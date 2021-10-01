@@ -10,75 +10,7 @@
 //! Timely and Differential Dataflow operators for persisting and replaying
 //! data.
 
-use persist_types::Codec;
-use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::ToStream;
-use timely::dataflow::{Scope, Stream};
-use timely::Data as TimelyData;
-
-use crate::indexed::runtime::DecodedSnapshot;
-use crate::indexed::Snapshot;
-
 pub mod input;
+pub mod replay;
 pub mod source;
 pub mod stream;
-
-fn replay<G: Scope<Timestamp = u64>, K: TimelyData + Codec, V: TimelyData + Codec>(
-    scope: &mut G,
-    snapshot: DecodedSnapshot<K, V>,
-) -> (
-    Stream<G, ((K, V), u64, isize)>,
-    Stream<G, (String, u64, isize)>,
-) {
-    // TODO: This currently works by only emitting the persisted data on worker
-    // 0 because that was the simplest thing to do initially. Instead, we should
-    // shard up the responsibility between all the workers.
-    if scope.index() == 0 {
-        let snapshot_since = snapshot.since();
-        let iter = snapshot.into_iter();
-        // TODO: Do this with a timely operator that reads the snapshot.
-        let (mut ok, mut errors) = (Vec::new(), Vec::new());
-        for x in iter {
-            match x {
-                Ok(u) => {
-                    // The raw update data held internally in the snapshot
-                    // may not be physically compacted up to the logical
-                    // compaction frontier of since. Snapshot handles
-                    // advancing any necessary data but we double check that
-                    // invariant here.
-                    debug_assert!(snapshot_since.less_equal(&u.1));
-                    ok.push(u);
-                }
-                Err(err) => {
-                    // TODO: Make the responsibility for retries in the presence
-                    // of transient storage failures lie with the snapshot (with
-                    // appropriate monitoring). At the limit, we should be able
-                    // to retry even the compaction+deletion of a batch that we
-                    // were supposed to fetch by grabbing the current version of
-                    // META. However, note that there is a case where we well
-                    // and truly have to give up: when the compaction frontier
-                    // has advanced past the ts this snapshot is reading at.
-                    //
-                    // TODO: Figure out a meaningful timestamp to use here? As
-                    // mentioned above, this error will eventually represent
-                    // something totally unrecoverable, so it should probably go
-                    // to the system errors (once that's built) instead of this
-                    // err_stream. Aljoscha suggests that system errors likely
-                    // won't have a timestamp in the source domain
-                    // (https://github.com/MaterializeInc/materialize/pull/8212#issuecomment-915877541),
-                    // so perhaps this problem just goes away at some point. In
-                    // the meantime, we never downgrade capabilities on the
-                    // err_stream until the operator is finished, so it
-                    // technically works to emit it at ts=0 for now.
-                    errors.push((err.to_string(), 0, 1));
-                    continue;
-                }
-            };
-        }
-        let ok_previous = ok.into_iter().to_stream(scope);
-        let err_previous = errors.into_iter().to_stream(scope);
-        (ok_previous, err_previous)
-    } else {
-        (operator::empty(scope), operator::empty(scope))
-    }
-}

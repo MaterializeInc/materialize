@@ -22,7 +22,7 @@ use timely::Data as TimelyData;
 
 use crate::indexed::runtime::StreamReadHandle;
 use crate::indexed::ListenEvent;
-use crate::operators;
+use crate::operators::replay::Replay;
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
 pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
@@ -92,7 +92,7 @@ where
                 let err_new_decode = err_new.flat_map(std::convert::identity);
 
                 // Replay the previously persisted data, if any.
-                let (ok_previous, err_previous) = operators::replay(self, snapshot);
+                let (ok_previous, err_previous) = self.replay(snapshot);
 
                 let ok_all = ok_previous.concat(&ok_new);
                 let err_all = err_previous.concat(&err_new_decode);
