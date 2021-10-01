@@ -73,6 +73,69 @@ impl PendingResponse {
     }
 }
 
+/// This struct holds changes to [Indexed] that have not been committed to
+/// persistent storage or sent to downstream listeners.
+struct Pending {
+    writes: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
+    responses: Vec<PendingResponse>,
+}
+
+impl Pending {
+    fn new() -> Self {
+        Self {
+            writes: Vec::new(),
+            responses: Vec::new(),
+        }
+    }
+
+    // Validate that there are no pending writes, seals or responses.
+    #[cfg(any(debug_assertions, test))]
+    fn validate_empty(&self) -> Result<(), Error> {
+        if !self.writes.is_empty() {
+            return Err(Error::from(format!(
+                "still have {} pending writes after draining pending writes, expected 0.",
+                self.writes.len()
+            )));
+        }
+
+        if !self.responses.is_empty() {
+            return Err(Error::from(format!(
+                "still have {} pending responses after draining pending responses, expected 0.",
+                self.responses.len()
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn add_writes(&mut self, updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>) {
+        self.writes.extend(updates);
+    }
+
+    fn add_response(&mut self, resp: PendingResponse) {
+        self.responses.push(resp);
+    }
+
+    /// Take the set of pending writes out of [Pending], leaving an empty hashmap.
+    fn take_writes(&mut self) -> Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)> {
+        std::mem::take(&mut self.writes)
+    }
+
+    /// Take the set of pending responses out of [Pending], leaving an empty vector.
+    fn take_responses(&mut self) -> Vec<PendingResponse> {
+        std::mem::take(&mut self.responses)
+    }
+
+    /// Return true if [Pending] has at least one pending response.
+    ///
+    /// TODO: It's unclear whether this API is worth doing. We could alternatively
+    /// just make writes and responses public and avoid having this function and
+    /// the various getter functions.
+    fn has_responses(&self) -> bool {
+        !self.responses.is_empty()
+    }
+}
+
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
 /// Diff)` updates.
 ///
@@ -119,10 +182,7 @@ pub struct Indexed<L: Log, B: Blob> {
     traces: BTreeMap<Id, Trace>,
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
     metrics: Metrics,
-    // Only drained by drain_pending_writes.
-    pending_writes: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-    // Only drained by drain_pending.
-    pending_responses: Vec<PendingResponse>,
+    pending: Pending,
     prev_meta: BlobMeta,
 }
 
@@ -171,8 +231,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             traces,
             listeners: HashMap::new(),
             metrics,
-            pending_writes: Vec::new(),
-            pending_responses: Vec::new(),
+            pending: Pending::new(),
             prev_meta: meta_copy,
         };
 
@@ -446,20 +505,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         // The postconditions are strictly more general than the preconditions so validate those as well.
         self.validate_drain_pending_preconditions()?;
 
-        if !self.pending_writes.is_empty() {
-            return Err(Error::from(format!(
-                "still have {} pending writes after draining pending writes, expected 0.",
-                self.pending_writes.len()
-            )));
-        }
-
-        if !self.pending_responses.is_empty() {
-            return Err(Error::from(format!(
-                "still have {} pending responses after draining pending responses, expected 0.",
-                self.pending_responses.len()
-            )));
-        }
-
+        self.pending.validate_empty()?;
         Ok(())
     }
 
@@ -472,16 +518,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
         let ret = match self.drain_pending_inner() {
             Ok(_) => {
-                self.pending_responses.drain(..).for_each(|r| r.fill());
+                let mut responses = self.pending.take_responses();
+                responses.drain(..).for_each(|r| r.fill());
                 Ok(())
             }
             Err(e) => {
+                let mut responses = self.pending.take_responses();
                 self.metrics
                     .cmd_failed_count
-                    .inc_by(u64::cast_from(self.pending_responses.len()));
-                self.pending_responses
-                    .drain(..)
-                    .for_each(|r| r.fill_err(e.clone()));
+                    .inc_by(u64::cast_from(responses.len()));
+                responses.drain(..).for_each(|r| r.fill_err(e.clone()));
                 Err(e)
             }
         };
@@ -607,10 +653,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         let resp = self.validate_write(&updates);
 
         if resp.is_ok() {
-            self.pending_writes.extend(updates);
+            self.pending.add_writes(updates);
         }
-        self.pending_responses
-            .push(PendingResponse::SeqNo(res, resp));
+        self.pending.add_response(PendingResponse::SeqNo(res, resp));
     }
 
     /// Drain pending writes to unsealed.
@@ -670,7 +715,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// The caller is responsible for draining any pending responses after this.
     fn drain_pending_inner(&mut self) -> Result<(), Error> {
         let mut updates_by_id: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> = HashMap::new();
-        for (id, updates) in self.pending_writes.drain(..) {
+        let mut writes = self.pending.take_writes();
+        for (id, updates) in writes.drain(..) {
             updates_by_id.entry(id).or_default().extend(updates);
         }
 
@@ -902,8 +948,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// `sealed_frontier` for details.
     pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: FutureHandle<()>) {
         let resp = self.do_seal(&ids, seal_ts);
-        self.pending_responses
-            .push(PendingResponse::Unit(res, resp));
+        self.pending.add_response(PendingResponse::Unit(res, resp));
     }
 
     fn do_allow_compaction(&mut self, id_sinces: Vec<(Id, Antichain<u64>)>) -> Result<(), Error> {
@@ -935,8 +980,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         res: FutureHandle<()>,
     ) {
         let response = self.do_allow_compaction(id_sinces);
-        self.pending_responses
-            .push(PendingResponse::Unit(res, response));
+        self.pending
+            .add_response(PendingResponse::Unit(res, response));
     }
 
     /// Appends the given `batch` to the unsealed for `id`, writing the data into
