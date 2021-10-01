@@ -36,6 +36,8 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=2
 04-02
 04-03
 
+$ kafka-verify-topic sink=materialize.public.multi_broker_sink topic=testdrive-kafka-multi-broker-sink-${testdrive.seed} nonced=true
+
 $ kafka-verify format=avro sink=materialize.public.multi_broker_sink sort-messages=true
 {"before": null, "after": {"row": {"f1": "01-01" }}}
 {"before": null, "after": {"row": {"f1": "01-02" }}}

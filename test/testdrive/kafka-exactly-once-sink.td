@@ -99,10 +99,16 @@ New York,NY,10004
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+$ kafka-verify-topic sink=materialize.public.output1 topic=output1-view-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.output1 topic=output1-view-${testdrive.seed}-consistency consistency=true
+
 > CREATE SINK output2 FROM input_kafka_no_byo
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output2-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify-topic sink=materialize.public.output2 topic=output2-view-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.output2 topic=output2-view-${testdrive.seed}-consistency consistency=true
 
 ! CREATE SINK output3 FROM input_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output3-view-${testdrive.seed}'
@@ -115,20 +121,32 @@ reuse_topic requires that sink input dependencies are sources, materialize.publi
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+$ kafka-verify-topic sink=materialize.public.output4 topic=output4-view-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.output4 topic=output4-view-${testdrive.seed}-consistency consistency=true
+
 > CREATE SINK output4_view FROM input_kafka_byo_mview_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output4b-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify-topic sink=materialize.public.output4_view topic=output4b-view-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.output4_view topic=output4b-view-${testdrive.seed}-consistency consistency=true
 
 > CREATE SINK output5 FROM input_kafka_no_byo_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+$ kafka-verify-topic sink=materialize.public.output5 topic=output5-view-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.output5 topic=output5-view-${testdrive.seed}-consistency consistency=true
+
 > CREATE SINK output5_view FROM input_kafka_no_byo_mview_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5b-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify-topic sink=materialize.public.output5_view topic=output5b-view-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.output5_view topic=output5b-view-${testdrive.seed}-consistency consistency=true
 
 ! CREATE SINK output6 FROM input_table_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output6-view-${testdrive.seed}'
@@ -153,15 +171,24 @@ reuse_topic requires that sink input dependencies are sources, materialize.publi
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+$ kafka-verify-topic sink=materialize.public.output12 topic=output12-view-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.output12 topic=output12-view-${testdrive.seed}-consistency consistency=true
+
 > CREATE SINK output13 FROM input_csv
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output13-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+$ kafka-verify-topic sink=materialize.public.output13 topic=output13-view-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.output13 topic=output13-view-${testdrive.seed}-consistency consistency=true
+
 > CREATE SINK output14_custom_consistency_topic FROM input_kafka_byo
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output1-view-${testdrive.seed}'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output14-view-${testdrive.seed}'
   WITH (reuse_topic=true, consistency_topic='output14-custom-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify-topic sink=materialize.public.output14_custom_consistency_topic topic=output14-view-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.output14_custom_consistency_topic topic=output14-custom-consistency-${testdrive.seed} consistency=true
 
 # ensure that the sink works with log compaction enabled on the consistency topic
 
@@ -181,6 +208,9 @@ $ kafka-create-topic topic=compaction-test-output-consistency compaction=true
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'compaction-test-output-${testdrive.seed}'
   WITH (reuse_topic=true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+
+$ kafka-verify-topic sink=materialize.public.compaction_test_sink topic=compaction-test-output-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.compaction_test_sink topic=compaction-test-output-${testdrive.seed}-consistency consistency=true
 
 $ kafka-ingest format=avro topic=compaction-test-input schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 1}}}
@@ -213,6 +243,9 @@ $ kafka-create-topic topic=rt-binding-consistency-test-input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'rt-binding-consistency-test-output-${testdrive.seed}'
   WITH (reuse_topic=true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+
+$ kafka-verify-topic sink=materialize.public.rt_binding_consistency_test_sink topic=rt-binding-consistency-test-output-${testdrive.seed}
+$ kafka-verify-topic sink=materialize.public.rt_binding_consistency_test_sink topic=rt-binding-consistency-test-output-${testdrive.seed}-consistency consistency=true
 
 $ kafka-ingest format=avro topic=rt-binding-consistency-test-input schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 1}}}
@@ -274,13 +307,19 @@ CONSISTENCY FORMAT JSON not yet supported
     CONSISTENCY TOPIC 'consistency-double-avro' CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+$ kafka-verify-topic sink=materialize.public.double_avro topic=double-avro nonced=true
+$ kafka-verify-topic sink=materialize.public.double_avro topic=consistency-double-avro consistency=true nonced=true
+
 $ kafka-verify format=avro sink=materialize.public.double_avro sort-messages=true
 {"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
 
 > CREATE SINK double_avro_2 FROM unnamed_cols
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro-2'
     CONSISTENCY (TOPIC 'consistency-double-avro' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify-topic sink=materialize.public.double_avro_2 topic=double-avro-2 nonced=true
+$ kafka-verify-topic sink=materialize.public.double_avro_2 topic=consistency-double-avro consistency=true nonced=true
 
 $ kafka-verify format=avro sink=materialize.public.double_avro_2 sort-messages=true
 {"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
@@ -290,13 +329,19 @@ $ kafka-verify format=avro sink=materialize.public.double_avro_2 sort-messages=t
     CONSISTENCY TOPIC 'consistency-json-avro' CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   FORMAT JSON
 
+$ kafka-verify-topic sink=materialize.public.json_avro topic=json-avro nonced=true
+$ kafka-verify-topic sink=materialize.public.json_avro topic=consistency-json-avro consistency=true nonced=true
+
 $ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true key=false
 {"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
 
 > CREATE SINK json_avro_2 FROM unnamed_cols
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro'
-    CONSISTENCY (TOPIC 'consistency-json-avro' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro-2'
+    CONSISTENCY (TOPIC 'consistency-json-avro-2' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
   FORMAT JSON
+
+$ kafka-verify-topic sink=materialize.public.json_avro_2 topic=json-avro-2 nonced=true
+$ kafka-verify-topic sink=materialize.public.json_avro_2 topic=consistency-json-avro-2 consistency=true nonced=true
 
 $ kafka-verify format=json sink=materialize.public.json_avro_2 sort-messages=true key=false
 {"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
@@ -315,6 +360,9 @@ For FORMAT JSON, you need to manually specify an Avro consistency topic using 'C
     WITH (reuse_topic=true)
   FORMAT JSON
 
+$ kafka-verify-topic sink=materialize.public.json_reuse_topic_no_parens topic=json-reuse-topic nonced=true
+$ kafka-verify-topic sink=materialize.public.json_reuse_topic_no_parens topic=consistency-json-avro consistency=true nonced=true
+
 $ kafka-verify format=json sink=materialize.public.json_reuse_topic_no_parens sort-messages=true key=false
 {"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
 
@@ -325,6 +373,9 @@ $ kafka-verify format=json sink=materialize.public.json_reuse_topic_no_parens so
     WITH (reuse_topic=true)
   FORMAT JSON
 
+$ kafka-verify-topic sink=materialize.public.json_reuse_topic_with_parens topic=json-reuse-topic-2
+$ kafka-verify-topic sink=materialize.public.json_reuse_topic_with_parens topic=consistency-json-avro-2 consistency=true
+
 # Same as above!
 > CREATE SINK json_reuse_topic_with_parens_and_with FROM rt_binding_consistency_test_source
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic-3'
@@ -332,11 +383,17 @@ $ kafka-verify format=json sink=materialize.public.json_reuse_topic_no_parens so
     WITH (reuse_topic=true)
   FORMAT JSON
 
+$ kafka-verify-topic sink=materialize.public.json_reuse_topic_with_parens_and_with topic=json-reuse-topic-3
+$ kafka-verify-topic sink=materialize.public.json_reuse_topic_with_parens_and_with topic=consistency-json-avro-3 consistency=true
+
 # Default consistency format is Avro if consistency_topic is used
 > CREATE SINK default_avro_2 FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'default-avro-2'
     WITH (consistency_topic='default-consistency-avro')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify-topic sink=materialize.public.default_avro_2 topic=default-avro-2 nonced=true
+$ kafka-verify-topic sink=materialize.public.default_avro_2 topic=default-consistency-avro consistency=true nonced=true
 
 $ kafka-verify format=avro sink=materialize.public.default_avro sort-messages=true
 {"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
@@ -348,15 +405,21 @@ $ kafka-verify format=avro sink=materialize.public.default_avro sort-messages=tr
   FORMAT JSON
   ENVELOPE UPSERT
 
+$ kafka-verify-topic sink=materialize.public.json_avro_upsert_key topic=json-avro-upsert-key nonced=true
+$ kafka-verify-topic sink=materialize.public.json_avro_upsert_key topic=consistency-json-avro-upsert-key consistency=true nonced=true
+
 $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key key=true
 {"b": 2} {"column1": 1, "b": 2, "column3": 3, "transaction": {"id": "0"}}
 
 > CREATE SINK json_avro_upsert_key_2 FROM unnamed_cols
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro-upsert-key'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro-upsert-key-2'
   KEY (b)
-    CONSISTENCY (TOPIC 'consistency-json-avro-upsert-key' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
+    CONSISTENCY (TOPIC 'consistency-json-avro-upsert-key-2' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
   FORMAT JSON
   ENVELOPE UPSERT
+
+$ kafka-verify-topic sink=materialize.public.json_avro_upsert_key_2 topic=json-avro-upsert-key-2 nonced=true
+$ kafka-verify-topic sink=materialize.public.json_avro_upsert_key_2 topic=consistency-json-avro-upsert-key-2 consistency=true nonced=true
 
 $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key_2 key=true
 {"b": 2} {"column1": 1, "b": 2, "column3": 3, "transaction": {"id": "0"}}
