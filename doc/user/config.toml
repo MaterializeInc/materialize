@@ -100,6 +100,11 @@ identifier = "third-party"
 name = "Third-Party Tools"
 weight = 120
 
+[[menu.main]]
+name = "Using Debezium"
+parent = "third-party"
+url = "/guides/cdc-postgres"
+weight= 3
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
