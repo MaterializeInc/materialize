@@ -46,7 +46,7 @@ use crate::plan::statement::StatementDesc;
 ///     components based upon connection defaults, e.g., resolving the partial
 ///     name `view42` to the fully-specified name `materialize.public.view42`.
 ///
-///   * Lookup operations, like [`SessionCatalog::list_items`] or [`SessionCatalog::get_item_by_id`]. These retrieve
+///   * Lookup operations, like [`SessionCatalog::get_item_by_id`]. These retrieve
 ///     metadata about a catalog entity based on a fully-specified name that is
 ///     known to be valid (i.e., because the name was successfully resolved,
 ///     or was constructed based on the output of a prior lookup operation).
