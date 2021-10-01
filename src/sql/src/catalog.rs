@@ -109,14 +109,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// functions within the catalog.
     fn resolve_function(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
 
-    /// Lists the items in the specified schema in the specified database.
-    ///
-    /// Panics if `schema_name` does not specify a valid schema.
-    fn list_items<'a>(
-        &'a self,
-        schema: &SchemaName,
-    ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a>;
-
     /// Gets an item by its ID.
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
 
@@ -214,6 +206,9 @@ pub trait CatalogSchema {
 
     /// Returns a stable ID for the schema.
     fn id(&self) -> i64;
+
+    /// Lists the `CatalogItem`s for the schema.
+    fn has_items(&self) -> bool;
 }
 
 /// A role in a [`SessionCatalog`].
@@ -425,13 +420,6 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn resolve_function(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
-    }
-
-    fn list_items<'a>(
-        &'a self,
-        _: &SchemaName,
-    ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a> {
         unimplemented!();
     }
 

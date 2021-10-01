@@ -2228,8 +2228,7 @@ pub fn plan_drop_schema(
                     schema.name()
                 );
             }
-            let mut items = scx.catalog.list_items(schema.name());
-            if !cascade && items.next().is_some() {
+            if !cascade && schema.has_items() {
                 bail!(
                     "schema '{}' cannot be dropped without CASCADE while it contains objects",
                     schema.name(),
