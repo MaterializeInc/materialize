@@ -2568,16 +2568,6 @@ impl SessionCatalog for ConnCatalog<'_> {
             .resolve_function(&self.database, self.search_path, name, self.conn_id)?)
     }
 
-    fn database_has_schemas(&self, database: &str) -> bool {
-        !self
-            .catalog
-            .by_name
-            .get(database)
-            .unwrap()
-            .schemas
-            .is_empty()
-    }
-
     fn list_items<'a>(
         &'a self,
         schema: &SchemaName,
@@ -2671,6 +2661,10 @@ impl sql::catalog::CatalogDatabase for Database {
 
     fn id(&self) -> i64 {
         self.id
+    }
+
+    fn has_schemas(&self) -> bool {
+        !self.schemas.is_empty()
     }
 }
 

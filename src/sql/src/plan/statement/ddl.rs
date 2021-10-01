@@ -2154,7 +2154,7 @@ pub fn plan_drop_database(
     let name = match scx.resolve_database_ident(name) {
         Ok(database) => {
             let name = String::from(database.name());
-            if restrict && scx.catalog.database_has_schemas(&name) {
+            if restrict && database.has_schemas() {
                 bail!(
                     "database '{}' cannot be dropped with RESTRICT while it contains schemas",
                     database.name(),
