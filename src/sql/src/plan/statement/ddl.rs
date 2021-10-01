@@ -32,10 +32,11 @@ use reqwest::Url;
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, ColumnSpec,
     Consistency, CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSinkFormat, KafkaSourceConnector,
-    KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
-    PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
-    SourceConnector, SourceDataEncoding, SourceEnvelope, Timeline,
+    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat,
+    KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
+    ProtobufEncoding, PubNubSourceConnector, RegexEncoding, S3SourceConnector,
+    SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceDataEncoding, SourceEnvelope,
+    Timeline,
 };
 use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
@@ -1483,6 +1484,30 @@ fn kafka_sink_builder(
         );
     }
 
+    let retention_ms = match with_options.remove("retention_ms") {
+        None => None,
+        Some(Value::Number(n)) => Some(n.parse::<i64>()?),
+        Some(_) => bail!("retention ms for sink topics must be an integer"),
+    };
+
+    if retention_ms.unwrap_or(0) < -1 {
+        bail!("retention ms for sink topics must be greater than or equal to -1");
+    }
+
+    let retention_bytes = match with_options.remove("retention_bytes") {
+        None => None,
+        Some(Value::Number(n)) => Some(n.parse::<i64>()?),
+        Some(_) => bail!("retention bytes for sink topics must be an integer"),
+    };
+
+    if retention_bytes.unwrap_or(0) < -1 {
+        bail!("retention bytes for sink topics must be greater than or equal to -1");
+    }
+    let retention = KafkaSinkConnectorRetention {
+        retention_ms,
+        retention_bytes,
+    };
+
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
@@ -1502,6 +1527,7 @@ fn kafka_sink_builder(
         value_desc,
         reuse_topic,
         transitive_source_dependencies,
+        retention,
     }))
 }
 

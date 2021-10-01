@@ -51,6 +51,7 @@ Put breaking changes before other release notes.
 {{% version-header v0.9.7 %}}
 - Support the `IS TRUE`, `IS FALSE`, `IS UNKNOWN` operators (and their `NOT`
   variations). {{% gh 8455 %}}
+- Add support for retention settings on Kafka sinks.
 
 {{% version-header v0.9.6 %}}
 

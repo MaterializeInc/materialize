@@ -21,8 +21,8 @@ use rdkafka::{Message, Offset, TopicPartitionList};
 
 use dataflow_types::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
-    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkConnector,
-    SinkConnectorBuilder,
+    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkConsistencyConnector,
+    PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
@@ -189,6 +189,7 @@ async fn register_kafka_topic(
     mut partition_count: i32,
     mut replication_factor: i32,
     succeed_if_exists: bool,
+    retention: KafkaSinkConnectorRetention,
 ) -> Result<(), CoordError> {
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
@@ -272,13 +273,24 @@ async fn register_kafka_topic(
         }
     }
 
+    let mut kafka_topic = NewTopic::new(
+        &topic,
+        partition_count,
+        TopicReplication::Fixed(replication_factor),
+    );
+
+    let retention_ms_str = retention.retention_ms.map(|s| s.to_string());
+    let retention_bytes_str = retention.retention_bytes.map(|s| s.to_string());
+    if let Some(ref retention_ms) = retention_ms_str {
+        kafka_topic = kafka_topic.set("retention.ms", retention_ms);
+    }
+    if let Some(ref retention_bytes) = retention_bytes_str {
+        kafka_topic = kafka_topic.set("retention.bytes", retention_bytes);
+    }
+
     let res = client
         .create_topics(
-            &[NewTopic::new(
-                &topic,
-                partition_count,
-                TopicReplication::Fixed(replication_factor),
-            )],
+            &[kafka_topic],
             &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
         )
         .await
@@ -376,6 +388,7 @@ async fn build_kafka(
         builder.partition_count,
         builder.replication_factor,
         builder.reuse_topic,
+        builder.retention,
     )
     .await
     .context("error registering kafka topic for sink")?;
@@ -424,6 +437,7 @@ async fn build_kafka(
                 1,
                 builder.replication_factor,
                 builder.reuse_topic,
+                KafkaSinkConnectorRetention::default(),
             )
             .await
             .context("error registering kafka consistency topic for sink")?;
