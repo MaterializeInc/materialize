@@ -198,6 +198,7 @@ services:
       --node-id=0 --check=false
       --set "redpanda.enable_transactions=true"
       --set "redpanda.enable_idempotence=true"
+      --set "redpanda.auto_create_topics_enabled=false"
       --advertise-kafka-addr redpanda:9092
   localstack:
     image: localstack/localstack:0.12.5
