@@ -739,7 +739,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         let updates_by_id = self.pending.take_writes();
         let mut seals_by_id = self.pending.take_seals();
 
-        let updates_for_listeners = updates_by_id.clone();
+        let mut updates_for_listeners = updates_by_id.clone();
         if let Err(e) = self.drain_pending_writes(updates_by_id) {
             self.restore();
             return Err(format!("failed to append to unsealed: {}", e).into());
@@ -770,10 +770,14 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 .inc_by(u64::cast_from(update_bytes));
         }
 
-        for (id, updates) in updates_for_listeners.iter() {
+        for (id, updates) in updates_for_listeners.drain() {
             if let Some(listen_fns) = self.listeners.get(&id) {
-                for listen_fn in listen_fns.iter() {
-                    listen_fn(ListenEvent::Records(updates.clone()));
+                if listen_fns.len() == 1 {
+                    listen_fns[0](ListenEvent::Records(updates));
+                } else {
+                    for listen_fn in listen_fns.iter() {
+                        listen_fn(ListenEvent::Records(updates.clone()));
+                    }
                 }
             }
         }
