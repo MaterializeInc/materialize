@@ -78,6 +78,7 @@ impl PendingResponse {
 struct Pending {
     writes: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>>,
     responses: Vec<PendingResponse>,
+    seals: HashMap<Id, u64>,
 }
 
 impl Pending {
@@ -85,6 +86,7 @@ impl Pending {
         Self {
             writes: HashMap::new(),
             responses: Vec::new(),
+            seals: HashMap::new(),
         }
     }
 
@@ -105,6 +107,13 @@ impl Pending {
             )));
         }
 
+        if !self.seals.is_empty() {
+            return Err(Error::from(format!(
+                "still have {} pending seals after draining pending seals, expected 0.",
+                self.seals.len()
+            )));
+        }
+
         Ok(())
     }
 
@@ -118,6 +127,12 @@ impl Pending {
         self.responses.push(resp);
     }
 
+    fn add_seals(&mut self, ids: Vec<Id>, seal: u64) {
+        for id in ids {
+            self.seals.insert(id, seal);
+        }
+    }
+
     /// Take the set of pending writes out of [Pending], leaving an empty hashmap.
     fn take_writes(&mut self) -> HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> {
         std::mem::take(&mut self.writes)
@@ -126,6 +141,11 @@ impl Pending {
     /// Take the set of pending responses out of [Pending], leaving an empty vector.
     fn take_responses(&mut self) -> Vec<PendingResponse> {
         std::mem::take(&mut self.responses)
+    }
+
+    /// Take the set of pending seals out of [Pending], leaving an empty hashmap.
+    fn take_seals(&mut self) -> HashMap<Id, u64> {
+        std::mem::take(&mut self.seals)
     }
 
     /// Return true if [Pending] has at least one pending response.
@@ -717,42 +737,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// The caller is responsible for draining any pending responses after this.
     fn drain_pending_inner(&mut self) -> Result<(), Error> {
         let updates_by_id = self.pending.take_writes();
+        let mut seals_by_id = self.pending.take_seals();
 
         let updates_for_listeners = updates_by_id.clone();
         if let Err(e) = self.drain_pending_writes(updates_by_id) {
             self.restore();
             return Err(format!("failed to append to unsealed: {}", e).into());
-        }
-
-        let mut seal_updates: HashMap<Id, Antichain<u64>> = HashMap::new();
-
-        let prev_traces: HashMap<_, _> = self
-            .prev_meta
-            .traces
-            .clone()
-            .drain(..)
-            .map(|trace| (trace.id, trace))
-            .collect();
-        for (id, trace) in self.traces.iter() {
-            let id = *id;
-            let curr_seal = trace.get_seal();
-            let prev_seal = match prev_traces.get(&id) {
-                Some(trace) => &trace.seal,
-                None => {
-                    self.restore();
-                    return Err(format!(
-                        "invalid current {:?} and previous {:?} metadata: missing trace for {:?}",
-                        self.serialize_meta(),
-                        self.prev_meta,
-                        id
-                    )
-                    .into());
-                }
-            };
-
-            if PartialOrder::less_than(prev_seal, &curr_seal) {
-                seal_updates.insert(id, curr_seal);
-            }
         }
 
         // TODO: only update meta if something has changed, instead of unconditionally.
@@ -788,15 +778,10 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             }
         }
 
-        for (id, seal) in seal_updates.iter() {
+        for (id, seal) in seals_by_id.drain() {
             if let Some(listen_fns) = self.listeners.get(&id) {
                 for listen_fn in listen_fns.iter() {
-                    // TODO: perhaps this event should take an antichain directly? If
-                    // the downstream user held a timely::CapabilitySet they could
-                    // use the antichain directly as well.
-                    for seal_ts in seal.elements().iter() {
-                        listen_fn(ListenEvent::Sealed(*seal_ts));
-                    }
+                    listen_fn(ListenEvent::Sealed(seal));
                 }
             }
         }
@@ -946,6 +931,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// `sealed_frontier` for details.
     pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: FutureHandle<()>) {
         let resp = self.do_seal(&ids, seal_ts);
+        self.pending.add_seals(ids, seal_ts);
         self.pending.add_response(PendingResponse::Unit(res, resp));
     }
 
