@@ -2148,15 +2148,15 @@ pub fn plan_drop_database(
     DropDatabaseStatement {
         name,
         if_exists,
-        cascade,
+        restrict,
     }: DropDatabaseStatement,
 ) -> Result<Plan, anyhow::Error> {
     let name = match scx.resolve_database_ident(name) {
         Ok(database) => {
             let name = String::from(database.name());
-            if !cascade && scx.catalog.database_has_schemas(&name) {
+            if restrict && scx.catalog.database_has_schemas(&name) {
                 bail!(
-                    "database '{}' cannot be dropped without CASCADE while it contains schemas",
+                    "database '{}' cannot be dropped with RESTRICT while it contains schemas",
                     database.name(),
                 );
             }

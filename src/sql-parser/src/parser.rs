@@ -166,13 +166,6 @@ enum SetPrecedence {
     Intersect,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-enum ParseAtMostOneResult {
-    A,
-    B,
-    Neither,
-}
-
 impl<'a> Parser<'a> {
     /// Parse the specified tokens
     fn new(sql: &'a str, tokens: Vec<(Token, usize)>) -> Self {
@@ -537,8 +530,8 @@ impl<'a> Parser<'a> {
     fn parse_function(&mut self, name: UnresolvedObjectName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let distinct = matches!(
-            self.parse_at_most_one_keyword(ALL, DISTINCT, &format!("function: {}", name))?,
-            ParseAtMostOneResult::B
+            self.parse_at_most_one_keyword(&[ALL, DISTINCT], &format!("function: {}", name))?,
+            Some(DISTINCT),
         );
         let args = self.parse_optional_args(true)?;
         let filter = if self.parse_keyword(FILTER) {
@@ -1309,27 +1302,26 @@ impl<'a> Parser<'a> {
 
     fn parse_at_most_one_keyword(
         &mut self,
-        a: Keyword,
-        b: Keyword,
+        keywords: &[Keyword],
         location: &str,
-    ) -> Result<ParseAtMostOneResult, ParserError> {
-        let a_found = self.parse_keyword(a);
-        let b_found = self.parse_keyword(b);
-        // Catch them in either order
-        let a_found = a_found || self.parse_keyword(a);
-        let second_pos = self.peek_prev_pos();
-        match (a_found, b_found) {
-            (true, true) => parser_err!(
-                self,
-                second_pos,
-                "Cannot specify both {} and {} in {}",
-                a,
-                b,
-                location,
-            ),
-            (true, false) => Ok(ParseAtMostOneResult::A),
-            (false, true) => Ok(ParseAtMostOneResult::B),
-            (false, false) => Ok(ParseAtMostOneResult::Neither),
+    ) -> Result<Option<Keyword>, ParserError> {
+        match self.parse_one_of_keywords(keywords) {
+            Some(first) => {
+                if let Some(second) = self.parse_one_of_keywords(keywords) {
+                    let second_pos = self.peek_prev_pos();
+                    parser_err!(
+                        self,
+                        second_pos,
+                        "Cannot specify both {} and {} in {}",
+                        first,
+                        second,
+                        location,
+                    )
+                } else {
+                    Ok(Some(first))
+                }
+            }
+            None => Ok(None),
         }
     }
 
@@ -2249,13 +2241,13 @@ impl<'a> Parser<'a> {
                 let if_exists = self.parse_if_exists()?;
                 let name = self.parse_identifier()?;
                 let restrict = matches!(
-                    self.parse_at_most_one_keyword(CASCADE, RESTRICT, "DROP")?,
-                    ParseAtMostOneResult::B
+                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+                    Some(RESTRICT),
                 );
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
                     if_exists,
                     name,
-                    cascade: !restrict,
+                    restrict: restrict,
                 }));
             }
             Some(INDEX) => ObjectType::Index,
@@ -2279,8 +2271,8 @@ impl<'a> Parser<'a> {
         let if_exists = self.parse_if_exists()?;
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
         let cascade = matches!(
-            self.parse_at_most_one_keyword(CASCADE, RESTRICT, "DROP")?,
-            ParseAtMostOneResult::A
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
         );
         Ok(Statement::DropObjects(DropObjectsStatement {
             materialized,
