@@ -1,4 +1,4 @@
-black==21.7b0
+black==21.9b0
 boto3-stubs[ec2,kinesis,s3,sqs,ssm,sts]==1.18.34
 boto3==1.18.34
 flake8==3.9.2
