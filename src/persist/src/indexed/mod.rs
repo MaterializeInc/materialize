@@ -76,14 +76,14 @@ impl PendingResponse {
 /// This struct holds changes to [Indexed] that have not been committed to
 /// persistent storage or sent to downstream listeners.
 struct Pending {
-    writes: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
+    writes: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>>,
     responses: Vec<PendingResponse>,
 }
 
 impl Pending {
     fn new() -> Self {
         Self {
-            writes: Vec::new(),
+            writes: HashMap::new(),
             responses: Vec::new(),
         }
     }
@@ -109,7 +109,9 @@ impl Pending {
     }
 
     fn add_writes(&mut self, updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>) {
-        self.writes.extend(updates);
+        for (id, updates) in updates {
+            self.writes.entry(id).or_default().extend(updates);
+        }
     }
 
     fn add_response(&mut self, resp: PendingResponse) {
@@ -117,7 +119,7 @@ impl Pending {
     }
 
     /// Take the set of pending writes out of [Pending], leaving an empty hashmap.
-    fn take_writes(&mut self) -> Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)> {
+    fn take_writes(&mut self) -> HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> {
         std::mem::take(&mut self.writes)
     }
 
@@ -714,11 +716,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ///
     /// The caller is responsible for draining any pending responses after this.
     fn drain_pending_inner(&mut self) -> Result<(), Error> {
-        let mut updates_by_id: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> = HashMap::new();
-        let mut writes = self.pending.take_writes();
-        for (id, updates) in writes.drain(..) {
-            updates_by_id.entry(id).or_default().extend(updates);
-        }
+        let updates_by_id = self.pending.take_writes();
 
         let updates_for_listeners = updates_by_id.clone();
         if let Err(e) = self.drain_pending_writes(updates_by_id) {
