@@ -13,14 +13,6 @@
 #   timeout_in_minutes: 240
 #   command: bin/ci-builder run nightly bin/pyactivate --dev -m ci.nightly.coverage
 
-- id: sqlsmith
-  label: SQLsmith fuzzing
-  timeout_in_minutes: 240
-  plugins:
-    - ./ci/plugins/mzcompose:
-        composition: smith
-        run: ci
-
 - id: pubnub
   label: "pubnub source"
   plugins:
