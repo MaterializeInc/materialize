@@ -1520,11 +1520,6 @@ fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError
     Ok(())
 }
 
-// From the `decNumber` library's documentation:
-// > Inexact results will almost always be correctly rounded, but may be up to 1
-// > ulp (unit in last place) in error in rare cases.
-//
-// See decNumberLn documentation at http://speleotrove.com/decimal/dnnumb.html
 fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     log_guard_numeric(&a, "log")?;
@@ -1537,6 +1532,27 @@ fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErr
     if a.is_zero() {
         Err(EvalError::DivisionByZero)
     } else {
+        // This division can result in slightly wrong answers due to the
+        // limitation of dividing irrational numbers. To correct that, see if
+        // rounding off the value from its `numeric::NUMERIC_DATUM_MAX_PRECISION
+        // - 1`th position results in an integral value.
+        cx.set_precision(numeric::NUMERIC_DATUM_MAX_PRECISION - 1)
+            .expect("reducing precision below max always succeeds");
+        let mut integral_check = b.clone();
+
+        // `reduce` rounds to the the context's final digit when the number of
+        // digits in its argument exceeds its precision. We've contrived that to
+        // happen by shrinking the context's precision by 1.
+        cx.reduce(&mut integral_check);
+
+        // Reduced integral values always have a non-negative exponent.
+        let mut b = if integral_check.exponent() >= 0 {
+            // We believe our result should have been an integral
+            integral_check
+        } else {
+            b
+        };
+
         numeric::munge_numeric(&mut b).unwrap();
         Ok(Datum::from(b))
     }
