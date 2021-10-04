@@ -36,10 +36,12 @@ name         nullable  type
  datacl      true      text[]
 
 > SHOW COLUMNS FROM pg_index
-name        nullable  type
+name         nullable  type
 --------------------------
-indexrelid  false     oid
-indrelid    false     oid
+indexrelid   false     oid
+indrelid     false     oid
+indisprimary false     boolean
+indkey       true      bigint[]
 
 > SHOW COLUMNS FROM pg_description
 name         nullable  type
