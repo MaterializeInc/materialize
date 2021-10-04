@@ -37,8 +37,6 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     unzip \
     xz-utils
 
-COPY crosstool.defconfig ./
-
 # TODO(benesch): switch back to an official crosstool-NG release when the
 # official releases support GCC 9.0.
 
@@ -47,9 +45,15 @@ RUN mkdir crosstool \
     && tar -xf crosstool.tar.gz -C crosstool --strip-components=1 \
     && rm crosstool.tar.gz \
     && (cd crosstool && ./bootstrap && ./configure && make install) \
-    && rm -rf crosstool \
-    && DEFCONFIG=crosstool.defconfig ct-ng defconfig \
+    && rm -rf crosstool
+
+COPY crosstool.defconfig ./
+
+# The sed command below works around
+# https://github.com/crosstool-ng/crosstool-ng/issues/1609.
+RUN DEFCONFIG=crosstool.defconfig ct-ng defconfig \
     && rm crosstool.defconfig \
+    && sed -i 's,http://isl.gforge.inria.fr,https://mirror.sobukus.de/files/src/isl/,' .config \
     && ct-ng build
 
 # Import the cross-compiling toolchain into a fresh image, omitting the

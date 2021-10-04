@@ -24,9 +24,9 @@ import sys
 import time
 import typing
 
-import psycopg2  # type: ignore
-import psycopg2.errors  # type: ignore
-import psycopg2.extensions  # type: ignore
+import psycopg2
+import psycopg2.errors
+import psycopg2.extensions
 import toml
 
 
@@ -49,8 +49,8 @@ def view_contents(cursor: psycopg2.extensions.cursor, view: str, timestamp: int)
     stream = io.StringIO()
     query = f"COPY (SELECT * FROM {view} WHERE mz_logical_timestamp() > {timestamp}) TO STDOUT"
     try:
-        cursor.copy_expert(query, stream)
-    except psycopg2.errors.InternalError_:
+        cursor.copy_expert(query, stream)  # type: ignore
+    except psycopg2.errors.InternalError_:  # type: ignore
         # The view is not yet ready to be queried
         raise ViewNotReady()
     return stream.getvalue().strip()
@@ -72,7 +72,7 @@ def source_at_offset(
         'SELECT timestamp FROM mz_source_info WHERE source_name = %s and "offset" = %s'
     )
     try:
-        cursor.execute(query, (source_info.topic_name, source_info.offset))
+        cursor.execute(query, (source_info.topic_name, source_info.offset))  # type: ignore
         if cursor.rowcount > 1:
             print("ERROR: More than one row returned when querying source offsets:")
             for row in cursor:
@@ -82,7 +82,7 @@ def source_at_offset(
             return None
 
         return int(cursor.fetchone()[0])
-    except psycopg2.errors.InternalError_:
+    except psycopg2.errors.InternalError_:  # type: ignore
         # The view is not yet ready to be queried
         return None
 
