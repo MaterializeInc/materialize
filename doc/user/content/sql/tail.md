@@ -234,7 +234,7 @@ BEGIN;
 DECLARE c CURSOR FOR TAIL t;
 ````
 
-Now use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as they are ready:
+Now use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it is ready:
 
 ```sql
 FETCH ALL c;
