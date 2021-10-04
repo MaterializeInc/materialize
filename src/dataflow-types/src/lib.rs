@@ -20,5 +20,7 @@ mod explain;
 mod types;
 
 pub use errors::*;
+pub use explain::DataflowGraphFormatter;
 pub use explain::Explanation;
+pub use explain::JsonViewFormatter;
 pub use types::*;

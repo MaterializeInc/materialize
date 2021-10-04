@@ -3333,31 +3333,48 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
-                let decorrelated_plan = decorrelate(&mut timings, raw_plan);
+                let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(
+                    &mut timings,
+                    raw_plan,
+                ));
                 let catalog = self.catalog.for_session(session);
+                let formatter =
+                    dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
                 let mut explanation =
-                    dataflow_types::Explanation::new(&decorrelated_plan, &catalog);
+                    dataflow_types::Explanation::new(&decorrelated_plan, &catalog, &formatter);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
-                if options.typed {
-                    explanation.explain_types();
-                }
                 explanation.to_string()
             }
-            ExplainStage::PhysicalPlan | // TODO
             ExplainStage::OptimizedPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
                 self.validate_timeline(decorrelated_plan.global_uses())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
+                let formatter =
+                    dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
                 let mut explanation =
-                    dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog);
+                    dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog, &formatter);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
-                if options.typed {
-                    explanation.explain_types();
+                explanation.to_string()
+            }
+            ExplainStage::PhysicalPlan => {
+                let decorrelated_plan = decorrelate(&mut timings, raw_plan);
+                self.validate_timeline(decorrelated_plan.global_uses())?;
+                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
+                let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
+                    .expect("Dataflow planning failed; unrecoverable error");
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = dataflow_types::Explanation::new_from_dataflow(
+                    &dataflow_plan,
+                    &catalog,
+                    &dataflow_types::JsonViewFormatter {},
+                );
+                if let Some(row_set_finishing) = row_set_finishing {
+                    explanation.explain_row_set_finishing(row_set_finishing);
                 }
                 explanation.to_string()
             }
