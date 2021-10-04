@@ -63,7 +63,11 @@ invalid input syntax for type double precision
 > SELECT * FROM t
 4 6 xy
 
-> CREATE VIEW v AS SELECT 1 a;
+# Update subqueries can only reference other tables
+> CREATE MATERIALIZED VIEW v (a) AS SELECT 4;
+
+! UPDATE t SET i = i + 1 WHERE i IN (SELECT a FROM v);
+invalid selection
 
 ! UPDATE v SET a = 1
 cannot mutate view

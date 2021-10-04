@@ -5,6 +5,8 @@ weight: 10
 menu:
   main:
     parent: guides
+aliases:
+  - /third-party/debezium
 ---
 
 Change Data Capture (CDC) allows you to track and propagate changes in a Postgres database to downstream consumers based on its Write-Ahead Log (WAL). In this guide, we'll cover how to use Materialize to create and efficiently maintain real-time materialized views on top of CDC data.
@@ -46,11 +48,11 @@ Before creating a source in Materialize, you need to ensure that the upstream da
 1. Set the replica identity value for the tables you want to replicate:
 
     ```sql
-    ALTER TABLE repl_table REPLICA IDENTITY FULL;
+    ALTER TABLE repl_table REPLICA IDENTITY DEFAULT;
     ```
 
-    This setting determines the amount of information that is written to the WAL in `UPDATE` and `DELETE` operations. Setting it to `FULL` will include the previous values of all the table’s columns in the change events.
-
+    This setting determines the amount of information that is written to the WAL in `UPDATE` and `DELETE` operations.
+    
     As a heads-up, you should expect a performance hit in the database from increased CPU usage. For more information, see the [PostgreSQL documentation](https://www.postgresql.org/docs/current/logical-replication-publication.html).
 
 1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:

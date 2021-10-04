@@ -38,14 +38,14 @@ use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
 use sql::catalog::{
-    Catalog as SqlCatalog, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType as SqlCatalogItemType, SessionCatalog,
 };
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::HirRelationExpr;
 use sql::plan::{
     CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext,
+    CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use transform::Optimizer;
 use uuid::Uuid;
@@ -55,7 +55,7 @@ use crate::catalog::builtin::{
     PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::{PersistConfig, PersistDetails, PersistMultiDetails, PersisterWithConfig};
-use crate::session::Session;
+use crate::session::{PreparedStatement, Session};
 
 mod builtin_table_updates;
 mod config;
@@ -112,6 +112,7 @@ pub struct Catalog {
     roles: HashMap<String, Role>,
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
+    transient_revision: u64,
     config: sql::catalog::CatalogConfig,
     /// Handle to persistence runtime and feature configuration.
     persist: PersisterWithConfig,
@@ -215,6 +216,7 @@ pub struct ConnCatalog<'a> {
     database: String,
     search_path: &'a [&'a str],
     user: String,
+    prepared_statements: Option<&'a HashMap<String, PreparedStatement>>,
 }
 
 impl ConnCatalog<'_> {
@@ -611,6 +613,7 @@ impl Catalog {
             roles: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
+            transient_revision: 0,
             config: sql::catalog::CatalogConfig {
                 start_time: to_datetime((config.now)()),
                 start_instant: Instant::now(),
@@ -867,8 +870,9 @@ impl Catalog {
         }
 
         let mut storage = catalog.storage();
-        let tx = storage.transaction()?;
-        let catalog = Self::load_catalog_items(&tx, &catalog)?;
+        let mut tx = storage.transaction()?;
+        let catalog = Self::load_catalog_items(&mut tx, &catalog)?;
+        tx.commit()?;
 
         let mut builtin_table_updates = vec![];
         for (schema_name, schema) in &catalog.ambient_schemas {
@@ -901,6 +905,13 @@ impl Catalog {
         Ok((catalog, builtin_table_updates, persister))
     }
 
+    /// Retuns the catalog's transient revision, which starts at 1 and is
+    /// incremented on every change. This is not persisted to disk, and will
+    /// restart on every load.
+    pub fn transient_revision(&self) -> u64 {
+        self.transient_revision
+    }
+
     /// Takes a catalog which only has items in its on-disk storage ("unloaded")
     /// and cannot yet resolve names, and returns a catalog loaded with those
     /// items.
@@ -910,7 +921,10 @@ impl Catalog {
     /// objects, which is necessary for at least one catalog migration.
     ///
     /// TODO(justin): it might be nice if these were two different types.
-    pub fn load_catalog_items(tx: &storage::Transaction, c: &Catalog) -> Result<Catalog, Error> {
+    pub fn load_catalog_items(
+        tx: &mut storage::Transaction,
+        c: &Catalog,
+    ) -> Result<Catalog, Error> {
         let mut c = c.clone();
         let items = tx.load_items()?;
         for (id, name, def) in items {
@@ -938,6 +952,7 @@ impl Catalog {
             let oid = c.allocate_oid()?;
             c.insert_item(id, oid, name, item);
         }
+        c.transient_revision = 1;
         Ok(c)
     }
 
@@ -969,13 +984,14 @@ impl Catalog {
         Ok(catalog)
     }
 
-    pub fn for_session(&self, session: &Session) -> ConnCatalog {
+    pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
         ConnCatalog {
             catalog: self,
             conn_id: session.conn_id(),
             database: session.vars().database().into(),
             search_path: session.vars().search_path(),
             user: session.user().into(),
+            prepared_statements: Some(session.prepared_statements()),
         }
     }
 
@@ -986,6 +1002,7 @@ impl Catalog {
             database: "materialize".into(),
             search_path: &[],
             user,
+            prepared_statements: None,
         }
     }
 
@@ -1790,6 +1807,7 @@ impl Catalog {
         tx.commit()?;
         drop(storage); // release immutable borrow on `self` so we can borrow mutably below
 
+        self.transient_revision += 1;
         for action in actions {
             match action {
                 Action::CreateDatabase { id, oid, name } => {
@@ -2016,7 +2034,7 @@ impl Catalog {
             }
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
-                let optimized_expr = optimizer.optimize(source.expr, self.enabled_indexes())?;
+                let optimized_expr = optimizer.optimize(source.expr)?;
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
@@ -2028,7 +2046,7 @@ impl Catalog {
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
-                let optimized_expr = optimizer.optimize(view.expr, self.enabled_indexes())?;
+                let optimized_expr = optimizer.optimize(view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
@@ -2485,7 +2503,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 }
 
-impl SqlCatalog for ConnCatalog<'_> {
+impl SessionCatalog for ConnCatalog<'_> {
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
         if include_system_schemas {
             self.search_path.to_vec()
@@ -2505,6 +2523,12 @@ impl SqlCatalog for ConnCatalog<'_> {
 
     fn user(&self) -> &str {
         &self.user
+    }
+
+    fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc> {
+        self.prepared_statements
+            .map(|ps| ps.get(name).map(|ps| ps.desc()))
+            .flatten()
     }
 
     fn default_database(&self) -> &str {
@@ -2557,22 +2581,6 @@ impl SqlCatalog for ConnCatalog<'_> {
         Ok(self
             .catalog
             .resolve_function(&self.database, self.search_path, name, self.conn_id)?)
-    }
-
-    fn list_items<'a>(
-        &'a self,
-        schema: &SchemaName,
-    ) -> Box<dyn Iterator<Item = &'a dyn sql::catalog::CatalogItem> + 'a> {
-        let schema = self
-            .catalog
-            .get_schema(&schema.database, &schema.schema, self.conn_id)
-            .unwrap();
-        Box::new(
-            schema
-                .items
-                .values()
-                .map(move |id| self.catalog.get_by_id(id) as &dyn sql::catalog::CatalogItem),
-        )
     }
 
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn sql::catalog::CatalogItem> {
@@ -2653,6 +2661,10 @@ impl sql::catalog::CatalogDatabase for Database {
     fn id(&self) -> i64 {
         self.id
     }
+
+    fn has_schemas(&self) -> bool {
+        !self.schemas.is_empty()
+    }
 }
 
 impl sql::catalog::CatalogSchema for Schema {
@@ -2662,6 +2674,10 @@ impl sql::catalog::CatalogSchema for Schema {
 
     fn id(&self) -> i64 {
         self.id
+    }
+
+    fn has_items(&self) -> bool {
+        !self.items.is_empty()
     }
 }
 
@@ -2747,7 +2763,7 @@ mod tests {
 
     use sql::names::{DatabaseSpecifier, FullName, PartialName};
 
-    use crate::catalog::{Catalog, MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA};
+    use crate::catalog::{Catalog, Op, MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -2818,5 +2834,23 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_catalog_revision() {
+        let catalog_file = NamedTempFile::new().unwrap();
+        let mut catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero).unwrap();
+        assert_eq!(catalog.transient_revision(), 1);
+        catalog
+            .transact(vec![Op::CreateDatabase {
+                name: "test".to_string(),
+                oid: 1,
+            }])
+            .unwrap();
+        assert_eq!(catalog.transient_revision(), 2);
+        drop(catalog);
+
+        let catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero).unwrap();
+        assert_eq!(catalog.transient_revision(), 1);
     }
 }

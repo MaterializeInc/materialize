@@ -220,10 +220,8 @@ impl MemBlobCore {
 
     fn delete(&mut self, key: &str) -> Result<(), Error> {
         self.ensure_open()?;
-        match self.dataz.remove(key) {
-            Some(_) => Ok(()),
-            None => Err(format!("key does not exist: {}", key).into()),
-        }
+        self.dataz.remove(key);
+        Ok(())
     }
 }
 
@@ -353,6 +351,7 @@ impl MemRegistry {
             log,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     }
 
@@ -371,6 +370,7 @@ impl MemRegistry {
             log,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     }
 }
@@ -426,6 +426,7 @@ impl MemMultiRegistry {
             log,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     }
 }

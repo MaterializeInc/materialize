@@ -155,7 +155,21 @@ CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS NULL))
 ----
 CREATE TABLE foo (id int4, CHECK (end_date > start_date OR end_date IS NULL))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: ">", expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsNull { expr: Identifier([Ident("end_date")]), negated: false } } }], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: ">", expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Null, negated: false } } }], with_options: [], if_not_exists: false, temporary: false })
+
+parse-statement
+CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS UNKNOWN))
+----
+CREATE TABLE foo (id int4, CHECK (end_date > start_date OR end_date IS UNKNOWN))
+=>
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: ">", expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Unknown, negated: false } } }], with_options: [], if_not_exists: false, temporary: false })
+
+parse-statement
+CREATE TABLE foo (id int, CHECK (start_date IS TRUE))
+----
+CREATE TABLE foo (id int4, CHECK (start_date IS TRUE))
+=>
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: IsExpr { expr: Identifier([Ident("start_date")]), construct: True, negated: false } }], with_options: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TEMP TABLE t (c schema.type)
@@ -665,11 +679,11 @@ CREATE SINK foo FROM bar INTO FILE 'baz' WITH SNAPSHOT FORMAT BYTES
                               ^
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("replication_factor"), value: Number("7") }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("replication_factor"), value: Number("7") }, Value { name: Ident("retention_ms"), value: Number("10000") }, Value { name: Ident("retention_bytes"), value: Number("10000000000") }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES
@@ -802,7 +816,7 @@ CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop W
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), on_name: UnresolvedObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: UnresolvedObjectName([Ident("ascii")]), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsNull { expr: Identifier([Ident("a")]), negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: "=", expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), on_name: UnresolvedObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: UnresolvedObjectName([Ident("ascii")]), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: "=", expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))
@@ -879,14 +893,14 @@ DROP DATABASE mydb
 ----
 DROP DATABASE mydb
 =>
-DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false })
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false, restrict: false })
 
 parse-statement
 DROP DATABASE IF EXISTS mydb
 ----
 DROP DATABASE IF EXISTS mydb
 =>
-DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: true })
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: true, restrict: false })
 
 parse-statement
 DROP DATABASE mydb.nope
@@ -894,6 +908,41 @@ DROP DATABASE mydb.nope
 error: Expected end of statement, found dot
 DROP DATABASE mydb.nope
                   ^
+
+parse-statement
+DROP DATABASE mydb CASCADE
+----
+DROP DATABASE mydb
+=>
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false, restrict: false })
+
+parse-statement
+DROP DATABASE mydb RESTRICT
+----
+DROP DATABASE mydb RESTRICT
+=>
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false, restrict: true })
+
+parse-statement
+DROP DATABASE mydb CASCADE RESTRICT
+----
+error: Cannot specify both CASCADE and RESTRICT in DROP
+DROP DATABASE mydb CASCADE RESTRICT
+                           ^
+
+parse-statement
+DROP DATABASE mydb RESTRICT CASCADE
+----
+error: Cannot specify both RESTRICT and CASCADE in DROP
+DROP DATABASE mydb RESTRICT CASCADE
+                            ^
+
+parse-statement
+DROP DATABASE mydb CASCADE CASCADE
+----
+error: Expected end of statement, found CASCADE
+DROP DATABASE mydb CASCADE CASCADE
+                           ^
 
 parse-statement
 DROP SCHEMA mydb.myschema

@@ -7,12 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
+$ file-append path=deleted.csv
+id,present
+1,person
 
-RUN apt-get update && apt-get install -qy \
-    ca-certificates \
-    postgresql-client
+> CREATE SOURCE csv_upgrade_with_header_alias_missing_file
+  FROM FILE '${testdrive.temp-dir}/deleted.csv'
+  FORMAT CSV WITH HEADER
 
-COPY smith-fuzz /usr/local/bin
-
-ENTRYPOINT ["smith-fuzz"]
+$ file-delete path=deleted.csv

@@ -1244,10 +1244,14 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     name: "pg_index",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_index AS SELECT
-    mz_indexes.oid as indexrelid,
-    mz_objects.oid as indrelid
+    mz_indexes.oid AS indexrelid,
+    mz_objects.oid AS indrelid,
+    false::pg_catalog.bool AS indisprimary,
+    pg_catalog.array_agg(mz_index_columns.on_position ORDER BY mz_index_columns.index_position) AS indkey
 FROM mz_catalog.mz_indexes
-JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id",
+JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id
+JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
+GROUP BY mz_indexes.oid, mz_objects.oid",
     id: GlobalId::System(5017),
     needs_logs: false,
 };

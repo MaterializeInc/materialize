@@ -22,8 +22,7 @@ use timely::Data as TimelyData;
 
 use crate::indexed::runtime::StreamReadHandle;
 use crate::indexed::ListenEvent;
-use crate::operators;
-use crate::operators::flatten_decoded_update;
+use crate::operators::replay::Replay;
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
 pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
@@ -93,7 +92,7 @@ where
                 let err_new_decode = err_new.flat_map(std::convert::identity);
 
                 // Replay the previously persisted data, if any.
-                let (ok_previous, err_previous) = operators::replay(self, snapshot);
+                let (ok_previous, err_previous) = self.replay(snapshot);
 
                 let ok_all = ok_previous.concat(&ok_new);
                 let err_all = err_previous.concat(&err_new_decode);
@@ -413,5 +412,17 @@ mod tests {
         assert_eq!(actual, expected);
 
         Ok(())
+    }
+}
+
+fn flatten_decoded_update<K, V>(
+    update: ((Result<K, String>, Result<V, String>), u64, isize),
+) -> Result<((K, V), u64, isize), Vec<(String, u64, isize)>> {
+    let ((k, v), ts, diff) = update;
+    match (k, v) {
+        (Ok(k), Ok(v)) => Ok(((k, v), ts, diff)),
+        (Err(k_err), Ok(_)) => Err(vec![(k_err, ts, diff)]),
+        (Ok(_), Err(v_err)) => Err(vec![(v_err, ts, diff)]),
+        (Err(k_err), Err(v_err)) => Err(vec![(k_err, ts, diff), (v_err, ts, diff)]),
     }
 }

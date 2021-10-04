@@ -114,14 +114,8 @@ mod tests {
 
         let out = match test_type {
             TestType::Opt => {
-                rel = logical_opt
-                    .optimize(rel, &HashMap::new())
-                    .unwrap()
-                    .into_inner();
-                rel = physical_opt
-                    .optimize(rel, &HashMap::new())
-                    .unwrap()
-                    .into_inner();
+                rel = logical_opt.optimize(rel).unwrap().into_inner();
+                rel = physical_opt.optimize(rel).unwrap().into_inner();
 
                 convert_rel_to_string(&rel, &cat, &format_type)
             }

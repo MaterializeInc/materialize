@@ -87,6 +87,37 @@ Invalid value for configuration property "request.required.acks" acks foo
 No such column: f2
 
 #
+# Retention options
+#
+! CREATE SINK invalid_retention_ms FROM v1
+  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
+  WITH (retention_ms = a)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+retention ms for sink topics must be an integer
+
+! CREATE SINK invalid_retention_ms FROM v1
+  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
+  WITH (retention_ms = -2)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+retention ms for sink topics must be greater than or equal to -1
+
+! CREATE SINK invalid_retention_bytes FROM v1
+  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
+  WITH (retention_bytes = a)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+retention bytes for sink topics must be an integer
+
+! CREATE SINK invalid_retention_bytes FROM v1
+  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
+  WITH (retention_bytes = -2)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+retention bytes for sink topics must be greater than or equal to -1
+
+#
 # Sink dependencies
 #
 

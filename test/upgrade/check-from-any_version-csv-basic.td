@@ -7,7 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: smith-fuzz
-pre-image:
-  - type: cargo-build
-    bin: smith-fuzz
+> select * from csv
+al  sia     mz_line_no
+----------------------
+id  value   1
+1   person  2
+
+$ file-append path=csv-basic.csv
+2,animal
+
+> select * from csv
+al  sia     mz_line_no
+----------------------
+id  value   1
+1   person  2
+2   animal  3

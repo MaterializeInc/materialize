@@ -27,7 +27,7 @@ use crate::ast::{
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowStatementFilter, Statement, UnresolvedObjectName, Value,
 };
-use crate::catalog::{Catalog, CatalogItemType};
+use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::PartialName;
 use crate::parse;
 use crate::plan::query::{resolve_names_stmt, ResolvedObjectName};
@@ -49,7 +49,7 @@ pub fn describe_show_create_view(
 // specified is the same as the name in the catalog, we don't use the ID format.
 #[derive(Debug)]
 struct NameSimplifier<'a> {
-    catalog: &'a dyn Catalog,
+    catalog: &'a dyn SessionCatalog,
 }
 
 impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {

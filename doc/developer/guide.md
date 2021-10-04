@@ -169,6 +169,9 @@ log` and `ps ... | grep` over the output of `confluent local services status`.
 Still, it's reliable enough to be more convenient than managing each service
 manually.
 
+When the confluent local services are running, they can be examined via a web
+UI which defaults to `localhost:9021`.
+
 ## Symbiosis mode
 
 For the convenience of developers, Materialize has a semi-secret "symbiosis"
