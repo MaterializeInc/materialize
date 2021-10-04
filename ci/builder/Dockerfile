@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:focal-20210827 AS crosstool
+FROM ubuntu:focal-20210921 AS crosstool
 
 WORKDIR /scratch
 
@@ -55,7 +55,7 @@ RUN mkdir crosstool \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:focal-20210827
+FROM ubuntu:focal-20210921
 
 WORKDIR /workdir
 
