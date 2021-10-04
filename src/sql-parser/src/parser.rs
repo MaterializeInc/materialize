@@ -1307,7 +1307,12 @@ impl<'a> Parser<'a> {
     ) -> Result<Option<Keyword>, ParserError> {
         match self.parse_one_of_keywords(keywords) {
             Some(first) => {
-                if let Some(second) = self.parse_one_of_keywords(keywords) {
+                let remaining_keywords = keywords
+                    .iter()
+                    .cloned()
+                    .filter(|k| *k != first)
+                    .collect::<Vec<_>>();
+                if let Some(second) = self.parse_one_of_keywords(remaining_keywords.as_slice()) {
                     let second_pos = self.peek_prev_pos();
                     parser_err!(
                         self,

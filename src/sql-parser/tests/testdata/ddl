@@ -938,6 +938,13 @@ DROP DATABASE mydb RESTRICT CASCADE
                             ^
 
 parse-statement
+DROP DATABASE mydb CASCADE CASCADE
+----
+error: Expected end of statement, found CASCADE
+DROP DATABASE mydb CASCADE CASCADE
+                           ^
+
+parse-statement
 DROP SCHEMA mydb.myschema
 ----
 DROP SCHEMA mydb.myschema

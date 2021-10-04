@@ -202,6 +202,8 @@ v2_primary_idx  user
 Cannot specify both RESTRICT and CASCADE in DROP
 ! DROP DATABASE d CASCADE RESTRICT
 Cannot specify both CASCADE and RESTRICT in DROP
+! DROP DATABASE d CASCADE CASCADE
+Expected end of statement, found CASCADE
 
 ! DROP DATABASE d RESTRICT
 database 'd' cannot be dropped with RESTRICT while it contains schemas
