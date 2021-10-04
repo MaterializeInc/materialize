@@ -2,6 +2,8 @@
 name: "Internal: release checklist"
 about: >
   A tracking issue for a new release of Materialize. Contributor use only.
+title: "Release: v"
+labels: release-tracker
 ---
 
 ## Current status: 🚢 Progressing 🚢
@@ -102,11 +104,12 @@ a release is published.
   issue links, one to point to the unreviewed PRs issue you went through above, and one
   to point to this issue:
 
-  > @relnotes-team the release is in progress, now's a great time to verify or
-  > prepare the release notes and any announcement posts.
-  > * release notes: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md
-  > * All PRs in this release: https://github.com/MaterializeInc/materialize/issues/`<unreviewed PRs issue>`
-  > * Release: https://github.com/MaterializeInc/materialize/issues/`<this issue>`
+  ```text
+  @relnotes-team the release is in progress; now's a great time to verify or prepare the release notes and any announcement posts.
+  * release notes: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md
+  * All PRs in this release: https://github.com/MaterializeInc/materialize/issues/<unreviewed PRs issue>
+  * Release: https://github.com/MaterializeInc/materialize/issues/<this issue>
+  ```
 
 ### Test the release candidate
 
