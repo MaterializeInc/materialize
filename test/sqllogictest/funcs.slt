@@ -106,28 +106,24 @@ SELECT date_trunc('millennium', TIMESTAMP '2000-11-26 15:56:46.241150')
 ----
 1001-01-01 00:00:00
 
-# TODO: PostgreSQL displays timestamps with 0 or negative year as (1 - year) BC, while we do not.
 # TODO: Currently we do not parse BC/AD and it's erroneously considered a named time zone, so INTERVAL is used.
-# This test should return:  0011-01-01 00:00:00 BC
 # Expects the decade to be rounded down for BC.
 query T
 SELECT date_trunc('decade', TIMESTAMP '0001-01-01 00:00:00.000000' - INTERVAL '2'YEAR)
 ----
--0010-01-01 00:00:00
+0011-01-01 00:00:00 BC
 
-# This test should return:  0100-01-01 00:00:00 BC
 # Expects the century to be rounded down for BC.
 query T
 SELECT date_trunc('century', TIMESTAMP '0001-01-01 00:00:00.000000' - INTERVAL '1'SECOND)
 ----
--0099-01-01 00:00:00
+0100-01-01 00:00:00 BC
 
-# This test should return:  1000-01-01 00:00:00 BC
 # Expects the millennium to be rounded down for BC.
 query T
 SELECT date_trunc('millennium', TIMESTAMP '0001-01-01 00:00:00.000000' - INTERVAL '1'SECOND)
 ----
--0999-01-01 00:00:00
+1000-01-01 00:00:00 BC
 
 query error unknown units 'bad'
 SELECT date_trunc('bad', TIMESTAMP '2019-11-26 15:56:46.241150')

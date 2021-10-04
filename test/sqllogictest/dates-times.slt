@@ -1100,3 +1100,134 @@ select '9::59.999999999'::time
 # TODO: Postgres supports this as 09:01:00.1.
 statement error invalid input syntax for type time: NANOSECOND
 select '9::60.1'::time
+
+# Era identifiers
+query T
+select '1000-02-24 BC'::date
+----
+1000-02-24 BC
+
+query T
+select '2001BC 02 03 +00:00'::date
+----
+2001-02-03 BC
+
+query T
+select '2001 BC 02 03 +00:00'::date
+----
+2001-02-03 BC
+
+query T
+select '2001 BC 02 03'::date
+----
+2001-02-03 BC
+
+query T
+select '2001BC 02 03'::date
+----
+2001-02-03 BC
+
+query T
+select '2001 02 BC 03'::date
+----
+2001-02-03 BC
+
+query T
+select '2001 02BC 03'::date
+----
+2001-02-03 BC
+
+query T
+select '2001 02 03 BC'::date
+----
+2001-02-03 BC
+
+query T
+select '2001 02 03BC'::date
+----
+2001-02-03 BC
+
+query T
+select '2001-02-03 BC'::date
+----
+2001-02-03 BC
+
+query T
+select '2001-02-03BC'::date
+----
+2001-02-03 BC
+
+query T
+select '2001 02-03 BC'::date
+----
+2001-02-03 BC
+
+query T
+select '2001 02-03BC'::date
+----
+2001-02-03 BC
+
+query T
+select '20010203 BC'::date
+----
+2001-02-03 BC
+
+query T
+select '20010203BC'::date
+----
+2001-02-03 BC
+
+query T
+select '690203 BC'::date
+----
+0069-02-03 BC
+
+query T
+select '700203 BC'::date
+----
+0070-02-03 BC
+
+query T
+select '010203 BC'::date
+----
+0001-02-03 BC
+
+query T
+select '0010203 BC'::date
+----
+0001-02-03 BC
+
+query T
+select '00010203 BC'::date
+----
+0001-02-03 BC
+
+query T
+select '2001-02-03 BC 04:05:06.789'::date
+----
+2001-02-03 BC
+
+query T
+select '2001-02-03 04:05:06.789 BC'::date
+----
+2001-02-03 BC
+
+query T
+select '2001-02-03 BC 04:05:06.789'::timestamp
+----
+2001-02-03 04:05:06.789 BC
+
+query T
+select '2001-02-03 04:05:06.789 BC'::timestamp
+----
+2001-02-03 04:05:06.789 BC
+
+query T
+select '2-01-01 00:00:00 BC'::timestamptz;
+----
+0002-01-01 00:00:00+00 BC
+
+query T
+select '2-01-01 BC 00:00:00-02'::timestamptz;
+----
+0002-01-01 02:00:00+00 BC

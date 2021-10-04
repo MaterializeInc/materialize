@@ -30,7 +30,7 @@ use std::fmt;
 use std::num::FpCategory;
 
 use chrono::offset::{Offset, TimeZone};
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use lazy_static::lazy_static;
@@ -321,7 +321,14 @@ pub fn format_date<F>(buf: &mut F, d: NaiveDate) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", d);
+    let str = if d.year() <= 0 {
+        // 1 BC is represented as year 0 internally
+        let neg_year = d.with_year(-d.year() + 1).unwrap();
+        format!("{} BC", neg_year)
+    } else {
+        d.to_string()
+    };
+    write!(buf, "{}", str);
     Nestable::Yes
 }
 
@@ -361,8 +368,17 @@ pub fn format_timestamp<F>(buf: &mut F, ts: NaiveDateTime) -> Nestable
 where
     F: FormatBuffer,
 {
+    let (ts, neg) = if ts.year() <= 0 {
+        // 1 BC is represented as year 0 internally
+        (ts.with_year(-ts.year() + 1).unwrap(), true)
+    } else {
+        (ts, false)
+    };
     write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
     format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    if neg {
+        write!(buf, " BC");
+    }
     // This always needs escaping because of the whitespace
     Nestable::MayNeedEscaping
 }
@@ -398,9 +414,18 @@ pub fn format_timestamptz<F>(buf: &mut F, ts: DateTime<Utc>) -> Nestable
 where
     F: FormatBuffer,
 {
+    let (ts, neg) = if ts.year() <= 0 {
+        // 1 BC is represented as year 0 internally
+        (ts.with_year(-ts.year() + 1).unwrap(), true)
+    } else {
+        (ts, false)
+    };
     write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
     format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
     write!(buf, "+00");
+    if neg {
+        write!(buf, " BC");
+    }
     // This always needs escaping because of the whitespace
     Nestable::MayNeedEscaping
 }

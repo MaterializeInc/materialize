@@ -24,8 +24,79 @@ fn test_parse_date() {
     run_test_parse_date("20010203", NaiveDate::from_ymd(2001, 2, 3));
     run_test_parse_date("99990203", NaiveDate::from_ymd(9999, 2, 3));
     run_test_parse_date("2001-02-03", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date("2001 02 03", NaiveDate::from_ymd(2001, 2, 3));
     run_test_parse_date("2001-02-03 04:05:06.789", NaiveDate::from_ymd(2001, 2, 3));
     fn run_test_parse_date(s: &str, n: NaiveDate) {
+        assert_eq!(strconv::parse_date(s).unwrap(), n);
+    }
+}
+
+#[test]
+fn test_parse_date_ad() {
+    run_test_parse_date_ad("2001AD 02 03 +00:00", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001 AD 02 03 +00:00", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001 AD 02 03", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001AD 02 03", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001 02 AD 03", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001 02AD 03", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001 02 03 AD", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001 02 03AD", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001-02-03 AD", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001-02-03AD", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001 02-03 AD", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("2001 02-03AD", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("20010203 AD", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("20010203AD", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("690203 AD", NaiveDate::from_ymd(2069, 2, 3));
+    run_test_parse_date_ad("700203 AD", NaiveDate::from_ymd(1970, 2, 3));
+    run_test_parse_date_ad("010203 AD", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date_ad("0010203 AD", NaiveDate::from_ymd(1, 2, 3));
+    run_test_parse_date_ad("00010203 AD", NaiveDate::from_ymd(1, 2, 3));
+    run_test_parse_date_ad(
+        "2001-02-03 AD 04:05:06.789",
+        NaiveDate::from_ymd(2001, 2, 3),
+    );
+    run_test_parse_date_ad(
+        "2001-02-03 04:05:06.789 AD",
+        NaiveDate::from_ymd(2001, 2, 3),
+    );
+    fn run_test_parse_date_ad(s: &str, n: NaiveDate) {
+        assert_eq!(strconv::parse_date(s).unwrap(), n);
+    }
+}
+
+#[test]
+fn test_parse_date_bc() {
+    run_test_parse_date_bc("0001BC 02 03 +00:00", NaiveDate::from_ymd(0, 2, 3));
+    run_test_parse_date_bc("0002BC 02 03 +00:00", NaiveDate::from_ymd(-1, 2, 3));
+    run_test_parse_date_bc("2002BC 02 03 +00:00", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002 BC 02 03 +00:00", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002 BC 02 03", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002BC 02 03", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002 02 BC 03", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002 02BC 03", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002 02 03 BC", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002 02 03BC", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002-02-03 BC", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002-02-03BC", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002 02-03 BC", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("2002 02-03BC", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("20020203 BC", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("20020203BC", NaiveDate::from_ymd(-2001, 2, 3));
+    run_test_parse_date_bc("690203 BC", NaiveDate::from_ymd(-68, 2, 3));
+    run_test_parse_date_bc("700203 BC", NaiveDate::from_ymd(-69, 2, 3));
+    run_test_parse_date_bc("010203 BC", NaiveDate::from_ymd(0, 2, 3));
+    run_test_parse_date_bc("0010203 BC", NaiveDate::from_ymd(0, 2, 3));
+    run_test_parse_date_bc("00010203 BC", NaiveDate::from_ymd(0, 2, 3));
+    run_test_parse_date_bc(
+        "2001-02-03 BC 04:05:06.789",
+        NaiveDate::from_ymd(-2000, 2, 3),
+    );
+    run_test_parse_date_bc(
+        "2001-02-03 04:05:06.789 BC",
+        NaiveDate::from_ymd(-2000, 2, 3),
+    );
+    fn run_test_parse_date_bc(s: &str, n: NaiveDate) {
         assert_eq!(strconv::parse_date(s).unwrap(), n);
     }
 }
@@ -162,6 +233,166 @@ fn test_parse_timestamp() {
     run_test_parse_timestamp(
         "2001-02-03 01:02",
         NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 0),
+    );
+
+    fn run_test_parse_timestamp(s: &str, ts: NaiveDateTime) {
+        assert_eq!(strconv::parse_timestamp(s).unwrap(), ts);
+    }
+}
+
+#[test]
+fn test_parse_timestamp_ad() {
+    run_test_parse_timestamp(
+        "2001-02-03 AD 04:05:06.789",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03AD 04:05:06.789",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 04:05:06.789 AD",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 04:05:06.789AD",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 AD",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms(0, 0, 0),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03AD",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms(0, 0, 0),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 AD 01:02:03",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 3),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03AD 01:02:03",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 3),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 01:02:03 AD",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 3),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 01:02:03AD",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 3),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 AD 02:03.456",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(0, 2, 3, 456_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03AD 02:03.456",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(0, 2, 3, 456_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 02:03.456 AD",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(0, 2, 3, 456_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 02:03.456AD",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(0, 2, 3, 456_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 AD 01:02",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 0),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03AD 01:02",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 0),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 01:02 AD",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 0),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 01:02AD",
+        NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 0),
+    );
+
+    fn run_test_parse_timestamp(s: &str, ts: NaiveDateTime) {
+        assert_eq!(strconv::parse_timestamp(s).unwrap(), ts);
+    }
+}
+
+#[test]
+fn test_parse_timestamp_bc() {
+    run_test_parse_timestamp(
+        "2001-02-03 BC 04:05:06.789",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03BC 04:05:06.789",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 04:05:06.789 BC",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 04:05:06.789BC",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 BC",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms(0, 0, 0),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03BC",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms(0, 0, 0),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 BC 01:02:03",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms(1, 2, 3),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03BC 01:02:03",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms(1, 2, 3),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 01:02:03 BC",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms(1, 2, 3),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 01:02:03BC",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms(1, 2, 3),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 BC 02:03.456",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms_nano(0, 2, 3, 456_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03BC 02:03.456",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms_nano(0, 2, 3, 456_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 02:03.456 BC",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms_nano(0, 2, 3, 456_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 02:03.456BC",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms_nano(0, 2, 3, 456_000_000),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 BC 01:02",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms(1, 2, 0),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03BC 01:02",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms(1, 2, 0),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 01:02 BC",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms(1, 2, 0),
+    );
+    run_test_parse_timestamp(
+        "2001-02-03 01:02BC",
+        NaiveDate::from_ymd(-2000, 2, 3).and_hms(1, 2, 0),
     );
 
     fn run_test_parse_timestamp(s: &str, ts: NaiveDateTime) {
@@ -454,4 +685,101 @@ fn miri_test_format_list() {
         out,
         r#"{a,"a\"b","",NULL,"NULL",nUlL,"  spaces ","a,b","\\","a\\b\"c\\d\""}"#
     );
+}
+
+#[test]
+fn test_format_date() {
+    run_test_format_date(NaiveDate::from_ymd(2000, 2, 3), "2000-02-03");
+    run_test_format_date(NaiveDate::from_ymd(-1999, 2, 3), "2000-02-03 BC");
+    run_test_format_date(NaiveDate::from_ymd(0, 2, 3), "0001-02-03 BC");
+    run_test_format_date(NaiveDate::from_ymd(-1, 2, 3), "0002-02-03 BC");
+
+    fn run_test_format_date(n: NaiveDate, e: &str) {
+        let mut buf = String::new();
+        strconv::format_date(&mut buf, n);
+        assert_eq!(buf, e);
+    }
+}
+
+#[test]
+fn test_format_timestamp() {
+    run_test_format_timestamp(
+        NaiveDate::from_ymd(2000, 2, 3).and_hms(4, 5, 6),
+        "2000-02-03 04:05:06",
+    );
+    run_test_format_timestamp(
+        NaiveDate::from_ymd(2000, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+        "2000-02-03 04:05:06.789",
+    );
+    run_test_format_timestamp(
+        NaiveDate::from_ymd(-1999, 2, 3).and_hms(4, 5, 6),
+        "2000-02-03 04:05:06 BC",
+    );
+    run_test_format_timestamp(
+        NaiveDate::from_ymd(-1999, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+        "2000-02-03 04:05:06.789 BC",
+    );
+    run_test_format_timestamp(
+        NaiveDate::from_ymd(0, 2, 3).and_hms(4, 5, 6),
+        "0001-02-03 04:05:06 BC",
+    );
+    run_test_format_timestamp(
+        NaiveDate::from_ymd(-1, 2, 3).and_hms(4, 5, 6),
+        "0002-02-03 04:05:06 BC",
+    );
+
+    fn run_test_format_timestamp(n: NaiveDateTime, e: &str) {
+        let mut buf = String::new();
+        strconv::format_timestamp(&mut buf, n);
+        assert_eq!(buf, e);
+    }
+}
+
+#[test]
+fn test_format_timestamptz() {
+    run_test_format_timestamptz(
+        datetime_utc(2000, 2, 3, 4, 5, 6, 0),
+        "2000-02-03 04:05:06+00",
+    );
+    run_test_format_timestamptz(
+        datetime_utc(2000, 2, 3, 4, 5, 6, 789_000_000),
+        "2000-02-03 04:05:06.789+00",
+    );
+    run_test_format_timestamptz(
+        datetime_utc(-1999, 2, 3, 4, 5, 6, 0),
+        "2000-02-03 04:05:06+00 BC",
+    );
+    run_test_format_timestamptz(
+        datetime_utc(-1999, 2, 3, 4, 5, 6, 789_000_000),
+        "2000-02-03 04:05:06.789+00 BC",
+    );
+    run_test_format_timestamptz(
+        datetime_utc(0, 2, 3, 4, 5, 6, 0),
+        "0001-02-03 04:05:06+00 BC",
+    );
+    run_test_format_timestamptz(
+        datetime_utc(-1, 2, 3, 4, 5, 6, 0),
+        "0002-02-03 04:05:06+00 BC",
+    );
+
+    fn datetime_utc(
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        min: u32,
+        sec: u32,
+        nano: u32,
+    ) -> DateTime<Utc> {
+        DateTime::from_utc(
+            NaiveDate::from_ymd(year, month, day).and_hms_nano(hour, min, sec, nano),
+            Utc,
+        )
+    }
+
+    fn run_test_format_timestamptz(n: DateTime<Utc>, e: &str) {
+        let mut buf = String::new();
+        strconv::format_timestamptz(&mut buf, n);
+        assert_eq!(buf, e);
+    }
 }

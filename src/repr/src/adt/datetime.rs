@@ -18,6 +18,8 @@ use std::str::FromStr;
 
 use chrono::{FixedOffset, NaiveDate, NaiveTime};
 use chrono_tz::Tz;
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
@@ -543,11 +545,17 @@ impl ParsedDateTime {
     /// # Errors
     /// - If year, month, or day overflows their respective parameter in
     ///   [chrono::naive::date::NaiveDate::from_ymd_opt](https://docs.rs/chrono/0.4/chrono/naive/struct.NaiveDate.html#method.from_ymd_opt).
+    ///
+    /// Note: Postgres does not recognize Year 0, but in order to make
+    /// arithmetic work as expected, the Year 1 BC in a ParsedDateTime
+    /// is mapped to the Year 0 in a NaiveDate, and vice-versa.
     pub fn compute_date(&self) -> Result<chrono::NaiveDate, String> {
         match (self.year, self.month, self.day) {
             (Some(year), Some(month), Some(day)) => {
+                // Adjust for BC years
+                let year = if year.unit < 0 { year.unit + 1} else { year.unit };
                 let p_err = |e, field| format!("{} in date is invalid: {}", field, e);
-                let year = year.unit.try_into().map_err(|e| p_err(e, "Year"))?;
+                let year = year.try_into().map_err(|e| p_err(e, "Year"))?;
                 let month = month.unit.try_into().map_err(|e| p_err(e, "Month"))?;
                 let day = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
                 NaiveDate::from_ymd_opt(year, month, day)
@@ -788,7 +796,7 @@ impl ParsedDateTime {
     }
     pub fn check_datelike_bounds(&mut self) -> Result<(), String> {
         if let Some(year) = self.year {
-            // 1BC is not represented as year 0 in postgres
+            // 1BC is not represented as year 0 at the parser level, only internally
             if year.unit == 0 {
                 return Err("YEAR cannot be zero".to_string());
             }
@@ -877,6 +885,15 @@ impl ParsedDateTime {
         self.day = None;
     }
 
+    fn negate_year(&mut self) {
+        if let Some(year) = self.year {
+            self.year = Some(DateTimeFieldValue {
+                unit: -year.unit,
+                ..year
+            });
+        }
+    }
+
     /// Retrieve any value that we parsed out of the literal string for the
     /// `field`.
     fn units_of(&self, field: DateTimeField) -> Option<DateTimeFieldValue> {
@@ -908,18 +925,27 @@ fn fill_pdt_date(
     // Check for one number that represents YYYYMMDDD.
     match actual.front() {
         Some(Num(mut val, digits)) if 6 <= *digits && *digits <= 8 => {
+            let digits = *digits;
             pdt.day = Some(DateTimeFieldValue::new(val % 100, 0));
             val /= 100;
             pdt.month = Some(DateTimeFieldValue::new(val % 100, 0));
             val /= 100;
-            // Handle 2 digit year case
-            if *digits == 6 {
-                if val < 70 {
-                    val += 2000;
-                } else {
-                    val += 1900;
+
+            // Handle BC years
+            if let Some(BCEra) = actual.back() {
+                val = -val;
+                actual.pop_back();
+            } else {
+                // Handle 2 digit year case, but only for AD dates
+                if digits == 6 {
+                    if val < 70 {
+                        val += 2000;
+                    } else {
+                        val += 1900;
+                    }
                 }
             }
+
             pdt.year = Some(DateTimeFieldValue::new(val, 0));
             actual.pop_front();
             // Trim remaining optional tokens, but never an immediately
@@ -933,7 +959,17 @@ fn fill_pdt_date(
         _ => (),
     }
 
+    // Note: since `Delim`s in the format specification cause the previous
+    // field to be written, BCEras should not be preceeded by a Delim here.
     let valid_formats = vec![
+        vec![
+            Num(0, 1), // year
+            Dash,
+            Num(0, 1), // month
+            Dash,
+            Num(0, 1), // day
+            BCEra,
+        ],
         vec![
             Num(0, 1), // year
             Dash,
@@ -947,7 +983,40 @@ fn fill_pdt_date(
             Num(0, 1), // month
             Dash,
             Num(0, 1), // day
+            BCEra,
         ],
+        vec![
+            Num(0, 1), // year
+            Delim,
+            Num(0, 1), // month
+            Dash,
+            Num(0, 1), // day
+        ],
+        vec![
+            Num(0, 1), // year
+            BCEra,
+            Delim,
+            Num(0, 1), // month
+            Delim,
+            Num(0, 1), // day
+        ],
+        vec![
+            Num(0, 1), // year
+            Delim,
+            Num(0, 1), // month
+            BCEra,
+            Delim,
+            Num(0, 1), // day
+        ],
+        vec![
+            Num(0, 1), // year
+            Delim,
+            Num(0, 1), // month
+            Delim,
+            Num(0, 1), // day
+            BCEra,
+        ],
+        // Needs to be the last pattern because of partial matches
         vec![
             Num(0, 1), // year
             Delim,
@@ -962,8 +1031,18 @@ fn fill_pdt_date(
     for expected in valid_formats {
         let mut expected = VecDeque::from(expected);
 
+        // Check for BCs in the end here as well
         match fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, DateTimeField::Year, 1) {
             Ok(()) => {
+                // Deal with trailing era indicators
+                if let Some(BCEra) = actual.back() {
+                    pdt.negate_year();
+                    actual.pop_back();
+                }
+                // Remove trailing delimiters
+                while let Some(Delim) = actual.back() {
+                    actual.pop_back();
+                }
                 return Ok(());
             }
             Err(_) => {
@@ -1250,6 +1329,32 @@ fn fill_pdt_from_tokens(
                     }
                 }
             }
+            (Delim, BCEra) => {
+                // Era identifiers can have an arbitrary number of preceeding spaces.
+                actual.pop_front();
+                i += 1;
+                continue;
+            }
+            (BCEra, BCEra) => {
+                // If there is a BC era identifier, treat the year as negative.
+                pdt.negate_year();
+
+                // Handle the case when Year is the next field to be written.
+                if current_field == DateTimeField::Year {
+                    if let Some(old_buf) = unit_buf {
+                        unit_buf = Some(DateTimeFieldValue {
+                            unit: -old_buf.unit,
+                            ..old_buf
+                        });
+                    }
+                }
+
+                actual.pop_front();
+                expected.pop_front();
+                i += 1;
+
+                continue;
+            }
             // Allow skipping expected spaces (Delim), numbers, dots, and nanoseconds.
             (_, Num(_, _)) | (_, Dot) | (_, Nanos(_)) | (_, Delim) => {
                 expected.pop_front();
@@ -1353,6 +1458,7 @@ fn determine_format_w_datetimefield(
         Some(DateTimeUnit(DateTimeUnits::Minute)) => Ok(Some(PostgreSql(Minute))),
         Some(DateTimeUnit(DateTimeUnits::Second)) => Ok(Some(PostgreSql(Second))),
         Some(DateTimeUnit(_)) => Ok(None),
+        Some(BCEra) => Ok(None),
         _ => Err("Cannot determine format of all parts".into()),
     }
 }
@@ -1463,6 +1569,8 @@ pub(crate) enum TimeStrToken {
     TimeUnit(DateTimeField),
     // Fallback if TimeUnit isn't parseable.
     DateTimeUnit(DateTimeUnits),
+    // BC era identifier
+    BCEra,
     // Used to support ISO-formatted timestamps.
     DateTimeDelimiter,
     // Space arbitrary non-enum punctuation (e.g. !), or leading/trailing
@@ -1484,6 +1592,7 @@ impl std::fmt::Display for TimeStrToken {
             TzName(n) => write!(f, "{}", n),
             TimeUnit(d) => write!(f, "{:?}", d),
             DateTimeUnit(u) => write!(f, "{}", u),
+            BCEra => write!(f, "BC"),
             DateTimeDelimiter => write!(f, "T"),
             Delim => write!(f, " "),
         }
@@ -1546,6 +1655,10 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
             // Supports ISO-formatted datetime strings.
             if c == "T" || c == "t" {
                 t.push_back(TimeStrToken::DateTimeDelimiter);
+            } else if c.to_uppercase() == "BC" {
+                t.push_back(TimeStrToken::BCEra);
+            } else if c.to_uppercase() == "AD" {
+                // No need to tokenize AD, since it is always a no-op
             } else {
                 match c.to_uppercase().parse() {
                     Ok(u) => t.push_back(TimeStrToken::TimeUnit(u)),
@@ -1846,6 +1959,12 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
     // string can have colons)
     let cut = value.find(" +").or_else(|| value.find(" -"));
 
+    lazy_static! {
+        // Matches `ad`, `bc`, `AD`, `BC`, including in cases like `1BC`, but
+        // not when inside textual strings
+        static ref ADBC_RE: Regex = Regex::new("(?i-u)(?:\\b|\\d)(ad|bc)\\b").unwrap();
+    }
+
     if let Some(cut) = cut {
         let (first, second) = value.split_at(cut);
         return (first.trim(), second.trim());
@@ -1863,6 +1982,11 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 
             if let Some(tz) = tz {
                 let (first, second) = value.split_at(colon + tz);
+                // If the trailing text we have is an era identifier, consider it
+                // part of the datetime portion
+                if ADBC_RE.is_match(second) {
+                    return (value.trim(), "");
+                }
                 return (first.trim(), second.trim());
             }
         }
@@ -1875,6 +1999,11 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 
         if let Some(cut) = cut {
             let (first, second) = value.split_at(cut);
+            // If the trailing text we have is an era identifier, consider it
+            // part of the datetime portion
+            if ADBC_RE.is_match(second) {
+                return (value.trim(), "");
+            }
             return (first.trim(), second.trim());
         }
 
@@ -2062,6 +2191,75 @@ mod test {
     }
 
     #[test]
+    fn test_fill_pdt_date_single_number() -> Result<(), String> {
+        let test_cases = [
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(4, 0)),
+                    day: Some(DateTimeFieldValue::new(1, 0)),
+                    ..Default::default()
+                },
+                "20000401",
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(1970, 0)),
+                    month: Some(DateTimeFieldValue::new(4, 0)),
+                    day: Some(DateTimeFieldValue::new(1, 0)),
+                    ..Default::default()
+                },
+                "19700401",
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(4, 0)),
+                    day: Some(DateTimeFieldValue::new(1, 0)),
+                    ..Default::default()
+                },
+                "000401",
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(1970, 0)),
+                    month: Some(DateTimeFieldValue::new(4, 0)),
+                    day: Some(DateTimeFieldValue::new(1, 0)),
+                    ..Default::default()
+                },
+                "700401",
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(2069, 0)),
+                    month: Some(DateTimeFieldValue::new(4, 0)),
+                    day: Some(DateTimeFieldValue::new(1, 0)),
+                    ..Default::default()
+                },
+                "690401",
+            ),
+            // Era handling
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(-69, 0)),
+                    month: Some(DateTimeFieldValue::new(4, 0)),
+                    day: Some(DateTimeFieldValue::new(1, 0)),
+                    ..Default::default()
+                },
+                "690401 BC",
+            ),
+        ];
+        for test in test_cases.iter() {
+            let mut pdt = ParsedDateTime::default();
+            let mut actual = tokenize_time_str(test.1)?;
+            fill_pdt_date(&mut pdt, &mut actual)?;
+
+            assert_eq!(pdt, test.0);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_fill_pdt_from_tokens() {
         use DateTimeField::*;
         let test_cases = [
@@ -2219,6 +2417,88 @@ mod test {
                 "1MONTHS-2",
                 "0YEAR-0",
                 Month,
+                1,
+            ),
+            // Parse era indicators
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 0)),
+                    ..Default::default()
+                },
+                "1 BC 2 3 4 5 6",
+                "0BC 0 0 0 0 0",
+                Year,
+                1,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 0)),
+                    ..Default::default()
+                },
+                "1 2 BC 3 4 5 6",
+                "0 0BC 0 0 0 0",
+                Year,
+                1,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 0)),
+                    ..Default::default()
+                },
+                "1 2 3 BC 4 5 6",
+                "0 0 0BC 0 0 0",
+                Year,
+                1,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    ..Default::default()
+                },
+                "1 BC 2 3",
+                "0BC 0 0",
+                Year,
+                1,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    ..Default::default()
+                },
+                "1 2 BC 3",
+                "0 0BC 0",
+                Year,
+                1,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    ..Default::default()
+                },
+                "1 2 3 BC",
+                "0 0 0BC",
+                Year,
                 1,
             ),
         ];
@@ -2692,6 +2972,103 @@ mod test {
             "2000-01-02T3:4:5.6",
             ParsedDateTime {
                 year: Some(DateTimeFieldValue::new(2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+
+        run_test_build_parsed_datetime_timestamp(
+            "2000 BC 01 02 T3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000 01 BC 02 T3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000 01 02 BC T3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000 01 02 T3:4:5.6 BC",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000-01-02 BC T3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000-01-02 BC 3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000 01-02 BC 3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000 BC 01 02 3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-2000, 0)),
                 month: Some(DateTimeFieldValue::new(1, 0)),
                 day: Some(DateTimeFieldValue::new(2, 0)),
                 hour: Some(DateTimeFieldValue::new(3, 0)),
