@@ -352,20 +352,21 @@ where
                                         let results = results.flat_map(
                                             move |DecodeResult { key, value, .. }| {
                                                 let (keys, metrics) = &mut trackstate;
+                                                #[rustfmt::skip]
                                                 let value = value.map(|value| {
                                                     match key {
-                                                None => Err::<_, DataflowError>(
-                                                    DecodeError::Text(
-                                                        "All upsert keys should decode to a value."
-                                                            .to_string(),
-                                                    )
-                                                    .into(),
-                                                ),
-                                                Some(Err(e)) => Err(e),
-                                                Some(Ok(key)) => {
-                                                    rewrite_for_upsert(value, keys, key, metrics)
-                                                }
-                                            }
+                                                        None => Err::<_, DataflowError>(
+                                                            DecodeError::Text(
+                                                                "All upsert keys should decode to a value."
+                                                                    .to_string(),
+                                                            )
+                                                            .into(),
+                                                        ),
+                                                        Some(Err(e)) => Err(e),
+                                                        Some(Ok(key)) => {
+                                                            rewrite_for_upsert(value, keys, key, metrics)
+                                                        }
+                                                    }
                                                 });
                                                 value
                                             },
