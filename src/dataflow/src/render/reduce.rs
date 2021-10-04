@@ -1780,12 +1780,10 @@ where
                                     pos_infs,
                                     neg_infs,
                                     nans,
-                                    non_nulls,
+                                    non_nulls: _,
                                 },
                             ) => {
-                                if *non_nulls == 0 {
-                                    Datum::Null
-                                } else if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
                                     // NaNs are NaNs and cases where we've seen a
                                     // mixture of positive and negative infinities.
                                     Datum::from(f32::NAN)
@@ -1804,12 +1802,10 @@ where
                                     pos_infs,
                                     neg_infs,
                                     nans,
-                                    non_nulls,
+                                    non_nulls: _,
                                 },
                             ) => {
-                                if *non_nulls == 0 {
-                                    Datum::Null
-                                } else if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
                                     // NaNs are NaNs and cases where we've seen a
                                     // mixture of positive and negative infinities.
                                     Datum::from(f64::NAN)
@@ -1828,7 +1824,7 @@ where
                                     pos_infs,
                                     neg_infs,
                                     nans,
-                                    non_nulls,
+                                    non_nulls: _,
                                 },
                             ) => {
                                 let mut cx_datum = numeric::cx_datum();
@@ -1842,9 +1838,7 @@ where
                                 let neg_d = d.is_negative();
                                 let pos_inf = *pos_infs > 0 || (inf_d && !neg_d);
                                 let neg_inf = *neg_infs > 0 || (inf_d && neg_d);
-                                if *non_nulls == 0 {
-                                    Datum::Null
-                                } else if *nans > 0 || (pos_inf && neg_inf) {
+                                if *nans > 0 || (pos_inf && neg_inf) {
                                     // NaNs are NaNs and cases where we've seen a
                                     // mixture of positive and negative infinities.
                                     Datum::from(Numeric::nan())
