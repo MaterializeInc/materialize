@@ -289,7 +289,7 @@ where
                 .await?
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
-                self.describe_statement(name).await?
+                self.describe_statement(&name).await?
             }
             Some(FrontendMessage::DescribePortal { name }) => self.describe_portal(&name).await?,
             Some(FrontendMessage::CloseStatement { name }) => self.close_statement(name).await?,
@@ -331,7 +331,7 @@ where
         const EMPTY_PORTAL: &str = "";
         if let Err(e) = self
             .coord_client
-            .declare(EMPTY_PORTAL.to_string(), stmt.clone(), param_types)
+            .declare(EMPTY_PORTAL.to_string(), stmt, param_types)
             .await
         {
             return self
@@ -547,19 +547,16 @@ where
         self.start_transaction(Some(1)).await;
 
         let aborted_txn = self.is_aborted_txn();
-        let stmt = self
+        let stmt = match self
             .coord_client
-            .session()
-            .get_prepared_statement(&statement_name);
-        let stmt = match stmt {
-            Some(stmt) => stmt,
-            None => {
+            .get_prepared_statement(&statement_name)
+            .await
+        {
+            Ok(stmt) => stmt,
+            Err(err) => {
                 return self
-                    .error(ErrorResponse::error(
-                        SqlState::INVALID_SQL_STATEMENT_NAME,
-                        "prepared statement does not exist",
-                    ))
-                    .await;
+                    .error(ErrorResponse::from_coord(Severity::Error, err))
+                    .await
             }
         };
 
@@ -762,33 +759,35 @@ where
         .boxed()
     }
 
-    async fn describe_statement(&mut self, name: String) -> Result<State, io::Error> {
-        let stmt = self.coord_client.session().get_prepared_statement(&name);
-        match stmt {
-            Some(stmt) => {
-                self.conn
-                    .send(BackendMessage::ParameterDescription(
-                        stmt.desc().param_types.clone(),
-                    ))
-                    .await?;
-                // Claim that all results will be output in text format, even
-                // though the true result formats are not yet known. A bit
-                // weird, but this is the behavior that PostgreSQL specifies.
-                let formats = vec![pgrepr::Format::Text; stmt.desc().arity()];
-                self.conn.send(describe_rows(stmt.desc(), &formats)).await?;
-                Ok(State::Ready)
+    async fn describe_statement(&mut self, name: &str) -> Result<State, io::Error> {
+        // Start a transaction if we aren't in one.
+        self.start_transaction(Some(1)).await;
+
+        let stmt = match self.coord_client.get_prepared_statement(&name).await {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                return self
+                    .error(ErrorResponse::from_coord(Severity::Error, err))
+                    .await
             }
-            None => {
-                self.error(ErrorResponse::error(
-                    SqlState::INVALID_SQL_STATEMENT_NAME,
-                    "prepared statement does not exist",
-                ))
-                .await
-            }
-        }
+        };
+        self.conn
+            .send(BackendMessage::ParameterDescription(
+                stmt.desc().param_types.clone(),
+            ))
+            .await?;
+        // Claim that all results will be output in text format, even
+        // though the true result formats are not yet known. A bit
+        // weird, but this is the behavior that PostgreSQL specifies.
+        let formats = vec![pgrepr::Format::Text; stmt.desc().arity()];
+        self.conn.send(describe_rows(stmt.desc(), &formats)).await?;
+        Ok(State::Ready)
     }
 
     async fn describe_portal(&mut self, name: &str) -> Result<State, io::Error> {
+        // Start a transaction if we aren't in one.
+        self.start_transaction(Some(1)).await;
+
         let session = self.coord_client.session();
         let row_desc = session
             .get_portal(name)

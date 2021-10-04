@@ -51,6 +51,12 @@ pub enum Command {
         tx: oneshot::Sender<Response<()>>,
     },
 
+    VerifyPreparedStatement {
+        name: String,
+        session: Session,
+        tx: oneshot::Sender<Response<()>>,
+    },
+
     Execute {
         portal_name: String,
         session: Session,

@@ -112,6 +112,7 @@ pub struct Catalog {
     roles: HashMap<String, Role>,
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
+    transient_revision: u64,
     config: sql::catalog::CatalogConfig,
     /// Handle to persistence runtime and feature configuration.
     persist: PersisterWithConfig,
@@ -612,6 +613,7 @@ impl Catalog {
             roles: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
+            transient_revision: 0,
             config: sql::catalog::CatalogConfig {
                 start_time: to_datetime((config.now)()),
                 start_instant: Instant::now(),
@@ -868,8 +870,9 @@ impl Catalog {
         }
 
         let mut storage = catalog.storage();
-        let tx = storage.transaction()?;
-        let catalog = Self::load_catalog_items(&tx, &catalog)?;
+        let mut tx = storage.transaction()?;
+        let catalog = Self::load_catalog_items(&mut tx, &catalog)?;
+        tx.commit()?;
 
         let mut builtin_table_updates = vec![];
         for (schema_name, schema) in &catalog.ambient_schemas {
@@ -902,6 +905,13 @@ impl Catalog {
         Ok((catalog, builtin_table_updates, persister))
     }
 
+    /// Retuns the catalog's transient revision, which starts at 1 and is
+    /// incremented on every change. This is not persisted to disk, and will
+    /// restart on every load.
+    pub fn transient_revision(&self) -> u64 {
+        self.transient_revision
+    }
+
     /// Takes a catalog which only has items in its on-disk storage ("unloaded")
     /// and cannot yet resolve names, and returns a catalog loaded with those
     /// items.
@@ -911,7 +921,10 @@ impl Catalog {
     /// objects, which is necessary for at least one catalog migration.
     ///
     /// TODO(justin): it might be nice if these were two different types.
-    pub fn load_catalog_items(tx: &storage::Transaction, c: &Catalog) -> Result<Catalog, Error> {
+    pub fn load_catalog_items(
+        tx: &mut storage::Transaction,
+        c: &Catalog,
+    ) -> Result<Catalog, Error> {
         let mut c = c.clone();
         let items = tx.load_items()?;
         for (id, name, def) in items {
@@ -939,6 +952,7 @@ impl Catalog {
             let oid = c.allocate_oid()?;
             c.insert_item(id, oid, name, item);
         }
+        c.transient_revision = 1;
         Ok(c)
     }
 
@@ -1793,6 +1807,7 @@ impl Catalog {
         tx.commit()?;
         drop(storage); // release immutable borrow on `self` so we can borrow mutably below
 
+        self.transient_revision += 1;
         for action in actions {
             match action {
                 Action::CreateDatabase { id, oid, name } => {
@@ -2756,7 +2771,7 @@ mod tests {
 
     use sql::names::{DatabaseSpecifier, FullName, PartialName};
 
-    use crate::catalog::{Catalog, MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA};
+    use crate::catalog::{Catalog, Op, MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -2827,5 +2842,23 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_catalog_revision() {
+        let catalog_file = NamedTempFile::new().unwrap();
+        let mut catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero).unwrap();
+        assert_eq!(catalog.transient_revision(), 1);
+        catalog
+            .transact(vec![Op::CreateDatabase {
+                name: "test".to_string(),
+                oid: 1,
+            }])
+            .unwrap();
+        assert_eq!(catalog.transient_revision(), 2);
+        drop(catalog);
+
+        let catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero).unwrap();
+        assert_eq!(catalog.transient_revision(), 1);
     }
 }
