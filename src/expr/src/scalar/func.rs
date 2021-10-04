@@ -833,12 +833,22 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
-fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32() + b.unwrap_float32())
+fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let sum = a.unwrap_float32() + b.unwrap_float32();
+    if sum.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::from(sum))
+    }
 }
 
-fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64() + b.unwrap_float64())
+fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let sum = a.unwrap_float64() + b.unwrap_float64();
+    if sum.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::from(sum))
+    }
 }
 
 fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1240,12 +1250,22 @@ fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
-fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32() - b.unwrap_float32())
+fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let difference = a.unwrap_float32() - b.unwrap_float32();
+    if difference.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::from(difference))
+    }
 }
 
-fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64() - b.unwrap_float64())
+fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let difference = a.unwrap_float64() - b.unwrap_float64();
+    if difference.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::from(difference))
+    }
 }
 
 fn sub_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1319,12 +1339,22 @@ fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
-fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32() * b.unwrap_float32())
+fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let product = a.unwrap_float32() * b.unwrap_float32();
+    if product.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::from(product))
+    }
 }
 
-fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64() * b.unwrap_float64())
+fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let product = a.unwrap_float64() * b.unwrap_float64();
+    if product.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::from(product))
+    }
 }
 
 fn mul_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1382,7 +1412,12 @@ fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     if b == 0.0 && !a.is_nan() {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a / b))
+        let quotient = a / b;
+        if quotient == 0.0 {
+            Err(EvalError::FloatUnderflow)
+        } else {
+            Ok(Datum::from(quotient))
+        }
     }
 }
 
@@ -1392,7 +1427,12 @@ fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     if b == 0.0 && !a.is_nan() {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a / b))
+        let quotient = a / b;
+        if quotient == 0.0 {
+            Err(EvalError::FloatUnderflow)
+        } else {
+            Ok(Datum::from(quotient))
+        }
     }
 }
 
@@ -2689,8 +2729,8 @@ impl BinaryFunc {
             BinaryFunc::AddInt16 => eager!(add_int16),
             BinaryFunc::AddInt32 => eager!(add_int32),
             BinaryFunc::AddInt64 => eager!(add_int64),
-            BinaryFunc::AddFloat32 => Ok(eager!(add_float32)),
-            BinaryFunc::AddFloat64 => Ok(eager!(add_float64)),
+            BinaryFunc::AddFloat32 => eager!(add_float32),
+            BinaryFunc::AddFloat64 => eager!(add_float64),
             BinaryFunc::AddTimestampInterval => Ok(eager!(add_timestamp_interval)),
             BinaryFunc::AddTimestampTzInterval => Ok(eager!(add_timestamptz_interval)),
             BinaryFunc::AddDateTime => Ok(eager!(add_date_time)),
@@ -2716,8 +2756,8 @@ impl BinaryFunc {
             BinaryFunc::SubInt16 => eager!(sub_int16),
             BinaryFunc::SubInt32 => eager!(sub_int32),
             BinaryFunc::SubInt64 => eager!(sub_int64),
-            BinaryFunc::SubFloat32 => Ok(eager!(sub_float32)),
-            BinaryFunc::SubFloat64 => Ok(eager!(sub_float64)),
+            BinaryFunc::SubFloat32 => eager!(sub_float32),
+            BinaryFunc::SubFloat64 => eager!(sub_float64),
             BinaryFunc::SubTimestamp => Ok(eager!(sub_timestamp)),
             BinaryFunc::SubTimestampTz => Ok(eager!(sub_timestamptz)),
             BinaryFunc::SubTimestampInterval => Ok(eager!(sub_timestamp_interval)),
@@ -2731,8 +2771,8 @@ impl BinaryFunc {
             BinaryFunc::MulInt16 => eager!(mul_int16),
             BinaryFunc::MulInt32 => eager!(mul_int32),
             BinaryFunc::MulInt64 => eager!(mul_int64),
-            BinaryFunc::MulFloat32 => Ok(eager!(mul_float32)),
-            BinaryFunc::MulFloat64 => Ok(eager!(mul_float64)),
+            BinaryFunc::MulFloat32 => eager!(mul_float32),
+            BinaryFunc::MulFloat64 => eager!(mul_float64),
             BinaryFunc::MulNumeric => eager!(mul_numeric),
             BinaryFunc::MulInterval => eager!(mul_interval),
             BinaryFunc::DivInt16 => eager!(div_int16),
