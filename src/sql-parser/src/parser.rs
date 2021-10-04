@@ -529,15 +529,10 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self, name: UnresolvedObjectName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let all = self.parse_keyword(ALL);
-        let distinct = self.parse_keyword(DISTINCT);
-        if all && distinct {
-            return parser_err!(
-                self,
-                self.peek_prev_pos(),
-                format!("Cannot specify both ALL and DISTINCT in function: {}", name)
-            );
-        }
+        let distinct = matches!(
+            self.parse_at_most_one_keyword(&[ALL, DISTINCT], &format!("function: {}", name))?,
+            Some(DISTINCT),
+        );
         let args = self.parse_optional_args(true)?;
         let filter = if self.parse_keyword(FILTER) {
             self.expect_token(&Token::LParen)?;
@@ -1302,6 +1297,36 @@ impl<'a> Parser<'a> {
             true
         } else {
             false
+        }
+    }
+
+    fn parse_at_most_one_keyword(
+        &mut self,
+        keywords: &[Keyword],
+        location: &str,
+    ) -> Result<Option<Keyword>, ParserError> {
+        match self.parse_one_of_keywords(keywords) {
+            Some(first) => {
+                let remaining_keywords = keywords
+                    .iter()
+                    .cloned()
+                    .filter(|k| *k != first)
+                    .collect::<Vec<_>>();
+                if let Some(second) = self.parse_one_of_keywords(remaining_keywords.as_slice()) {
+                    let second_pos = self.peek_prev_pos();
+                    parser_err!(
+                        self,
+                        second_pos,
+                        "Cannot specify both {} and {} in {}",
+                        first,
+                        second,
+                        location,
+                    )
+                } else {
+                    Ok(Some(first))
+                }
+            }
+            None => Ok(None),
         }
     }
 
@@ -2218,9 +2243,16 @@ impl<'a> Parser<'a> {
             DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
         ]) {
             Some(DATABASE) => {
+                let if_exists = self.parse_if_exists()?;
+                let name = self.parse_identifier()?;
+                let restrict = matches!(
+                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+                    Some(RESTRICT),
+                );
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
-                    if_exists: self.parse_if_exists()?,
-                    name: self.parse_identifier()?,
+                    if_exists,
+                    name,
+                    restrict: restrict,
                 }));
             }
             Some(INDEX) => ObjectType::Index,
@@ -2243,16 +2275,10 @@ impl<'a> Parser<'a> {
 
         let if_exists = self.parse_if_exists()?;
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
-        let cascade = self.parse_keyword(CASCADE);
-        let restrict = self.parse_keyword(RESTRICT);
-        let restrict_pos = self.peek_prev_pos();
-        if cascade && restrict {
-            return parser_err!(
-                self,
-                restrict_pos,
-                "Cannot specify both CASCADE and RESTRICT in DROP"
-            );
-        }
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
+        );
         Ok(Statement::DropObjects(DropObjectsStatement {
             materialized,
             object_type,

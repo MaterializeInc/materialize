@@ -53,6 +53,9 @@ Put breaking changes before other release notes.
   variations). {{% gh 8455 %}}
 - Add support for retention settings on Kafka sinks.
 
+- Support explicit `DROP DATABASE ... (CASCADE | RESTRICT)` statements.  The
+  default behavior remains CASCADE.
+
 {{% version-header v0.9.6 %}}
 
 - Correctly handle TOASTed columns when using PostgreSQL sources. {{% gh 8371 %}}

@@ -904,6 +904,7 @@ impl_display!(DiscardTarget);
 pub struct DropDatabaseStatement {
     pub name: Ident,
     pub if_exists: bool,
+    pub restrict: bool,
 }
 
 impl AstDisplay for DropDatabaseStatement {
@@ -913,6 +914,9 @@ impl AstDisplay for DropDatabaseStatement {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&self.name);
+        if self.restrict {
+            f.write_str(" RESTRICT");
+        }
     }
 }
 impl_display!(DropDatabaseStatement);

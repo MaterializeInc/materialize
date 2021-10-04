@@ -2583,22 +2583,6 @@ impl SessionCatalog for ConnCatalog<'_> {
             .resolve_function(&self.database, self.search_path, name, self.conn_id)?)
     }
 
-    fn list_items<'a>(
-        &'a self,
-        schema: &SchemaName,
-    ) -> Box<dyn Iterator<Item = &'a dyn sql::catalog::CatalogItem> + 'a> {
-        let schema = self
-            .catalog
-            .get_schema(&schema.database, &schema.schema, self.conn_id)
-            .unwrap();
-        Box::new(
-            schema
-                .items
-                .values()
-                .map(move |id| self.catalog.get_by_id(id) as &dyn sql::catalog::CatalogItem),
-        )
-    }
-
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn sql::catalog::CatalogItem> {
         self.catalog
             .try_get_by_id(*id)
@@ -2677,6 +2661,10 @@ impl sql::catalog::CatalogDatabase for Database {
     fn id(&self) -> i64 {
         self.id
     }
+
+    fn has_schemas(&self) -> bool {
+        !self.schemas.is_empty()
+    }
 }
 
 impl sql::catalog::CatalogSchema for Schema {
@@ -2686,6 +2674,10 @@ impl sql::catalog::CatalogSchema for Schema {
 
     fn id(&self) -> i64 {
         self.id
+    }
+
+    fn has_items(&self) -> bool {
+        !self.items.is_empty()
     }
 }
 

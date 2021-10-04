@@ -893,14 +893,14 @@ DROP DATABASE mydb
 ----
 DROP DATABASE mydb
 =>
-DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false })
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false, restrict: false })
 
 parse-statement
 DROP DATABASE IF EXISTS mydb
 ----
 DROP DATABASE IF EXISTS mydb
 =>
-DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: true })
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: true, restrict: false })
 
 parse-statement
 DROP DATABASE mydb.nope
@@ -908,6 +908,41 @@ DROP DATABASE mydb.nope
 error: Expected end of statement, found dot
 DROP DATABASE mydb.nope
                   ^
+
+parse-statement
+DROP DATABASE mydb CASCADE
+----
+DROP DATABASE mydb
+=>
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false, restrict: false })
+
+parse-statement
+DROP DATABASE mydb RESTRICT
+----
+DROP DATABASE mydb RESTRICT
+=>
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false, restrict: true })
+
+parse-statement
+DROP DATABASE mydb CASCADE RESTRICT
+----
+error: Cannot specify both CASCADE and RESTRICT in DROP
+DROP DATABASE mydb CASCADE RESTRICT
+                           ^
+
+parse-statement
+DROP DATABASE mydb RESTRICT CASCADE
+----
+error: Cannot specify both RESTRICT and CASCADE in DROP
+DROP DATABASE mydb RESTRICT CASCADE
+                            ^
+
+parse-statement
+DROP DATABASE mydb CASCADE CASCADE
+----
+error: Expected end of statement, found CASCADE
+DROP DATABASE mydb CASCADE CASCADE
+                           ^
 
 parse-statement
 DROP SCHEMA mydb.myschema

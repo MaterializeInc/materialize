@@ -46,7 +46,7 @@ use crate::plan::statement::StatementDesc;
 ///     components based upon connection defaults, e.g., resolving the partial
 ///     name `view42` to the fully-specified name `materialize.public.view42`.
 ///
-///   * Lookup operations, like [`SessionCatalog::list_items`] or [`SessionCatalog::get_item_by_id`]. These retrieve
+///   * Lookup operations, like [`SessionCatalog::get_item_by_id`]. These retrieve
 ///     metadata about a catalog entity based on a fully-specified name that is
 ///     known to be valid (i.e., because the name was successfully resolved,
 ///     or was constructed based on the output of a prior lookup operation).
@@ -108,14 +108,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// functions within the catalog.
     fn resolve_function(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
-
-    /// Lists the items in the specified schema in the specified database.
-    ///
-    /// Panics if `schema_name` does not specify a valid schema.
-    fn list_items<'a>(
-        &'a self,
-        schema: &SchemaName,
-    ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a>;
 
     /// Gets an item by its ID.
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
@@ -202,6 +194,9 @@ pub trait CatalogDatabase {
 
     /// Returns a stable ID for the database.
     fn id(&self) -> i64;
+
+    /// Returns whether the database contains schemas.
+    fn has_schemas(&self) -> bool;
 }
 
 /// A schema in a [`SessionCatalog`].
@@ -211,6 +206,9 @@ pub trait CatalogSchema {
 
     /// Returns a stable ID for the schema.
     fn id(&self) -> i64;
+
+    /// Lists the `CatalogItem`s for the schema.
+    fn has_items(&self) -> bool;
 }
 
 /// A role in a [`SessionCatalog`].
@@ -422,13 +420,6 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn resolve_function(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
-    }
-
-    fn list_items<'a>(
-        &'a self,
-        _: &SchemaName,
-    ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a> {
         unimplemented!();
     }
 

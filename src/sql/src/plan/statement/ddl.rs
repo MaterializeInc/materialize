@@ -2171,10 +2171,23 @@ pub fn describe_drop_database(
 
 pub fn plan_drop_database(
     scx: &StatementContext,
-    DropDatabaseStatement { name, if_exists }: DropDatabaseStatement,
+    DropDatabaseStatement {
+        name,
+        if_exists,
+        restrict,
+    }: DropDatabaseStatement,
 ) -> Result<Plan, anyhow::Error> {
     let name = match scx.resolve_database_ident(name) {
-        Ok(database) => database.name().into(),
+        Ok(database) => {
+            let name = String::from(database.name());
+            if restrict && database.has_schemas() {
+                bail!(
+                    "database '{}' cannot be dropped with RESTRICT while it contains schemas",
+                    database.name(),
+                );
+            }
+            name
+        }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the database
             // does not exist.
@@ -2241,8 +2254,7 @@ pub fn plan_drop_schema(
                     schema.name()
                 );
             }
-            let mut items = scx.catalog.list_items(schema.name());
-            if !cascade && items.next().is_some() {
+            if !cascade && schema.has_items() {
                 bail!(
                     "schema '{}' cannot be dropped without CASCADE while it contains objects",
                     schema.name(),
