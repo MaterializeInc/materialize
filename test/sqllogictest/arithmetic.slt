@@ -520,6 +520,42 @@ SELECT 9223372036854775807::bigint+1::bigint
 query error numeric field overflow
 SELECT 9223372036854775807::bigint-(-1)::bigint
 
+query error numeric field overflow
+SELECT (-6734743351254754)::bigint * (-99783359317598)::bigint
+
+query error numeric field overflow
+SELECT (CAST(-6734743351254754 AS bigint) * CAST(-99783359317598 AS bigint))
+
+statement ok
+SELECT '1e300'::float
+
+query error value out of range
+SELECT '1e300'::float * '1e200'::float
+
+query error value out of range
+SELECT '1e308'::float + '1e308'::float
+
+query error value out of range
+SELECT '-1e308'::float - '1e308'::float
+
+query error value out of range
+SELECT '1e-300'::float / '1e30'::float
+
+statement ok
+SELECT '1e38'::float4
+
+query error value out of range
+SELECT '1e30'::float4 * '1e10'::float4
+
+query error value out of range
+SELECT '3e38'::float4 + '3e38'::float4
+
+query error value out of range
+SELECT '-3e38'::float4 - '3e38'::float4
+
+query error value out of range
+SELECT '1e-30'::float4 / '1e20'::float4
+
 ### bitwise operators ###
 
 # dummy table and data needed for tests
