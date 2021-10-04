@@ -4260,26 +4260,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "smith-fuzz"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "env_logger",
- "futures",
- "futures-channel",
- "log",
- "postgres-types",
- "reqwest",
- "serde",
- "serde_json",
- "structopt",
- "test-util",
- "tokio",
- "tokio-postgres",
- "url",
-]
-
-[[package]]
 name = "snap"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
