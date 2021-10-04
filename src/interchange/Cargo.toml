@@ -35,7 +35,7 @@ serde-protobuf = "0.8.2"
 serde-value = "0.7.0"
 serde_json = "1.0.68"
 sha2 = "0.9.8"
-smallvec = "1.5.1"
+smallvec = "1.7.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde"] }
