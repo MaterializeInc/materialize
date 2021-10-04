@@ -9,10 +9,11 @@
 
 > INSERT INTO avro_ocf_table VALUES (3);
 
-# The restart has caused a new .ocf file to be created
-# Mz and $ avro-ocf-verify have no memory of the previous file
-# so we only verify that the record we just inserted in the source
-# appears in the sink
+# Make sure the OCF file has been created and populated before attempting to run $ avro-ocf-verify on it
+# As there is no way to wait precisely until that occurs, we have no option but to use mz_sleep()
+> SELECT mz_internal.mz_sleep(2);
+<null>
+
 $ avro-ocf-verify sink=materialize.public.avro_ocf_sink
 {"before": null, "after": {"row": {"f1": 3}}}
 

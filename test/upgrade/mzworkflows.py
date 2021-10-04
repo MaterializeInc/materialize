@@ -7,12 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from os import environ
+import os
 from typing import List
 from unittest.mock import patch
 
 from semver import Version, VersionInfo
 
+from materialize import errors
 from materialize.git import get_version_tags
 from materialize.mzcompose import (
     Kafka,
@@ -28,13 +29,18 @@ from materialize.mzcompose import (
 # Determine the list of versions to be tested
 #
 
-min_tested_tag = VersionInfo.parse("0.8.0")
-all_tags = get_version_tags(fetch=False)
-all_tested_tags = []
+min_tested_tag = VersionInfo.parse(os.getenv("MIN_TESTED_TAG", "0.8.0"))
 
-all_tested_tags = sorted(
-    [tag for tag in all_tags if tag >= min_tested_tag and tag.prerelease is None]
-)
+all_tags = [tag for tag in get_version_tags(fetch=False) if tag.prerelease is None]
+if not all_tags:
+    raise error.MzRuntimeError(
+        "No tags found in current repository. Please run git fetch --all to obtain tags."
+    )
+
+all_tested_tags = sorted([tag for tag in all_tags if tag >= min_tested_tag])
+
+# The Mz options that are valid only at or above a certain version
+mz_options = {VersionInfo.parse("0.9.2"): "--persistent-user-tables"}
 
 #
 # Construct Materialized service objects for all participating versions
@@ -47,13 +53,20 @@ mz_versioned = dict(
             name=f"materialized_v{tag}",
             image=f"materialize/materialized:v{tag}",
             hostname="materialized",
+            options="".join(
+                option
+                for starting_version, option in mz_options.items()
+                if tag >= starting_version
+            ),
         ),
     )
     for tag in all_tested_tags
 )
 
 mz_versioned["current_source"] = Materialized(
-    name="materialized_current_source", hostname="materialized"
+    name="materialized_current_source",
+    hostname="materialized",
+    options="".join(mz_options.values()),
 )
 
 prerequisites = [Zookeeper(), Kafka(), SchemaRegistry(), Postgres()]
@@ -74,18 +87,19 @@ def workflow_upgrade(w: Workflow):
 def test_upgrade_from_version(w: Workflow, from_version: str, priors: List[str]):
     print(f"===>>> Testing upgrade from Materialize {from_version} to current_source.")
 
-    glob = "|".join(["any_version", *priors, from_version])
-    print(">>> Glob pattern: " + glob)
+    version_glob = "|".join(["any_version", *priors, from_version])
+    print(">>> Version glob pattern: " + version_glob)
+    td_glob = os.getenv("TD_GLOB", "*")
 
     mz_from = f"materialized_{from_version}"
     w.start_services(services=[mz_from])
     w.wait_for_mz(service=mz_from)
 
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
-    with patch.dict(environ, {"UPGRADE_FROM_VERSION": from_version}):
+    with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
         w.run_service(
             service="testdrive-svc",
-            command=f"--seed=1 --no-reset {temp_dir} create-in-@({glob})*.td",
+            command=f"--seed=1 --no-reset {temp_dir} create-in-@({version_glob})-{td_glob}.td",
         )
 
     w.kill_services(services=[mz_from])
@@ -95,10 +109,10 @@ def test_upgrade_from_version(w: Workflow, from_version: str, priors: List[str])
     w.start_services(services=[mz_to])
     w.wait_for_mz(service=mz_to)
 
-    with patch.dict(environ, {"UPGRADE_FROM_VERSION": from_version}):
+    with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
         w.run_service(
             service="testdrive-svc",
-            command=f"--seed=1 --no-reset {temp_dir} check-from-@({glob})*.td",
+            command=f"--seed=1 --no-reset {temp_dir} check-from-@({version_glob})-{td_glob}.td",
         )
 
     w.kill_services(services=[mz_to])
