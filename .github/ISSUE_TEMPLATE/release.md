@@ -105,7 +105,7 @@ a release is published.
   to point to this issue:
 
   ```text
-  @relnotes-team the release is in progress, now's a great time to verify or prepare the release notes and any announcement posts.
+  @relnotes-team the release is in progress; now's a great time to verify or prepare the release notes and any announcement posts.
   * release notes: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md
   * All PRs in this release: https://github.com/MaterializeInc/materialize/issues/<unreviewed PRs issue>
   * Release: https://github.com/MaterializeInc/materialize/issues/<this issue>
