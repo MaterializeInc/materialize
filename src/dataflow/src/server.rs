@@ -145,7 +145,7 @@ pub enum Command {
         /// The ID of the timestamped source
         id: GlobalId,
         /// The connector for the timestamped source.
-        connector: SourceConnector,
+        connector: Box<SourceConnector>,
         /// Previously stored timestamp bindings.
         bindings: Vec<(PartitionId, Timestamp, MzOffset)>,
     },
@@ -954,7 +954,7 @@ where
                     consistency,
                     ts_frequency,
                     ..
-                } = connector
+                } = *connector
                 {
                     let byo_default = TimestampBindingRc::new(None, self.now, true);
                     let rt_default = TimestampBindingRc::new(

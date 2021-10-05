@@ -30,7 +30,9 @@ use kafka_util::KafkaAddrs;
 use log::{error, info, log_enabled, warn};
 use uuid::Uuid;
 
-use crate::logging::materialized::{Logger, MaterializedEvent};
+use crate::logging::materialized::{
+    KafkaBrokerRtt, KafkaConsumerPartition, Logger, MaterializedEvent,
+};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 use super::metrics::SourceBaseMetrics;
@@ -59,21 +61,24 @@ impl PartitionStats {
         source_id: SourceInstanceId,
         partition_id: String,
     ) -> MaterializedEvent {
-        MaterializedEvent::KafkaConsumerPartition {
-            consumer_name,
-            source_id,
-            partition_id,
-            rxmsgs: -self.rxmsgs,
-            rxbytes: -self.rxbytes,
-            txmsgs: -self.txmsgs,
-            txbytes: -self.txbytes,
-            lo_offset: -self.lo_offset,
-            hi_offset: -self.hi_offset,
-            ls_offset: -self.ls_offset,
-            app_offset: -self.app_offset,
-            consumer_lag: -self.consumer_lag,
-            initial_high_offset: -self.initial_high_offset.unwrap_or(0),
-        }
+        MaterializedEvent::KafkaConsumerPartition(
+            KafkaConsumerPartition {
+                consumer_name,
+                source_id,
+                partition_id,
+                rxmsgs: -self.rxmsgs,
+                rxbytes: -self.rxbytes,
+                txmsgs: -self.txmsgs,
+                txbytes: -self.txbytes,
+                lo_offset: -self.lo_offset,
+                hi_offset: -self.hi_offset,
+                ls_offset: -self.ls_offset,
+                app_offset: -self.app_offset,
+                consumer_lag: -self.consumer_lag,
+                initial_high_offset: -self.initial_high_offset.unwrap_or(0),
+            }
+            .into(),
+        )
     }
     /// Update the value for this partition, returning a MaterializedEvent that represents the
     /// difference between the previous values and the new values
@@ -92,21 +97,24 @@ impl PartitionStats {
                 0
             };
 
-        let event = MaterializedEvent::KafkaConsumerPartition {
-            consumer_name,
-            source_id,
-            partition_id,
-            rxmsgs: stats.rxmsgs - self.rxmsgs,
-            rxbytes: stats.rxbytes - self.rxbytes,
-            txmsgs: stats.txmsgs - self.txmsgs,
-            txbytes: stats.txbytes - self.txbytes,
-            lo_offset: stats.lo_offset - self.lo_offset,
-            hi_offset: stats.hi_offset - self.hi_offset,
-            ls_offset: stats.ls_offset - self.ls_offset,
-            app_offset: stats.app_offset - self.app_offset,
-            consumer_lag: stats.consumer_lag - self.consumer_lag,
-            initial_high_offset: reported_initial_high_offset,
-        };
+        let event = MaterializedEvent::KafkaConsumerPartition(
+            KafkaConsumerPartition {
+                consumer_name,
+                source_id,
+                partition_id,
+                rxmsgs: stats.rxmsgs - self.rxmsgs,
+                rxbytes: stats.rxbytes - self.rxbytes,
+                txmsgs: stats.txmsgs - self.txmsgs,
+                txbytes: stats.txbytes - self.txbytes,
+                lo_offset: stats.lo_offset - self.lo_offset,
+                hi_offset: stats.hi_offset - self.hi_offset,
+                ls_offset: stats.ls_offset - self.ls_offset,
+                app_offset: stats.app_offset - self.app_offset,
+                consumer_lag: stats.consumer_lag - self.consumer_lag,
+                initial_high_offset: reported_initial_high_offset,
+            }
+            .into(),
+        );
 
         self.rxmsgs = stats.rxmsgs;
         self.rxbytes = stats.rxbytes;
@@ -146,23 +154,26 @@ impl BrokerRTTWindow {
         source_id: SourceInstanceId,
         broker_name: String,
     ) -> MaterializedEvent {
-        MaterializedEvent::KafkaBrokerRtt {
-            consumer_name: consumer_name,
-            source_id: source_id,
-            broker_name: broker_name,
-            min: -self.min,
-            max: -self.max,
-            avg: -self.avg,
-            sum: -self.sum,
-            cnt: -self.cnt,
-            stddev: -self.stddev,
-            p50: -self.p50,
-            p75: -self.p75,
-            p90: -self.p90,
-            p95: -self.p95,
-            p99: -self.p99,
-            p99_99: -self.p99_99,
-        }
+        MaterializedEvent::KafkaBrokerRtt(
+            KafkaBrokerRtt {
+                consumer_name: consumer_name,
+                source_id: source_id,
+                broker_name: broker_name,
+                min: -self.min,
+                max: -self.max,
+                avg: -self.avg,
+                sum: -self.sum,
+                cnt: -self.cnt,
+                stddev: -self.stddev,
+                p50: -self.p50,
+                p75: -self.p75,
+                p90: -self.p90,
+                p95: -self.p95,
+                p99: -self.p99,
+                p99_99: -self.p99_99,
+            }
+            .into(),
+        )
     }
     /// Update the value for window, returning a MaterializedEvent that represents the
     /// difference between the previous values and the new values
@@ -173,23 +184,26 @@ impl BrokerRTTWindow {
         broker_name: String,
         stats: &rdkafka::statistics::Window,
     ) -> MaterializedEvent {
-        let event = MaterializedEvent::KafkaBrokerRtt {
-            consumer_name,
-            source_id,
-            broker_name,
-            min: stats.min - self.min,
-            max: stats.max - self.max,
-            avg: stats.avg - self.avg,
-            sum: stats.sum - self.sum,
-            cnt: stats.cnt - self.cnt,
-            stddev: stats.stddev - self.stddev,
-            p50: stats.p50 - self.p50,
-            p75: stats.p75 - self.p75,
-            p90: stats.p90 - self.p90,
-            p95: stats.p95 - self.p95,
-            p99: stats.p99 - self.p99,
-            p99_99: stats.p99_99 - self.p99_99,
-        };
+        let event = MaterializedEvent::KafkaBrokerRtt(
+            KafkaBrokerRtt {
+                consumer_name,
+                source_id,
+                broker_name,
+                min: stats.min - self.min,
+                max: stats.max - self.max,
+                avg: stats.avg - self.avg,
+                sum: stats.sum - self.sum,
+                cnt: stats.cnt - self.cnt,
+                stddev: stats.stddev - self.stddev,
+                p50: stats.p50 - self.p50,
+                p75: stats.p75 - self.p75,
+                p90: stats.p90 - self.p90,
+                p95: stats.p95 - self.p95,
+                p99: stats.p99 - self.p99,
+                p99_99: stats.p99_99 - self.p99_99,
+            }
+            .into(),
+        );
 
         self.min = stats.min;
         self.max = stats.max;

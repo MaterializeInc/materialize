@@ -43,7 +43,7 @@ pub use linear_join::LinearJoinPlan;
 /// A complete enumeration of possible join plans to render.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum JoinPlan {
-    Linear(LinearJoinPlan),
+    Linear(Box<LinearJoinPlan>),
     Delta(DeltaJoinPlan),
 }
 

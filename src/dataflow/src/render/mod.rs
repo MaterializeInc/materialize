@@ -488,7 +488,7 @@ where
                     .collect();
                 match plan {
                     crate::render::join::JoinPlan::Linear(linear_plan) => {
-                        self.render_join(inputs, linear_plan, scope)
+                        self.render_join(inputs, *linear_plan, scope)
                     }
                     crate::render::join::JoinPlan::Delta(delta_plan) => {
                         self.render_delta_join(inputs, delta_plan, scope)
@@ -970,13 +970,16 @@ pub mod plan {
                     // Extract temporal predicates as joins cannot currently absorb them.
                     let plan = match implementation {
                         expr::JoinImplementation::Differential((start, _start_arr), order) => {
-                            JoinPlan::Linear(LinearJoinPlan::create_from(
-                                *start,
-                                equivalences,
-                                order,
-                                input_mapper,
-                                &mut mfp,
-                            ))
+                            JoinPlan::Linear(
+                                LinearJoinPlan::create_from(
+                                    *start,
+                                    equivalences,
+                                    order,
+                                    input_mapper,
+                                    &mut mfp,
+                                )
+                                .into(),
+                            )
                         }
                         expr::JoinImplementation::DeltaQuery(orders) => {
                             JoinPlan::Delta(DeltaJoinPlan::create_from(

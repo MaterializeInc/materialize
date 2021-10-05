@@ -49,7 +49,7 @@ use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
 use self::metrics::SourceBaseMetrics;
 
 use super::source::util::source;
-use crate::logging::materialized::{Logger, MaterializedEvent};
+use crate::logging::materialized::{Logger, MaterializedEvent, SourceInfo};
 use crate::operator::StreamExt;
 use crate::source::timestamp::TimestampBindingRc;
 
@@ -823,13 +823,16 @@ impl Drop for SourceMetrics {
         // retract our partition from logging
         if let Some(logger) = self.logger.as_mut() {
             for (partition, metric) in self.partition_metrics.iter() {
-                logger.log(MaterializedEvent::SourceInfo {
-                    source_name: self.source_name.clone(),
-                    source_id: self.source_id,
-                    partition_id: partition.into(),
-                    offset: -metric.last_offset,
-                    timestamp: -metric.last_timestamp,
-                });
+                logger.log(MaterializedEvent::SourceInfo(
+                    SourceInfo {
+                        source_name: self.source_name.clone(),
+                        source_id: self.source_id,
+                        partition_id: partition.into(),
+                        offset: -metric.last_offset,
+                        timestamp: -metric.last_timestamp,
+                    }
+                    .into(),
+                ));
             }
         }
     }
@@ -860,13 +863,16 @@ impl PartitionMetrics {
         offset: i64,
         timestamp: i64,
     ) {
-        logger.log(MaterializedEvent::SourceInfo {
-            source_name: source_name.to_string(),
-            source_id,
-            partition_id: partition_id.into(),
-            offset: offset - self.last_offset,
-            timestamp: timestamp - self.last_timestamp,
-        });
+        logger.log(MaterializedEvent::SourceInfo(
+            SourceInfo {
+                source_name: source_name.to_string(),
+                source_id,
+                partition_id: partition_id.into(),
+                offset: offset - self.last_offset,
+                timestamp: timestamp - self.last_timestamp,
+            }
+            .into(),
+        ));
         self.last_offset = offset;
         self.last_timestamp = timestamp;
     }

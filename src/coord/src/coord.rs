@@ -3979,7 +3979,7 @@ impl Coordinator {
                         .expect("Failed to send CREATE Instance notice to timestamper");
                     self.broadcast(dataflow::Command::AddSourceTimestamping {
                         id: source_id,
-                        connector: s.connector.clone(),
+                        connector: Box::new(s.connector.clone()),
                         bindings,
                     });
                 }

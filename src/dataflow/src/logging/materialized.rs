@@ -31,6 +31,91 @@ use repr::{Datum, Row, Timestamp};
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
 
+/// Tracks RTT statistics for a Kafka broker, by consumer
+/// Reference: <https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md>
+/// This structure containe splatted metrics from the rdkafka::statistics::Window struct
+/// Window cannot be used as it does not satisfy several of the traits required
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct KafkaBrokerRtt {
+    /// Kafka name for the consumer
+    pub consumer_name: String,
+    /// Materialize source identifier
+    pub source_id: SourceInstanceId,
+    /// The Kafka broker for these metrics (may be multiple per consumer)
+    pub broker_name: String,
+    /// Smallest value
+    pub min: i64,
+    /// Largest value
+    pub max: i64,
+    /// Average value
+    pub avg: i64,
+    /// Sum of all values
+    pub sum: i64,
+    /// Number of values samples
+    pub cnt: i64,
+    /// Standard deviation of values (based on histogram)
+    pub stddev: i64,
+    /// 50th percentile value
+    pub p50: i64,
+    /// 75th percentile value
+    pub p75: i64,
+    /// 90th percentile value
+    pub p90: i64,
+    /// 959h percentile value
+    pub p95: i64,
+    /// 99th percentile value
+    pub p99: i64,
+    /// 99.99th percentile value
+    pub p99_99: i64,
+}
+
+/// Tracks statistics for a particular Kafka consumer / partition pair
+/// Reference: <https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md>
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct KafkaConsumerPartition {
+    /// Kafka name for the consumer
+    pub consumer_name: String,
+    /// Materialize source identifier
+    pub source_id: SourceInstanceId,
+    /// The Kafka partition ID for these metrics (may be multiple per consumer)
+    pub partition_id: String,
+    /// Number of message sets received from Brokers
+    pub rxmsgs: i64,
+    /// Number of bytes received from Brokers
+    pub rxbytes: i64,
+    /// Number of message sets sent to Brokers
+    pub txmsgs: i64,
+    /// Number of bytes transmitted to Brokers
+    pub txbytes: i64,
+    /// Partition's low watermark offset on the broker
+    pub lo_offset: i64,
+    /// Partition's high watermark offset on the broker
+    pub hi_offset: i64,
+    /// Last stable offset on the broker
+    pub ls_offset: i64,
+    /// How far into the topic our consumer has read
+    pub app_offset: i64,
+    /// How many messages remain until our consumer reaches the (hi|lo) watermark
+    pub consumer_lag: i64,
+    /// Initial partiation's high watermark offset on the broker (hi_offset)
+    pub initial_high_offset: i64,
+}
+
+/// Tracks the source name, id, partition id, and received/ingested offsets
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct SourceInfo {
+    /// Name of the source
+    pub source_name: String,
+    /// Source identifier
+    pub source_id: SourceInstanceId,
+    /// Partition identifier
+    pub partition_id: Option<String>,
+    /// Difference between the previous offset and current highest offset we've seen
+    pub offset: i64,
+    /// Difference between the previous timestamp and current highest timestamp we've seen
+    pub timestamp: i64,
+}
+
 /// A logged materialized event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub enum MaterializedEvent {
@@ -47,83 +132,14 @@ pub enum MaterializedEvent {
     /// Reference: <https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md>
     /// This structure containe splatted metrics from the rdkafka::statistics::Window struct
     /// Window cannot be used as it does not satisfy several of the traits required
-    KafkaBrokerRtt {
-        /// Kafka name for the consumer
-        consumer_name: String,
-        /// Materialize source identifier
-        source_id: SourceInstanceId,
-        /// The Kafka broker for these metrics (may be multiple per consumer)
-        broker_name: String,
-        /// Smallest value
-        min: i64,
-        /// Largest value
-        max: i64,
-        /// Average value
-        avg: i64,
-        /// Sum of all values
-        sum: i64,
-        /// Number of values samples
-        cnt: i64,
-        /// Standard deviation of values (based on histogram)
-        stddev: i64,
-        /// 50th percentile value
-        p50: i64,
-        /// 75th percentile value
-        p75: i64,
-        /// 90th percentile value
-        p90: i64,
-        /// 959h percentile value
-        p95: i64,
-        /// 99th percentile value
-        p99: i64,
-        /// 99.99th percentile value
-        p99_99: i64,
-    },
+    KafkaBrokerRtt(Box<KafkaBrokerRtt>),
     /// Tracks statistics for a particular Kafka consumer / partition pair
     /// Reference: <https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md>
-    KafkaConsumerPartition {
-        /// Kafka name for the consumer
-        consumer_name: String,
-        /// Materialize source identifier
-        source_id: SourceInstanceId,
-        /// The Kafka partition ID for these metrics (may be multiple per consumer)
-        partition_id: String,
-        /// Number of message sets received from Brokers
-        rxmsgs: i64,
-        /// Number of bytes received from Brokers
-        rxbytes: i64,
-        /// Number of message sets sent to Brokers
-        txmsgs: i64,
-        /// Number of bytes transmitted to Brokers
-        txbytes: i64,
-        /// Partition's low watermark offset on the broker
-        lo_offset: i64,
-        /// Partition's high watermark offset on the broker
-        hi_offset: i64,
-        /// Last stable offset on the broker
-        ls_offset: i64,
-        /// How far into the topic our consumer has read
-        app_offset: i64,
-        /// How many messages remain until our consumer reaches the (hi|lo) watermark
-        consumer_lag: i64,
-        /// Initial partiation's high watermark offset on the broker (hi_offset)
-        initial_high_offset: i64,
-    },
+    KafkaConsumerPartition(Box<KafkaConsumerPartition>),
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
     /// Tracks the source name, id, partition id, and received/ingested offsets
-    SourceInfo {
-        /// Name of the source
-        source_name: String,
-        /// Source identifier
-        source_id: SourceInstanceId,
-        /// Partition identifier
-        partition_id: Option<String>,
-        /// Difference between the previous offset and current highest offset we've seen
-        offset: i64,
-        /// Difference between the previous timestamp and current highest timestamp we've seen
-        timestamp: i64,
-    },
+    SourceInfo(Box<SourceInfo>),
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
 }
@@ -263,23 +279,24 @@ pub fn construct<A: Allocate>(
                                     delta as isize,
                                 ));
                             }
-                            MaterializedEvent::KafkaBrokerRtt {
-                                consumer_name,
-                                source_id,
-                                broker_name,
-                                min,
-                                max,
-                                avg,
-                                sum,
-                                cnt,
-                                stddev,
-                                p50,
-                                p75,
-                                p90,
-                                p95,
-                                p99,
-                                p99_99,
-                            } => {
+                            MaterializedEvent::KafkaBrokerRtt(boxed) => {
+                                let KafkaBrokerRtt {
+                                    consumer_name,
+                                    source_id,
+                                    broker_name,
+                                    min,
+                                    max,
+                                    avg,
+                                    sum,
+                                    cnt,
+                                    stddev,
+                                    p50,
+                                    p75,
+                                    p90,
+                                    p95,
+                                    p99,
+                                    p99_99,
+                                } = *boxed;
                                 kafka_broker_rtt_session.give((
                                     (consumer_name, source_id, broker_name),
                                     time_ms,
@@ -289,21 +306,22 @@ pub fn construct<A: Allocate>(
                                     ],
                                 ));
                             }
-                            MaterializedEvent::KafkaConsumerPartition {
-                                consumer_name,
-                                source_id,
-                                partition_id,
-                                rxmsgs,
-                                rxbytes,
-                                txmsgs,
-                                txbytes,
-                                lo_offset,
-                                hi_offset,
-                                ls_offset,
-                                app_offset,
-                                consumer_lag,
-                                initial_high_offset,
-                            } => {
+                            MaterializedEvent::KafkaConsumerPartition(boxed) => {
+                                let KafkaConsumerPartition {
+                                    consumer_name,
+                                    source_id,
+                                    partition_id,
+                                    rxmsgs,
+                                    rxbytes,
+                                    txmsgs,
+                                    txbytes,
+                                    lo_offset,
+                                    hi_offset,
+                                    ls_offset,
+                                    app_offset,
+                                    consumer_lag,
+                                    initial_high_offset,
+                                } = *boxed;
                                 kafka_consumer_info_session.give((
                                     (consumer_name, source_id, partition_id),
                                     time_ms,
@@ -351,13 +369,14 @@ pub fn construct<A: Allocate>(
                                     }
                                 }
                             }
-                            MaterializedEvent::SourceInfo {
-                                source_name,
-                                source_id,
-                                partition_id,
-                                offset,
-                                timestamp,
-                            } => {
+                            MaterializedEvent::SourceInfo(boxed) => {
+                                let SourceInfo {
+                                    source_name,
+                                    source_id,
+                                    partition_id,
+                                    offset,
+                                    timestamp,
+                                } = *boxed;
                                 source_info_session.give((
                                     (source_name, source_id, partition_id),
                                     time_ms,

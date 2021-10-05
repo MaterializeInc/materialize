@@ -237,7 +237,7 @@ pub enum BasicPlan {
     /// Plan for rendering a single basic aggregation. Here, the
     /// first element denotes the index in the set of inputs
     /// that we are aggregating over.
-    Single(usize, AggregateExpr),
+    Single(usize, Box<AggregateExpr>),
     /// Plan for rendering multiple basic aggregations.
     /// These need to then be collated together in an additional
     /// reduction. Each element represents the:
@@ -440,7 +440,7 @@ impl ReducePlan {
                 if aggregates_list.len() == 1 {
                     ReducePlan::Basic(BasicPlan::Single(
                         aggregates_list[0].0,
-                        aggregates_list[0].1.clone(),
+                        Box::new(aggregates_list[0].1.clone()),
                     ))
                 } else {
                     ReducePlan::Basic(BasicPlan::Multiple(aggregates_list))
@@ -1198,6 +1198,8 @@ where
 
 /// Accumulates values for the various types of accumulable aggregations.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+// Numeric is 100 bytes
+#[allow(variant_size_differences)]
 enum AccumInner {
     /// Accumulates boolean values.
     Bool {

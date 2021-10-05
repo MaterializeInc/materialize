@@ -181,11 +181,13 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
 // they just go from sequences of vectors of bytes (for which we already know the delimiters)
 // to rows, and can eventually just be planned as `HirRelationExpr::Map`. (TODO)
 #[derive(Debug)]
+// Regex is 48 bytes
+#[allow(variant_size_differences)]
 pub(crate) enum PreDelimitedFormat {
     Bytes,
     Text,
     Regex(Regex, Row),
-    Protobuf(ProtobufDecoderState),
+    Protobuf(Box<ProtobufDecoderState>),
 }
 
 impl PreDelimitedFormat {
@@ -377,10 +379,9 @@ fn get_decoder(
                 DataEncoding::Protobuf(ProtobufEncoding {
                     descriptors,
                     message_name,
-                }) => PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(
-                    &descriptors,
-                    message_name,
-                )),
+                }) => PreDelimitedFormat::Protobuf(
+                    ProtobufDecoderState::new(&descriptors, message_name).into(),
+                ),
                 DataEncoding::Bytes => PreDelimitedFormat::Bytes,
                 DataEncoding::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
