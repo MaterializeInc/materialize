@@ -24,7 +24,7 @@ Before deploying a Debezium connector, you need to ensure that the upstream data
     WHERE variable_name IN ('log_bin', 'binlog_format');
     ```
 
-    For CDC, binary logging must be enabled and use the `row` format. If your settings differ, you can adjust the database configuration file (`/etc/mysql/my.cnf`) to use `log_bin=mysql-bin` and `binlog_format=row`. Keep in mind that changing these settings requires a restart of the MySQL instance and can affect database performance.
+    For CDC, binary logging must be enabled and use the `row` format. If your settings differ, you can adjust the database configuration file (`/etc/mysql/my.cnf`) to use `log_bin=mysql-bin` and `binlog_format=row`. Keep in mind that changing these settings requires a restart of the MySQL instance and can [affect database performance](https://dev.mysql.com/doc/refman/8.0/en/replication-sbr-rbr.html#replication-sbr-rbr-rbr-disadvantages).
 
     **Note:** Additional steps may be required if you're using MySQL on [Amazon RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_LogAccess.MySQL.BinaryFormat.html).
 
@@ -67,7 +67,33 @@ Currently, Materialize only supports Avro-encoded Debezium records. If you’re 
     }
     ```
 
-    You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/connectors/mysql.html#mysql-connector-properties). By default, the connector writes events for each table to a Kafka topic named `serverName.databaseName.tableName`.
+    You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/connectors/mysql.html#mysql-connector-properties).
+
+1. Start the Debezium MySQL connector using the configuration file:
+
+    ```bash
+    export CURRENT_HOST='<your-host>'
+
+    curl -i -X POST -H "Accept:application/json" -H  "Content-Type:application/json" \
+    http://$CURRENT_HOST:8083/connectors/ -d @register-mysql.json
+    ```
+
+1. Check that the connector is running:
+
+    ```bash
+    curl http://$CURRENT_HOST:8083/connectors/your-connector/status
+    ```
+
+    The first time it connects to a MySQL server, Debezium takes a [consistent snapshot](https://debezium.io/documentation/reference/connectors/mysql.html#mysql-snapshots) of the tables selected for replication, so you should see that the pre-existing records in the replicated table are initially pushed into your Kafka topic:
+
+    ```bash
+    /usr/bin/kafka-avro-console-consumer \
+      --bootstrap-server kafka:9092 \
+      --from-beginning \
+      --topic dbserver1.db1.table1
+    ```
+
+    **Note:** By default, the connector writes events for each table to a Kafka topic named `serverName.databaseName.tableName`.
 
 ### Create a source
 
