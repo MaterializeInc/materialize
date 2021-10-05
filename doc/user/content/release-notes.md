@@ -48,6 +48,8 @@ Wrap your release notes at the 80 character mark.
 Put breaking changes before other release notes.
 {{< /comment >}}
 
+{{% version-header v0.9.8 %}}
+
 {{% version-header v0.9.7 %}}
 - Support the `IS TRUE`, `IS FALSE`, `IS UNKNOWN` operators (and their `NOT`
   variations). {{% gh 8455 %}}
