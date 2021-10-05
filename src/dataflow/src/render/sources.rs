@@ -210,199 +210,187 @@ where
                     base_metrics,
                 };
 
-                let (collection, capability) =
-                    if let ExternalSourceConnector::PubNub(pubnub_connector) = connector {
-                        let source = PubNubSourceReader::new(src.name.clone(), pubnub_connector);
-                        let ((ok_stream, err_stream), capability) =
-                            source::create_source_simple(source_config, source);
+                let (collection, capability) = if let ExternalSourceConnector::PubNub(
+                    pubnub_connector,
+                ) = connector
+                {
+                    let source = PubNubSourceReader::new(src.name.clone(), pubnub_connector);
+                    let ((ok_stream, err_stream), capability) =
+                        source::create_source_simple(source_config, source);
 
-                        error_collections.push(
-                            err_stream
-                                .map(DataflowError::SourceError)
-                                .pass_through("source-errors")
-                                .as_collection(),
-                        );
+                    error_collections.push(
+                        err_stream
+                            .map(DataflowError::SourceError)
+                            .pass_through("source-errors")
+                            .as_collection(),
+                    );
 
-                        (ok_stream.as_collection(), capability)
-                    } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
-                        let source = PostgresSourceReader::new(src.name.clone(), pg_connector);
+                    (ok_stream.as_collection(), capability)
+                } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
+                    let source = PostgresSourceReader::new(src.name.clone(), pg_connector);
 
-                        let ((ok_stream, err_stream), capability) =
-                            source::create_source_simple(source_config, source);
+                    let ((ok_stream, err_stream), capability) =
+                        source::create_source_simple(source_config, source);
 
-                        error_collections.push(
-                            err_stream
-                                .map(DataflowError::SourceError)
-                                .pass_through("source-errors")
-                                .as_collection(),
-                        );
+                    error_collections.push(
+                        err_stream
+                            .map(DataflowError::SourceError)
+                            .pass_through("source-errors")
+                            .as_collection(),
+                    );
 
-                        (ok_stream.as_collection(), capability)
-                    } else {
-                        let is_connector_delimited = connector.is_delimited();
+                    (ok_stream.as_collection(), capability)
+                } else {
+                    let is_connector_delimited = connector.is_delimited();
 
-                        let ((ok_source, err_source), capability) = match connector {
-                            ExternalSourceConnector::Kafka(_) => {
-                                source::create_source::<_, KafkaSourceReader>(
-                                    source_config,
-                                    &connector,
-                                )
-                            }
-                            ExternalSourceConnector::Kinesis(_) => {
-                                source::create_source::<_, KinesisSourceReader>(
-                                    source_config,
-                                    &connector,
-                                )
-                            }
-                            ExternalSourceConnector::S3(_) => {
-                                source::create_source::<_, S3SourceReader>(
-                                    source_config,
-                                    &connector,
-                                )
-                            }
-                            ExternalSourceConnector::File(_)
-                            | ExternalSourceConnector::AvroOcf(_) => {
-                                source::create_source::<_, FileSourceReader>(
-                                    source_config,
-                                    &connector,
-                                )
-                            }
-                            ExternalSourceConnector::Postgres(_) => unreachable!(),
-                            ExternalSourceConnector::PubNub(_) => unreachable!(),
+                    let ((ok_source, err_source), capability) = match connector {
+                        ExternalSourceConnector::Kafka(_) => {
+                            source::create_source::<_, KafkaSourceReader>(source_config, &connector)
+                        }
+                        ExternalSourceConnector::Kinesis(_) => {
+                            source::create_source::<_, KinesisSourceReader>(
+                                source_config,
+                                &connector,
+                            )
+                        }
+                        ExternalSourceConnector::S3(_) => {
+                            source::create_source::<_, S3SourceReader>(source_config, &connector)
+                        }
+                        ExternalSourceConnector::File(_) | ExternalSourceConnector::AvroOcf(_) => {
+                            source::create_source::<_, FileSourceReader>(source_config, &connector)
+                        }
+                        ExternalSourceConnector::Postgres(_) => unreachable!(),
+                        ExternalSourceConnector::PubNub(_) => unreachable!(),
+                    };
+
+                    // Include any source errors.
+                    error_collections.push(
+                        err_source
+                            .map(DataflowError::SourceError)
+                            .pass_through("source-errors")
+                            .as_collection(),
+                    );
+
+                    let (stream, errors) = {
+                        let (key_encoding, value_encoding) = match encoding {
+                            SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
+                            SourceDataEncoding::Single(value) => (None, value),
                         };
 
-                        // Include any source errors.
-                        error_collections.push(
-                            err_source
-                                .map(DataflowError::SourceError)
-                                .pass_through("source-errors")
-                                .as_collection(),
-                        );
-
-                        let (stream, errors) = {
-                            let (key_encoding, value_encoding) = match encoding {
-                                SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
-                                SourceDataEncoding::Single(value) => (None, value),
+                        // CDCv2 can't quite be slotted in to the below code, since it determines its own diffs/timestamps as part of decoding.
+                        if let SourceEnvelope::CdcV2 = &envelope {
+                            let AvroEncoding {
+                                schema,
+                                schema_registry_config,
+                                confluent_wire_format,
+                            } = match value_encoding {
+                                DataEncoding::Avro(enc) => enc,
+                                _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
                             };
-
-                            // CDCv2 can't quite be slotted in to the below code, since it determines its own diffs/timestamps as part of decoding.
-                            if let SourceEnvelope::CdcV2 = &envelope {
-                                let AvroEncoding {
-                                    schema,
-                                    schema_registry_config,
-                                    confluent_wire_format,
-                                } = match value_encoding {
-                                    DataEncoding::Avro(enc) => enc,
-                                    _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
-                                };
-                                let (oks, token) = decode_cdcv2(
+                            let (oks, token) = decode_cdcv2(
+                                &ok_source,
+                                &schema,
+                                schema_registry_config,
+                                confluent_wire_format,
+                            );
+                            tokens
+                                .additional_tokens
+                                .entry(src_id)
+                                .or_insert_with(Vec::new)
+                                .push(Rc::new(token));
+                            (oks, None)
+                        } else {
+                            let (results, extra_token) = if is_connector_delimited {
+                                render_decode_delimited(
                                     &ok_source,
-                                    &schema,
-                                    schema_registry_config,
-                                    confluent_wire_format,
-                                );
+                                    key_encoding,
+                                    value_encoding,
+                                    &self.debug_name,
+                                    &envelope,
+                                    &mut linear_operators,
+                                    fast_forwarded,
+                                    render_state.metrics.clone(),
+                                )
+                            } else {
+                                render_decode(
+                                    &ok_source,
+                                    key_encoding,
+                                    value_encoding,
+                                    &self.debug_name,
+                                    &envelope,
+                                    &mut linear_operators,
+                                    fast_forwarded,
+                                    render_state.metrics.clone(),
+                                )
+                            };
+                            if let Some(tok) = extra_token {
                                 tokens
                                     .additional_tokens
                                     .entry(src_id)
                                     .or_insert_with(Vec::new)
-                                    .push(Rc::new(token));
-                                (oks, None)
-                            } else {
-                                let (results, extra_token) = if is_connector_delimited {
-                                    render_decode_delimited(
-                                        &ok_source,
-                                        key_encoding,
-                                        value_encoding,
-                                        &self.debug_name,
-                                        &envelope,
-                                        &mut linear_operators,
-                                        fast_forwarded,
-                                        render_state.metrics.clone(),
-                                    )
-                                } else {
-                                    render_decode(
-                                        &ok_source,
-                                        key_encoding,
-                                        value_encoding,
-                                        &self.debug_name,
-                                        &envelope,
-                                        &mut linear_operators,
-                                        fast_forwarded,
-                                        render_state.metrics.clone(),
-                                    )
-                                };
-                                if let Some(tok) = extra_token {
-                                    tokens
-                                        .additional_tokens
-                                        .entry(src_id)
-                                        .or_insert_with(Vec::new)
-                                        .push(Rc::new(tok));
-                                }
+                                    .push(Rc::new(tok));
+                            }
 
-                                // render debezium or regular upsert
-                                match &envelope {
-                                    SourceEnvelope::Debezium(_, DebeziumMode::Upsert) => {
-                                        let mut trackstate = (
-                                            HashMap::new(),
-                                            render_state.metrics.debezium_upsert_count_for(
-                                                src_id,
-                                                self.dataflow_id,
-                                            ),
-                                        );
-                                        let results = results.flat_map(
+                            // render debezium or regular upsert
+                            match &envelope {
+                                SourceEnvelope::Debezium(_, DebeziumMode::Upsert) => {
+                                    let mut trackstate = (
+                                        HashMap::new(),
+                                        render_state
+                                            .metrics
+                                            .debezium_upsert_count_for(src_id, self.dataflow_id),
+                                    );
+                                    let results = results.flat_map(
                                             move |DecodeResult { key, value, .. }| {
                                                 let (keys, metrics) = &mut trackstate;
+                                                #[rustfmt::skip]
                                                 let value = value.map(|value| {
                                                     match key {
-                                                None => Err::<_, DataflowError>(
-                                                    DecodeError::Text(
-                                                        "All upsert keys should decode to a value."
-                                                            .to_string(),
-                                                    )
-                                                    .into(),
-                                                ),
-                                                Some(Err(e)) => Err(e),
-                                                Some(Ok(key)) => {
-                                                    rewrite_for_upsert(value, keys, key, metrics)
-                                                }
-                                            }
+                                                        None => Err::<_, DataflowError>(
+                                                            DecodeError::Text(
+                                                                "All upsert keys should decode to a value."
+                                                                    .to_string(),
+                                                            )
+                                                            .into(),
+                                                        ),
+                                                        Some(Err(e)) => Err(e),
+                                                        Some(Ok(key)) => {
+                                                            rewrite_for_upsert(value, keys, key, metrics)
+                                                        }
+                                                    }
                                                 });
                                                 value
                                             },
                                         );
-                                        let (stream, errors) =
-                                            results.ok_err(std::convert::identity);
-                                        let stream =
-                                            stream.pass_through("decode-ok").as_collection();
-                                        let errors =
-                                            errors.pass_through("decode-errors").as_collection();
-                                        (stream, Some(errors))
-                                    }
-                                    SourceEnvelope::Upsert => super::upsert::upsert(
-                                        &results,
-                                        self.as_of_frontier.clone(),
-                                        &mut linear_operators,
-                                        src.bare_desc.typ().arity(),
-                                    ),
-                                    _ => {
-                                        let (stream, errors) =
-                                            flatten_results(key_envelope, results);
-                                        let stream =
-                                            stream.pass_through("decode-ok").as_collection();
-                                        let errors =
-                                            errors.pass_through("decode-errors").as_collection();
-                                        (stream, Some(errors))
-                                    }
+                                    let (stream, errors) = results.ok_err(std::convert::identity);
+                                    let stream = stream.pass_through("decode-ok").as_collection();
+                                    let errors =
+                                        errors.pass_through("decode-errors").as_collection();
+                                    (stream, Some(errors))
+                                }
+                                SourceEnvelope::Upsert => super::upsert::upsert(
+                                    &results,
+                                    self.as_of_frontier.clone(),
+                                    &mut linear_operators,
+                                    src.bare_desc.typ().arity(),
+                                ),
+                                _ => {
+                                    let (stream, errors) = flatten_results(key_envelope, results);
+                                    let stream = stream.pass_through("decode-ok").as_collection();
+                                    let errors =
+                                        errors.pass_through("decode-errors").as_collection();
+                                    (stream, Some(errors))
                                 }
                             }
-                        };
-
-                        if let Some(errors) = errors {
-                            error_collections.push(errors);
                         }
-
-                        (stream, capability)
                     };
+
+                    if let Some(errors) = errors {
+                        error_collections.push(errors);
+                    }
+
+                    (stream, capability)
+                };
 
                 // render debezium dedupe
                 let mut collection = match &envelope {
