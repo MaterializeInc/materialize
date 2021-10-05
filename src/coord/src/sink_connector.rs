@@ -88,7 +88,14 @@ fn get_latest_ts(
 
     let partition = partitions.into_element();
 
-    // Seek to end-1 offset
+    // We scan from the beginning and see if we can find an END record. We have
+    // to do it like this because Kafka Control Batches mess with offsets. We
+    // therefore cannot simply take the last offset from the back and expect an
+    // END message there. With a transactional producer, the OffsetTail(1) will
+    // not point to an END message but a control message. With aborted
+    // transactions, there might even be a lot of garbage at the end of the
+    // topic or in between.
+
     let mut tps = TopicPartitionList::new();
     tps.add_partition(consistency_topic, partition);
     tps.set_partition_offset(consistency_topic, partition, Offset::Beginning)?;
@@ -99,14 +106,6 @@ fn get_latest_ts(
             consistency_topic, partition
         )
     })?;
-
-    // We scan from the beginning and see if we can find an END record. We have
-    // to do it like this because Kafka Control Batches mess with offsets. We
-    // therefore cannot simply take the last offset from the back and expect an
-    // END message there. With a transactional producer, the OffsetTail(1) will
-    // not point to an END message but a control message. With aborted
-    // transactions, there might even be a lot of garbage at the end of the
-    // topic or in between.
 
     let mut latest_message = None;
     while let Some(message) = get_next_message(consumer, timeout)? {
