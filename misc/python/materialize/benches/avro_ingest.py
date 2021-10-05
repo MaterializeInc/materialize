@@ -19,7 +19,7 @@ from threading import Thread
 from typing import NamedTuple
 
 import psutil
-import psycopg2  # type: ignore
+import psycopg2
 import requests
 
 from materialize import mzbuild, spawn
@@ -118,7 +118,7 @@ class PrevStats(NamedTuple):
 def print_stats(cid: str, prev: PrevStats) -> PrevStats:
     proc = mz_proc(cid)
     memory = proc.memory_info()  # type: ignore
-    cpu = proc.cpu_times()  # type: ignore
+    cpu = proc.cpu_times()
     new_prev = PrevStats(time.time(), cpu.user, cpu.system)
     print(
         f"{memory.rss},{memory.vms},{new_prev.user_cpu - prev.user_cpu},{new_prev.system_cpu - prev.system_cpu},{new_prev.wall_time - prev.wall_time}"
@@ -181,21 +181,21 @@ def main() -> None:
     conn.autocommit = True
     cur = conn.cursor()
     print("Rss,Vms,User Cpu,System Cpu,Wall Time")
-    cur.execute(
+    cur.execute(  # type: ignore
         "CREATE SOURCE s FROM KAFKA BROKER 'confluent:9093' TOPIC 'bench_data' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://confluent:8081'"
     )
     prev = PrevStats(time.time(), 0.0, 0.0)
     for _ in range(ns.trials):
-        cur.execute("DROP VIEW IF EXISTS ct")
-        cur.execute("CREATE MATERIALIZED VIEW ct AS SELECT count(*) FROM s")
+        cur.execute("DROP VIEW IF EXISTS ct")  # type: ignore
+        cur.execute("CREATE MATERIALIZED VIEW ct AS SELECT count(*) FROM s")  # type: ignore
         while True:
             try:
-                cur.execute("SELECT * FROM ct")
+                cur.execute("SELECT * FROM ct")  # type: ignore
                 n = cur.fetchone()[0]
                 if n == ns.records:
                     break
             except (
-                psycopg2.errors.SqlStatementNotYetComplete,
+                psycopg2.errors.SqlStatementNotYetComplete,  # type: ignore
                 psycopg2.errors.InternalError,
             ):
                 pass
