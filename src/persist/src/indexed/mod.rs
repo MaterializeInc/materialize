@@ -465,7 +465,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
     /// Commit any pending in-memory changes to persistent storage, respond to clients
     /// and notify any listeners.
-    fn drain_pending(&mut self) -> Result<(), Error> {
+    pub fn drain_pending(&mut self) -> Result<(), Error> {
         #[cfg(any(debug_assertions, test))]
         {
             assert_eq!(self.validate_drain_pending_preconditions(), Ok(()));
