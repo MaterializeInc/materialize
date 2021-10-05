@@ -60,9 +60,9 @@ impl UnionBranchCancellation {
             // with opposite sign until it finds a branch that cancels the given one
             // and returns its position.
             let matching_negation = |input: &MirRelationExpr,
-                                     sign: i64,
+                                     sign: bool,
                                      inputs: &[MirRelationExpr],
-                                     input_signs: &[i64],
+                                     input_signs: &[bool],
                                      start_idx: usize|
              -> Option<usize> {
                 for i in start_idx..inputs.len() {
@@ -83,10 +83,7 @@ impl UnionBranchCancellation {
                 .collect_vec();
 
             // Compare branches if there is at least a negated branch
-            if let Some(_) = std::iter::once(&base_sign)
-                .chain(&input_signs)
-                .find(|x| **x == -1)
-            {
+            if std::iter::once(&base_sign).chain(&input_signs).any(|x| *x) {
                 if let Some(j) = matching_negation(&*base, base_sign, inputs, &input_signs, 0) {
                     let relation_typ = base.typ();
                     **base = MirRelationExpr::constant(vec![], relation_typ.clone());
@@ -107,20 +104,20 @@ impl UnionBranchCancellation {
         Ok(())
     }
 
-    /// Returns the sign of a given union branch. The sign is -1 if the branch contains
-    /// a Negate operator within a chain of Map, Filter and Project operators, and 1
-    /// otherwise.
+    /// Returns the sign of a given union branch. The sign is `true` if the branch contains
+    /// an odd number of Negate operators within a chain of Map, Filter and Project
+    /// operators, and `false` otherwise.
     ///
     /// This sign is pre-computed for all union branches in order to avoid performing
     /// expensive comparisons of branches with the same sign since they can't possibly
     /// cancel each other.
-    fn branch_sign(branch: &MirRelationExpr) -> i64 {
+    fn branch_sign(branch: &MirRelationExpr) -> bool {
         let mut relation = branch;
-        let mut sign = 1;
+        let mut sign = false;
         loop {
             match relation {
                 MirRelationExpr::Negate { input } => {
-                    sign *= -1;
+                    sign ^= true;
                     relation = &**input;
                 }
                 MirRelationExpr::Map { input, .. }
