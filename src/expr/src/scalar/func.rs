@@ -834,8 +834,10 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let sum = a.unwrap_float32() + b.unwrap_float32();
-    if sum.is_infinite() {
+    let a = a.unwrap_float32();
+    let b = b.unwrap_float32();
+    let sum = a + b;
+    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
     } else {
         Ok(Datum::from(sum))
@@ -843,8 +845,10 @@ fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let sum = a.unwrap_float64() + b.unwrap_float64();
-    if sum.is_infinite() {
+    let a = a.unwrap_float64();
+    let b = b.unwrap_float64();
+    let sum = a + b;
+    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
     } else {
         Ok(Datum::from(sum))
@@ -1251,8 +1255,10 @@ fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let difference = a.unwrap_float32() - b.unwrap_float32();
-    if difference.is_infinite() {
+    let a = a.unwrap_float32();
+    let b = b.unwrap_float32();
+    let difference = a - b;
+    if difference.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
     } else {
         Ok(Datum::from(difference))
@@ -1260,8 +1266,10 @@ fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let difference = a.unwrap_float64() - b.unwrap_float64();
-    if difference.is_infinite() {
+    let a = a.unwrap_float64();
+    let b = b.unwrap_float64();
+    let difference = a - b;
+    if difference.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
     } else {
         Ok(Datum::from(difference))
@@ -1340,18 +1348,26 @@ fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let product = a.unwrap_float32() * b.unwrap_float32();
-    if product.is_infinite() {
+    let a = a.unwrap_float32();
+    let b = b.unwrap_float32();
+    let product = a * b;
+    if product.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
+    } else if product == 0.0f32 && a != 0.0f32 && b != 0.0f32 {
+        Err(EvalError::FloatUnderflow)
     } else {
         Ok(Datum::from(product))
     }
 }
 
 fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let product = a.unwrap_float64() * b.unwrap_float64();
-    if product.is_infinite() {
+    let a = a.unwrap_float64();
+    let b = b.unwrap_float64();
+    let product = a * b;
+    if product.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
+    } else if product == 0.0f64 && a != 0.0f64 && b != 0.0f64 {
+        Err(EvalError::FloatUnderflow)
     } else {
         Ok(Datum::from(product))
     }
@@ -1409,11 +1425,13 @@ fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float32();
     let b = b.unwrap_float32();
-    if b == 0.0 && !a.is_nan() {
+    if b == 0.0f32 && !a.is_nan() {
         Err(EvalError::DivisionByZero)
     } else {
         let quotient = a / b;
-        if quotient == 0.0 {
+        if quotient.is_infinite() && !a.is_infinite() {
+            Err(EvalError::FloatOverflow)
+        } else if quotient == 0.0f32 && a != 0.0f32 && !b.is_infinite() {
             Err(EvalError::FloatUnderflow)
         } else {
             Ok(Datum::from(quotient))
@@ -1424,11 +1442,13 @@ fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float64();
     let b = b.unwrap_float64();
-    if b == 0.0 && !a.is_nan() {
+    if b == 0.0f64 && !a.is_nan() {
         Err(EvalError::DivisionByZero)
     } else {
         let quotient = a / b;
-        if quotient == 0.0 {
+        if quotient.is_infinite() && !a.is_infinite() {
+            Err(EvalError::FloatOverflow)
+        } else if quotient == 0.0f64 && a != 0.0f64 && !b.is_infinite() {
             Err(EvalError::FloatUnderflow)
         } else {
             Ok(Datum::from(quotient))
