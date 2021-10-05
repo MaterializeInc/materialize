@@ -123,37 +123,45 @@ id   mz_offset
 a    1
 b    2
 
+$ http-request method=POST url=${testdrive.schema-registry-url}subjects/testdrive-no-messages-${testdrive.seed}-value/versions content-type=application/json
+{
+    "schema": "syntax = \"proto3\"; enum Choices { ZERO = 0; ONE = 1; }",
+    "schemaType": "PROTOBUF",
+    "references": []
+}
+
+$ http-request method=POST url=${testdrive.schema-registry-url}subjects/testdrive-imported-${testdrive.seed}-value/versions content-type=application/json
+{
+    "schema": "syntax = \"proto3\"; import 'no_messages.proto'; message Imported { Choices choice = 1; }",
+    "schemaType": "PROTOBUF",
+    "references": [{
+        "name": "no_messages.proto",
+        "subject": "testdrive-no-messages-${testdrive.seed}-value",
+        "version": 1
+    }]
+}
+
 $ kafka-create-topic topic=imported
 
 $ set schema
 syntax = "proto3";
 
-import 'simple.proto';
+import 'no_messages.proto';
 
 message Imported {
-    SimpleId id = 1;
-}
-
-$ http-request method=POST url=${testdrive.schema-registry-url}subjects/testdrive-imported-${testdrive.seed}-value/versions content-type=application/json
-{
-    "schema": "syntax = \"proto3\"; import 'simple.proto'; message Imported { SimpleId id = 1; }",
-    "schemaType": "PROTOBUF",
-    "references": [{
-        "name": "simple.proto",
-        "subject": "testdrive-simple-${testdrive.seed}-value",
-        "version": 1
-    }]
+    Choices choice = 1;
 }
 
 $ kafka-ingest topic=imported format=protobuf schema=${schema} message=imported
-{"id": {"id": "a"}}
-{"id": {"id": "b"}}
+{"choice": "ONE"}
+{"choice": "ONE"}
 
 ! CREATE MATERIALIZED SOURCE imported_csr
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-imported-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-unsupported protobuf schema reference simple.proto
+unsupported protobuf schema reference no_messages.proto
 
+# Tests that we do not error when the first available file descriptor does not contain a Message.
 > CREATE MATERIALIZED SOURCE imported_csr
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-imported-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Imported' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
