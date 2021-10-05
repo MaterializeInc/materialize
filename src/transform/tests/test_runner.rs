@@ -222,6 +222,7 @@ mod tests {
             "UnionBranchCancellation" => {
                 Ok(Box::new(transform::union_cancel::UnionBranchCancellation))
             }
+            "UnionFusion" => Ok(Box::new(transform::fusion::union::Union)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name
