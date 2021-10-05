@@ -698,7 +698,7 @@ to improve both our software and your queries! Please reach out at:
 
     Web: https://materialize.com
     GitHub issues: https://github.com/MaterializeInc/materialize/issues
-    Email: support@materialize.io
+    Email: support@materialize.com
     Twitter: @MaterializeInc
 =======================================================================
 "
