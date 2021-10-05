@@ -165,6 +165,7 @@ pub enum Expr<T: AstInfo> {
     Array(Vec<Expr<T>>),
     /// `LIST[<expr>*]`
     List(Vec<Expr<T>>),
+    ListSubquery(Box<Query<T>>),
     /// `<expr>[<expr>]`
     SubscriptIndex {
         expr: Box<Expr<T>>,
@@ -427,6 +428,11 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     }
                 }
                 f.write_str("]");
+            }
+            Expr::ListSubquery(s) => {
+                f.write_str("LIST(");
+                f.write_node(&s);
+                f.write_str(")");
             }
             Expr::SubscriptIndex { expr, subscript } => {
                 f.write_node(&expr);

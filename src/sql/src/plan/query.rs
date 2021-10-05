@@ -2871,6 +2871,7 @@ pub fn plan_expr<'a>(
             expr.select().into()
         }
 
+        Expr::ListSubquery(s) => bail_unsupported!("TESTING CHAE"),
         Expr::Collate { .. } => bail_unsupported!("COLLATE"),
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
         Expr::InList { .. } => unreachable!("Expr::InList not desugared"),

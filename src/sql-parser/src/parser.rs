@@ -2777,7 +2777,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_list(&mut self) -> Result<Expr<Raw>, ParserError> {
-        Ok(Expr::List(self.parse_sequence(Self::parse_list)?))
+        if self.consume_token(&Token::LParen) {
+            let subquery = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            Ok(Expr::ListSubquery(Box::new(subquery)))
+        } else {
+            self.parse_sequence(Self::parse_list).map(Expr::List)
+        }
     }
 
     fn parse_sequence<F>(&mut self, mut f: F) -> Result<Vec<Expr<Raw>>, ParserError>
