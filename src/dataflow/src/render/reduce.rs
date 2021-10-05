@@ -1213,6 +1213,20 @@ enum AccumInner {
         /// The number of non-NULL values observed.
         non_nulls: isize,
     },
+    /// Accumulates float values.
+    Float {
+        /// Accumulates non-special float values, mapped to a fixed presicion i128 domain to
+        /// preserve associativity and commutativity
+        accum: i128,
+        /// Counts +inf
+        pos_infs: isize,
+        /// Counts -inf
+        neg_infs: isize,
+        /// Counts NaNs
+        nans: isize,
+        /// Counts non-NULL values
+        non_nulls: isize,
+    },
     /// Accumulates arbitrary precision decimals.
     Numeric {
         /// Accumulates non-special values
@@ -1233,6 +1247,19 @@ impl Semigroup for AccumInner {
         match self {
             AccumInner::Bool { trues, falses } => trues.is_zero() && falses.is_zero(),
             AccumInner::SimpleNumber { accum, non_nulls } => accum.is_zero() && non_nulls.is_zero(),
+            AccumInner::Float {
+                accum,
+                pos_infs,
+                neg_infs,
+                nans,
+                non_nulls,
+            } => {
+                accum.is_zero()
+                    && pos_infs.is_zero()
+                    && neg_infs.is_zero()
+                    && nans.is_zero()
+                    && non_nulls.is_zero()
+            }
             AccumInner::Numeric {
                 accum,
                 pos_infs,
@@ -1269,6 +1296,28 @@ impl Semigroup for AccumInner {
                 },
             ) => {
                 *accum += other_accum;
+                *non_nulls += other_non_nulls;
+            }
+            (
+                AccumInner::Float {
+                    accum,
+                    pos_infs,
+                    neg_infs,
+                    nans,
+                    non_nulls,
+                },
+                AccumInner::Float {
+                    accum: other_accum,
+                    pos_infs: other_pos_infs,
+                    neg_infs: other_neg_infs,
+                    nans: other_nans,
+                    non_nulls: other_non_nulls,
+                },
+            ) => {
+                *accum += other_accum;
+                *pos_infs += other_pos_infs;
+                *neg_infs += other_neg_infs;
+                *nans += other_nans;
                 *non_nulls += other_non_nulls;
             }
             (
@@ -1339,6 +1388,19 @@ impl Multiply<isize> for AccumInner {
             },
             AccumInner::SimpleNumber { accum, non_nulls } => AccumInner::SimpleNumber {
                 accum: accum * i128::cast_from(factor),
+                non_nulls: non_nulls * factor,
+            },
+            AccumInner::Float {
+                accum,
+                pos_infs,
+                neg_infs,
+                nans,
+                non_nulls,
+            } => AccumInner::Float {
+                accum: accum * i128::cast_from(factor),
+                pos_infs: pos_infs * factor,
+                neg_infs: neg_infs * factor,
+                nans: nans * factor,
                 non_nulls: non_nulls * factor,
             },
             AccumInner::Numeric {
@@ -1453,6 +1515,13 @@ where
                     trues: 0,
                     falses: 0,
                 },
+                AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => AccumInner::Float {
+                    accum: 0,
+                    pos_infs: 0,
+                    neg_infs: 0,
+                    nans: 0,
+                    non_nulls: 0,
+                },
                 AggregateFunc::SumNumeric => AccumInner::Numeric {
                     accum: OrderedDecimal(NumericAgg::zero()),
                     pos_infs: 0,
@@ -1498,6 +1567,35 @@ where
                 },
                 x => panic!("Invalid argument to AggregateFunc::Dummy: {:?}", x),
             },
+            AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => {
+                let n = match datum {
+                    Datum::Float32(n) => f64::from(*n),
+                    Datum::Float64(n) => *n,
+                    Datum::Null => 0f64,
+                    x => panic!("Invalid argument to AggregateFunc::{:?}: {:?}", aggr, x),
+                };
+
+                let nans = n.is_nan() as isize;
+                let pos_infs = (n == f64::INFINITY) as isize;
+                let neg_infs = (n == f64::NEG_INFINITY) as isize;
+                let non_nulls = (datum != Datum::Null) as isize;
+
+                // Map the floating point value onto a fixed presicion domain
+                // All special values should map to zero, since they are tracked separately
+                let accum = if nans > 0 || pos_infs > 0 || neg_infs > 0 {
+                    0
+                } else {
+                    (n * float_scale) as i128
+                };
+
+                AccumInner::Float {
+                    accum,
+                    pos_infs,
+                    neg_infs,
+                    nans,
+                    non_nulls,
+                }
+            }
             AggregateFunc::SumNumeric => match datum {
                 Datum::Numeric(n) => {
                     let (accum, pos_infs, neg_infs, nans) = if n.0.is_infinite() {
@@ -1547,14 +1645,6 @@ where
                     },
                     Datum::Int64(i) => AccumInner::SimpleNumber {
                         accum: i128::from(i),
-                        non_nulls: 1,
-                    },
-                    Datum::Float32(f) => AccumInner::SimpleNumber {
-                        accum: (f64::from(*f) * float_scale) as i128,
-                        non_nulls: 1,
-                    },
-                    Datum::Float64(f) => AccumInner::SimpleNumber {
-                        accum: (*f * float_scale) as i128,
                         non_nulls: 1,
                     },
                     Datum::Null => AccumInner::SimpleNumber {
@@ -1683,11 +1773,49 @@ where
                             (AggregateFunc::SumInt64, AccumInner::SimpleNumber { accum, .. }) => {
                                 Datum::from(*accum)
                             }
-                            (AggregateFunc::SumFloat32, AccumInner::SimpleNumber { accum, .. }) => {
-                                Datum::Float32((((*accum as f64) / float_scale) as f32).into())
+                            (
+                                AggregateFunc::SumFloat32,
+                                AccumInner::Float {
+                                    accum,
+                                    pos_infs,
+                                    neg_infs,
+                                    nans,
+                                    non_nulls: _,
+                                },
+                            ) => {
+                                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                                    // NaNs are NaNs and cases where we've seen a
+                                    // mixture of positive and negative infinities.
+                                    Datum::from(f32::NAN)
+                                } else if *pos_infs > 0 {
+                                    Datum::from(f32::INFINITY)
+                                } else if *neg_infs > 0 {
+                                    Datum::from(f32::NEG_INFINITY)
+                                } else {
+                                    Datum::from(((*accum as f64) / float_scale) as f32)
+                                }
                             }
-                            (AggregateFunc::SumFloat64, AccumInner::SimpleNumber { accum, .. }) => {
-                                Datum::Float64(((*accum as f64) / float_scale).into())
+                            (
+                                AggregateFunc::SumFloat64,
+                                AccumInner::Float {
+                                    accum,
+                                    pos_infs,
+                                    neg_infs,
+                                    nans,
+                                    non_nulls: _,
+                                },
+                            ) => {
+                                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                                    // NaNs are NaNs and cases where we've seen a
+                                    // mixture of positive and negative infinities.
+                                    Datum::from(f64::NAN)
+                                } else if *pos_infs > 0 {
+                                    Datum::from(f64::INFINITY)
+                                } else if *neg_infs > 0 {
+                                    Datum::from(f64::NEG_INFINITY)
+                                } else {
+                                    Datum::from((*accum as f64) / float_scale)
+                                }
                             }
                             (
                                 AggregateFunc::SumNumeric,
@@ -1696,7 +1824,7 @@ where
                                     pos_infs,
                                     neg_infs,
                                     nans,
-                                    non_nulls,
+                                    non_nulls: _,
                                 },
                             ) => {
                                 let mut cx_datum = numeric::cx_datum();
@@ -1710,9 +1838,7 @@ where
                                 let neg_d = d.is_negative();
                                 let pos_inf = *pos_infs > 0 || (inf_d && !neg_d);
                                 let neg_inf = *neg_infs > 0 || (inf_d && neg_d);
-                                if *non_nulls == 0 {
-                                    Datum::Null
-                                } else if *nans > 0 || (pos_inf && neg_inf) {
+                                if *nans > 0 || (pos_inf && neg_inf) {
                                     // NaNs are NaNs and cases where we've seen a
                                     // mixture of positive and negative infinities.
                                     Datum::from(Numeric::nan())
@@ -1897,7 +2023,7 @@ pub mod monoids {
     }
 
     /// Get the correct monoid implementation for a given aggregation function. Note that
-    // all hierarchical aggregation functions need to supply a monoid implementation.
+    /// all hierarchical aggregation functions need to supply a monoid implementation.
     pub fn get_monoid(row: Row, func: &AggregateFunc) -> Option<ReductionMonoid> {
         match func {
             AggregateFunc::MaxNumeric
