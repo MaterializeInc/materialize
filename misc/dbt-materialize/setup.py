@@ -24,7 +24,7 @@ from setuptools import find_packages
 # without bumping the dbt-postgres version, change version_suffix to ".post1",
 # ".post2", etc. Reset version_suffix back to "" when bumping the
 # dbt_postgres_version.
-dbt_postgres_version = "0.20.2"
+dbt_postgres_version = "0.21.0"
 version_suffix = ""
 
 setup(
