@@ -88,10 +88,26 @@ impl<B: Blob> Maintainer<B> {
         blob: Arc<BlobCache<B>>,
         req: CompactTraceReq,
     ) -> Result<CompactTraceRes, Error> {
+        let (first, second) = (&req.b0, &req.b1);
         if first.desc.upper() != second.desc.lower() {
             return Err(Error::from(format!(
                 "invalid merge of non-consecutive batches {:?} and {:?}",
                 first, second
+            )));
+        }
+
+        if PartialOrder::less_than(&req.since, first.desc.since()) {
+            return Err(Error::from(format!(
+                "output since {:?} must be at or in advance of input since {:?}",
+                &req.since,
+                first.desc.since()
+            )));
+        }
+        if PartialOrder::less_than(&req.since, second.desc.since()) {
+            return Err(Error::from(format!(
+                "output since {:?} must be at or in advance of input since {:?}",
+                &req.since,
+                second.desc.since()
             )));
         }
 
@@ -102,7 +118,7 @@ impl<B: Blob> Maintainer<B> {
         let desc = Description::new(
             first.desc.lower().clone(),
             second.desc.upper().clone(),
-            self.since.clone(),
+            req.since.clone(),
         );
 
         let mut updates = vec![];
@@ -122,12 +138,8 @@ impl<B: Blob> Maintainer<B> {
                 .cloned(),
         );
 
-        for ((_, _), t, _) in updates.iter_mut() {
-            for since_ts in self.since.elements().iter() {
-                if *t < *since_ts {
-                    *t = *since_ts;
-                }
-            }
+        for ((_, _), ts, _) in updates.iter_mut() {
+            ts.advance_by(desc.since().borrow());
         }
 
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
@@ -137,9 +149,7 @@ impl<B: Blob> Maintainer<B> {
             updates,
         };
 
-        let key = self.new_blob_key();
-        // TODO: actually clear the unwanted batches from the blob storage
-        let size_bytes = blob.set_trace_batch(key.clone(), new_batch)?;
+        let size_bytes = blob.set_trace_batch(req.output_key.clone(), new_batch)?;
 
         // Only upgrade the compaction level if we know this new batch represents
         // an increase in data over both of its parents so that we know we need
@@ -151,12 +161,13 @@ impl<B: Blob> Maintainer<B> {
             first.level
         };
 
-        Ok(TraceBatchMeta {
-            key,
+        let merged = TraceBatchMeta {
+            key: req.output_key.clone(),
             desc,
             level: merged_level,
             size_bytes,
-        })
+        };
+        Ok(CompactTraceRes { req, merged })
     }
 }
 
@@ -204,19 +215,20 @@ mod tests {
         let req = CompactTraceReq {
             b0: TraceBatchMeta {
                 key: "b0".into(),
-                desc: b0.desc.clone(),
+                desc: b0.desc,
                 level: 0,
                 size_bytes: b0_size_bytes,
             },
             b1: TraceBatchMeta {
                 key: "b1".into(),
-                desc: b1.desc.clone(),
+                desc: b1.desc,
                 level: 0,
                 size_bytes: b1_size_bytes,
             },
             since: Antichain::from_elem(2),
             output_key: "b2".into(),
         };
+
         let expected_res = CompactTraceRes {
             req: req.clone(),
             merged: TraceBatchMeta {
@@ -239,6 +251,90 @@ mod tests {
         ];
         assert_eq!(&b2.desc, &expected_res.merged.desc);
         assert_eq!(&b2.updates, &expected_updates);
+        Ok(())
+    }
+
+    #[test]
+    fn compact_trace_errors() -> Result<(), Error> {
+        let blob = BlobCache::new(Metrics::default(), MemRegistry::new().blob_no_reentrance()?);
+        let maintainer = Maintainer::new(blob, Arc::new(Runtime::new()?));
+
+        // Non-contiguous batch descs
+        let req = CompactTraceReq {
+            b0: TraceBatchMeta {
+                key: "".into(),
+                desc: desc_from(0, 2, 0),
+                level: 0,
+                size_bytes: 0,
+            },
+            b1: TraceBatchMeta {
+                key: "".into(),
+                desc: desc_from(3, 4, 0),
+                level: 0,
+                size_bytes: 0,
+            },
+            since: Antichain::from_elem(0),
+            output_key: "".into(),
+        };
+        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [3] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
+
+        // Overlapping batch descs
+        let req = CompactTraceReq {
+            b0: TraceBatchMeta {
+                key: "".into(),
+                desc: desc_from(0, 2, 0),
+                level: 0,
+                size_bytes: 0,
+            },
+            b1: TraceBatchMeta {
+                key: "".into(),
+                desc: desc_from(1, 4, 0),
+                level: 0,
+                size_bytes: 0,
+            },
+            since: Antichain::from_elem(0),
+            output_key: "".into(),
+        };
+        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
+
+        // Since not at or in advance of b0's since
+        let req = CompactTraceReq {
+            b0: TraceBatchMeta {
+                key: "".into(),
+                desc: desc_from(0, 2, 1),
+                level: 0,
+                size_bytes: 0,
+            },
+            b1: TraceBatchMeta {
+                key: "".into(),
+                desc: desc_from(2, 4, 0),
+                level: 0,
+                size_bytes: 0,
+            },
+            since: Antichain::from_elem(0),
+            output_key: "".into(),
+        };
+        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("output since Antichain { elements: [0] } must be at or in advance of input since Antichain { elements: [1] }")));
+
+        // Since not at or in advance of b1's since
+        let req = CompactTraceReq {
+            b0: TraceBatchMeta {
+                key: "".into(),
+                desc: desc_from(0, 2, 0),
+                level: 0,
+                size_bytes: 0,
+            },
+            b1: TraceBatchMeta {
+                key: "".into(),
+                desc: desc_from(2, 4, 1),
+                level: 0,
+                size_bytes: 0,
+            },
+            since: Antichain::from_elem(0),
+            output_key: "".into(),
+        };
+        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("output since Antichain { elements: [0] } must be at or in advance of input since Antichain { elements: [1] }")));
+
         Ok(())
     }
 }
