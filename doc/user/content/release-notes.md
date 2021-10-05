@@ -49,6 +49,7 @@ Put breaking changes before other release notes.
 {{< /comment >}}
 
 {{% version-header v0.9.8 %}}
+- Throw errors on floating point arithmetic overflow and underflow.
 
 {{% version-header v0.9.7 %}}
 - Support the `IS TRUE`, `IS FALSE`, `IS UNKNOWN` operators (and their `NOT`
