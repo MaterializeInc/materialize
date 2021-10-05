@@ -10,10 +10,11 @@
 //! Runtime for concurrent, asynchronous use of [Indexed], and the public API
 //! used by the rest of the crate to connect to it.
 
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashSet;
+use std::collections::hash_map::{DefaultHasher, Entry};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
@@ -28,6 +29,7 @@ use tokio::runtime::Runtime;
 
 use crate::error::Error;
 use crate::future::{Future, FutureHandle};
+use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::{
@@ -38,10 +40,7 @@ use crate::storage::{Blob, Log, SeqNo};
 enum Cmd {
     Register(String, (&'static str, &'static str), FutureHandle<Id>),
     Destroy(String, FutureHandle<bool>),
-    Write(
-        Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-        FutureHandle<SeqNo>,
-    ),
+    Write(Vec<(Id, ColumnarRecords)>, FutureHandle<SeqNo>),
     Seal(Vec<Id>, u64, FutureHandle<()>),
     AllowCompaction(Vec<(Id, Antichain<u64>)>, FutureHandle<()>),
     Snapshot(Id, FutureHandle<IndexedSnapshot>),
@@ -298,11 +297,7 @@ impl RuntimeClient {
     /// streams with the given ids.
     ///
     /// The ids must have previously been registered.
-    fn write(
-        &self,
-        updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-        res: FutureHandle<SeqNo>,
-    ) {
+    pub(crate) fn write(&self, updates: Vec<(Id, ColumnarRecords)>, res: FutureHandle<SeqNo>) {
         self.core.send(Cmd::Write(updates, res))
     }
 
@@ -361,24 +356,6 @@ impl RuntimeClient {
     }
 }
 
-fn encode_updates<'a, K, V, I>(updates: I) -> Vec<((Vec<u8>, Vec<u8>), u64, isize)>
-where
-    K: Codec,
-    V: Codec,
-    I: IntoIterator<Item = &'a ((K, V), u64, isize)>,
-{
-    updates
-        .into_iter()
-        .map(|((k, v), ts, diff)| {
-            let mut key_encoded = Vec::with_capacity(k.size_hint());
-            let mut val_encoded = Vec::with_capacity(v.size_hint());
-            k.encode(&mut key_encoded);
-            v.encode(&mut val_encoded);
-            ((key_encoded, val_encoded), *ts, *diff)
-        })
-        .collect()
-}
-
 /// A handle that allows writes of ((Key, Value), Time, Diff) updates into an
 /// [crate::indexed::Indexed] via a [RuntimeClient].
 #[derive(Debug, PartialEq, Eq)]
@@ -418,9 +395,11 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     where
         I: IntoIterator<Item = &'a ((K, V), u64, isize)>,
     {
-        let updates = encode_updates(updates);
+        // TODO: Cache the WriteReqBuilder on the StreamWriteHandle so we can
+        // reuse the alloc for the consolidation map.
+        let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
         let (tx, rx) = Future::new();
-        self.runtime.write(vec![(self.id, updates)], tx);
+        self.runtime.write(vec![(self.id, updates.finish())], tx);
         rx
     }
 
@@ -437,6 +416,84 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
         let (tx, rx) = Future::new();
         self.runtime.allow_compaction(&[(self.id, since)], tx);
         rx
+    }
+}
+
+struct WriteReqBuilder<K: Codec, V: Codec> {
+    records: ColumnarRecordsBuilder,
+    key_buf: Vec<u8>,
+    val_buf: Vec<u8>,
+    key_val_ts_offsets: HashMap<u64, usize>,
+    _phantom: PhantomData<(K, V)>,
+}
+
+impl<K: Codec, V: Codec> WriteReqBuilder<K, V> {
+    pub fn finish(&mut self) -> ColumnarRecords {
+        std::mem::take(&mut self.records).finish()
+    }
+
+    fn hash_key_val_ts(key: &[u8], val: &[u8], ts: u64) -> u64 {
+        let mut h = DefaultHasher::new();
+        key.hash(&mut h);
+        val.hash(&mut h);
+        ts.hash(&mut h);
+        h.finish()
+    }
+}
+
+impl<'a, K: Codec, V: Codec> FromIterator<&'a ((K, V), u64, isize)> for WriteReqBuilder<K, V> {
+    fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, isize)>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let size_hint = iter.size_hint();
+
+        let mut builder = WriteReqBuilder {
+            records: ColumnarRecordsBuilder::default(),
+            key_buf: Vec::new(),
+            val_buf: Vec::new(),
+            key_val_ts_offsets: HashMap::new(),
+            _phantom: PhantomData,
+        };
+        for record in iter {
+            let ((key, val), ts, diff) = record;
+            builder.key_buf.clear();
+            key.encode(&mut builder.key_buf);
+            builder.val_buf.clear();
+            val.encode(&mut builder.val_buf);
+
+            if builder.records.len() == 0 {
+                // Use the first record to attempt to pre-size the builder
+                // allocations. This uses the iter's size_hint's lower+1 to
+                // match the logic in Vec.
+                let (lower, _) = size_hint;
+                let additional = usize::saturating_add(lower, 1);
+                builder
+                    .records
+                    .reserve(additional, builder.key_buf.len(), builder.val_buf.len());
+            }
+
+            // Consolidate as we go. Manually hash the HashMap key so we don't
+            // have to clone key and val.
+            match builder
+                .key_val_ts_offsets
+                .entry(WriteReqBuilder::<K, V>::hash_key_val_ts(
+                    &builder.key_buf,
+                    &builder.val_buf,
+                    *ts,
+                )) {
+                Entry::Vacant(x) => {
+                    let idx = builder.records.len();
+                    builder
+                        .records
+                        .push(((&builder.key_buf, &builder.val_buf), *ts, *diff));
+                    x.insert(idx);
+                }
+                Entry::Occupied(x) => {
+                    let existing_idx = x.get();
+                    *builder.records.mut_diff(*existing_idx).expect("valid idx") += diff;
+                }
+            }
+        }
+        builder
     }
 }
 
@@ -513,8 +570,8 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
         let updates = updates
             .iter()
             .map(|(id, updates)| {
-                let updates = encode_updates(updates);
-                (*id, updates)
+                let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
+                (*id, updates.finish())
             })
             .collect();
         self.runtime.write(updates, tx);

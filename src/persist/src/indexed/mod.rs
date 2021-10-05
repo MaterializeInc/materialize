@@ -12,6 +12,7 @@
 
 // NB: These really don't need to be public, but the public doc lint is nice.
 pub mod cache;
+pub mod columnar;
 pub mod encoding;
 pub mod metrics;
 pub mod runtime;
@@ -32,6 +33,7 @@ use timely::PartialOrder;
 use crate::error::Error;
 use crate::future::FutureHandle;
 use crate::indexed::cache::BlobCache;
+use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration, TraceMeta, UnsealedMeta,
 };
@@ -120,7 +122,7 @@ pub struct Indexed<L: Log, B: Blob> {
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
     metrics: Metrics,
     // Only drained by drain_pending_writes.
-    pending_writes: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
+    pending_writes: Vec<(Id, ColumnarRecords)>,
     // Only drained by drain_pending.
     pending_responses: Vec<PendingResponse>,
     prev_meta: BlobMeta,
@@ -578,10 +580,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         Ok(())
     }
 
-    fn validate_write(
-        &mut self,
-        updates: &[(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)],
-    ) -> Result<SeqNo, Error> {
+    fn validate_write(&mut self, updates: &[(Id, ColumnarRecords)]) -> Result<SeqNo, Error> {
         for (id, updates) in updates.iter() {
             let sealed_frontier = self.sealed_frontier(*id)?;
             for update in updates.iter() {
@@ -599,11 +598,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
     /// Asynchronously persists (Key, Value, Time, Diff) updates for the stream
     /// with the given id.
-    pub fn write(
-        &mut self,
-        updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-        res: FutureHandle<SeqNo>,
-    ) {
+    pub fn write(&mut self, updates: Vec<(Id, ColumnarRecords)>, res: FutureHandle<SeqNo>) {
         let resp = self.validate_write(&updates);
 
         if resp.is_ok() {
@@ -619,7 +614,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// restoring metadata if this fails.
     fn drain_pending_writes(
         &mut self,
-        mut writes_by_id: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>>,
+        writes_by_id: &HashMap<Id, Vec<ColumnarRecords>>,
     ) -> Result<(), Error> {
         if writes_by_id.is_empty() {
             return Ok(());
@@ -638,7 +633,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         // a log. On the other hand, how would we distinguish unsealed batches
         // from each other?
         let desc = write_seqno..self.unsealeds_seqno_upper;
-        for (id, writes) in writes_by_id.drain() {
+        for (id, writes) in writes_by_id.iter() {
             let unsealed = self
                 .unsealeds
                 .get_mut(&id)
@@ -656,7 +651,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             let mut desc = desc.clone();
             desc.start = seqno_upper;
 
-            self.drain_pending_writes_inner(id, writes, &desc)?;
+            self.drain_pending_writes_inner(*id, writes, &desc)?;
         }
 
         self.unsealeds_seqno_upper = desc.end;
@@ -669,13 +664,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ///
     /// The caller is responsible for draining any pending responses after this.
     fn drain_pending_inner(&mut self) -> Result<(), Error> {
-        let mut updates_by_id: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> = HashMap::new();
+        let mut updates_by_id: HashMap<Id, Vec<ColumnarRecords>> = HashMap::new();
         for (id, updates) in self.pending_writes.drain(..) {
-            updates_by_id.entry(id).or_default().extend(updates);
+            updates_by_id.entry(id).or_default().push(updates);
         }
 
-        let updates_for_listeners = updates_by_id.clone();
-        if let Err(e) = self.drain_pending_writes(updates_by_id) {
+        if let Err(e) = self.drain_pending_writes(&updates_by_id) {
             self.restore();
             return Err(format!("failed to append to unsealed: {}", e).into());
         }
@@ -722,10 +716,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         {
             let mut update_count = 0;
             let mut update_bytes = 0;
-            for updates in updates_for_listeners.values() {
-                update_count += updates.len();
-                for ((k, v), _, _) in updates.iter() {
-                    update_bytes += k.len() + v.len() + 8 + 8;
+            for updates_vec in updates_by_id.values() {
+                for updates in updates_vec.iter() {
+                    update_count += updates.len();
+                    for ((k, v), _, _) in updates.iter() {
+                        update_bytes += k.len() + v.len() + 8 + 8;
+                    }
                 }
             }
             self.metrics
@@ -736,10 +732,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 .inc_by(u64::cast_from(update_bytes));
         }
 
-        for (id, updates) in updates_for_listeners.iter() {
+        for (id, updates) in updates_by_id.iter() {
             if let Some(listen_fns) = self.listeners.get(&id) {
                 for listen_fn in listen_fns.iter() {
-                    listen_fn(ListenEvent::Records(updates.clone()));
+                    listen_fn(ListenEvent::Records(
+                        updates
+                            .iter()
+                            .flat_map(|u| u.iter())
+                            .map(|((k, v), ts, diff)| ((k.to_vec(), v.to_vec()), ts, diff))
+                            .collect(),
+                    ));
                 }
             }
         }
@@ -768,12 +770,13 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn drain_pending_writes_inner(
         &mut self,
         id: Id,
-        mut updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+        updates: &Vec<ColumnarRecords>,
         desc: &Range<SeqNo>,
     ) -> Result<(), Error> {
         let mut updates: Vec<_> = updates
-            .drain(..)
-            .map(|((k, v), t, d)| (t, (k, v), d))
+            .iter()
+            .flat_map(|updates| updates.iter())
+            .map(|((k, v), t, d)| (t, (k.to_vec(), v.to_vec()), d))
             .collect();
         // Unsealed batches are required to be sorted and consolidated by ((ts, (k, v)).
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
@@ -1170,7 +1173,7 @@ mod tests {
 
     #[test]
     fn single_stream() -> Result<(), Error> {
-        let updates = vec![
+        let updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)> = vec![
             (("1".into(), "".into()), 1, 1),
             (("2".into(), "".into()), 2, 1),
         ];
@@ -1202,7 +1205,10 @@ mod tests {
 
         // After a write, all data is in the unsealed.
         block_on_drain(&mut i, |i, handle| {
-            i.write(vec![(id, updates.clone())], handle)
+            i.write(
+                vec![(id, updates.iter().collect::<ColumnarRecords>())],
+                handle,
+            )
         })?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
         let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
@@ -1279,7 +1285,10 @@ mod tests {
         // orders it within each batch by time. It's not, so this will fire a
         // validations error if the sort code doesn't work.
         block_on_drain(&mut i, |i, handle| {
-            i.write(vec![(id, updates.clone())], handle)
+            i.write(
+                vec![(id, updates.iter().collect::<ColumnarRecords>())],
+                handle,
+            )
         })?;
 
         // Now move it into the trace part of the index, which orders it within
@@ -1311,13 +1320,19 @@ mod tests {
         // not already consolidated this test will fail if the consolidation
         // code does not work.
         block_on_drain(&mut i, |i, handle| {
-            i.write(vec![(id, updates.clone())], handle)
+            i.write(
+                vec![(id, updates.iter().collect::<ColumnarRecords>())],
+                handle,
+            )
         })?;
 
         // Add another set of identical updates and place into another unsealed
         // batch.
         block_on_drain(&mut i, |i, handle| {
-            i.write(vec![(id, updates.clone())], handle)
+            i.write(
+                vec![(id, updates.iter().collect::<ColumnarRecords>())],
+                handle,
+            )
         })?;
 
         // Now move the data to the trace part of the index, which consolidates
@@ -1342,11 +1357,21 @@ mod tests {
 
         // Write an empty set of updates and try to move it into the unsealed part
         // of the index.
-        block_on_drain(&mut i, |i, handle| i.write(vec![(id, vec![])], handle))?;
+        block_on_drain(&mut i, |i, handle| {
+            i.write(
+                vec![(id, vec![].iter().collect::<ColumnarRecords>())],
+                handle,
+            )
+        })?;
 
         // Sending updates with dif = 0.
         let updates = vec![(("1".into(), "".into()), 1, 0)];
-        block_on_drain(&mut i, |i, handle| i.write(vec![(id, updates)], handle))?;
+        block_on_drain(&mut i, |i, handle| {
+            i.write(
+                vec![(id, updates.iter().collect::<ColumnarRecords>())],
+                handle,
+            )
+        })?;
 
         // Now try again with a set of updates that consolidates down to the empty
         // set.
@@ -1355,7 +1380,12 @@ mod tests {
             (("1".into(), "".into()), 1, -2),
         ];
 
-        block_on_drain(&mut i, |i, handle| i.write(vec![(id, updates)], handle))?;
+        block_on_drain(&mut i, |i, handle| {
+            i.write(
+                vec![(id, updates.iter().collect::<ColumnarRecords>())],
+                handle,
+            )
+        })?;
         Ok(())
     }
 
@@ -1376,18 +1406,42 @@ mod tests {
         // to verify the fix.
         let s1 = block_on(|res| i.register("s1", "", "", res))?;
         block_on_drain(&mut i, |i, handle| {
-            i.write(vec![(s1, vec![(("".into(), "".into()), 0, 1)])], handle)
+            i.write(
+                vec![(
+                    s1,
+                    vec![(("".into(), "".into()), 0, 1)]
+                        .iter()
+                        .collect::<ColumnarRecords>(),
+                )],
+                handle,
+            )
         })?;
         let s2 = block_on(|res| i.register("s2", "", "", res))?;
         block_on_drain(&mut i, |i, handle| {
-            i.write(vec![(s2, vec![(("".into(), "".into()), 1, 1)])], handle)
+            i.write(
+                vec![(
+                    s2,
+                    vec![(("".into(), "".into()), 1, 1)]
+                        .iter()
+                        .collect::<ColumnarRecords>(),
+                )],
+                handle,
+            )
         })?;
 
         // The second flavor is similar. If we then write to the first stream
         // again and step, it is then missing X..Y. (A stream not written to
         // between two step calls doesn't get a batch.)
         block_on_drain(&mut i, |i, handle| {
-            i.write(vec![(s1, vec![(("".into(), "".into()), 2, 1)])], handle)
+            i.write(
+                vec![(
+                    s1,
+                    vec![(("".into(), "".into()), 2, 1)]
+                        .iter()
+                        .collect::<ColumnarRecords>(),
+                )],
+                handle,
+            )
         })?;
 
         Ok(())
@@ -1466,7 +1520,9 @@ mod tests {
             (("1".into(), "".into()), 10, -1),
             (("2".into(), "".into()), 2, 1),
         ];
-        block_on_drain(&mut i, |i, res| i.write(vec![(id, updates)], res))?;
+        block_on_drain(&mut i, |i, res| {
+            i.write(vec![(id, updates.iter().collect::<ColumnarRecords>())], res)
+        })?;
         block_on_drain(&mut i, |i, res| i.seal(vec![id], 4, res))?;
         block_on_drain(&mut i, |i, res| {
             i.allow_compaction(vec![(id, Antichain::from_elem(3))], res)
