@@ -225,7 +225,7 @@ where
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    capability: Rc<RefCell<Option<Capability<Timestamp>>>>,
+    capabilities: Rc<RefCell<Option<(Capability<Timestamp>, Capability<Timestamp>)>>>,
     activator: Activator,
 }
 
@@ -238,7 +238,7 @@ impl SourceToken {
 
 impl Drop for SourceToken {
     fn drop(&mut self) {
-        *self.capability.borrow_mut() = None;
+        *self.capabilities.borrow_mut() = None;
         self.activator.activate();
     }
 }
@@ -1183,7 +1183,7 @@ where
         });
     }
 
-    let (stream, capability) = source(scope, name.clone(), move |info| {
+    let (stream, _secondary_stream, capability) = source(scope, name.clone(), move |info| {
         let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
 
         let metrics_name = upstream_name.unwrap_or(name);
@@ -1199,7 +1199,10 @@ where
             metrics.add_partition(&PartitionId::None);
         }
 
-        move |cap, output| {
+        move |cap,
+              _secondary_cap: &mut Capability<Timestamp>,
+              output,
+              _secondary_output: &mut OutputHandle<Timestamp, (), _>| {
             if !active {
                 return SourceStatus::Done;
             }
@@ -1277,7 +1280,8 @@ where
         ..
     } = config;
     let bytes_read_counter = base_metrics.bytes_read.clone();
-    let (stream, capability) = source(scope, name.clone(), move |info| {
+
+    let (stream, _secondary_stream, capability) = source(scope, name.clone(), move |info| {
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
 
@@ -1328,7 +1332,10 @@ where
         // Stash messages we cannot yet timestamp here.
         let mut buffer = None;
 
-        move |cap, output| {
+        move |cap,
+              _secondary_cap: &mut Capability<Timestamp>,
+              output,
+              _secondary_output: &mut OutputHandle<Timestamp, (), _>| {
             // First check that the source was successfully created
             let source_reader = match &mut source_reader {
                 Some(source_reader) => source_reader,
