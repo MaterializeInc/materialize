@@ -4,7 +4,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License in the LICENSE file at the
 # root of this repository, or online at
-#
+# 
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-MZFROM ubuntu-base
+FROM rscale/ubuntu-base
 
 RUN apt-get update && apt-get install -qy maven
 
@@ -26,7 +26,7 @@ RUN cd /scratch && mvn package
 COPY . /scratch
 RUN cd /scratch && mvn -o package
 
-MZFROM ubuntu-base
+FROM rscale/ubuntu-base
 
 RUN apt-get update && apt-get install -qy openjdk-11-jre-headless
 
