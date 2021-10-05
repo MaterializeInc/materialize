@@ -984,12 +984,8 @@ pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
     }
 }
 
-fn wrap<'a>(datums: Vec<Datum<'a>>, width: usize) -> impl Iterator<Item = (Row, Diff)> + 'a {
-    datums
-        .chunks(width)
-        .map(|chunk| (Row::pack(chunk), 1))
-        .collect::<Vec<_>>()
-        .into_iter()
+fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
@@ -1027,7 +1023,7 @@ pub enum TableFunc {
 impl TableFunc {
     pub fn eval<'a>(
         &'a self,
-        datums: Vec<Datum<'a>>,
+        datums: &'a [Datum<'a>],
         temp_storage: &'a RowArena,
     ) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
         if self.empty_on_null_input() {
@@ -1068,7 +1064,7 @@ impl TableFunc {
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
-            TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(datums, *width))),
+            TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(&datums, *width))),
         }
     }
 
