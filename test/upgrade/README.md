@@ -8,13 +8,38 @@ This upgrade test framework serves to verify that objects created in a previous 
 The framework does the following:
 - fires an old version of Materialize
 - runs the applicable 'create-in' .td tests against it
-- kills the old version and starts a Materialize binary from your branch, preserving the mzdata directory across restarts
+- kills the old version and starts a Materialize binary from your current source, preserving the mzdata directory across restarts
 - runs the applicable 'check-from' .td tests
 
-Kafka and the Schema Registry are not restarted.
+The external services (Kafka, Schema Registry, Postgres) are not restarted.
 
-The "upgrade" from your branch back to your branch is also tested.
+The "upgrade" from your current source to your current source is also tested.
 
+## Running
+
+To run the entire sequence of tests:
+
+```
+./mzcompose down -v ; ./mzcompose run upgrade
+```
+
+To run the tests against a particular version and all following versions:
+
+```
+./mzcompose down -v ; MIN_TESTED_TAG=0.9.6 ./mzcompose run upgrade
+```
+
+To run the tests upgrading from the current source to the current source:
+
+```
+./mzcompose down -v ; MIN_TESTED_TAG=99.99.99 ./mzcompose run upgrade
+```
+
+To run just a particular test or tests:
+
+```
+./mzcompose down -v ; TD_GLOB=persistent-user-tables ./mzcompose run upgrade
+```
 
 ## Test naming convention
 
