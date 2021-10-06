@@ -251,7 +251,7 @@ impl<B: Blob> BlobCache<B> {
     /// Writes a batch to backing [Blob] storage.
     ///
     /// Returns the size of the encoded blob value in bytes.
-    pub fn set_trace_batch(&mut self, key: String, batch: BlobTraceBatch) -> Result<u64, Error> {
+    pub fn set_trace_batch(&self, key: String, batch: BlobTraceBatch) -> Result<u64, Error> {
         if key == Self::META_KEY {
             return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
         }

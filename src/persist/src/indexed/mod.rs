@@ -11,6 +11,7 @@
 //! Diff)` updates.
 
 // NB: These really don't need to be public, but the public doc lint is nice.
+pub mod background;
 pub mod cache;
 pub mod encoding;
 pub mod metrics;
@@ -31,6 +32,7 @@ use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::future::FutureHandle;
+use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration, TraceMeta, UnsealedMeta,
@@ -115,6 +117,7 @@ pub struct Indexed<L: Log, B: Blob> {
     // Indexed or somewhere else.
     log: L,
     blob: BlobCache<B>,
+    maintainer: Maintainer<B>,
     unsealeds: BTreeMap<Id, Unsealed>,
     traces: BTreeMap<Id, Trace>,
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
@@ -129,8 +132,12 @@ pub struct Indexed<L: Log, B: Blob> {
 impl<L: Log, B: Blob> Indexed<L, B> {
     /// Returns a new Indexed, initializing each Unsealed and Trace with the
     /// existing data for them in the blob storage, if any.
-    pub fn new(mut log: L, blob: B, metrics: Metrics) -> Result<Self, Error> {
-        let mut blob = BlobCache::new(metrics.clone(), blob);
+    pub fn new(
+        mut log: L,
+        mut blob: BlobCache<B>,
+        maintainer: Maintainer<B>,
+        metrics: Metrics,
+    ) -> Result<Self, Error> {
         let meta = blob
             .get_meta()
             .map_err(|err| {
@@ -167,6 +174,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             graveyard: meta.graveyard,
             log,
             blob,
+            maintainer,
             unsealeds,
             traces,
             listeners: HashMap::new(),
@@ -504,7 +512,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
             deleted_unsealed_batches.extend(unsealed.truncate(trace.ts_upper())?);
-            let (written_bytes, deleted_batches) = trace.step(&mut self.blob)?;
+            let (written_bytes, deleted_batches) = trace.step(&self.maintainer)?;
             total_written_bytes += written_bytes;
             deleted_trace_batches.extend(deleted_batches);
         }
