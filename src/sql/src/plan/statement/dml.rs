@@ -116,22 +116,18 @@ pub fn plan_read_then_write(
 ) -> Result<Plan, anyhow::Error> {
     selection.bind_parameters(&params)?;
     let selection = selection.lower();
-    let assignments = if let Some(sets) = assignments {
-        let mut assignments = HashMap::new();
-        for (idx, mut set) in sets {
-            set.bind_parameters(&params)?;
-            let set = set.lower_uncorrelated()?;
-            assignments.insert(idx, set);
-        }
-        Some(assignments)
-    } else {
-        None
-    };
+    let mut assignments_outer = HashMap::new();
+    for (idx, mut set) in assignments {
+        set.bind_parameters(&params)?;
+        let set = set.lower_uncorrelated()?;
+        assignments_outer.insert(idx, set);
+    }
+
     Ok(Plan::ReadThenWrite(ReadThenWritePlan {
         id,
         selection,
         finishing,
-        assignments,
+        assignments: assignments_outer,
         kind,
     }))
 }

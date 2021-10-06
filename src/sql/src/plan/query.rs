@@ -679,14 +679,13 @@ pub fn plan_copy_from_rows(
     Ok(expr.map(map_exprs).project(project_key))
 }
 
-/// Common information used for DELETE and UPDATE plans. assignments is None
-/// for DELETE.
+/// Common information used for DELETE and UPDATE plans.
 pub struct ReadThenWritePlan {
     pub id: GlobalId,
     /// WHERE filter.
     pub selection: HirRelationExpr,
-    /// Map from column index to SET expression.
-    pub assignments: Option<HashMap<usize, HirScalarExpr>>,
+    /// Map from column index to SET expression. Empty for DELETE statements.
+    pub assignments: HashMap<usize, HirScalarExpr>,
     pub finishing: RowSetFinishing,
 }
 
@@ -821,7 +820,7 @@ pub fn plan_mutation_query_inner(
         id,
         selection,
         finishing,
-        assignments: if sets.is_empty() { None } else { Some(sets) },
+        assignments: sets,
     })
 }
 
