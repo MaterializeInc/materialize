@@ -662,6 +662,13 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
         self.runtime.listen(self.id, listen_fn, tx);
         rx.recv()
     }
+
+    /// Registers a callback to be invoked on successful writes and seals.
+    pub fn listen_raw(&self, listen_fn: ListenFn<Vec<u8>, Vec<u8>>) -> Result<(), Error> {
+        let (tx, rx) = Future::new();
+        self.runtime.listen(self.id, listen_fn, tx);
+        rx.recv()
+    }
 }
 
 struct RuntimeImpl<L: Log, B: Blob> {
