@@ -265,6 +265,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
             // Add any predicates that can be pushed to the source.
             if let Some(operator) = &mut source_desc.operators {
                 operator.predicates.extend(list.iter().cloned());
+                operator.predicates.sort();
             }
         }
     }
