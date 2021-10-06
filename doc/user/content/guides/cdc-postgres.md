@@ -52,7 +52,7 @@ Before creating a source in Materialize, you need to ensure that the upstream da
     ```
 
     This setting determines the amount of information that is written to the WAL in `UPDATE` and `DELETE` operations.
-    
+
     As a heads-up, you should expect a performance hit in the database from increased CPU usage. For more information, see the [PostgreSQL documentation](https://www.postgresql.org/docs/current/logical-replication-publication.html).
 
 1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
