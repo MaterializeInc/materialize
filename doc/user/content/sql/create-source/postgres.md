@@ -35,8 +35,14 @@ Materialize makes use of PostgreSQL's native replication capabilities to create 
 Before creating the source in Materialize, you must:
 
 1. Set up your Postgres database to allow logical replication.
-2. Ensure that the user for your Materialize connection has `REPLICATION` privileges.
-3. Create a Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html), or replication data set, containing the tables to be streamed to Materialize. Since Postgres sources are materialized (kept in memory) in their entirety, we strongly recommend that you limit publications only to the data you need to query.
+
+1. Ensure that the user for your Materialize connection has `REPLICATION` privileges.
+
+1. Make sure replica identity is set to `FULL` for all tables you want to stream to Materialize.
+
+     As a heads-up, you should expect a performance hit in the database from increased CPU usage. For more information, see the [PostgreSQL documentation](https://www.postgresql.org/docs/current/logical-replication-publication.html).
+     
+1. Create a Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html), or replication data set, containing the tables to be streamed to Materialize. Since Postgres sources are materialized (kept in memory) in their entirety, we strongly recommend that you limit publications only to the data you need to query.
 
 Once you create a materialized source from the publication, the source will contain the raw data stream of replication updates. You can then break the stream out into views that represent the publication's original tables with [`CREATE VIEWS`](/sql/create-views/). You can treat these tables as you would any other source and create other views or materialized views from them.
 
