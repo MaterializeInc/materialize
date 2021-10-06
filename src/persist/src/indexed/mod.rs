@@ -23,6 +23,7 @@ use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::time::Instant;
 
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
@@ -804,22 +805,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         mut updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
         desc: &Range<SeqNo>,
     ) -> Result<(), Error> {
-        let mut updates: Vec<_> = updates
-            .drain(..)
-            .map(|((k, v), t, d)| (t, (k, v), d))
-            .collect();
-        // Unsealed batches are required to be sorted and consolidated by ((ts, (k, v)).
-        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+        consolidate_updates_time(&mut updates);
 
         if updates.is_empty() {
             return Ok(());
         }
 
-        // Reshape updates back to the desired type.
-        let updates: Vec<_> = updates
-            .drain(..)
-            .map(|(t, (k, v), d)| ((k, v), t, d))
-            .collect();
         let batch = BlobUnsealedBatch {
             desc: Description::new(
                 Antichain::from_elem(desc.start),
@@ -1173,6 +1164,57 @@ impl Iterator for IndexedSnapshotIter {
             })
         })
     }
+}
+
+/// Sorts and consolidates `vec` by the 2nd then first element.
+pub fn consolidate_updates_time<D: Ord, T: Ord, R: Semigroup + std::ops::AddAssign + Copy>(
+    vec: &mut Vec<(D, T, R)>,
+) {
+    let length = consolidate_updates_slice_time(&mut vec[..]);
+    vec.truncate(length);
+}
+
+/// Sorts and consolidates a slice, returning the valid prefix length.
+fn consolidate_updates_slice_time<D: Ord, T: Ord, R: Semigroup + std::ops::AddAssign + Copy>(
+    slice: &mut [(D, T, R)],
+) -> usize {
+    // We could do an insertion-sort like initial scan which builds up sorted, consolidated runs.
+    // In a world where there are not many results, we may never even need to call in to merge sort.
+    // XXX: changed here to sort by the second element, then the first.
+    slice.sort_unstable_by(|x, y| (&x.1, &x.0).cmp(&(&y.1, &y.0)));
+
+    // Counts the number of distinct known-non-zero accumulations. Indexes the write location.
+    let mut offset = 0;
+    for index in 1..slice.len() {
+        // The following unsafe block elides various bounds checks, using the reasoning that `offset`
+        // is always strictly less than `index` at the beginning of each iteration. This is initially
+        // true, and in each iteration `offset` can increase by at most one (whereas `index` always
+        // increases by one). As `index` is always in bounds, and `offset` starts at zero, it too is
+        // always in bounds.
+        //
+        // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness
+        // using run-time tests.
+        unsafe {
+            // LOOP INVARIANT: offset < index
+            let ptr1 = slice.as_mut_ptr().offset(offset as isize);
+            let ptr2 = slice.as_mut_ptr().offset(index as isize);
+
+            if (*ptr1).0 == (*ptr2).0 && (*ptr1).1 == (*ptr2).1 {
+                (*ptr1).2 += (*ptr2).2;
+            } else {
+                if !(*ptr1).2.is_zero() {
+                    offset += 1;
+                }
+                let ptr1 = slice.as_mut_ptr().offset(offset as isize);
+                std::mem::swap(&mut *ptr1, &mut *ptr2);
+            }
+        }
+    }
+    if offset < slice.len() && !slice[offset].2.is_zero() {
+        offset += 1;
+    }
+
+    offset
 }
 
 #[cfg(test)]
