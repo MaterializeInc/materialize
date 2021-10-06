@@ -4303,6 +4303,7 @@ dependencies = [
  "postgres-protocol",
  "postgres-types",
  "postgres-util",
+ "protobuf",
  "protoc",
  "rdkafka",
  "regex",
