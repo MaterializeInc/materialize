@@ -24,7 +24,7 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat,
     CreateSourceKeyEnvelope, DataType, Envelope, Expr, Format, Ident, KeyConstraint, Query,
-    TableConstraint, UnresolvedObjectName, Value,
+    TableAlias, TableConstraint, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -275,8 +275,8 @@ impl_display_t!(CopyStatement);
 /// `UPDATE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UpdateStatement<T: AstInfo> {
-    /// TABLE
-    pub table_name: UnresolvedObjectName,
+    /// `FROM`
+    pub table_name: T::ObjectName,
     /// Column assignments
     pub assignments: Vec<Assignment<T>>,
     /// WHERE
@@ -303,7 +303,9 @@ impl_display_t!(UpdateStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeleteStatement<T: AstInfo> {
     /// `FROM`
-    pub table_name: UnresolvedObjectName,
+    pub table_name: T::ObjectName,
+    /// `AS`
+    pub alias: Option<TableAlias>,
     /// `WHERE`
     pub selection: Option<Expr<T>>,
 }
@@ -312,6 +314,10 @@ impl<T: AstInfo> AstDisplay for DeleteStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DELETE FROM ");
         f.write_node(&self.table_name);
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
         if let Some(selection) = &self.selection {
             f.write_str(" WHERE ");
             f.write_node(selection);

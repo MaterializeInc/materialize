@@ -35,10 +35,10 @@ use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
-    Assignment, AstInfo, Cte, DataType, Distinct, Expr, Function, FunctionArgs, Ident,
-    InsertSource, IsExprConstruct, JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw,
-    RawName, Select, SelectItem, SetExpr, SetOperator, Statement, TableAlias, TableFactor,
-    TableWithJoins, UnresolvedObjectName, Value, Values,
+    Assignment, AstInfo, Cte, DataType, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
+    Ident, InsertSource, IsExprConstruct, JoinConstraint, JoinOperator, Limit, OrderByExpr, Query,
+    Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement, TableAlias, TableFactor,
+    TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -279,6 +279,38 @@ pub fn resolve_names(
         ids: HashSet::new(),
     };
     let result = n.fold_query(query);
+    n.status?;
+    qcx.ids.extend(n.ids.iter());
+    Ok(result)
+}
+
+pub fn resolve_names_delete(
+    qcx: &mut QueryContext,
+    stmt: DeleteStatement<Raw>,
+) -> Result<DeleteStatement<Aug>, anyhow::Error> {
+    let mut n = NameResolver {
+        status: Ok(()),
+        catalog: qcx.scx.catalog,
+        ctes: HashMap::new(),
+        ids: HashSet::new(),
+    };
+    let result = n.fold_delete_statement(stmt);
+    n.status?;
+    qcx.ids.extend(n.ids.iter());
+    Ok(result)
+}
+
+pub fn resolve_names_update(
+    qcx: &mut QueryContext,
+    stmt: UpdateStatement<Raw>,
+) -> Result<UpdateStatement<Aug>, anyhow::Error> {
+    let mut n = NameResolver {
+        status: Ok(()),
+        catalog: qcx.scx.catalog,
+        ctes: HashMap::new(),
+        ids: HashSet::new(),
+    };
+    let result = n.fold_update_statement(stmt);
     n.status?;
     qcx.ids.extend(n.ids.iter());
     Ok(result)
@@ -682,43 +714,78 @@ pub struct ReadThenWritePlan {
     pub finishing: RowSetFinishing,
 }
 
-pub fn plan_mutation_query(
+pub fn plan_delete_query(
     scx: &StatementContext,
-    table_name: UnresolvedObjectName,
-    selection: Option<Expr<Raw>>,
-    assignments: Option<Vec<Assignment<Raw>>>,
+    mut delete_stmt: DeleteStatement<Raw>,
 ) -> Result<ReadThenWritePlan, anyhow::Error> {
+    if let Some(ref mut expr) = delete_stmt.selection {
+        transform_ast::transform_expr(scx, expr)?;
+    }
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-    let table = scx.resolve_item(table_name)?;
+    let DeleteStatement {
+        table_name,
+        alias,
+        selection,
+    } = resolve_names_delete(&mut qcx, delete_stmt)?;
 
-    // Validate the target of the mutation.
-    if table.item_type() != CatalogItemType::Table {
-        bail!("cannot mutate {} '{}'", table.item_type(), table.name());
+    plan_mutation_query_inner(qcx, table_name, alias, vec![], selection)
+}
+
+pub fn plan_update_query(
+    scx: &StatementContext,
+    mut update_stmt: UpdateStatement<Raw>,
+) -> Result<ReadThenWritePlan, anyhow::Error> {
+    if let Some(ref mut expr) = update_stmt.selection {
+        transform_ast::transform_expr(scx, expr)?;
     }
-    let desc = table.desc()?;
-
-    if table.id().is_system() {
-        bail!("cannot mutate system table '{}'", table.name());
+    for Assignment { id: _, value } in update_stmt.assignments.iter_mut() {
+        transform_ast::transform_expr(scx, value)?;
     }
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let UpdateStatement {
+        table_name,
+        assignments,
+        selection,
+    } = resolve_names_update(&mut qcx, update_stmt)?;
 
-    let get = HirRelationExpr::Get {
-        id: Id::Global(table.id()),
-        typ: desc.typ().clone(),
+    plan_mutation_query_inner(qcx, table_name, None, assignments, selection)
+}
+
+pub fn plan_mutation_query_inner(
+    qcx: QueryContext,
+    table_name: ResolvedObjectName,
+    alias: Option<TableAlias>,
+    assignments: Vec<Assignment<Aug>>,
+    selection: Option<Expr<Aug>>,
+) -> Result<ReadThenWritePlan, anyhow::Error> {
+    // Get global ID.
+    let id = match table_name.id {
+        Id::Global(id) => id,
+        _ => bail!("cannot mutate non-user table"),
     };
 
+    // Perform checks on item with given ID.
+    let item = qcx.scx.get_item_by_id(&id);
+    if item.item_type() != CatalogItemType::Table {
+        bail!("cannot mutate {} '{}'", item.item_type(), item.name());
+    }
+    if id.is_system() {
+        bail!("cannot mutate system table '{}'", item.name());
+    }
+
+    // Derive structs for operation from validated table
+    let (get, scope) = qcx.resolve_table_name(table_name)?;
+    let scope = plan_table_alias(scope, alias.as_ref())?;
+    let desc = item.desc()?;
+    let relation_type = qcx.relation_type(&get);
+
     let selection: HirRelationExpr = match selection {
-        Some(mut expr) => {
-            transform_ast::transform_expr(scx, &mut expr)?;
-            let expr = resolve_names_expr(&mut qcx, expr)?;
+        Some(expr) => {
             let ecx = &ExprContext {
                 qcx: &qcx,
                 name: "WHERE clause",
-                scope: &Scope::from_source(
-                    Some(PartialName::from(table.name().clone())),
-                    desc.iter_names(),
-                    None,
-                ),
-                relation_type: &RelationType::new(desc.iter_types().cloned().collect()),
+                scope: &scope,
+                relation_type: &relation_type,
                 allow_aggregates: false,
                 allow_subqueries: true,
             };
@@ -731,45 +798,34 @@ pub fn plan_mutation_query(
         None => get,
     };
 
-    let assignments = if let Some(assignments) = assignments {
-        let mut sets = HashMap::new();
-        for Assignment { id, mut value } in assignments {
-            // Get the index and type of the column.
-            let name = normalize::column_name(id);
-            match desc.get_by_name(&name) {
-                Some((idx, typ)) => {
-                    transform_ast::transform_expr(scx, &mut value)?;
-                    let expr = resolve_names_expr(&mut qcx, value)?;
-                    let ecx = &ExprContext {
-                        qcx: &qcx,
-                        name: "SET clause",
-                        scope: &Scope::from_source(
-                            Some(PartialName::from(table.name().clone())),
-                            desc.iter_names(),
-                            None,
-                        ),
-                        relation_type: &RelationType::new(desc.iter_types().cloned().collect()),
-                        allow_aggregates: false,
-                        allow_subqueries: false,
-                    };
-                    let expr = plan_expr(&ecx, &expr)?.cast_to(
-                        "SET clause",
-                        ecx,
-                        CastContext::Assignment,
-                        &typ.scalar_type,
-                    )?;
+    let mut sets = HashMap::new();
+    for Assignment { id, value } in assignments {
+        // Get the index and type of the column.
+        let name = normalize::column_name(id);
+        match desc.get_by_name(&name) {
+            Some((idx, typ)) => {
+                let ecx = &ExprContext {
+                    qcx: &qcx,
+                    name: "SET clause",
+                    scope: &scope,
+                    relation_type: &relation_type,
+                    allow_aggregates: false,
+                    allow_subqueries: false,
+                };
+                let expr = plan_expr(&ecx, &value)?.cast_to(
+                    "SET clause",
+                    ecx,
+                    CastContext::Assignment,
+                    &typ.scalar_type,
+                )?;
 
-                    if sets.insert(idx, expr).is_some() {
-                        bail!("column {} set twice", name)
-                    }
+                if sets.insert(idx, expr).is_some() {
+                    bail!("column {} set twice", name)
                 }
-                None => bail!("unknown column {}", name),
-            };
-        }
-        Some(sets)
-    } else {
-        None
-    };
+            }
+            None => bail!("unknown column {}", name),
+        };
+    }
 
     let finishing = RowSetFinishing {
         order_by: vec![],
@@ -779,10 +835,10 @@ pub fn plan_mutation_query(
     };
 
     Ok(ReadThenWritePlan {
-        id: table.id(),
+        id,
         selection,
         finishing,
-        assignments,
+        assignments: if sets.is_empty() { None } else { Some(sets) },
     })
 }
 
