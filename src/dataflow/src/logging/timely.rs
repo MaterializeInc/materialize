@@ -34,19 +34,19 @@ pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
-    mut activator: RcActivator,
+    activator: RcActivator,
 ) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
     let peers = worker.peers();
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely logging", move |scope| {
-        let (act, logs) = Some(linked).mz_replay(
+        let logs = Some(linked).mz_replay(
             scope,
             "timely logs",
             Duration::from_nanos(config.granularity_ns as u64),
+            activator,
         );
-        activator.register(act);
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
@@ -77,7 +77,6 @@ pub fn construct<A: Allocate>(
             let mut messages_received_data: HashMap<_, Vec<isize>> = HashMap::new();
             let mut schedules_data: HashMap<_, Vec<(isize, isize)>> = HashMap::new();
             move |_frontiers| {
-                activator.ack();
                 let operates = operates_out.activate();
                 let channels = channels_out.activate();
                 let addresses = addresses_out.activate();

@@ -12,6 +12,7 @@
 //! This is roughly based on [timely::dataflow::operators::capture::Replay], which
 //! provides the protocol and semantics of the [MzReplay] operator.
 
+use crate::activator::RcActivator;
 use std::time::{Duration, Instant};
 use timely::dataflow::channels::pushers::buffer::Buffer as PushBuffer;
 use timely::dataflow::channels::pushers::Counter as PushCounter;
@@ -20,7 +21,6 @@ use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
-use timely::scheduling::Activator;
 use timely::Data;
 
 /// Replay a capture stream into a scope with the same timestamp.
@@ -34,7 +34,8 @@ pub trait MzReplay<T: Timestamp, D: Data>: Sized {
         scope: &mut S,
         name: &str,
         perid: Duration,
-    ) -> (Activator, Stream<S, D>);
+        rc_activator: RcActivator,
+    ) -> Stream<S, D>;
 }
 
 impl<T: Timestamp, D: Data, I> MzReplay<T, D> for I
@@ -47,7 +48,8 @@ where
         scope: &mut S,
         name: &str,
         period: Duration,
-    ) -> (Activator, Stream<S, D>) {
+        mut rc_activator: RcActivator,
+    ) -> Stream<S, D> {
         let name = format!("Replay {}", name);
         let mut builder = OperatorBuilder::new(name, scope.clone());
 
@@ -62,12 +64,13 @@ where
 
         let mut last_active = Instant::now();
 
-        let op_activator = scope.activator_for(&address[..]);
+        rc_activator.register(scope.activator_for(&address[..]));
 
         builder.build(move |progress| {
+            rc_activator.ack();
             if last_active + period <= Instant::now() || !started {
                 last_active = Instant::now();
-                op_activator.activate_after(period);
+                activator.activate_after(period);
             }
 
             if !started {
@@ -105,6 +108,6 @@ where
             false
         });
 
-        (activator, stream)
+        stream
     }
 }

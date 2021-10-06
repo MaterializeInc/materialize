@@ -45,7 +45,7 @@ pub fn construct<A: Allocate>(
             ),
         >,
     >,
-    mut activator: RcActivator,
+    activator: RcActivator,
 ) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
@@ -53,16 +53,16 @@ pub fn construct<A: Allocate>(
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
         use differential_dataflow::collection::AsCollection;
 
-        let (act, logs) = Some(linked).mz_replay(
+        let logs = Some(linked).mz_replay(
             scope,
             "reachability logs",
             Duration::from_nanos(config.granularity_ns as u64),
+            activator,
         );
-        activator.register(act);
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-        let construct_reachability = |key: Vec<_>, mut activator: RcActivator| {
+        let construct_reachability = |key: Vec<_>| {
             let mut flatten = OperatorBuilder::new(
                 "Timely Reachability Logging Flatten ".to_string(),
                 scope.clone(),
@@ -76,7 +76,6 @@ pub fn construct<A: Allocate>(
             let mut buffer = Vec::new();
             flatten.build(move |_capability| {
                 move |_frontiers| {
-                    activator.ack();
                     let updates = updates_out.activate();
                     let mut updates_session = ConsolidateBuffer::new(updates, 0);
 
@@ -138,7 +137,7 @@ pub fn construct<A: Allocate>(
             if config.active_logs.contains_key(&variant) {
                 let key = variant.index_by();
                 let key_clone = key.clone();
-                let trace = construct_reachability(key.clone(), activator.clone())
+                let trace = construct_reachability(key.clone())
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
                     .trace;
                 result.insert(variant, (key_clone, trace));
