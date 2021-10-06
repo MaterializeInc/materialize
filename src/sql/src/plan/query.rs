@@ -1284,21 +1284,27 @@ fn plan_values(
             .as_ref()
             .and_then(|type_hints| type_hints.get(index).copied());
         let col = coerce_homogeneous_exprs("VALUES", ecx, plan_exprs(ecx, col)?, type_hint)?;
-        col_types.push(ecx.column_type(&col[0]));
+        let mut col_type = ecx.column_type(&col[0]);
+        for val in &col[1..] {
+            col_type = col_type.union(&ecx.column_type(val))?;
+        }
+        col_types.push(col_type);
         col_iters.push(col.into_iter());
     }
 
     // Build constant relation.
-    let typ = RelationType::new(col_types);
-    let mut rows = vec![];
+    let mut exprs = vec![];
     for _ in 0..nrows {
-        let row: Vec<_> = (0..ncols).map(|i| col_iters[i].next().unwrap()).collect();
-        let empty = HirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]));
-        rows.push(empty.map(row));
+        for i in 0..ncols {
+            exprs.push(col_iters[i].next().unwrap());
+        }
     }
-    let out = HirRelationExpr::Union {
-        base: Box::new(HirRelationExpr::constant(vec![], typ)),
-        inputs: rows,
+    let out = HirRelationExpr::CallTable {
+        func: expr::TableFunc::Wrap {
+            width: ncols,
+            types: col_types,
+        },
+        exprs,
     };
 
     // Build column names.

@@ -984,25 +984,46 @@ pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
     }
 }
 
+fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
 pub enum TableFunc {
-    JsonbEach { stringify: bool },
+    JsonbEach {
+        stringify: bool,
+    },
     JsonbObjectKeys,
-    JsonbArrayElements { stringify: bool },
+    JsonbArrayElements {
+        stringify: bool,
+    },
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
     GenerateSeriesInt32,
     GenerateSeriesInt64,
     // TODO(justin): should also possibly have GenerateSeriesTimestamp{,Tz}.
     Repeat,
-    UnnestArray { el_typ: ScalarType },
-    UnnestList { el_typ: ScalarType },
+    UnnestArray {
+        el_typ: ScalarType,
+    },
+    UnnestList {
+        el_typ: ScalarType,
+    },
+    /// Given `n` input expressions, wraps them into `n / width` rows, each of
+    /// `width` columns.
+    ///
+    /// This function is not intended to be called directly by end users, but
+    /// is useful in the planning of e.g. VALUES clauses.
+    Wrap {
+        types: Vec<ColumnType>,
+        width: usize,
+    },
 }
 
 impl TableFunc {
     pub fn eval<'a>(
         &'a self,
-        datums: Vec<Datum<'a>>,
+        datums: &'a [Datum<'a>],
         temp_storage: &'a RowArena,
     ) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
         if self.empty_on_null_input() {
@@ -1043,6 +1064,7 @@ impl TableFunc {
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
+            TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(&datums, *width))),
         }
     }
 
@@ -1079,6 +1101,7 @@ impl TableFunc {
             TableFunc::Repeat => vec![],
             TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
+            TableFunc::Wrap { types, .. } => types.clone(),
         })
     }
 
@@ -1094,15 +1117,11 @@ impl TableFunc {
             TableFunc::Repeat => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
+            TableFunc::Wrap { width, .. } => *width,
         }
     }
 
     pub fn empty_on_null_input(&self) -> bool {
-        // Warning: this returns currently "true" for all TableFuncs.
-        // If adding a TableFunc for which this function will return "false",
-        // check the places where `empty_on_null_input` is called to ensure,
-        // such as NonNullRequirements that the case this function returns
-        // false is properly handled.
         match self {
             TableFunc::JsonbEach { .. }
             | TableFunc::JsonbObjectKeys
@@ -1114,6 +1133,7 @@ impl TableFunc {
             | TableFunc::Repeat
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. } => true,
+            TableFunc::Wrap { .. } => false,
         }
     }
 
@@ -1132,6 +1152,7 @@ impl TableFunc {
             TableFunc::Repeat => false,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
+            TableFunc::Wrap { .. } => true,
         }
     }
 }
@@ -1149,6 +1170,7 @@ impl fmt::Display for TableFunc {
             TableFunc::Repeat => f.write_str("repeat_row"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
+            TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
         }
     }
 }

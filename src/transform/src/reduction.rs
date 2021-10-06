@@ -499,15 +499,11 @@ impl FoldConstants {
         for (input_row, diff) in rows {
             let datums = input_row.unpack();
             let temp_storage = RowArena::new();
-            let mut output_rows = func
-                .eval(
-                    exprs
-                        .iter()
-                        .map(|expr| expr.eval(&datums, &temp_storage))
-                        .collect::<Result<Vec<_>, _>>()?,
-                    &temp_storage,
-                )?
-                .fuse();
+            let datums = exprs
+                .iter()
+                .map(|expr| expr.eval(&datums, &temp_storage))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut output_rows = func.eval(&datums, &temp_storage)?.fuse();
             for (output_row, diff2) in (&mut output_rows).take(limit - new_rows.len()) {
                 row_packer.extend(input_row.clone().into_iter().chain(output_row.into_iter()));
                 new_rows.push((row_packer.finish_and_reuse(), diff2 * *diff))
