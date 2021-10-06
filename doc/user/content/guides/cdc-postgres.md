@@ -45,10 +45,10 @@ Before creating a source in Materialize, you need to ensure that the upstream da
 
     **Note:** This user also needs `SELECT` privileges on the tables you want to replicate, for the initial table sync.
 
-1. Set the replica identity value for the tables you want to replicate:
+1. Set the replica identity to `FULL` for the tables you want to replicate:
 
     ```sql
-    ALTER TABLE repl_table REPLICA IDENTITY DEFAULT;
+    ALTER TABLE repl_table REPLICA IDENTITY FULL;
     ```
 
     This setting determines the amount of information that is written to the WAL in `UPDATE` and `DELETE` operations.
