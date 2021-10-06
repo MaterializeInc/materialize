@@ -108,6 +108,23 @@ parent = "third-party"
 url = "/guides/cdc-postgres"
 weight= 3
 
+[[menu.main]]
+identifier = "security"
+name = "Security"
+weight = 140
+
+[[menu.main]]
+name = "Security Overview"
+parent = "security"
+url = "https://materialize.com/security-overview"
+weight= 1
+
+[[menu.main]]
+name = "Responsible Disclosure Policy"
+parent = "security"
+url = "https://materialize.com/securitydisclosure"
+weight= 2
+
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
 unsafe = true
