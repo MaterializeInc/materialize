@@ -3229,6 +3229,7 @@ dependencies = [
  "anyhow",
  "openssl",
  "postgres-openssl",
+ "repr",
  "sql-parser",
  "tokio",
  "tokio-postgres",
