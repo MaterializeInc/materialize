@@ -465,9 +465,10 @@ where
                             .flat_map_fallible("SourceLinearOperators", {
                                 // Produce an executable plan reflecting the linear operators.
                                 let source_type = src.bare_desc.typ();
-                                let linear_op_mfp = crate::render::plan::linear_to_mfp(operators, source_type)
-                                    .into_plan()
-                                    .unwrap_or_else(|e| panic!("{}", e));
+                                let linear_op_mfp =
+                                    crate::render::plan::linear_to_mfp(operators, source_type)
+                                        .into_plan()
+                                        .unwrap_or_else(|e| panic!("{}", e));
                                 // Reusable allocation for unpacking datums.
                                 let mut datums = crate::render::datum_vec::DatumVec::new();
                                 // Closure that applies the linear operators to each `input_row`.
