@@ -9,9 +9,9 @@
 
 //! A Timely Dataflow operator that mirrors a persisted stream.
 
-use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
+use crossbeam_channel::TryRecvError;
 use log::debug;
 use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
@@ -50,12 +50,7 @@ where
         Stream<G, ((K, V), u64, isize)>,
         Stream<G, (String, u64, isize)>,
     ) {
-        let (listen_tx, listen_rx) = mpsc::channel();
-        let listen_fn = Box::new(move |e| {
-            // TODO: If send fails, it means the operator is no longer running.
-            // We should probably allow the listen to deregister itself.
-            let _ = listen_tx.send(e);
-        });
+        let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
 
         // We intentionally register the listener before we take the snapshot so
         // that we know there will be no missing data between the data returned
@@ -67,7 +62,7 @@ where
         //
         // TODO: if we had some way to communicate the ts/seqno a listener started
         // listening at, we could pass it along as the upper bound to snapshot.
-        let err_new_register = match read.listen(listen_fn) {
+        let err_new_register = match read.listen(listen_tx) {
             Ok(_) => operator::empty(self),
             Err(err) => vec![(err.to_string(), 0, 1)].to_stream(self),
         };
@@ -111,7 +106,7 @@ where
 fn listen_source<S, K, V>(
     scope: &S,
     lower_filter: Antichain<u64>,
-    listen_rx: Receiver<ListenEvent<Result<K, String>, Result<V, String>>>,
+    listen_rx: crossbeam_channel::Receiver<ListenEvent<Vec<u8>, Vec<u8>>>,
 ) -> (
     Stream<S, ((K, V), u64, isize)>,
     Stream<S, Vec<(String, u64, isize)>>,
@@ -147,11 +142,13 @@ where
                             // 0 because that was the simplest thing to do initially. Instead, we should
                             // shard up the responsibility between all the workers.
                             if worker_index == 0 {
-                                for record in records.drain(..) {
-                                    if lower_filter.less_equal(&record.1) {
-                                        session.give(record);
+                                for ((k, v), ts, diff) in records.drain(..) {
+                                    if lower_filter.less_equal(&ts) {
+                                        let k = K::decode(&k);
+                                        let v = V::decode(&v);
+                                        session.give(((k, v), ts, diff));
                                     } else {
-                                        debug!("Got record that was not beyond the lower snapshot filter. lower_filter: {:?}, record time: {:?}", lower_filter, record.1);
+                                        debug!("Got record that was not beyond the lower snapshot filter. lower_filter: {:?}, record time: {:?}", lower_filter, ts);
                                     }
                                 }
                             }
@@ -303,6 +300,7 @@ mod tests {
     // registration and use it as the upper bound of the snapshot.
     #[test]
     #[ignore]
+    #[cfg(feature = "WIP")]
     fn multiple_workers() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
         let p = registry.runtime_no_reentrance()?;

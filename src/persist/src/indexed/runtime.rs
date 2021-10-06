@@ -33,7 +33,7 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::{
-    Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenEvent, ListenFn, Snapshot,
+    Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, MaintenanceReq, Snapshot,
 };
 use crate::storage::{Blob, Log, SeqNo};
 
@@ -94,11 +94,30 @@ where
     };
     let pool_guard = pool.enter();
 
+    // Start up a thread for maintenance work that can be done off the hot path,
+    // but must be done serially (in contract to what Maintenance which is order
+    // independent).
+    let (maintenance_tx, maintenance_rx) = crossbeam_channel::unbounded();
+    let _maintenance_handle = thread::Builder::new()
+        .name("persist-maintenance".into())
+        .spawn(move || {
+            for req in maintenance_rx {
+                match req {
+                    MaintenanceReq::NotifyListeners(event, listeners) => {
+                        for listener in listeners.iter() {
+                            listener.send(event.clone()).expect("WIP");
+                        }
+                    }
+                }
+            }
+        })?;
+
     // Start up the runtime.
     let blob = BlobCache::new(metrics.clone(), blob);
     let maintainer = Maintainer::new(blob.clone(), pool.clone());
     let indexed = Indexed::new(log, blob, maintainer, metrics.clone())?;
-    let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
+    let mut runtime =
+        RuntimeImpl::new(config.clone(), indexed, rx, maintenance_tx, metrics.clone());
     let id = RuntimeId::new();
     let runtime_pool = pool.clone();
     let impl_handle = thread::Builder::new()
@@ -677,24 +696,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     }
 
     /// Registers a callback to be invoked on successful writes and seals.
-    pub fn listen(
-        &self,
-        listen_fn: ListenFn<Result<K, String>, Result<V, String>>,
-    ) -> Result<(), Error> {
-        let listen_fn = Box::new(move |e: ListenEvent<Vec<u8>, Vec<u8>>| match e {
-            ListenEvent::Records(records) => {
-                let records = records
-                    .into_iter()
-                    .map(|((k, v), ts, diff)| {
-                        let k = K::decode(&k);
-                        let v = V::decode(&v);
-                        ((k, v), ts, diff)
-                    })
-                    .collect();
-                listen_fn(ListenEvent::Records(records))
-            }
-            ListenEvent::Sealed(ts) => listen_fn(ListenEvent::Sealed(ts)),
-        });
+    pub fn listen(&self, listen_fn: ListenFn<Vec<u8>, Vec<u8>>) -> Result<(), Error> {
         let (tx, rx) = Future::new();
         self.runtime.listen(self.id, listen_fn, tx);
         rx.recv()
@@ -704,6 +706,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
 struct RuntimeImpl<L: Log, B: Blob> {
     indexed: Indexed<L, B>,
     rx: crossbeam_channel::Receiver<Cmd>,
+    maintenance_tx: crossbeam_channel::Sender<MaintenanceReq>,
     metrics: Metrics,
     prev_step: Instant,
     min_step_interval: Duration,
@@ -740,11 +743,13 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         config: RuntimeConfig,
         indexed: Indexed<L, B>,
         rx: crossbeam_channel::Receiver<Cmd>,
+        maintenance_tx: crossbeam_channel::Sender<MaintenanceReq>,
         metrics: Metrics,
     ) -> Self {
         RuntimeImpl {
             indexed,
             rx,
+            maintenance_tx,
             metrics,
             // Initialize this so it's ready to trigger immediately.
             prev_step: Instant::now() - config.min_step_interval,
@@ -879,12 +884,19 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 
         if need_step {
             self.prev_step = step_start;
-            if let Err(e) = self.indexed.step() {
-                self.metrics.cmd_step_error_count.inc();
-                // TODO: revisit whether we need to move this to a different log level
-                // depending on how spammy it ends up being. Alternatively, we
-                // may want to rate-limit our logging here.
-                log::warn!("error running step: {:?}", e);
+            match self.indexed.step() {
+                Ok(maintenance_reqs) => {
+                    for req in maintenance_reqs {
+                        self.maintenance_tx.send(req).expect("WIP");
+                    }
+                }
+                Err(e) => {
+                    self.metrics.cmd_step_error_count.inc();
+                    // TODO: revisit whether we need to move this to a different log level
+                    // depending on how spammy it ends up being. Alternatively, we
+                    // may want to rate-limit our logging here.
+                    log::warn!("error running step: {:?}", e);
+                }
             }
 
             self.metrics

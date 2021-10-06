@@ -19,9 +19,10 @@ pub mod runtime;
 pub mod trace;
 pub mod unsealed;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{hash_map, BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 use std::ops::Range;
+use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
@@ -75,6 +76,15 @@ impl PendingResponse {
     }
 }
 
+/// WIP
+pub enum MaintenanceReq {
+    /// WIP
+    NotifyListeners(
+        ListenEvent<Vec<u8>, Vec<u8>>,
+        Arc<Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
+    ),
+}
+
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
 /// Diff)` updates.
 ///
@@ -120,7 +130,7 @@ pub struct Indexed<L: Log, B: Blob> {
     maintainer: Maintainer<B>,
     unsealeds: BTreeMap<Id, Unsealed>,
     traces: BTreeMap<Id, Trace>,
-    listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
+    listeners: HashMap<Id, Arc<Vec<ListenFn<Vec<u8>, Vec<u8>>>>>,
     metrics: Metrics,
     // Only drained by drain_pending_writes.
     pending_writes: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
@@ -473,15 +483,15 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
     /// Commit any pending in-memory changes to persistent storage, respond to clients
     /// and notify any listeners.
-    fn drain_pending(&mut self) -> Result<(), Error> {
+    fn drain_pending(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
         #[cfg(any(debug_assertions, test))]
         {
             assert_eq!(self.validate_drain_pending_preconditions(), Ok(()));
         }
         let ret = match self.drain_pending_inner() {
-            Ok(_) => {
+            Ok(maintenance) => {
                 self.pending_responses.drain(..).for_each(|r| r.fill());
-                Ok(())
+                Ok(maintenance)
             }
             Err(e) => {
                 self.metrics
@@ -579,11 +589,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// In production, step should just be called in a loop (probably with some
     /// smarts about waiting to call it only after there have been some writes),
     /// but it's exposed this way so we can write deterministic tests.
-    pub fn step(&mut self) -> Result<(), Error> {
-        self.drain_pending()?;
+    pub fn step(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
+        let maintenance = self.drain_pending()?;
         self.drain_unsealed()?;
         self.compact()?;
-        Ok(())
+        Ok(maintenance)
     }
 
     fn validate_write(
@@ -676,13 +686,13 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// listeners.
     ///
     /// The caller is responsible for draining any pending responses after this.
-    fn drain_pending_inner(&mut self) -> Result<(), Error> {
+    fn drain_pending_inner(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
         let mut updates_by_id: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> = HashMap::new();
         for (id, updates) in self.pending_writes.drain(..) {
             updates_by_id.entry(id).or_default().extend(updates);
         }
 
-        let updates_for_listeners = updates_by_id.clone();
+        let mut updates_for_listeners = updates_by_id.clone();
         if let Err(e) = self.drain_pending_writes(updates_by_id) {
             self.restore();
             return Err(format!("failed to append to unsealed: {}", e).into());
@@ -744,28 +754,31 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 .inc_by(u64::cast_from(update_bytes));
         }
 
-        for (id, updates) in updates_for_listeners.iter() {
+        let mut maintenance = Vec::new();
+        for (id, updates) in updates_for_listeners.drain() {
             if let Some(listen_fns) = self.listeners.get(&id) {
-                for listen_fn in listen_fns.iter() {
-                    listen_fn(ListenEvent::Records(updates.clone()));
-                }
+                maintenance.push(MaintenanceReq::NotifyListeners(
+                    ListenEvent::Records(updates),
+                    listen_fns.clone(),
+                ));
             }
         }
 
         for (id, seal) in seal_updates.iter() {
             if let Some(listen_fns) = self.listeners.get(&id) {
-                for listen_fn in listen_fns.iter() {
-                    // TODO: perhaps this event should take an antichain directly? If
-                    // the downstream user held a timely::CapabilitySet they could
-                    // use the antichain directly as well.
-                    for seal_ts in seal.elements().iter() {
-                        listen_fn(ListenEvent::Sealed(*seal_ts));
-                    }
+                // TODO: perhaps this event should take an antichain directly? If
+                // the downstream user held a timely::CapabilitySet they could
+                // use the antichain directly as well.
+                for seal_ts in seal.elements().iter() {
+                    maintenance.push(MaintenanceReq::NotifyListeners(
+                        ListenEvent::Sealed(*seal_ts),
+                        listen_fns.clone(),
+                    ));
                 }
             }
         }
 
-        Ok(())
+        Ok(maintenance)
     }
 
     /// Construct a new [BlobUnsealedBatch] out of the provided `updates` and add
@@ -1016,7 +1029,20 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         self.drain_pending()?;
         // Verify that id has been registered.
         let _ = self.sealed_frontier(id)?;
-        self.listeners.entry(id).or_default().push(listen_fn);
+        match self.listeners.entry(id) {
+            hash_map::Entry::Vacant(x) => {
+                x.insert(Arc::new(vec![listen_fn]));
+            }
+            hash_map::Entry::Occupied(x) => {
+                // Registering a listener is a much rarer operation than
+                // something like a write, so maintain it as an Arc<Vec<...>> so
+                // the path that has to do the notifications only has to clone
+                // the Arc.
+                let mut new_listeners = x.get().to_vec();
+                new_listeners.push(listen_fn);
+                *x.into_mut() = Arc::new(new_listeners);
+            }
+        };
         Ok(())
     }
 }
@@ -1034,7 +1060,7 @@ pub enum ListenEvent<K, V> {
 }
 
 /// The callback used by [Indexed::listen].
-pub type ListenFn<K, V> = Box<dyn Fn(ListenEvent<K, V>) + Send>;
+pub type ListenFn<K, V> = crossbeam_channel::Sender<ListenEvent<K, V>>;
 
 /// An isolated, consistent read of previously written (Key, Value, Time, Diff)
 /// updates.
@@ -1152,8 +1178,6 @@ impl Iterator for IndexedSnapshotIter {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-
     use crate::error::Error;
     use crate::future::Future;
     use crate::mem::MemRegistry;
@@ -1177,6 +1201,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "WIP")]
     fn single_stream() -> Result<(), Error> {
         let updates = vec![
             (("1".into(), "".into()), 1, 1),
