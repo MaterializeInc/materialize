@@ -42,7 +42,7 @@ use sql::ast::{
     DropObjectsStatement, Expr, InsertStatement, ObjectType, Raw, Statement, TableConstraint,
     UpdateStatement,
 };
-use sql::catalog::Catalog;
+use sql::catalog::SessionCatalog;
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::normalize;
 use sql::plan::{
@@ -138,7 +138,7 @@ END $$;
     pub async fn execute(
         &mut self,
         pcx: &PlanContext,
-        catalog: &dyn Catalog,
+        catalog: &dyn SessionCatalog,
         stmt: &Statement<Raw>,
     ) -> Result<Plan, anyhow::Error> {
         let scx = StatementContext::new(Some(pcx), catalog, Rc::new(RefCell::new(BTreeMap::new())));

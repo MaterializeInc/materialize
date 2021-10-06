@@ -21,7 +21,7 @@ use timely::Data as TimelyData;
 
 use crate::future::Future;
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
-use crate::operators;
+use crate::operators::replay::Replay;
 use crate::storage::SeqNo;
 
 /// A persistent equivalent of [UnorderedInput].
@@ -66,7 +66,7 @@ where
                 // TODO: Figure out how to make these retractable.
                 vec![(format!("replaying persisted data: {}", err), 0, 1)].to_stream(self),
             ),
-            Ok(snapshot) => operators::replay(self, snapshot),
+            Ok(snapshot) => self.replay(snapshot),
         };
 
         let ok_previous = ok_previous.map(|((k, _), ts, diff)| (k, ts, diff));

@@ -114,14 +114,8 @@ mod tests {
 
         let out = match test_type {
             TestType::Opt => {
-                rel = logical_opt
-                    .optimize(rel, &HashMap::new())
-                    .unwrap()
-                    .into_inner();
-                rel = physical_opt
-                    .optimize(rel, &HashMap::new())
-                    .unwrap()
-                    .into_inner();
+                rel = logical_opt.optimize(rel).unwrap().into_inner();
+                rel = physical_opt.optimize(rel).unwrap().into_inner();
 
                 convert_rel_to_string(&rel, &cat, &format_type)
             }
@@ -228,6 +222,7 @@ mod tests {
             "UnionBranchCancellation" => {
                 Ok(Box::new(transform::union_cancel::UnionBranchCancellation))
             }
+            "UnionFusion" => Ok(Box::new(transform::fusion::union::Union)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name

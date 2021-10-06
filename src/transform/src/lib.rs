@@ -340,17 +340,22 @@ impl Optimizer {
         Self { transforms }
     }
 
-    /// Optimizes the supplied relation expression returning an optimized relation.
+    /// Optimizes the supplied relation expression.
+    ///
+    /// These optimizations are performed with no information about available arrangements,
+    /// which makes them suitable for pre-optimization before dataflow deployment.
     pub fn optimize(
         &mut self,
         mut relation: MirRelationExpr,
-        indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ) -> Result<expr::OptimizedMirRelationExpr, TransformError> {
-        self.transform(&mut relation, indexes)?;
+        self.transform(&mut relation, &HashMap::new())?;
         Ok(expr::OptimizedMirRelationExpr(relation))
     }
 
-    /// Optimizes the supplied relation expression in place.
+    /// Optimizes the supplied relation expression in place, using available arrangements.
+    ///
+    /// This method should only be called with non-empty `indexes` when optimizing a dataflow,
+    /// as the optimizations may lock in the use of arrangements that may cease to exist.
     fn transform(
         &self,
         relation: &mut MirRelationExpr,

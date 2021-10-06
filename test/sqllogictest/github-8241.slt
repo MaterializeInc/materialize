@@ -34,4 +34,11 @@ CREATE INDEX i2 ON t1 (f2);
 simple conn=conn1
 SELECT * FROM v1;
 ----
-db error: ERROR: transactions can only reference nearby relations; "materialize.public.i2" referenced here, but only the following are available: "materialize.public.i1", "materialize.public.t1", "materialize.public.t1_primary_idx", "materialize.public.v1"
+db error: ERROR: Transactions can only reference objects in the same timedomain. See https://materialize.com/docs/sql/begin/#same-timedomain-error
+DETAIL: The following relations in the query are outside the transaction's time domain:
+"materialize.public.i2"
+Only the following relations are available:
+"materialize.public.i1"
+"materialize.public.t1"
+"materialize.public.t1_primary_idx"
+"materialize.public.v1"

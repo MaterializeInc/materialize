@@ -17,18 +17,18 @@ use std::mem;
 use byteorder::{ByteOrder, NetworkEndian};
 use expr::GlobalId;
 use futures::future::{BoxFuture, FutureExt};
-use futures::stream::{self, StreamExt};
 use itertools::izip;
 use log::debug;
 use message::decode_copy_text_format;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
+use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::{self, Duration, Instant};
-use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use coord::session::{
-    EndTransactionAction, Portal, PortalState, RowBatchStream, Session, TransactionStatus,
+    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
+    TransactionStatus,
 };
 use coord::ExecuteResponse;
 use dataflow_types::PeekResponse;
@@ -289,7 +289,7 @@ where
                 .await?
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
-                self.describe_statement(name).await?
+                self.describe_statement(&name).await?
             }
             Some(FrontendMessage::DescribePortal { name }) => self.describe_portal(&name).await?,
             Some(FrontendMessage::CloseStatement { name }) => self.close_statement(name).await?,
@@ -331,7 +331,7 @@ where
         const EMPTY_PORTAL: &str = "";
         if let Err(e) = self
             .coord_client
-            .declare(EMPTY_PORTAL.to_string(), stmt.clone(), param_types)
+            .declare(EMPTY_PORTAL.to_string(), stmt, param_types)
             .await
         {
             return self
@@ -547,19 +547,16 @@ where
         self.start_transaction(Some(1)).await;
 
         let aborted_txn = self.is_aborted_txn();
-        let stmt = self
+        let stmt = match self
             .coord_client
-            .session()
-            .get_prepared_statement(&statement_name);
-        let stmt = match stmt {
-            Some(stmt) => stmt,
-            None => {
+            .get_prepared_statement(&statement_name)
+            .await
+        {
+            Ok(stmt) => stmt,
+            Err(err) => {
                 return self
-                    .error(ErrorResponse::error(
-                        SqlState::INVALID_SQL_STATEMENT_NAME,
-                        "prepared statement does not exist",
-                    ))
-                    .await;
+                    .error(ErrorResponse::from_coord(Severity::Error, err))
+                    .await
             }
         };
 
@@ -762,33 +759,35 @@ where
         .boxed()
     }
 
-    async fn describe_statement(&mut self, name: String) -> Result<State, io::Error> {
-        let stmt = self.coord_client.session().get_prepared_statement(&name);
-        match stmt {
-            Some(stmt) => {
-                self.conn
-                    .send(BackendMessage::ParameterDescription(
-                        stmt.desc().param_types.clone(),
-                    ))
-                    .await?;
-                // Claim that all results will be output in text format, even
-                // though the true result formats are not yet known. A bit
-                // weird, but this is the behavior that PostgreSQL specifies.
-                let formats = vec![pgrepr::Format::Text; stmt.desc().arity()];
-                self.conn.send(describe_rows(stmt.desc(), &formats)).await?;
-                Ok(State::Ready)
+    async fn describe_statement(&mut self, name: &str) -> Result<State, io::Error> {
+        // Start a transaction if we aren't in one.
+        self.start_transaction(Some(1)).await;
+
+        let stmt = match self.coord_client.get_prepared_statement(&name).await {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                return self
+                    .error(ErrorResponse::from_coord(Severity::Error, err))
+                    .await
             }
-            None => {
-                self.error(ErrorResponse::error(
-                    SqlState::INVALID_SQL_STATEMENT_NAME,
-                    "prepared statement does not exist",
-                ))
-                .await
-            }
-        }
+        };
+        self.conn
+            .send(BackendMessage::ParameterDescription(
+                stmt.desc().param_types.clone(),
+            ))
+            .await?;
+        // Claim that all results will be output in text format, even
+        // though the true result formats are not yet known. A bit
+        // weird, but this is the behavior that PostgreSQL specifies.
+        let formats = vec![pgrepr::Format::Text; stmt.desc().arity()];
+        self.conn.send(describe_rows(stmt.desc(), &formats)).await?;
+        Ok(State::Ready)
     }
 
     async fn describe_portal(&mut self, name: &str) -> Result<State, io::Error> {
+        // Start a transaction if we aren't in one.
+        self.start_transaction(Some(1)).await;
+
         let session = self.coord_client.session();
         let row_desc = session
             .get_portal(name)
@@ -1047,7 +1046,7 @@ where
                         self.send_rows(
                             row_desc,
                             portal_name,
-                            Box::new(stream::iter(vec![rows])),
+                            InProgressRows::single_batch(rows),
                             max_rows,
                             get_response,
                             fetch_portal_name,
@@ -1118,7 +1117,7 @@ where
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    Box::new(UnboundedReceiverStream::new(rx)),
+                    InProgressRows::new(rx),
                     max_rows,
                     get_response,
                     fetch_portal_name,
@@ -1130,7 +1129,7 @@ where
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 let rows: RowBatchStream = match *resp {
-                    ExecuteResponse::Tailing { rx } => Box::new(UnboundedReceiverStream::new(rx)),
+                    ExecuteResponse::Tailing { rx } => rx,
                     ExecuteResponse::SendingRows(rx) => match rx.await {
                         // TODO(mjibson): This logic is duplicated from SendingRows. Dedup?
                         PeekResponse::Canceled => {
@@ -1146,7 +1145,11 @@ where
                                 .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
                                 .await;
                         }
-                        PeekResponse::Rows(rows) => Box::new(stream::iter(vec![rows])),
+                        PeekResponse::Rows(rows) => {
+                            let (tx, rx) = unbounded_channel();
+                            tx.send(rows).expect("send must succeed");
+                            rx
+                        }
                     },
                     _ => {
                         return self
@@ -1171,6 +1174,10 @@ where
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
             ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
+            ExecuteResponse::Prepare => command_complete!("PREPARE"),
+            ExecuteResponse::Deallocate { all } => {
+                command_complete!("DEALLOCATE{}", if all { " ALL" } else { "" })
+            }
         }
     }
 
@@ -1179,7 +1186,7 @@ where
         &mut self,
         row_desc: RelationDesc,
         portal_name: String,
-        mut rows: RowBatchStream,
+        mut rows: InProgressRows,
         max_rows: ExecuteCount,
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
@@ -1229,10 +1236,16 @@ where
         loop {
             // Fetch next batch of rows, waiting for a possible requested timeout or
             // cancellation.
-            let batch = tokio::select! {
-                _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
-                _ = self.coord_client.canceled() => FetchResult::Cancelled,
-                batch = rows.next() => FetchResult::Rows(batch),
+            let batch = if self.coord_client.canceled().now_or_never().is_some() {
+                FetchResult::Cancelled
+            } else if rows.current.is_some() {
+                FetchResult::Rows(rows.current.take())
+            } else {
+                tokio::select! {
+                    _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
+                    _ = self.coord_client.canceled() => FetchResult::Cancelled,
+                    batch = rows.remaining.recv() => FetchResult::Rows(batch),
+                }
             };
 
             match batch {
@@ -1293,7 +1306,7 @@ where
                     // (if any) back and stop sending.
                     if want_rows == 0 {
                         if !batch_rows.is_empty() {
-                            rows = Box::new(stream::iter(vec![batch_rows]).chain(rows));
+                            rows.current = Some(batch_rows);
                         }
                         break;
                     }
@@ -1416,7 +1429,7 @@ where
                         ))
                     .await;
                 },
-                batch = stream.next() => match batch {
+                batch = stream.recv() => match batch {
                     None => break,
                     Some(rows) => {
                         count += rows.len();

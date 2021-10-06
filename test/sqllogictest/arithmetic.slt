@@ -520,6 +520,172 @@ SELECT 9223372036854775807::bigint+1::bigint
 query error numeric field overflow
 SELECT 9223372036854775807::bigint-(-1)::bigint
 
+query error numeric field overflow
+SELECT (-6734743351254754)::bigint * (-99783359317598)::bigint
+
+query error numeric field overflow
+SELECT (CAST(-6734743351254754 AS bigint) * CAST(-99783359317598 AS bigint))
+
+### overflow and underflow checking ###
+
+statement ok
+SELECT '1e300'::float
+
+query error value out of range: overflow
+SELECT '1e300'::float * '1e200'::float
+
+query R
+SELECT 'Inf'::float * '1e200'::float
+----
+inf
+
+query R
+SELECT '1e200'::float * '-Inf'::float
+----
+-inf
+
+query error value out of range: underflow
+SELECT '1e-300'::float * '1e-200'::float
+
+query R
+SELECT '0.0'::float * '1e-200'::float
+----
+0
+
+query R
+SELECT '1e-300'::float * '0.0'::float
+----
+0
+
+query error value out of range: overflow
+SELECT '1e308'::float + '1e308'::float
+
+query R
+SELECT 'Inf'::float + '1e308'::float
+----
+inf
+
+query R
+SELECT '1e308'::float + '-Inf'::float
+----
+-inf
+
+query error value out of range: overflow
+SELECT '-1e308'::float - '1e308'::float
+
+query R
+SELECT 'Inf'::float - '1e308'::float
+----
+inf
+
+query R
+SELECT '1e308'::float - '-Inf'::float
+----
+inf
+
+query error division by zero
+SELECT '1e-300'::float / '0.0'::float
+
+query error value out of range: overflow
+SELECT '1e300'::float / '1e-30'::float
+
+query R
+SELECT 'Inf'::float / '1e-30'::float
+----
+inf
+
+query error value out of range: underflow
+SELECT '1e-300'::float / '1e30'::float
+
+query R
+SELECT '1e-300'::float / 'Inf'::float
+----
+0
+
+query R
+SELECT '0.0'::float / 'Inf'::float
+----
+0
+
+statement ok
+SELECT '3e38'::float4
+
+query error value out of range: overflow
+SELECT '1e30'::float4 * '1e10'::float4
+
+query R
+SELECT 'Inf'::float4 * '1e10'::float4
+----
+inf
+
+query R
+SELECT '1e30'::float4 * '-Inf'::float4
+----
+-inf
+
+query error value out of range: underflow
+SELECT '1e-30'::float4 * '1e-20'::float4
+
+query R
+SELECT '0.0'::float4 * '1e-20'::float4
+----
+0
+
+query R
+SELECT '1e-30'::float4 * '0.0'::float4
+----
+0
+
+query error value out of range: overflow
+SELECT '3e38'::float4 + '3e38'::float4
+
+query R
+SELECT 'Inf'::float4 + '3e38'::float4
+----
+inf
+
+query R
+SELECT '3e38'::float4 + '-Inf'::float4
+----
+-inf
+
+query error value out of range: overflow
+SELECT '-3e38'::float4 - '3e38'::float4
+
+query R
+SELECT 'Inf'::float4 - '3e38'::float4
+----
+inf
+
+query R
+SELECT '3e38'::float4 - '-Inf'::float4
+----
+inf
+
+query error division by zero
+SELECT '1e-30'::float4 / '0.0'::float4
+
+query error value out of range: overflow
+SELECT '1e30'::float4 / '1e-20'::float4
+
+query R
+SELECT 'Inf'::float4 / '1e-20'::float4
+----
+inf
+
+query error value out of range: underflow
+SELECT '1e-30'::float4 / '1e20'::float4
+
+query R
+SELECT '1e-30'::float4 / 'Inf'::float4
+----
+0
+
+query R
+SELECT '0.0'::float4 / 'Inf'::float4
+----
+0
+
 ### bitwise operators ###
 
 # dummy table and data needed for tests

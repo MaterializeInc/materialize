@@ -833,12 +833,26 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
-fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32() + b.unwrap_float32())
+fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float32();
+    let b = b.unwrap_float32();
+    let sum = a + b;
+    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::from(sum))
+    }
 }
 
-fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64() + b.unwrap_float64())
+fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float64();
+    let b = b.unwrap_float64();
+    let sum = a + b;
+    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::from(sum))
+    }
 }
 
 fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1240,12 +1254,26 @@ fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
-fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32() - b.unwrap_float32())
+fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float32();
+    let b = b.unwrap_float32();
+    let difference = a - b;
+    if difference.is_infinite() && !a.is_infinite() && !b.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::from(difference))
+    }
 }
 
-fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64() - b.unwrap_float64())
+fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float64();
+    let b = b.unwrap_float64();
+    let difference = a - b;
+    if difference.is_infinite() && !a.is_infinite() && !b.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::from(difference))
+    }
 }
 
 fn sub_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1319,12 +1347,30 @@ fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
-fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32() * b.unwrap_float32())
+fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float32();
+    let b = b.unwrap_float32();
+    let product = a * b;
+    if product.is_infinite() && !a.is_infinite() && !b.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else if product == 0.0f32 && a != 0.0f32 && b != 0.0f32 {
+        Err(EvalError::FloatUnderflow)
+    } else {
+        Ok(Datum::from(product))
+    }
 }
 
-fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64() * b.unwrap_float64())
+fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float64();
+    let b = b.unwrap_float64();
+    let product = a * b;
+    if product.is_infinite() && !a.is_infinite() && !b.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else if product == 0.0f64 && a != 0.0f64 && b != 0.0f64 {
+        Err(EvalError::FloatUnderflow)
+    } else {
+        Ok(Datum::from(product))
+    }
 }
 
 fn mul_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1379,20 +1425,34 @@ fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float32();
     let b = b.unwrap_float32();
-    if b == 0.0 && !a.is_nan() {
+    if b == 0.0f32 && !a.is_nan() {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a / b))
+        let quotient = a / b;
+        if quotient.is_infinite() && !a.is_infinite() {
+            Err(EvalError::FloatOverflow)
+        } else if quotient == 0.0f32 && a != 0.0f32 && !b.is_infinite() {
+            Err(EvalError::FloatUnderflow)
+        } else {
+            Ok(Datum::from(quotient))
+        }
     }
 }
 
 fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float64();
     let b = b.unwrap_float64();
-    if b == 0.0 && !a.is_nan() {
+    if b == 0.0f64 && !a.is_nan() {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a / b))
+        let quotient = a / b;
+        if quotient.is_infinite() && !a.is_infinite() {
+            Err(EvalError::FloatOverflow)
+        } else if quotient == 0.0f64 && a != 0.0f64 && !b.is_infinite() {
+            Err(EvalError::FloatUnderflow)
+        } else {
+            Ok(Datum::from(quotient))
+        }
     }
 }
 
@@ -1520,11 +1580,6 @@ fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError
     Ok(())
 }
 
-// From the `decNumber` library's documentation:
-// > Inexact results will almost always be correctly rounded, but may be up to 1
-// > ulp (unit in last place) in error in rare cases.
-//
-// See decNumberLn documentation at http://speleotrove.com/decimal/dnnumb.html
 fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     log_guard_numeric(&a, "log")?;
@@ -1537,6 +1592,27 @@ fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErr
     if a.is_zero() {
         Err(EvalError::DivisionByZero)
     } else {
+        // This division can result in slightly wrong answers due to the
+        // limitation of dividing irrational numbers. To correct that, see if
+        // rounding off the value from its `numeric::NUMERIC_DATUM_MAX_PRECISION
+        // - 1`th position results in an integral value.
+        cx.set_precision(numeric::NUMERIC_DATUM_MAX_PRECISION - 1)
+            .expect("reducing precision below max always succeeds");
+        let mut integral_check = b.clone();
+
+        // `reduce` rounds to the the context's final digit when the number of
+        // digits in its argument exceeds its precision. We've contrived that to
+        // happen by shrinking the context's precision by 1.
+        cx.reduce(&mut integral_check);
+
+        // Reduced integral values always have a non-negative exponent.
+        let mut b = if integral_check.exponent() >= 0 {
+            // We believe our result should have been an integral
+            integral_check
+        } else {
+            b
+        };
+
         numeric::munge_numeric(&mut b).unwrap();
         Ok(Datum::from(b))
     }
@@ -2673,8 +2749,8 @@ impl BinaryFunc {
             BinaryFunc::AddInt16 => eager!(add_int16),
             BinaryFunc::AddInt32 => eager!(add_int32),
             BinaryFunc::AddInt64 => eager!(add_int64),
-            BinaryFunc::AddFloat32 => Ok(eager!(add_float32)),
-            BinaryFunc::AddFloat64 => Ok(eager!(add_float64)),
+            BinaryFunc::AddFloat32 => eager!(add_float32),
+            BinaryFunc::AddFloat64 => eager!(add_float64),
             BinaryFunc::AddTimestampInterval => Ok(eager!(add_timestamp_interval)),
             BinaryFunc::AddTimestampTzInterval => Ok(eager!(add_timestamptz_interval)),
             BinaryFunc::AddDateTime => Ok(eager!(add_date_time)),
@@ -2700,8 +2776,8 @@ impl BinaryFunc {
             BinaryFunc::SubInt16 => eager!(sub_int16),
             BinaryFunc::SubInt32 => eager!(sub_int32),
             BinaryFunc::SubInt64 => eager!(sub_int64),
-            BinaryFunc::SubFloat32 => Ok(eager!(sub_float32)),
-            BinaryFunc::SubFloat64 => Ok(eager!(sub_float64)),
+            BinaryFunc::SubFloat32 => eager!(sub_float32),
+            BinaryFunc::SubFloat64 => eager!(sub_float64),
             BinaryFunc::SubTimestamp => Ok(eager!(sub_timestamp)),
             BinaryFunc::SubTimestampTz => Ok(eager!(sub_timestamptz)),
             BinaryFunc::SubTimestampInterval => Ok(eager!(sub_timestamp_interval)),
@@ -2715,8 +2791,8 @@ impl BinaryFunc {
             BinaryFunc::MulInt16 => eager!(mul_int16),
             BinaryFunc::MulInt32 => eager!(mul_int32),
             BinaryFunc::MulInt64 => eager!(mul_int64),
-            BinaryFunc::MulFloat32 => Ok(eager!(mul_float32)),
-            BinaryFunc::MulFloat64 => Ok(eager!(mul_float64)),
+            BinaryFunc::MulFloat32 => eager!(mul_float32),
+            BinaryFunc::MulFloat64 => eager!(mul_float64),
             BinaryFunc::MulNumeric => eager!(mul_numeric),
             BinaryFunc::MulInterval => eager!(mul_interval),
             BinaryFunc::DivInt16 => eager!(div_int16),
@@ -3398,6 +3474,8 @@ trait UnaryFuncTrait {
 pub enum UnaryFunc {
     Not(Not),
     IsNull(IsNull),
+    IsTrue(IsTrue),
+    IsFalse(IsFalse),
     BitNotInt16(BitNotInt16),
     BitNotInt32(BitNotInt32),
     BitNotInt64(BitNotInt64),
@@ -3652,6 +3730,8 @@ derive_unary!(
     PgColumnSize,
     MzRowSize,
     IsNull,
+    IsTrue,
+    IsFalse,
     Sleep,
     ToTimestamp,
     CastFloat64ToString,
@@ -3713,6 +3793,8 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | IsTrue(_)
+            | IsFalse(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -3913,6 +3995,8 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | IsTrue(_)
+            | IsFalse(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -4128,6 +4212,8 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | IsTrue(_)
+            | IsFalse(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -4268,6 +4354,8 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | IsTrue(_)
+            | IsFalse(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -4340,6 +4428,8 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | IsTrue(_)
+            | IsFalse(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
