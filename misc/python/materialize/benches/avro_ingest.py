@@ -37,7 +37,7 @@ def wait_for_confluent() -> None:
             continue
 
 
-def generate_data(n_records: int) -> None:
+def generate_data(n_records: int, distribution: str) -> None:
     repo = mzbuild.Repository(Path(MZ_ROOT))
     deps = repo.resolve_dependencies([repo.images["kafka-avro-generator"]])
     image = deps["kafka-avro-generator"]
@@ -61,6 +61,8 @@ def generate_data(n_records: int) -> None:
             "http://confluent:8081",
             "-t",
             "bench_data",
+            "-d",
+            distribution,
         ],
         stdout=stdout,
         stderr=stderr,
@@ -143,6 +145,13 @@ def main() -> None:
         type=int,
         help="Number of Avro records to generate",
     )
+    parser.add_argument(
+        "-d",
+        "--distribution",
+        default="benchmark",
+        type=str,
+        help="Distribution to use in kafka-avro-generator",
+    )
     ns = parser.parse_args()
 
     wait_for_confluent()
@@ -164,7 +173,7 @@ def main() -> None:
     mz_launcher = Thread(target=launch_mz, daemon=True)
     mz_launcher.start()
 
-    kgen_launcher = Thread(target=generate_data, args=[ns.records])
+    kgen_launcher = Thread(target=generate_data, args=[ns.records, ns.distribution])
     kgen_launcher.start()
     kgen_launcher.join()
 
