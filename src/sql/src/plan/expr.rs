@@ -34,7 +34,7 @@ use repr::adt::array::ArrayDimension;
 
 use super::Explanation;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Just like MirRelationExpr, except where otherwise noted below.
 ///
 /// - There is no equivalent to `MirRelationExpr::Let`.
@@ -112,7 +112,7 @@ pub enum HirRelationExpr {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Just like expr::MirScalarExpr, except where otherwise noted below.
 pub enum HirScalarExpr {
     /// Unlike expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
@@ -309,7 +309,7 @@ pub struct ColumnRef {
     pub column: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum JoinKind {
     Inner { lateral: bool },
     LeftOuter { lateral: bool },
@@ -343,7 +343,7 @@ impl JoinKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AggregateExpr {
     pub func: AggregateFunc,
     pub expr: Box<HirScalarExpr>,
@@ -1292,6 +1292,27 @@ impl HirScalarExpr {
             }
             Exists(..) | Select(..) => (),
         }
+    }
+
+    /// A generalization of `visit_mut`. The function `pre` runs on a
+    /// `MirScalarExpr` before it runs on any of the child `MirScalarExpr`s.
+    /// The function `post` runs on child `MirScalarExpr`s first before the
+    /// parent. Optionally, `pre` can return which child `MirScalarExpr`s, if
+    /// any, should be visited (default is to visit all children).
+    pub fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
+    where
+        F1: FnMut(&Self) -> Option<Vec<&Self>>,
+        F2: FnMut(&Self),
+    {
+        let to_visit = pre(self);
+        if let Some(to_visit) = to_visit {
+            for e in to_visit {
+                e.visit_pre_post(pre, post);
+            }
+        } else {
+            self.visit1(|e| e.visit_pre_post(pre, post));
+        }
+        post(self);
     }
 
     /// Visits the column references in this scalar expression.

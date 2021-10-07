@@ -177,21 +177,30 @@ impl HirRelationExpr {
                 // Scalar expressions may contain correlated subqueries. We must be cautious!
                 let mut input = input.applied_to(id_gen, get_outer, col_map);
 
+                let old_arity = input.arity();
+                let (with_subqueries, subquery_map) =
+                    HirScalarExpr::lower_subqueries(&scalars, id_gen, col_map, input);
+                input = with_subqueries;
+
                 // We will proceed sequentially through the scalar expressions, for each transforming the decorrelated `input`
                 // into a relation with potentially more columns capable of addressing the needs of the scalar expression.
                 // Having done so, we add the scalar value of interest and trim off any other newly added columns.
                 //
                 // The sequential traversal is present as expressions are allowed to depend on the values of prior expressions.
+                let first_scalar = input.arity();
+                let num_scalars = scalars.len();
                 for scalar in scalars {
-                    let old_arity = input.arity();
-                    let scalar = scalar.applied_to(id_gen, col_map, &mut input);
-                    let new_arity = input.arity();
+                    let scalar =
+                        scalar.applied_to(id_gen, col_map, &mut input, &Some(&subquery_map));
                     input = input.map(vec![scalar]);
-                    if old_arity != new_arity {
-                        // this means we added some columns to handle subqueries, and now we need to get rid of them
-                        input = input.project((0..old_arity).chain(vec![new_arity]).collect());
-                    }
                 }
+
+                input = input.project(
+                    (0..old_arity)
+                        .chain(first_scalar..first_scalar + num_scalars)
+                        .collect(),
+                );
+
                 input
             }
             CallTable { func, exprs } => {
@@ -205,7 +214,7 @@ impl HirRelationExpr {
 
                 let exprs = exprs
                     .into_iter()
-                    .map(|e| e.applied_to(id_gen, col_map, &mut input))
+                    .map(|e| e.applied_to(id_gen, col_map, &mut input, &None))
                     .collect::<Vec<_>>();
 
                 let new_arity = input.arity();
@@ -228,7 +237,7 @@ impl HirRelationExpr {
                 let mut input = input.applied_to(id_gen, get_outer, col_map);
                 for predicate in predicates {
                     let old_arity = input.arity();
-                    let predicate = predicate.applied_to(id_gen, col_map, &mut input);
+                    let predicate = predicate.applied_to(id_gen, col_map, &mut input, &None);
                     let new_arity = input.arity();
                     input = input.filter(vec![predicate]);
                     if old_arity != new_arity {
@@ -269,7 +278,7 @@ impl HirRelationExpr {
 
                     // Plan the `on` predicate.
                     let old_arity = join.arity();
-                    let on = on.applied_to(id_gen, col_map, &mut join);
+                    let on = on.applied_to(id_gen, col_map, &mut join, &None);
                     join = join.filter(vec![on]);
                     let new_arity = join.arity();
                     if old_arity != new_arity {
@@ -329,7 +338,7 @@ impl HirRelationExpr {
                                 .collect(),
                         );
                         let old_arity = product.arity();
-                        let on = on.applied_to(id_gen, col_map, &mut product);
+                        let on = on.applied_to(id_gen, col_map, &mut product, &None);
 
                         // Attempt an efficient equijoin implementation, in which outer joins are
                         // more efficiently rendered than in general. This can return `None` if
@@ -503,9 +512,16 @@ impl HirScalarExpr {
         id_gen: &mut expr::IdGen,
         col_map: &ColumnMap,
         inner: &mut expr::MirRelationExpr,
+        subquery_map: &Option<&HashMap<HirScalarExpr, usize>>,
     ) -> expr::MirScalarExpr {
         use self::HirScalarExpr::*;
         use expr::MirScalarExpr as SS;
+
+        if let Some(subquery_map) = subquery_map {
+            if let Some(col) = subquery_map.get(&self) {
+                return SS::Column(*col);
+            }
+        }
 
         match self {
             Column(col_ref) => SS::Column(col_map.get(&col_ref)),
@@ -514,18 +530,18 @@ impl HirScalarExpr {
             CallNullary(func) => SS::CallNullary(func),
             CallUnary { func, expr } => SS::CallUnary {
                 func,
-                expr: Box::new(expr.applied_to(id_gen, col_map, inner)),
+                expr: Box::new(expr.applied_to(id_gen, col_map, inner, subquery_map)),
             },
             CallBinary { func, expr1, expr2 } => SS::CallBinary {
                 func,
-                expr1: Box::new(expr1.applied_to(id_gen, col_map, inner)),
-                expr2: Box::new(expr2.applied_to(id_gen, col_map, inner)),
+                expr1: Box::new(expr1.applied_to(id_gen, col_map, inner, subquery_map)),
+                expr2: Box::new(expr2.applied_to(id_gen, col_map, inner, subquery_map)),
             },
             CallVariadic { func, exprs } => SS::CallVariadic {
                 func,
                 exprs: exprs
                     .into_iter()
-                    .map(|expr| expr.applied_to(id_gen, col_map, inner))
+                    .map(|expr| expr.applied_to(id_gen, col_map, inner, subquery_map))
                     .collect::<Vec<_>>(),
             },
             If { cond, then, els } => {
@@ -550,7 +566,7 @@ impl HirScalarExpr {
                 // and we would benefit from not introducing the complexity.
 
                 let inner_arity = inner.arity();
-                let cond_expr = cond.applied_to(id_gen, col_map, inner);
+                let cond_expr = cond.applied_to(id_gen, col_map, inner, subquery_map);
 
                 // Defensive copies, in case we mangle these in decorrelation.
                 let inner_clone = inner.clone();
@@ -558,8 +574,8 @@ impl HirScalarExpr {
                 let else_clone = els.clone();
 
                 let cond_arity = inner.arity();
-                let then_expr = then.applied_to(id_gen, col_map, inner);
-                let else_expr = els.applied_to(id_gen, col_map, inner);
+                let then_expr = then.applied_to(id_gen, col_map, inner, subquery_map);
+                let else_expr = els.applied_to(id_gen, col_map, inner, subquery_map);
 
                 if cond_arity == inner.arity() {
                     // If no additional columns were added, we simply return the
@@ -570,7 +586,7 @@ impl HirScalarExpr {
                         els: Box::new(else_expr),
                     }
                 } else {
-                    // If columns were added, we need a more careful approch, as
+                    // If columns were added, we need a more careful approach, as
                     // described above. First, we need to de-correlate each of
                     // the two expressions independently, and apply their cases
                     // as `MirRelationExpr::Map` operations.
@@ -578,7 +594,8 @@ impl HirScalarExpr {
                     *inner = inner_clone.let_in(id_gen, |id_gen, get_inner| {
                         // Restrict to records satisfying `cond_expr` and apply `then` as a map.
                         let mut then_inner = get_inner.clone().filter(vec![cond_expr.clone()]);
-                        let then_expr = then_clone.applied_to(id_gen, col_map, &mut then_inner);
+                        let then_expr =
+                            then_clone.applied_to(id_gen, col_map, &mut then_inner, subquery_map);
                         let then_arity = then_inner.arity();
                         then_inner = then_inner
                             .map(vec![then_expr])
@@ -597,7 +614,8 @@ impl HirScalarExpr {
                                 expr: Box::new(cond_expr.clone()),
                             }),
                         }]);
-                        let else_expr = else_clone.applied_to(id_gen, col_map, &mut else_inner);
+                        let else_expr =
+                            else_clone.applied_to(id_gen, col_map, &mut else_inner, subquery_map);
                         let else_arity = else_inner.arity();
                         else_inner = else_inner
                             .map(vec![else_expr])
@@ -646,6 +664,98 @@ impl HirScalarExpr {
                 SS::Column(inner.arity() - 1)
             }
         }
+    }
+
+    /// Applies the subqueries in the given list of scalar expressions to every distinct
+    /// value of the given relation and returns a join of the given relation with all
+    /// the subqueries found, and the mapping of scalar expressions with columns projected
+    /// by the returned join that will hold their results.
+    fn lower_subqueries(
+        exprs: &[Self],
+        id_gen: &mut expr::IdGen,
+        col_map: &ColumnMap,
+        inner: expr::MirRelationExpr,
+    ) -> (expr::MirRelationExpr, HashMap<HirScalarExpr, usize>) {
+        let mut subquery_map = HashMap::new();
+        let output = inner.let_in(id_gen, |id_gen, get_inner| {
+            let mut subqueries = Vec::new();
+            let distinct_inner = get_inner.clone().distinct();
+            for expr in exprs.iter() {
+                expr.visit_pre_post(
+                    &mut |e| match e {
+                        // For simplicity, subqueries within a conditional statement will be
+                        // lowered when lowering the conditional expression.
+                        HirScalarExpr::If { .. } => Some(vec![]),
+                        _ => None,
+                    },
+                    &mut |e| match e {
+                        HirScalarExpr::Select(expr) => {
+                            let apply_requires_distinct_outer = false;
+                            let subquery = apply_scalar_subquery(
+                                id_gen,
+                                distinct_inner.clone(),
+                                col_map,
+                                (**expr).clone(),
+                                apply_requires_distinct_outer,
+                            );
+
+                            subqueries.push((e.clone(), subquery));
+                        }
+                        HirScalarExpr::Exists(expr) => {
+                            let apply_requires_distinct_outer = false;
+                            let subquery = apply_existential_subquery(
+                                id_gen,
+                                distinct_inner.clone(),
+                                col_map,
+                                (**expr).clone(),
+                                apply_requires_distinct_outer,
+                            );
+                            subqueries.push((e.clone(), subquery));
+                        }
+                        _ => {}
+                    },
+                );
+            }
+
+            if subqueries.is_empty() {
+                get_inner
+            } else {
+                let inner_arity = get_inner.arity();
+                let mut total_arity = inner_arity;
+                let mut join_inputs = vec![get_inner];
+                for (expr, subquery) in subqueries.into_iter() {
+                    // Avoid lowering duplicated subqueries
+                    if !subquery_map.contains_key(&expr) {
+                        let subquery_arity = subquery.arity();
+                        assert_eq!(subquery_arity, inner_arity + 1);
+                        join_inputs.push(subquery);
+                        total_arity += subquery_arity;
+
+                        // Column with the value of the subquery
+                        subquery_map.insert(expr, total_arity - 1);
+                    }
+                }
+                // Each subquery projects all the columns of the outer context (distinct_inner)
+                // plus 1 column, containing the result of the subquery. Those columns must be
+                // joined with the outer/main relation (get_inner).
+                let input_mapper = expr::JoinInputMapper::new(&join_inputs);
+                let equivalences = (0..inner_arity)
+                    .map(|col| {
+                        join_inputs
+                            .iter()
+                            .enumerate()
+                            .map(|(input, _)| {
+                                expr::MirScalarExpr::Column(
+                                    input_mapper.map_column_to_global(col, input),
+                                )
+                            })
+                            .collect_vec()
+                    })
+                    .collect_vec();
+                expr::MirRelationExpr::join_scalars(join_inputs, equivalences)
+            }
+        });
+        (output, subquery_map)
     }
 
     /// Rewrites `self` into a `expr::ScalarExpr`.
@@ -945,7 +1055,7 @@ impl AggregateExpr {
 
         expr::AggregateExpr {
             func: func.into_expr(),
-            expr: expr.applied_to(id_gen, col_map, inner),
+            expr: expr.applied_to(id_gen, col_map, inner, &None),
             distinct,
         }
     }
