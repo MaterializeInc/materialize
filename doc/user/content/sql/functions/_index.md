@@ -5,7 +5,7 @@ menu:
   main:
     identifier: sql-functions
     parent: sql
-    weight: 2
+    weight: 20
 disable_list: true
 disable_toc: true
 ---
