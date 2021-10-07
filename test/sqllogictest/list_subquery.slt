@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-mode standard
+mode cockroach
 
 statement ok
 CREATE TABLE xs (x int not null)
@@ -43,20 +43,23 @@ SELECT LIST[LIST(SELECT x FROM xs)]::text
 ----
 {{1,1,2}}
 
-query T
+statement ok
 SELECT LIST(SELECT x FROM xs LIMIT 2)::text
-----
-{{1,1}}
 
 query T
 SELECT LIST(SELECT x FROM xs ORDER BY x DESC)::text
 ----
-{{2,1,1}}
+{2,1,1}
 
 query T
 SELECT LIST(SELECT x FROM xs ORDER BY x DESC LIMIT 2)::text
 ----
-{{2,1}}
+{2,1}
+
+query T
+SELECT LIST(SELECT x FROM xs ORDER BY x DESC LIMIT 1)::text
+----
+{2}
 
 query T
 SELECT LIST[LIST(SELECT x FROM xs), LIST(SELECT y FROM ys)]::text
@@ -66,7 +69,7 @@ SELECT LIST[LIST(SELECT x FROM xs), LIST(SELECT y FROM ys)]::text
 query T
 SELECT list_cat(LIST(SELECT x FROM xs), LIST(SELECT y FROM ys))::text
 ----
-{{1,1,2,2,4,5}}
+{1,1,2,2,4,5}
 
 query T
 SELECT list_cat(LIST(SELECT x FROM xs), LIST(SELECT y FROM ys ORDER BY y DESC))::text
@@ -74,6 +77,16 @@ SELECT list_cat(LIST(SELECT x FROM xs), LIST(SELECT y FROM ys ORDER BY y DESC)):
 {1,1,2,5,4,2}
 
 query T
-SELECT LIST(SELECT x FROM xs JOIN ys ON xs.x = ys.y)::text
+SELECT LIST(SELECT y FROM xs JOIN ys ON xs.x = ys.y)::text
 ----
 {2}
+
+query T
+SELECT LIST(SELECT y FROM xs JOIN ys ON 2*xs.x >= ys.y)::text
+----
+{2,2,2,4}
+
+query T
+SELECT LIST(SELECT DISTINCT y FROM xs JOIN ys ON 2*xs.x >= ys.y)::text
+----
+{2,4}

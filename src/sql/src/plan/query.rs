@@ -2875,7 +2875,17 @@ pub fn plan_expr<'a>(
                 bail!("{} does not allow subqueries", ecx.name)
             }
             let mut qcx = ecx.derived_query_context();
-            let (expr, _scope) = plan_subquery(&mut qcx, query)?;
+            let (mut expr, _scope, finishing) = plan_query(&mut qcx, query)?;
+            if finishing.limit.is_some() || finishing.offset > 0 {
+                expr = HirRelationExpr::TopK {
+                    input: Box::new(expr),
+                    group_key: vec![],
+                    order_key: finishing.order_by.clone(),
+                    limit: finishing.limit,
+                    offset: finishing.offset,
+                };
+            }
+            expr = expr.project(finishing.project);
             let column_types = qcx.relation_type(&expr).column_types;
             if column_types.len() != 1 {
                 bail!(
@@ -2889,19 +2899,34 @@ pub fn plan_expr<'a>(
                 column: 0,
             };
             let typ = column_types.get(0).cloned().unwrap().scalar_type();
-            // TODO: ORDER BY doesn't do anything; LIMIT crashes
+
+            let mut nested_exprs = vec![
+                HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: typ.clone(),
+                    },
+                    exprs: vec![
+                        HirScalarExpr::Column(column_ref),
+                    ],
+                },
+            ];
+            nested_exprs.extend(finishing.order_by.clone().into_iter().map(|co| {
+                HirScalarExpr::Column(ColumnRef {
+                    column: co.column,
+                    level: 0,
+                })
+            }));
             let reduced_expr = expr.reduce(
                 vec![],
                 vec![AggregateExpr {
-                    func: AggregateFunc::ListConcat { order_by: vec![] },
+                    func: AggregateFunc::ListConcat {
+                        order_by: finishing.order_by.clone(),
+                    },
                     expr: Box::new(HirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![ColumnName::from("")],
                         },
-                        exprs: vec![HirScalarExpr::CallVariadic {
-                            func: VariadicFunc::ListCreate { elem_type: typ },
-                            exprs: vec![HirScalarExpr::Column(column_ref)],
-                        }],
+                        exprs: nested_exprs,
                     }),
                     distinct: false,
                 }],
