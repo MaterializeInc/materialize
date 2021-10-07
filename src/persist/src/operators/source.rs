@@ -12,7 +12,7 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
-use log::debug;
+use log::error;
 use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, ToStream};
@@ -154,7 +154,7 @@ where
                                     if lower_filter.less_equal(&ts) {
                                         session.give(((k, v), ts, diff));
                                     } else {
-                                        debug!("Got record that was not beyond the lower snapshot filter. lower_filter: {:?}, record time: {:?}", lower_filter, ts);
+                                        error!("Got record that was not beyond the lower snapshot filter. lower_filter: {:?}, record time: {:?}", lower_filter, ts);
                                     }
                                 }
                             }
