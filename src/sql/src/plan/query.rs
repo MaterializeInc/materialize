@@ -2885,7 +2885,8 @@ pub fn plan_expr<'a>(
                     offset: finishing.offset,
                 };
             }
-            expr = expr.project(finishing.project);
+            let expr = expr.project(finishing.project);
+
             let column_types = qcx.relation_type(&expr).column_types;
             if column_types.len() != 1 {
                 bail!(
@@ -2893,38 +2894,35 @@ pub fn plan_expr<'a>(
                     column_types.len()
                 );
             }
-            // XXX: I'm not sure how to properly get this ref?
-            let column_ref = ColumnRef {
-                level: 0,
-                column: 0,
-            };
-            let typ = column_types.get(0).cloned().unwrap().scalar_type();
 
-            let mut nested_exprs = vec![
-                HirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: typ.clone(),
-                    },
-                    exprs: vec![
-                        HirScalarExpr::Column(column_ref),
-                    ],
-                },
-            ];
-            nested_exprs.extend(finishing.order_by.clone().into_iter().map(|co| {
+            let typ = column_types.get(0).cloned().unwrap().scalar_type();
+            let nested_exprs = iter::once(HirScalarExpr::CallVariadic {
+                func: VariadicFunc::ListCreate { elem_type: typ },
+                exprs: vec![HirScalarExpr::Column(ColumnRef {
+                    column: 0,
+                    level: 0,
+                })],
+            })
+            .chain(finishing.order_by.clone().into_iter().map(|co| {
                 HirScalarExpr::Column(ColumnRef {
                     column: co.column,
                     level: 0,
                 })
-            }));
+            }))
+            .collect();
+
+            let order_by_len = finishing.order_by.len();
             let reduced_expr = expr.reduce(
                 vec![],
                 vec![AggregateExpr {
                     func: AggregateFunc::ListConcat {
-                        order_by: finishing.order_by.clone(),
+                        order_by: finishing.order_by,
                     },
                     expr: Box::new(HirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
-                            field_names: vec![ColumnName::from("")],
+                            field_names: iter::repeat(ColumnName::from(""))
+                                .take(1 + order_by_len)
+                                .collect(),
                         },
                         exprs: nested_exprs,
                     }),
