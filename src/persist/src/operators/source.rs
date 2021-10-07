@@ -111,7 +111,7 @@ where
 fn listen_source<S, K, V>(
     scope: &S,
     lower_filter: Antichain<u64>,
-    listen_rx: Receiver<ListenEvent<Result<K, String>, Result<V, String>>>,
+    listen_rx: Receiver<ListenEvent<Vec<u8>, Vec<u8>>>,
 ) -> (
     Stream<S, ((K, V), u64, isize)>,
     Stream<S, Vec<(String, u64, isize)>>,
@@ -148,10 +148,13 @@ where
                             // shard up the responsibility between all the workers.
                             if worker_index == 0 {
                                 for record in records.drain(..) {
-                                    if lower_filter.less_equal(&record.1) {
-                                        session.give(record);
+                                    let ((k, v), ts, diff) = record;
+                                    let k = K::decode(&k);
+                                    let v = V::decode(&v);
+                                    if lower_filter.less_equal(&ts) {
+                                        session.give(((k, v), ts, diff));
                                     } else {
-                                        debug!("Got record that was not beyond the lower snapshot filter. lower_filter: {:?}, record time: {:?}", lower_filter, record.1);
+                                        debug!("Got record that was not beyond the lower snapshot filter. lower_filter: {:?}, record time: {:?}", lower_filter, ts);
                                     }
                                 }
                             }
