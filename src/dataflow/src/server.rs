@@ -388,10 +388,12 @@ where
         let mut d_traces = HashMap::new();
         let mut m_traces = HashMap::new();
 
-        let t_activator = RcActivator::new("t_activator".into());
-        let r_activator = RcActivator::new("r_activator".into());
-        let d_activator = RcActivator::new("d_activator".into());
-        let m_activator = RcActivator::new("m_activator".into());
+        let activate_after = 128;
+
+        let t_activator = RcActivator::new("t_activator".into(), activate_after);
+        let r_activator = RcActivator::new("r_activator".into(), activate_after);
+        let d_activator = RcActivator::new("d_activator".into(), activate_after);
+        let m_activator = RcActivator::new("m_activator".into(), activate_after);
 
         if !logging.log_logging {
             // Construct logging dataflows and endpoints before registering any.

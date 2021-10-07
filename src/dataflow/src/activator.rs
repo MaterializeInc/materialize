@@ -15,21 +15,38 @@ use timely::scheduling::Activator;
 
 /// An shared handle to multiple activators with support for triggering and acknowledging
 /// activations.
+///
+/// Activations are only triggered once the `activate` function has been called at least `threshold`
+/// times, and then not again until `ack` is called. This way, the [RcActivator] ensures two
+/// properties:
+/// * It does not enqueue more than one activation per activator, if there is only one activator
+///   registered with this [RcActivator]. Once multiple activators are registered, any ack will
+///   enable more activations.
+/// * The threshold to activation avoids activations purely caused by previous activations. Each
+///   scheduling of a logging dataflow potentially creates additional log data, which needs to be
+///   processed. The threshold should ensure that multiple activations under no load cause the
+///   dataflow to be scheduled. For Materialize's log dataflows, this number seems to be larger than
+///   32, below we might risk that we do not cause monotonically decreasing work. A value of 64 or
+///   larger is recommended, as there is no harm in bigger values. The log dataflow will still pick
+///   up all its inputs once every introspection interval, and this activator only creates
+///   additional activations.
 #[derive(Debug, Clone)]
 pub struct RcActivator {
     inner: Rc<RefCell<ActivatorInner>>,
 }
 
 impl RcActivator {
-    /// Construct a new [RcActivator] with the given name.
-    pub fn new(name: String) -> Self {
-        let inner = ActivatorInner::new(name);
+    /// Construct a new [RcActivator] with the given name and threshold.
+    ///
+    /// The threshold determines now many activations to ignore until scheduling the activation.
+    pub fn new(name: String, threshold: usize) -> Self {
+        let inner = ActivatorInner::new(name, threshold);
         Self {
             inner: Rc::new(RefCell::new(inner)),
         }
     }
 
-    /// Register an additional [Activator] with this [RcActivator]
+    /// Register an additional [Activator] with this [RcActivator].
     pub fn register(&mut self, activator: Activator) {
         self.inner.borrow_mut().register(activator)
     }
@@ -53,14 +70,14 @@ struct ActivatorInner {
     activated: usize,
     activators: Vec<Activator>,
     name: String,
+    threshold: usize,
 }
 
 impl ActivatorInner {
-    const THRESHOLD: usize = 32;
-
-    fn new(name: String) -> Self {
+    fn new(name: String, threshold: usize) -> Self {
         Self {
             name,
+            threshold,
             activated: 0,
             activators: Vec::new(),
         }
@@ -75,7 +92,7 @@ impl ActivatorInner {
             return;
         }
         self.activated += 1;
-        if self.activated == ActivatorInner::THRESHOLD {
+        if self.activated == self.threshold {
             for activator in &self.activators {
                 activator.activate();
             }
