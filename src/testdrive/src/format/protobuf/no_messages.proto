@@ -9,8 +9,7 @@
 
 syntax = "proto3";
 
-import 'no_messages.proto';
-
-message Imported {
-    Choices choice = 1;
+enum Choices {
+  ZERO = 0;
+  ONE = 1;
 }

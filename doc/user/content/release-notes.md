@@ -59,6 +59,9 @@ Put breaking changes before other release notes.
 - Support explicit `DROP DATABASE ... (CASCADE | RESTRICT)` statements.  The
   default behavior remains CASCADE.
 
+- Fix a bug that prevented some users from creating Protobuf-formatted
+  sources. {{% gh 8528 %}}
+
 {{% version-header v0.9.6 %}}
 
 - Correctly handle TOASTed columns when using PostgreSQL sources. {{% gh 8371 %}}

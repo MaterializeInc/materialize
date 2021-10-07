@@ -111,21 +111,19 @@ pub fn decode_descriptors(descriptors: &[u8]) -> Result<decode::DecodedDescripto
     let proto: protobuf::descriptor::FileDescriptorSet =
         protobuf::Message::parse_from_bytes(descriptors)
             .context("parsing encoded protobuf descriptors failed")?;
-    let name = proto
-        .file
-        .iter()
-        .next()
-        .ok_or_else(|| anyhow!("file descriptor set must have file"))?
-        .get_message_type()
-        .iter()
-        .next()
-        .ok_or_else(|| anyhow!("proto must have at least one message"))?
-        .get_name()
-        .to_owned();
-    Ok(decode::DecodedDescriptors {
-        descriptors: Descriptors::from_proto(&proto),
-        first_message_name: format!(".{}", name),
-    })
+
+    // Iterate through the FileDescriptors to get the first Message name,
+    // which might not be in the first file!
+    for file in proto.file.iter() {
+        if let Some(message) = file.get_message_type().iter().next() {
+            return Ok(decode::DecodedDescriptors {
+                descriptors: Descriptors::from_proto(&proto),
+                first_message_name: format!(".{}", message.get_name().to_owned()),
+            });
+        }
+    }
+
+    Err(anyhow!("file descriptor set must have a message"))
 }
 
 pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Result<RelationDesc> {
