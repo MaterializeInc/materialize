@@ -125,6 +125,17 @@ struct NameResolver<'a> {
     ids: HashSet<GlobalId>,
 }
 
+impl<'a> NameResolver<'a> {
+    pub fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
+        NameResolver {
+            catalog,
+            ctes: HashMap::new(),
+            status: Ok(()),
+            ids: HashSet::new(),
+        }
+    }
+}
+
 impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     fn fold_query(&mut self, q: Query<Raw>) -> Query<Aug> {
         // Retain the old values of various CTE names so that we can restore them after we're done
@@ -254,12 +265,7 @@ pub fn resolve_names_stmt(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
 ) -> Result<Statement<Aug>, anyhow::Error> {
-    let mut n = NameResolver {
-        status: Ok(()),
-        catalog,
-        ctes: HashMap::new(),
-        ids: HashSet::new(),
-    };
+    let mut n = NameResolver::new(catalog);
     let result = n.fold_statement(stmt);
     n.status?;
     Ok(result)
@@ -272,45 +278,8 @@ pub fn resolve_names(
     qcx: &mut QueryContext,
     query: Query<Raw>,
 ) -> Result<Query<Aug>, anyhow::Error> {
-    let mut n = NameResolver {
-        status: Ok(()),
-        catalog: qcx.scx.catalog,
-        ctes: HashMap::new(),
-        ids: HashSet::new(),
-    };
+    let mut n = NameResolver::new(qcx.scx.catalog);
     let result = n.fold_query(query);
-    n.status?;
-    qcx.ids.extend(n.ids.iter());
-    Ok(result)
-}
-
-pub fn resolve_names_delete(
-    qcx: &mut QueryContext,
-    stmt: DeleteStatement<Raw>,
-) -> Result<DeleteStatement<Aug>, anyhow::Error> {
-    let mut n = NameResolver {
-        status: Ok(()),
-        catalog: qcx.scx.catalog,
-        ctes: HashMap::new(),
-        ids: HashSet::new(),
-    };
-    let result = n.fold_delete_statement(stmt);
-    n.status?;
-    qcx.ids.extend(n.ids.iter());
-    Ok(result)
-}
-
-pub fn resolve_names_update(
-    qcx: &mut QueryContext,
-    stmt: UpdateStatement<Raw>,
-) -> Result<UpdateStatement<Aug>, anyhow::Error> {
-    let mut n = NameResolver {
-        status: Ok(()),
-        catalog: qcx.scx.catalog,
-        ctes: HashMap::new(),
-        ids: HashSet::new(),
-    };
-    let result = n.fold_update_statement(stmt);
     n.status?;
     qcx.ids.extend(n.ids.iter());
     Ok(result)
@@ -320,12 +289,7 @@ pub fn resolve_names_expr(
     qcx: &mut QueryContext,
     expr: Expr<Raw>,
 ) -> Result<Expr<Aug>, anyhow::Error> {
-    let mut n = NameResolver {
-        status: Ok(()),
-        catalog: qcx.scx.catalog,
-        ctes: HashMap::new(),
-        ids: HashSet::new(),
-    };
+    let mut n = NameResolver::new(qcx.scx.catalog);
     let result = n.fold_expr(expr);
     n.status?;
     qcx.ids.extend(n.ids.iter());
@@ -336,15 +300,27 @@ pub fn resolve_names_data_type(
     scx: &StatementContext,
     data_type: DataType<Raw>,
 ) -> Result<(DataType<Aug>, HashSet<GlobalId>), anyhow::Error> {
-    let mut n = NameResolver {
-        status: Ok(()),
-        catalog: scx.catalog,
-        ctes: HashMap::new(),
-        ids: HashSet::new(),
-    };
+    let mut n = NameResolver::new(scx.catalog);
     let result = n.fold_data_type(data_type);
     n.status?;
     Ok((result, n.ids))
+}
+
+/// A general implementation for name resolution on AST elements.
+///
+/// This implementation is appropriate Whenever:
+/// - You don't need to export the name resolution outside the `sql` crate and
+///   the extra typing isn't too onerous.
+/// - Discovered dependencies should extend `qcx.ids`.
+fn resolve_names_extend_qcx_ids<F, T>(qcx: &mut QueryContext, f: F) -> Result<T, anyhow::Error>
+where
+    F: FnOnce(&mut NameResolver) -> T,
+{
+    let mut n = NameResolver::new(qcx.scx.catalog);
+    let result = f(&mut n);
+    n.status?;
+    qcx.ids.extend(n.ids.iter());
+    Ok(result)
 }
 
 pub struct PlannedQuery<E> {
@@ -718,15 +694,20 @@ pub fn plan_delete_query(
     scx: &StatementContext,
     mut delete_stmt: DeleteStatement<Raw>,
 ) -> Result<ReadThenWritePlan, anyhow::Error> {
-    if let Some(ref mut expr) = delete_stmt.selection {
-        transform_ast::transform_expr(scx, expr)?;
-    }
+    transform_ast::run_transforms(
+        scx,
+        |t, delete_stmt| t.visit_delete_statement_mut(delete_stmt),
+        &mut delete_stmt,
+    )?;
+
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     let DeleteStatement {
         table_name,
         alias,
         selection,
-    } = resolve_names_delete(&mut qcx, delete_stmt)?;
+    } = resolve_names_extend_qcx_ids(&mut qcx, move |n: &mut NameResolver| {
+        n.fold_delete_statement(delete_stmt)
+    })?;
 
     plan_mutation_query_inner(qcx, table_name, alias, vec![], selection)
 }
@@ -735,18 +716,20 @@ pub fn plan_update_query(
     scx: &StatementContext,
     mut update_stmt: UpdateStatement<Raw>,
 ) -> Result<ReadThenWritePlan, anyhow::Error> {
-    if let Some(ref mut expr) = update_stmt.selection {
-        transform_ast::transform_expr(scx, expr)?;
-    }
-    for Assignment { id: _, value } in update_stmt.assignments.iter_mut() {
-        transform_ast::transform_expr(scx, value)?;
-    }
+    transform_ast::run_transforms(
+        scx,
+        |t, update_stmt| t.visit_update_statement_mut(update_stmt),
+        &mut update_stmt,
+    )?;
+
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     let UpdateStatement {
         table_name,
         assignments,
         selection,
-    } = resolve_names_update(&mut qcx, update_stmt)?;
+    } = resolve_names_extend_qcx_ids(&mut qcx, move |n: &mut NameResolver| {
+        n.fold_update_statement(update_stmt)
+    })?;
 
     plan_mutation_query_inner(qcx, table_name, None, assignments, selection)
 }

@@ -36,7 +36,11 @@ pub fn transform_expr(scx: &StatementContext, expr: &mut Expr<Raw>) -> Result<()
     run_transforms(scx, |t, expr| t.visit_expr_mut(expr), expr)
 }
 
-fn run_transforms<F, A>(scx: &StatementContext, mut f: F, ast: &mut A) -> Result<(), anyhow::Error>
+pub(crate) fn run_transforms<F, A>(
+    scx: &StatementContext,
+    mut f: F,
+    ast: &mut A,
+) -> Result<(), anyhow::Error>
 where
     F: for<'ast> FnMut(&mut dyn VisitMut<'ast, Raw>, &'ast mut A),
 {
