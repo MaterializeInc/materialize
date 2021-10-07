@@ -1,0 +1,15 @@
+{
+    "name": "testrecordkey",
+    "type" : "record",
+    "namespace": "com.acme.avro",
+    "fields": [
+     {
+       "name": "Key1",
+       "type": "long"
+     },
+     {
+         "name": "Key2",
+         "type": "long"
+     }
+    ]
+}
