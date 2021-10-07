@@ -5,7 +5,6 @@ disable_toc: true
 disable_list: true
 menu:
   main:
-    parent: "sql"
     weight: 1
 ---
 
