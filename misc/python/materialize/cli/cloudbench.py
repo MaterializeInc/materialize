@@ -103,6 +103,7 @@ def configure_check(parser: argparse.ArgumentParser) -> None:
 
 DEFAULT_BUCKET = "mz-cloudbench"
 
+
 def try_get_object(key: str, bucket: str) -> Optional[str]:
     client = boto3.client("s3")
     try:
@@ -134,8 +135,12 @@ def check(ns: argparse.Namespace) -> None:
         for i in not_done:
             maybe_result = try_get_object(f"{bench_id}/{insts[i]}.csv", ns.s3_root)
             if maybe_result is None:
-                maybe_out = try_get_object(f"{bench_id}/{insts[i]}-FAILURE.out", ns.s3_root)
-                maybe_err = try_get_object(f"{bench_id}/{insts[i]}-FAILURE.err", ns.s3_root)
+                maybe_out = try_get_object(
+                    f"{bench_id}/{insts[i]}-FAILURE.out", ns.s3_root
+                )
+                maybe_err = try_get_object(
+                    f"{bench_id}/{insts[i]}-FAILURE.err", ns.s3_root
+                )
                 if (maybe_out is None) or (maybe_err is None):
                     continue
                 results[i] = BenchFailureLogs(stdout=maybe_out, stderr=maybe_err)
