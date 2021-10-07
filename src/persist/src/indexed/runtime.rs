@@ -32,9 +32,7 @@ use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
-use crate::indexed::{
-    Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenEvent, ListenFn, Snapshot,
-};
+use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Snapshot};
 use crate::storage::{Blob, Log, SeqNo};
 
 enum Cmd {
@@ -677,24 +675,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     }
 
     /// Registers a callback to be invoked on successful writes and seals.
-    pub fn listen(
-        &self,
-        listen_fn: ListenFn<Result<K, String>, Result<V, String>>,
-    ) -> Result<(), Error> {
-        let listen_fn = Box::new(move |e: ListenEvent<Vec<u8>, Vec<u8>>| match e {
-            ListenEvent::Records(records) => {
-                let records = records
-                    .into_iter()
-                    .map(|((k, v), ts, diff)| {
-                        let k = K::decode(&k);
-                        let v = V::decode(&v);
-                        ((k, v), ts, diff)
-                    })
-                    .collect();
-                listen_fn(ListenEvent::Records(records))
-            }
-            ListenEvent::Sealed(ts) => listen_fn(ListenEvent::Sealed(ts)),
-        });
+    pub fn listen(&self, listen_fn: ListenFn<Vec<u8>, Vec<u8>>) -> Result<(), Error> {
         let (tx, rx) = Future::new();
         self.runtime.listen(self.id, listen_fn, tx);
         rx.recv()
