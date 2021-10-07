@@ -54,9 +54,9 @@ use crate::names::PartialName;
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
-    AbstractColumnType, AbstractExpr, AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder,
-    ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, UnaryFunc, VariadicFunc,
-    WindowExpr, WindowExprType,
+    AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
+    CoercibleScalarExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind,
+    ScalarWindowExpr, UnaryFunc, VariadicFunc, WindowExpr, WindowExprType,
 };
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -2208,7 +2208,7 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ScopeItemNa
         Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
         Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
         Expr::Exists { .. } => Some("exists".into()),
-        Expr::Subquery(query) => {
+        Expr::Subquery(query) | Expr::ListSubquery(query) => {
             // A bit silly to have to plan the query here just to get its column
             // name, since we throw away the planned expression, but fixing this
             // requires a separate semantic analysis phase.
@@ -2870,8 +2870,46 @@ pub fn plan_expr<'a>(
             }
             expr.select().into()
         }
+        Expr::ListSubquery(query) => {
+            if !ecx.allow_subqueries {
+                bail!("{} does not allow subqueries", ecx.name)
+            }
+            let mut qcx = ecx.derived_query_context();
+            let (expr, _scope) = plan_subquery(&mut qcx, query)?;
+            let column_types = qcx.relation_type(&expr).column_types;
+            if column_types.len() != 1 {
+                bail!(
+                    "Expected subselect to return 1 column, got {} columns",
+                    column_types.len()
+                );
+            }
+            // XXX: I'm not sure how to properly get this ref?
+            let column_ref = ColumnRef {
+                level: 0,
+                column: 0,
+            };
+            let typ = column_types.get(0).cloned().unwrap().scalar_type();
+            // TODO: ORDER BY doesn't do anything; LIMIT crashes
+            let reduced_expr = expr.reduce(
+                vec![],
+                vec![AggregateExpr {
+                    func: AggregateFunc::ListConcat { order_by: vec![] },
+                    expr: Box::new(HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("")],
+                        },
+                        exprs: vec![HirScalarExpr::CallVariadic {
+                            func: VariadicFunc::ListCreate { elem_type: typ },
+                            exprs: vec![HirScalarExpr::Column(column_ref)],
+                        }],
+                    }),
+                    distinct: false,
+                }],
+                None,
+            );
+            HirScalarExpr::Select(Box::new(reduced_expr)).into()
+        }
 
-        Expr::ListSubquery(s) => bail_unsupported!("TESTING CHAE"),
         Expr::Collate { .. } => bail_unsupported!("COLLATE"),
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
         Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
