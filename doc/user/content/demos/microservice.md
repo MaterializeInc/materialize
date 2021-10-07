@@ -4,7 +4,6 @@ description: "Find out how a single Materialize instance can create an entire mi
 menu:
   main:
     parent: 'demos'
-
 ---
 
 **tl;dr** Using Materialize, you can easily create transformation-oriented

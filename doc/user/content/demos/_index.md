@@ -9,7 +9,6 @@ aliases:
 disable_toc: true
 disable_list: true
 disable_h1: true
-
 ---
 
 Our demos let you try out Materialize for yourself. Each one walks you through building a real-time application based on streaming data using standard SQL.
