@@ -103,6 +103,7 @@ List new features before bug fixes.
 
 {{% version-header v0.9.10 %}}
 
+- Evaluate TopK operators on constant inputs at query compile time.
 
 {{% version-header v0.9.9 %}}
 
