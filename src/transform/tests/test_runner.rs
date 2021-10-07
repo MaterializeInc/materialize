@@ -205,6 +205,9 @@ mod tests {
             "FoldConstants" => Ok(Box::new(transform::reduction::FoldConstants {
                 limit: None,
             })),
+            "InlineLet" => Ok(Box::new(transform::inline_let::InlineLet {
+                inline_mfp: false,
+            })),
             "JoinFusion" => Ok(Box::new(transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting)),
             "NonNullRequirements" => Ok(Box::new(
@@ -214,15 +217,20 @@ mod tests {
             "ProjectionExtraction" => Ok(Box::new(
                 transform::projection_extraction::ProjectionExtraction,
             )),
+            "ProjectionFusion" => Ok(Box::new(transform::fusion::project::Project)),
             "ProjectionLifting" => Ok(Box::new(transform::projection_lifting::ProjectionLifting)),
             "ProjectionPushdown" => {
                 Ok(Box::new(transform::projection_pushdown::ProjectionPushdown))
             }
+            "ReductionCSE" => Ok(Box::new(transform::cse::reduction_cse::ReductionCSE)),
             "ReductionPushdown" => Ok(Box::new(transform::reduction_pushdown::ReductionPushdown)),
+            "RedundantJoin" => Ok(Box::new(transform::redundant_join::RedundantJoin)),
+            "RelationCSE" => Ok(Box::new(transform::cse::relation_cse::RelationCSE)),
             "UnionBranchCancellation" => {
                 Ok(Box::new(transform::union_cancel::UnionBranchCancellation))
             }
             "UnionFusion" => Ok(Box::new(transform::fusion::union::Union)),
+            "UpdateLet" => Ok(Box::new(transform::update_let::UpdateLet)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name

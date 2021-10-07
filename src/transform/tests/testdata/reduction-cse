@@ -1,0 +1,228 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [int64 int64])
+----
+ok
+
+build
+(union
+  [
+    (reduce (get x) [] [(sum_int64 #1)])
+    (reduce (get x) [] [(max_int64 #1)])
+  ])
+----
+----
+%0 =
+| Get x (u0)
+| Reduce group=()
+| | agg sum(#1)
+
+%1 =
+| Get x (u0)
+| Reduce group=()
+| | agg max(#1)
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=ReductionCSE
+(union
+  [
+    (reduce (get x) [] [(sum_int64 #1)])
+    (reduce (get x) [] [(max_int64 #1)])
+  ])
+----
+----
+%0 = Let l0 =
+| Get x (u0)
+| Reduce group=()
+| | agg sum(#1)
+| | agg max(#1)
+
+%1 =
+| Get %0 (l0)
+| Project (#0)
+
+%2 =
+| Get %0 (l0)
+| Project (#1)
+
+%3 =
+| Union %1 %2
+----
+----
+
+# different grouping key
+build apply=ReductionCSE
+(union
+  [
+    (reduce (get x) [#0] [(sum_int64 #1)])
+    (reduce (get x) [] [(max_int64 #1)])
+  ])
+----
+----
+%0 = Let l0 =
+| Get x (u0)
+| Reduce group=(#0)
+| | agg sum(#1)
+
+%1 = Let l1 =
+| Get x (u0)
+| Reduce group=()
+| | agg max(#1)
+
+%2 =
+| Get %0 (l0)
+| Project (#0, #1)
+
+%3 =
+| Get %1 (l1)
+| Project (#0)
+
+%4 =
+| Union %2 %3
+----
+----
+
+build apply=ReductionCSE
+(join
+  [
+    (reduce (get x) [#0] [(sum_int64 #1)])
+    (reduce (get x) [#0] [(max_int64 #1)])
+  ]
+  [[#0 #2]]
+  )
+----
+----
+%0 = Let l0 =
+| Get x (u0)
+| Reduce group=(#0)
+| | agg sum(#1)
+| | agg max(#1)
+
+%1 =
+| Get %0 (l0)
+| Project (#0, #1)
+
+%2 =
+| Get %0 (l0)
+| Project (#0, #2)
+
+%3 =
+| Join %1 %2 (= #0 #2)
+| | implementation = Unimplemented
+----
+----
+
+build apply=(ReductionCSE,UpdateLet,ProjectionLifting,RedundantJoin,JoinFusion,InlineLet,ProjectionFusion)
+(join
+  [
+    (reduce (get x) [#0] [(sum_int64 #1)])
+    (reduce (get x) [#0] [(max_int64 #1)])
+  ]
+  [[#0 #2]]
+  )
+----
+%0 =
+| Get x (u0)
+| Reduce group=(#0)
+| | agg sum(#1)
+| | agg max(#1)
+| Project (#0, #1, #0, #2)
+
+build apply=ReductionCSE
+(let y (get x)
+  (union
+  [
+    (reduce (get y) [] [(sum_int64 #1)])
+    (reduce (get y) [] [(max_int64 #1)])
+  ]))
+----
+----
+%0 = Let l0 =
+| Get x (u0)
+
+%1 = Let l1 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg sum(#1)
+| | agg max(#1)
+
+%2 =
+| Get %1 (l1)
+| Project (#0)
+
+%3 =
+| Get %1 (l1)
+| Project (#1)
+
+%4 =
+| Union %2 %3
+----
+----
+
+build apply=ReductionCSE
+(let y (reduce (get x) [] [(sum_int64 #1)])
+  (union
+  [
+    (get y)
+    (reduce (get x) [] [(max_int64 #1)])
+  ]))
+----
+----
+%0 = Let l0 =
+| Get x (u0)
+| Reduce group=()
+| | agg sum(#1)
+| | agg max(#1)
+
+%1 = Let l1 =
+| Get %0 (l0)
+| Project (#0)
+
+%2 =
+| Get %0 (l0)
+| Project (#1)
+
+%3 =
+| Union %1 %2
+----
+----
+
+build apply=(ReductionCSE,InlineLet)
+(let y (reduce (get x) [] [(sum_int64 #1)])
+  (union
+  [
+    (get y)
+    (reduce (get x) [] [(max_int64 #1)])
+  ]))
+----
+----
+%0 = Let l0 =
+| Get x (u0)
+| Reduce group=()
+| | agg sum(#1)
+| | agg max(#1)
+
+%1 =
+| Get %0 (l0)
+| Project (#0)
+
+%2 =
+| Get %0 (l0)
+| Project (#1)
+
+%3 =
+| Union %1 %2
+----
+----
