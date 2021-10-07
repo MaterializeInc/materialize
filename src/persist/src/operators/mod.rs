@@ -14,3 +14,4 @@ pub mod input;
 pub mod replay;
 pub mod source;
 pub mod stream;
+pub mod upsert;
