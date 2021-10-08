@@ -4391,7 +4391,6 @@ pub fn serve_debug(
                         GlobalId::System(_),
                         SourceConnector::Local {
                             timeline: Timeline::EpochMilliseconds,
-                            persisted_name: None,
                         },
                     )
                     | TimestampMessage::Add(

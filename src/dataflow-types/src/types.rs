@@ -647,6 +647,7 @@ pub struct SourceDesc {
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
     pub bare_desc: RelationDesc,
+    pub persisted_name: Option<String>,
 }
 
 /// A sink for updates to a relational collection.
@@ -752,7 +753,6 @@ pub enum SourceConnector {
     },
     Local {
         timeline: Timeline,
-        persisted_name: Option<String>,
     },
 }
 
