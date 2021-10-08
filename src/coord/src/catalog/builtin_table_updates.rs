@@ -182,6 +182,7 @@ impl Catalog {
         source: &Source,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
+        let persisted_name_datum = Datum::from(source.persist_name.as_ref().map(|s| s.as_str()));
         vec![BuiltinTableUpdate {
             id: MZ_SOURCES.id,
             row: Row::pack_slice(&[
@@ -191,6 +192,7 @@ impl Catalog {
                 Datum::String(name),
                 Datum::String(source.connector.name()),
                 Datum::String(self.is_volatile(id).as_str()),
+                persisted_name_datum,
             ]),
             diff,
         }]
