@@ -763,7 +763,8 @@ lazy_static! {
             .with_named_column("schema_id", ScalarType::Int64.nullable(false))
             .with_named_column("name", ScalarType::String.nullable(false))
             .with_named_column("connector_type", ScalarType::String.nullable(false))
-            .with_named_column("volatility", ScalarType::String.nullable(false)),
+            .with_named_column("volatility", ScalarType::String.nullable(false))
+            .with_named_column("persisted_name", ScalarType::String.nullable(true)),
         id: GlobalId::System(4021),
         index_id: GlobalId::System(4022),
         persistent: false,
