@@ -36,7 +36,10 @@ pub enum Expr<T: AstInfo> {
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
     QualifiedWildcard(Vec<Ident>),
     /// A field access, like `(expr).foo`.
-    FieldAccess { expr: Box<Expr<T>>, field: Ident },
+    FieldAccess {
+        expr: Box<Expr<T>>,
+        field: Ident,
+    },
     /// A wildcard field access, like `(expr).*`.
     ///
     /// Note that this is different from `QualifiedWildcard` in that the
@@ -47,7 +50,9 @@ pub enum Expr<T: AstInfo> {
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),
     /// Boolean negation
-    Not { expr: Box<Expr<T>> },
+    Not {
+        expr: Box<Expr<T>>,
+    },
     /// Boolean and
     And {
         left: Box<Expr<T>>,
@@ -103,7 +108,9 @@ pub enum Expr<T: AstInfo> {
     ///
     /// While COALESCE has the same syntax as a function call, its semantics are
     /// extremely unusual, and are better captured with a dedicated AST node.
-    Coalesce { exprs: Vec<Expr<T>> },
+    Coalesce {
+        exprs: Vec<Expr<T>>,
+    },
     /// NULLIF(expr, expr)
     ///
     /// While NULLIF has the same syntax as a function call, it is not evaluated
@@ -115,7 +122,9 @@ pub enum Expr<T: AstInfo> {
     /// Nested expression e.g. `(foo > bar)` or `(1)`
     Nested(Box<Expr<T>>),
     /// A row constructor like `ROW(<expr>...)` or `(<expr>, <expr>...)`.
-    Row { exprs: Vec<Expr<T>> },
+    Row {
+        exprs: Vec<Expr<T>>,
+    },
     /// A literal value, such as string, number, date or NULL
     Value(Value),
     /// Scalar function call e.g. `LEFT(foo, 5)`
