@@ -162,6 +162,8 @@ List new features before bug fixes.
 
 - Support PgJDBC's `getColumns()` API.
 
+- Add support for `LIST(<subquery>)` constructor.
+
 {{% version-header v0.9.11 %}}
 
 - Disallow `UPDATE` and `DELETE` operations on tables when boot in
