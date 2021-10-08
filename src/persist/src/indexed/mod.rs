@@ -1005,19 +1005,31 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
     /// Registers a callback to be invoked on successful writes and seals.
     //
+    // Also returns a copy of the snapshot so that users can, if they want,
+    // apply their logic to a consistent read of the entire stream.
+    //
     // TODO: Finish the naming bikeshed for this. Other options so far include
     // tail, subscribe, tee, inspect, and capture.
-    pub fn listen(&mut self, id: Id, listen_fn: ListenFn<Vec<u8>, Vec<u8>>, res: FutureHandle<()>) {
+    pub fn listen(
+        &mut self,
+        id: Id,
+        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+        res: FutureHandle<IndexedSnapshot>,
+    ) {
         let resp = self.do_listen(id, listen_fn);
         res.fill(resp);
     }
 
-    fn do_listen(&mut self, id: Id, listen_fn: ListenFn<Vec<u8>, Vec<u8>>) -> Result<(), Error> {
+    fn do_listen(
+        &mut self,
+        id: Id,
+        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+    ) -> Result<IndexedSnapshot, Error> {
         self.drain_pending()?;
         // Verify that id has been registered.
         let _ = self.sealed_frontier(id)?;
         self.listeners.entry(id).or_default().push(listen_fn);
-        Ok(())
+        self.do_snapshot(id)
     }
 }
 

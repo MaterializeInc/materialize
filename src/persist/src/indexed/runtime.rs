@@ -45,7 +45,11 @@ enum Cmd {
     Seal(Vec<Id>, u64, FutureHandle<()>),
     AllowCompaction(Vec<(Id, Antichain<u64>)>, FutureHandle<()>),
     Snapshot(Id, FutureHandle<IndexedSnapshot>),
-    Listen(Id, ListenFn<Vec<u8>, Vec<u8>>, FutureHandle<()>),
+    Listen(
+        Id,
+        ListenFn<Vec<u8>, Vec<u8>>,
+        FutureHandle<IndexedSnapshot>,
+    ),
     Stop(FutureHandle<()>),
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
@@ -340,7 +344,12 @@ impl RuntimeClient {
 
     /// Asynchronously registers a callback to be invoked on successful writes
     /// and seals.
-    fn listen(&self, id: Id, listen_fn: ListenFn<Vec<u8>, Vec<u8>>, res: FutureHandle<()>) {
+    fn listen(
+        &self,
+        id: Id,
+        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+        res: FutureHandle<IndexedSnapshot>,
+    ) {
         self.core.send(Cmd::Listen(id, listen_fn, res))
     }
 
@@ -675,10 +684,19 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     }
 
     /// Registers a callback to be invoked on successful writes and seals.
-    pub fn listen(&self, listen_fn: ListenFn<Vec<u8>, Vec<u8>>) -> Result<(), Error> {
+    ///
+    /// Also returns a snapshot so that users can, if they choose, perform their
+    /// logic on everything that was previously persisted before registering the
+    /// listener, and all writes and seals that happen after registration without
+    /// duplicating or dropping data.
+    pub fn listen(
+        &self,
+        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+    ) -> Result<DecodedSnapshot<K, V>, Error> {
         let (tx, rx) = Future::new();
         self.runtime.listen(self.id, listen_fn, tx);
-        rx.recv()
+        let snap = rx.recv()?;
+        Ok(DecodedSnapshot::new(snap))
     }
 }
 
@@ -879,8 +897,13 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 
 #[cfg(test)]
 mod tests {
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::{Capture, Probe};
+    use timely::dataflow::ProbeHandle;
+
     use crate::indexed::SnapshotExt;
     use crate::mem::{MemMultiRegistry, MemRegistry};
+    use crate::operators::source::PersistedSource;
 
     use super::*;
 
@@ -1038,6 +1061,81 @@ mod tests {
                 "invalid registration: val codec mismatch Vec<u8> vs previous String"
             ))
         );
+
+        Ok(())
+    }
+
+    /// Previously, the persisted source would first register a listener, and
+    /// then read a snapshot in two separate commands. This approach had the
+    /// problem that there could be some data duplication between the snapshot
+    /// and the listener. We attempted to solve that problem by filtering out all
+    /// records <= the snapshot's sealed frontier from the listener, and allowed the
+    /// listener to send us records > the snapshot's sealed frontier.
+    ///
+    /// Unfortunately, we also allowed the snapshot to send us records > the
+    /// snapshot's sealed frontier so this didn't fix the data duplication issue.
+    /// #8606 manifested as an issue with the persistent system tables test where
+    /// some records had negative multiplicity. Basically, something like the
+    /// following sequence of events happened:
+    ///
+    /// 1. Register a listener
+    /// 2. Insert (foo, t1, +1)
+    /// 3. Insert (foo, t100, -1)
+    /// 4. Seal t2
+    /// 5. Take a snapshot - which has sealed frontier t2
+    /// 6. Start reading from the listener and snapshot.
+    ///
+    /// Now when we did step 6 - we received from the snapshot:
+    ///
+    /// (foo, t1, +1)
+    /// (foo, t100, -1)
+    ///
+    /// because we didn't filter anything from the snapshot.
+    ///
+    /// From the listener, we received:
+    ///
+    /// (foo, t100, -1) because we filtered out all records at times < t2
+    ///
+    /// at t100, we now have a negative multiplicity.
+    ///
+    /// This test attempts to replicate that scenario by interleaving writes
+    /// and seals with persisted source creation to catch any regressions where
+    /// taking a snapshot and registering a listener are not properly atomic.
+    #[test]
+    fn regression_8606_snapshot_listener_atomicity() -> Result<(), Error> {
+        let data = vec![(("foo".into(), ()), 1, 1), (("foo".into(), ()), 1000, -1)];
+
+        let mut p = MemRegistry::new().runtime_no_reentrance()?;
+        let (write, read) = p.create_or_load::<String, ()>("1").unwrap();
+
+        let ok = timely::execute_directly(move |worker| {
+            let writes = std::thread::spawn(move || {
+                write.write(&data).recv().expect("write was successful");
+                write.seal(2).recv().expect("seal was successful");
+            });
+
+            let mut probe = ProbeHandle::new();
+            let ok_stream = worker.dataflow(|scope| {
+                let (ok_stream, _err_stream) = scope.persisted_source(&read);
+                ok_stream.probe_with(&mut probe).capture()
+            });
+
+            writes.join().expect("write thread succeeds");
+
+            while probe.less_than(&2) {
+                worker.step();
+            }
+            p.stop().expect("stop was successful");
+
+            ok_stream
+        });
+
+        let diff_sum: isize = ok
+            .extract()
+            .into_iter()
+            .flat_map(|(_, xs)| xs.into_iter().map(|(_, _, diff)| diff))
+            .sum();
+        assert_eq!(diff_sum, 0);
 
         Ok(())
     }
