@@ -9,7 +9,7 @@
 
 //! Replace operators on constants collections with constant collections.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::iter;
 
 use expr::{AggregateExpr, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
@@ -385,14 +385,7 @@ impl FoldConstants {
         } = relation
         {
             // Reduce down to canonical representation.
-            let mut accum = HashMap::new();
-            for (row, cnt) in rows.drain(..) {
-                *accum.entry(row).or_insert(0) += cnt;
-            }
-            accum.retain(|_k, v| v != &0);
-            // `rows` cleared by drain.
-            rows.extend(accum.into_iter());
-            rows.sort();
+            differential_dataflow::consolidation::consolidate(rows);
 
             // Re-establish nullability of each column.
             for col_type in typ.column_types.iter_mut() {
