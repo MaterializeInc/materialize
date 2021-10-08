@@ -12,7 +12,6 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
-use log::debug;
 use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, ToStream};
@@ -57,22 +56,7 @@ where
             let _ = listen_tx.send(e);
         });
 
-        // We intentionally register the listener before we take the snapshot so
-        // that we know there will be no missing data between the data returned
-        // by the listener and the data contained in the snapshot. However, this
-        // means that either the records received by the listener or the seal
-        // notifications received by the listener could be duplicates of the data
-        // contained in the snapshot and so we have to check every notification to
-        // ensure it is in advance of the snapshot's frontier.
-        //
-        // TODO: if we had some way to communicate the ts/seqno a listener started
-        // listening at, we could pass it along as the upper bound to snapshot.
-        let err_new_register = match read.listen(listen_fn) {
-            Ok(_) => operator::empty(self),
-            Err(err) => vec![(err.to_string(), 0, 1)].to_stream(self),
-        };
-
-        let snapshot = read.snapshot();
+        let snapshot = read.listen(listen_fn);
 
         // TODO: Plumb the name of the stream down through the handles and use
         // it for the operator.
@@ -100,14 +84,11 @@ where
             }
         };
 
-        let err_all = err_all.concat(&err_new_register);
-
         (ok_all, err_all)
     }
 }
 
-/// Creates a source that listens on the given `listen_rx` and gates (filters out)
-/// updates by the given `gate_frontier`.
+/// Creates a source that listens on the given `listen_rx`.
 fn listen_source<S, K, V>(
     scope: &S,
     lower_filter: Antichain<u64>,
@@ -151,26 +132,14 @@ where
                                     let ((k, v), ts, diff) = record;
                                     let k = K::decode(&k);
                                     let v = V::decode(&v);
-                                    if lower_filter.less_equal(&ts) {
-                                        session.give(((k, v), ts, diff));
-                                    } else {
-                                        debug!("Got record that was not beyond the lower snapshot filter. lower_filter: {:?}, record time: {:?}", lower_filter, ts);
-                                    }
+                                    session.give(((k, v), ts, diff));
                                 }
                             }
                             activator.activate();
                         }
                         ListenEvent::Sealed(ts) => {
-                            // We only need to check that the incoming notifications
-                            // are in advance of the snapshot's lower bound because the
-                            // snapshot might have some overlap with the notifications.
-                            // The seals are required to be in order and so we don't
-                            // need to check that each seal is in advance of its
-                            // predecessor.
-                            if lower_filter.less_equal(&ts) {
-                                cap.downgrade(&ts);
-                                activator.activate();
-                            }
+                            cap.downgrade(&ts);
+                            activator.activate();
                         }
                     },
                     Err(TryRecvError::Empty) => {
@@ -301,9 +270,7 @@ mod tests {
         Ok(())
     }
 
-    // TODO: At the moment, there's a race between registering the listener and
-    // getting the snapshot. Fix it by get a seqno back from listener
-    // registration and use it as the upper bound of the snapshot.
+    // TODO: At the moment, this test hangs indefinitely. Currently unclear why.
     #[test]
     #[ignore]
     fn multiple_workers() -> Result<(), Error> {
@@ -401,11 +368,7 @@ mod tests {
             .flat_map(|(_, xs)| xs.into_iter())
             .collect::<Vec<_>>();
 
-        let expected = vec![(
-            "failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
-            0,
-            1,
-        ),
+        let expected = vec![
         (
             "replaying persisted data: failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
             0,
