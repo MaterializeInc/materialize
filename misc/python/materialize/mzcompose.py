@@ -655,6 +655,7 @@ class PythonServiceConfig(TypedDict, total=False):
     depends_on: List[str]
     entrypoint: List[str]
     volumes: List[str]
+    deploy: Dict[str, Dict[str, Dict[str, str]]]
     propagate_uid_gid: bool
     init: bool
 
@@ -679,6 +680,7 @@ class Materialized(PythonService):
         hostname: Optional[str] = None,
         image: Optional[str] = None,
         port: int = 6875,
+        memory: Optional[str] = None,
         data_directory: str = "/share/mzdata",
         options: str = "",
         environment: List[str] = [
@@ -704,6 +706,11 @@ class Materialized(PythonService):
 
         if hostname:
             config["hostname"] = hostname
+
+        # Depending on the docker-compose version, this may either work or be ignored with a warning
+        # Unfortunately no portable way of setting the memory limit is known
+        if memory:
+            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
         config.update(
             {

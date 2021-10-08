@@ -47,3 +47,11 @@
     - ./ci/plugins/mzcompose:
         composition: upgrade
         run: upgrade
+
+- id: limits
+  label: "Product limits test"
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: limits
+        run: limits
+  timeout_in_minutes: 20
