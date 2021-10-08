@@ -28,8 +28,8 @@ use mzcloud::apis::deployments_api::{
 };
 use mzcloud::apis::mz_versions_api::mz_versions_list;
 use mzcloud::models::deployment_request::DeploymentRequest;
+use mzcloud::models::deployment_size_enum::DeploymentSizeEnum;
 use mzcloud::models::patched_deployment_request::PatchedDeploymentRequest;
-use mzcloud::models::size_enum::SizeEnum;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -117,18 +117,24 @@ enum Category {
 enum DeploymentsCommand {
     /// Create a new Materialize deployment.
     Create {
-        /// Version of materialized to deploy. Defaults to latest available version.
-        #[structopt(short = "v", long)]
-        mz_version: Option<String>,
+        /// Name of the deployed materialized instance. Defaults to randomly assigned.
+        #[structopt(long)]
+        name: Option<String>,
         /// Size of the deployment.
         #[structopt(short, long, parse(try_from_str = parse_size))]
-        size: Option<SizeEnum>,
+        size: Option<DeploymentSizeEnum>,
         /// The number of megabytes of storage to allocate.
         #[structopt(long)]
         storage_mb: Option<i32>,
+        /// Disable user-created indexes (used for debugging).
+        #[structopt(long)]
+        disable_user_indexes: Option<bool>,
         /// Extra arguments to provide to materialized.
         #[structopt(long)]
         materialized_extra_args: Option<Vec<String>>,
+        /// Version of materialized to deploy. Defaults to latest available version.
+        #[structopt(short = "v", long)]
+        mz_version: Option<String>,
     },
 
     /// Describe a Materialize deployment.
@@ -141,17 +147,23 @@ enum DeploymentsCommand {
     Update {
         /// ID of the deployment.
         id: String,
-        /// Version of materialized to upgrade to. Defaults to the current
-        /// version.
-        #[structopt(short = "v", long)]
-        mz_version: Option<String>,
+        /// Name of the deployed materialized instance. Defaults to the current version.
+        #[structopt(long)]
+        name: Option<String>,
         /// Size of the deployment. Defaults to current size.
         #[structopt(short, long, parse(try_from_str = parse_size))]
-        size: Option<SizeEnum>,
+        size: Option<DeploymentSizeEnum>,
+        /// Disable user-created indexes (used for debugging).
+        #[structopt(long)]
+        disable_user_indexes: Option<bool>,
         /// Extra arguments to provide to materialized. Defaults to the
         /// currently set extra arguments.
         #[structopt(long)]
         materialized_extra_args: Option<Vec<String>>,
+        /// Version of materialized to upgrade to. Defaults to the current
+        /// version.
+        #[structopt(short = "v", long)]
+        mz_version: Option<String>,
     },
 
     /// Destroy a Materialize deployment.
@@ -185,13 +197,13 @@ enum MzVersionsCommand {
     List,
 }
 
-fn parse_size(s: &str) -> Result<SizeEnum, String> {
+fn parse_size(s: &str) -> Result<DeploymentSizeEnum, String> {
     match s {
-        "XS" => Ok(SizeEnum::XS),
-        "S" => Ok(SizeEnum::S),
-        "M" => Ok(SizeEnum::M),
-        "L" => Ok(SizeEnum::L),
-        "XL" => Ok(SizeEnum::XL),
+        "XS" => Ok(DeploymentSizeEnum::XS),
+        "S" => Ok(DeploymentSizeEnum::S),
+        "M" => Ok(DeploymentSizeEnum::M),
+        "L" => Ok(DeploymentSizeEnum::L),
+        "XL" => Ok(DeploymentSizeEnum::XL),
         _ => Err("Invalid size.".to_owned()),
     }
 }
@@ -214,18 +226,22 @@ async fn handle_deployment_operations(
 ) -> anyhow::Result<()> {
     Ok(match operation {
         DeploymentsCommand::Create {
+            name,
             size,
-            mz_version,
             storage_mb,
+            disable_user_indexes,
             materialized_extra_args,
+            mz_version,
         } => {
             let deployment = deployments_create(
                 &config,
                 Some(DeploymentRequest {
+                    name,
                     size: size.map(Box::new),
-                    mz_version,
                     storage_mb,
+                    disable_user_indexes,
                     materialized_extra_args,
+                    mz_version,
                 }),
             )
             .await?;
@@ -237,18 +253,22 @@ async fn handle_deployment_operations(
         }
         DeploymentsCommand::Update {
             id,
+            name,
             size,
-            mz_version,
+            disable_user_indexes,
             materialized_extra_args,
+            mz_version,
         } => {
             let deployment = deployments_partial_update(
                 &config,
                 &id,
                 Some(PatchedDeploymentRequest {
+                    name,
                     size: size.map(Box::new),
-                    mz_version,
                     storage_mb: None,
+                    disable_user_indexes,
                     materialized_extra_args,
+                    mz_version,
                 }),
             )
             .await?;
