@@ -16,10 +16,14 @@
 //! Command-line interface for Materialize Cloud.
 
 use std::fs;
-use std::process;
+use std::io::Cursor;
+use std::process::{exit, Command};
 
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use structopt::StructOpt;
+use tempfile::tempdir;
+use zip::ZipArchive;
 
 use mzcloud::apis::configuration::Configuration;
 use mzcloud::apis::deployments_api::{
@@ -189,6 +193,13 @@ enum DeploymentsCommand {
         /// ID of the deployment.
         id: String,
     },
+
+    /// Connect to a Materialize deployment using psql.
+    /// Requires psql to be on your PATH.
+    Psql {
+        /// ID of the deployment.
+        id: String,
+    },
 }
 
 #[derive(Debug, StructOpt)]
@@ -290,6 +301,23 @@ async fn handle_deployment_operations(
             let logs = deployments_logs_retrieve(&config, &id).await?;
             print!("{}", logs);
         }
+        DeploymentsCommand::Psql { id } => {
+            let bytes = deployments_certs_retrieve(&config, &id).await?;
+            let dir = tempdir()?;
+            let c = Cursor::new(bytes);
+            let mut archive = ZipArchive::new(c)?;
+            archive.extract(&dir)?;
+            let deployment = deployments_retrieve(&config, &id).await?;
+            let hostname = deployment
+                .hostname
+                .ok_or_else(|| anyhow!("Deployment does not have a hostname."))?;
+            let dir_str = dir
+                .path()
+                .to_str()
+                .ok_or_else(|| anyhow!("Unable to format postgresql connection string. Temp dir contains non-unicode characters."))?;
+            let postgres_url = format!("postgresql://materialize@{hostname}:6875/materialize?sslmode=require&sslcert={dir}/materialize.crt&sslkey={dir}/materialize.key&sslrootcert={dir}/ca.crt", hostname=hostname, dir=dir_str);
+            Command::new("psql").arg(postgres_url).spawn()?.wait()?;
+        }
     })
 }
 
@@ -338,6 +366,6 @@ async fn run() -> anyhow::Result<()> {
 async fn main() {
     if let Err(e) = run().await {
         eprintln!("error: {:#?}", e);
-        process::exit(1);
+        exit(1);
     }
 }
