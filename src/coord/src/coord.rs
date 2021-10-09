@@ -3347,7 +3347,7 @@ impl Coordinator {
                     id: plan.id,
                     selection,
                     finishing,
-                    assignments: None,
+                    assignments: HashMap::new(),
                     kind: MutationKind::Insert,
                 };
 
@@ -3487,14 +3487,14 @@ impl Coordinator {
                             // Use 2x row len incase there's some assignments.
                             let mut diffs = Vec::with_capacity(rows.len() * 2);
                             for row in rows {
-                                if let Some(ref assignments) = assignments {
+                                if !assignments.is_empty() {
                                     assert!(
                                         matches!(kind, MutationKind::Update),
                                         "only updates support assignments"
                                     );
                                     let mut datums = row.unpack();
                                     let mut updates = vec![];
-                                    for (idx, expr) in assignments {
+                                    for (idx, expr) in &assignments {
                                         let updated = match expr.eval(&datums, &arena) {
                                             Ok(updated) => updated,
                                             Err(e) => {

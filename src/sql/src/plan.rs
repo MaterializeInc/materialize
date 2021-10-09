@@ -272,7 +272,7 @@ pub struct ReadThenWritePlan {
     pub id: GlobalId,
     pub selection: ::expr::MirRelationExpr,
     pub finishing: RowSetFinishing,
-    pub assignments: Option<HashMap<usize, ::expr::MirScalarExpr>>,
+    pub assignments: HashMap<usize, ::expr::MirScalarExpr>,
     pub kind: MutationKind,
 }
 
