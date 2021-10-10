@@ -55,7 +55,7 @@ url = "2.2.2"
 uuid = "0.8.2"
 
 [dev-dependencies]
-assert_cmd = "2.0.1"
+assert_cmd = "2.0.2"
 predicates = "2.0.2"
 
 [build-dependencies]
