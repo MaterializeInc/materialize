@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 dataflow-types = { path = "../dataflow-types" }
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 itertools = "0.10.1"
 repr = { path = "../repr" }

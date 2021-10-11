@@ -5051,6 +5051,7 @@ dependencies = [
  "anyhow",
  "datadriven",
  "dataflow-types",
+ "differential-dataflow",
  "expr",
  "expr_test_util",
  "itertools",
