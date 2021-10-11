@@ -493,7 +493,7 @@ where
                     if let Err(e) = result {
                         let mut session = data_output.session(&cap);
                         log::error!(
-                            "Error sealing {} (condition) up to {}: {:?}",
+                            "Error sealing {} (primary) up to {}: {:?}",
                             &operator_name,
                             cap.time(),
                             e
