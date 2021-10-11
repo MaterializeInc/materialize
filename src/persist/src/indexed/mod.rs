@@ -943,7 +943,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// `sealed_frontier` for details.
     pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: FutureHandle<()>) {
         let resp = self.do_seal(&ids, seal_ts);
-        self.pending.add_seals(ids, seal_ts);
+        if resp.is_ok() {
+            self.pending.add_seals(ids, seal_ts);
+        }
         self.pending.add_response(PendingResponse::Unit(res, resp));
     }
 
