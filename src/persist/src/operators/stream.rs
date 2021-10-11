@@ -916,6 +916,8 @@ mod tests {
         //  c) We seal up, even when never receiving any data.
         assert_eq!(
             vec![
+                Sealed::Condition(0),
+                Sealed::Primary(0),
                 Sealed::Condition(1),
                 Sealed::Primary(1),
                 Sealed::Condition(2),
