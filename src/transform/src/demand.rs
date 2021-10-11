@@ -48,7 +48,7 @@ impl crate::Transform for Demand {
 
 impl Demand {
     /// Columns to be produced.
-    pub fn action(
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
         mut columns: HashSet<usize>,
