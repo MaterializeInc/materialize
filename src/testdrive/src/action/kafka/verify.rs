@@ -14,6 +14,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use ore::result::ResultExt;
+use ore::retry::Retry;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use tokio::pin;
@@ -106,20 +107,26 @@ impl Action for VerifyAction {
             sink: &str,
             topic_field: &str,
             state: &mut State,
+            timeout: Duration,
         ) -> Result<String, String> {
             let query = format!("SELECT {} FROM mz_catalog_names JOIN mz_kafka_sinks ON global_id = sink_id WHERE name = $1", topic_field);
-            let result = state
-                .pgclient
-                .query_one(query.as_str(), &[&sink])
+            Retry::default()
+                .max_duration(timeout)
+                .retry(|_| async {
+                    let result = state
+                        .pgclient
+                        .query_one(query.as_str(), &[&sink])
+                        .await
+                        .map_err(|e| format!("retrieving topic name: {}", e))?
+                        .get(topic_field);
+                    Ok(result)
+                })
                 .await
-                .map_err(|e| format!("retrieving topic name: {}", e))?
-                .get(topic_field);
-            Ok(result)
         }
         let topic: String = match self.consistency {
-            None => get_topic(&self.sink, "topic", state).await?,
+            None => get_topic(&self.sink, "topic", state, self.context.timeout).await?,
             Some(SinkConsistencyFormat::Debezium) => {
-                get_topic(&self.sink, "consistency_topic", state).await?
+                get_topic(&self.sink, "consistency_topic", state, self.context.timeout).await?
             }
         };
 
