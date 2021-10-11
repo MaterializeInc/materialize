@@ -10,7 +10,7 @@
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::fmt;
 use std::mem::{size_of, transmute};
 
@@ -239,7 +239,7 @@ enum Tag {
 ///
 /// # Safety
 ///
-/// This function is safe if a value of type `T` was previously written at this offset by `push_copy!`.
+/// This function is safe if a value of type `T` was previously written at this offset by `Bytes::push_copy`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 #[inline(always)]
 unsafe fn read_copy<T>(data: &[u8], offset: &mut usize) -> T
@@ -404,23 +404,23 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
 // --------------------------------------------------------------------------------
 // writing data
 
-fn assert_is_copy<T: Copy>() {}
-
 /// A trait that abstracts over ways to push bytes into a buffer.
 ///
 /// This trait exists to allow us to write the `push` logic once for
 /// multiple recipients of the pushed data.
 trait Bytes {
     fn extend_from_slice(&mut self, slice: &[u8]);
-    fn push(&mut self, byte: u8);
+    fn push_copy<T: Copy>(&mut self, val: T) {
+        let byte_view = unsafe {
+            std::slice::from_raw_parts(&val as *const T as *const u8, std::mem::size_of::<T>())
+        };
+        self.extend_from_slice(byte_view);
+    }
 }
 
 impl Bytes for Vec<u8> {
     fn extend_from_slice(&mut self, slice: &[u8]) {
         self.extend_from_slice(slice);
-    }
-    fn push(&mut self, byte: u8) {
-        self.push(byte);
     }
 }
 
@@ -428,37 +428,26 @@ impl Bytes for Row {
     fn extend_from_slice(&mut self, slice: &[u8]) {
         self.data.extend_from_slice(slice);
     }
-    fn push(&mut self, byte: u8) {
-        self.data.push(byte);
-    }
-}
-
-// See https://github.com/rust-lang/rust/issues/43408 for why this can't be a function
-macro_rules! push_copy {
-    ($data:expr, $t:expr, $T:ty) => {
-        assert_is_copy::<$T>();
-        $data.extend_from_slice(&unsafe { transmute::<$T, [u8; size_of::<$T>()]>($t) })
-    };
 }
 
 fn push_untagged_bytes<T: Bytes>(data: &mut T, bytes: &[u8]) {
-    push_copy!(data, bytes.len(), usize);
+    data.push_copy(bytes.len());
     data.extend_from_slice(bytes);
 }
 
 fn push_lengthed_bytes<T: Bytes>(data: &mut T, bytes: &[u8], tag: Tag) {
     match tag {
         Tag::BytesTiny | Tag::StringTiny => {
-            push_copy!(data, bytes.len() as u8, u8);
+            data.push_copy(bytes.len() as u8);
         }
         Tag::BytesShort | Tag::StringShort => {
-            push_copy!(data, bytes.len() as u16, u16);
+            data.push_copy(bytes.len() as u16);
         }
         Tag::BytesLong | Tag::StringLong => {
-            push_copy!(data, bytes.len() as u32, u32);
+            data.push_copy(bytes.len() as u32);
         }
         Tag::BytesHuge | Tag::StringHuge => {
-            push_copy!(data, bytes.len() as usize, usize);
+            data.push_copy(bytes.len() as usize);
         }
         _ => unreachable!(),
     }
@@ -467,49 +456,49 @@ fn push_lengthed_bytes<T: Bytes>(data: &mut T, bytes: &[u8], tag: Tag) {
 
 fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
     match datum {
-        Datum::Null => data.push(Tag::Null as u8),
-        Datum::False => data.push(Tag::False as u8),
-        Datum::True => data.push(Tag::True as u8),
+        Datum::Null => data.push_copy(Tag::Null as u8),
+        Datum::False => data.push_copy(Tag::False as u8),
+        Datum::True => data.push_copy(Tag::True as u8),
         Datum::Int16(i) => {
-            data.push(Tag::Int16 as u8);
-            push_copy!(data, i, i16);
+            data.push_copy(Tag::Int16 as u8);
+            data.push_copy(i);
         }
         Datum::Int32(i) => {
-            data.push(Tag::Int32 as u8);
-            push_copy!(data, i, i32);
+            data.push_copy(Tag::Int32 as u8);
+            data.push_copy(i);
         }
         Datum::Int64(i) => {
-            data.push(Tag::Int64 as u8);
-            push_copy!(data, i, i64);
+            data.push_copy(Tag::Int64 as u8);
+            data.push_copy(i);
         }
         Datum::Float32(f) => {
-            data.push(Tag::Float32 as u8);
-            push_copy!(data, f.to_bits(), u32);
+            data.push_copy(Tag::Float32 as u8);
+            data.push_copy(f.to_bits());
         }
         Datum::Float64(f) => {
-            data.push(Tag::Float64 as u8);
-            push_copy!(data, f.to_bits(), u64);
+            data.push_copy(Tag::Float64 as u8);
+            data.push_copy(f.to_bits());
         }
         Datum::Date(d) => {
-            data.push(Tag::Date as u8);
-            push_copy!(data, d, NaiveDate);
+            data.push_copy(Tag::Date as u8);
+            data.push_copy(d);
         }
         Datum::Time(t) => {
-            data.push(Tag::Time as u8);
-            push_copy!(data, t, NaiveTime);
+            data.push_copy(Tag::Time as u8);
+            data.push_copy(t);
         }
         Datum::Timestamp(t) => {
-            data.push(Tag::Timestamp as u8);
-            push_copy!(data, t, NaiveDateTime);
+            data.push_copy(Tag::Timestamp as u8);
+            data.push_copy(t);
         }
         Datum::TimestampTz(t) => {
-            data.push(Tag::TimestampTz as u8);
-            push_copy!(data, t, DateTime<Utc>);
+            data.push_copy(Tag::TimestampTz as u8);
+            data.push_copy(t);
         }
         Datum::Interval(i) => {
-            data.push(Tag::Interval as u8);
-            push_copy!(data, i.months, i32);
-            push_copy!(data, i.duration, i128);
+            data.push_copy(Tag::Interval as u8);
+            data.push_copy(i.months);
+            data.push_copy(i.duration);
         }
         Datum::Bytes(bytes) => {
             let tag = match bytes.len() {
@@ -518,7 +507,7 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
                 65536..=4294967295 => Tag::BytesLong,
                 _ => Tag::BytesHuge,
             };
-            data.push(tag as u8);
+            data.push_copy(tag as u8);
             push_lengthed_bytes(data, bytes, tag);
         }
         Datum::String(string) => {
@@ -528,31 +517,31 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
                 65536..=4294967295 => Tag::StringLong,
                 _ => Tag::StringHuge,
             };
-            data.push(tag as u8);
+            data.push_copy(tag as u8);
             push_lengthed_bytes(data, string.as_bytes(), tag);
         }
         Datum::Uuid(u) => {
-            data.push(Tag::Uuid as u8);
+            data.push_copy(Tag::Uuid as u8);
             push_untagged_bytes(data, u.as_bytes());
         }
         Datum::Array(array) => {
             // See the comment in `Row::push_array` for details on the encoding
             // of arrays.
-            data.push(Tag::Array as u8);
-            data.push(array.dims.ndims());
+            data.push_copy(Tag::Array as u8);
+            data.push_copy(array.dims.ndims());
             data.extend_from_slice(array.dims.data);
             push_untagged_bytes(data, &array.elements.data);
         }
         Datum::List(list) => {
-            data.push(Tag::List as u8);
+            data.push_copy(Tag::List as u8);
             push_untagged_bytes(data, &list.data);
         }
         Datum::Map(dict) => {
-            data.push(Tag::Dict as u8);
+            data.push_copy(Tag::Dict as u8);
             push_untagged_bytes(data, &dict.data);
         }
-        Datum::JsonNull => data.push(Tag::JsonNull as u8),
-        Datum::Dummy => data.push(Tag::Dummy as u8),
+        Datum::JsonNull => data.push_copy(Tag::JsonNull as u8),
+        Datum::Dummy => data.push_copy(Tag::Dummy as u8),
         Datum::Numeric(mut n) => {
             // Pseudo-canonical representation of decimal values with
             // insignificant zeroes trimmed. This compresses the number further
@@ -560,19 +549,15 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
             // the fractional component.
             numeric::cx_datum().reduce(&mut n.0);
             let (digits, exponent, bits, lsu) = n.0.to_raw_parts();
-            data.push(Tag::Numeric as u8);
-            push_copy!(
-                data,
+            data.push_copy(Tag::Numeric as u8);
+            data.push_copy(
                 u8::try_from(digits).expect("digits to fit within u8; should not exceed 39"),
-                u8
             );
-            push_copy!(
-                data,
+            data.push_copy(
                 i8::try_from(exponent)
                     .expect("exponent to fit within i8; should not exceed +/- 39"),
-                i8
             );
-            data.push(bits);
+            data.push_copy(bits);
             data.extend_from_slice(lsu);
         }
     }
@@ -841,10 +826,10 @@ impl Row {
     where
         F: FnOnce(&mut Row) -> R,
     {
-        self.data.push(Tag::List as u8);
+        self.push_copy(Tag::List as u8);
         let start = self.data.len();
         // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
+        self.push_copy(0usize);
 
         let out = f(self);
 
@@ -895,10 +880,10 @@ impl Row {
     where
         F: FnOnce(&mut Row) -> R,
     {
-        self.data.push(Tag::Dict as u8);
+        self.push_copy(Tag::Dict as u8);
         let start = self.data.len();
         // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
+        self.push_copy(0usize);
 
         let res = f(self);
 
@@ -940,19 +925,18 @@ impl Row {
         }
 
         let start = self.data.len();
-        self.data.push(Tag::Array as u8);
+        self.push_copy(Tag::Array as u8);
 
         // Write dimension information.
-        self.data
-            .push(dims.len().try_into().expect("ndims verified to fit in u8"));
+        self.push_copy(u8::try_from(dims.len()).expect("ndims verified to fit in u8"));
         for dim in dims {
-            push_copy!(&mut self.data, dim.lower_bound, usize);
-            push_copy!(&mut self.data, dim.length, usize);
+            self.push_copy(dim.lower_bound);
+            self.push_copy(dim.length);
         }
 
         // Write elements.
         let off = self.data.len();
-        push_copy!(&mut self.data, 0, usize); // dummy length fixed up below
+        self.push_copy(0usize); // dummy length fixed up below
         let mut nelements = 0;
         for datum in iter {
             self.push(*datum.borrow());
@@ -1367,7 +1351,7 @@ mod tests {
             let row = Row::pack(datums.clone());
 
             // When run under miri this catchs undefined bytes written to data
-            // eg by calling push_copy! on a type which contains undefined padding values
+            // eg by calling Bytes::push_copy on a type which contains undefined padding values
             println!("{:?}", row.data());
 
             let datums2 = row.iter().collect::<Vec<_>>();
