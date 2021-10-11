@@ -874,7 +874,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         // mz_metrics). Otherwise, it has no effect.
         //
         // TODO: Make step smarter and remove this hack.
-        let need_step = need_step && !self.indexed.pending_responses.is_empty();
+        let need_step = need_step && self.indexed.pending.has_responses();
 
         if need_step {
             self.prev_step = step_start;

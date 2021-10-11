@@ -11,9 +11,13 @@
 
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 
+use persist::error::Error;
 use persist::file::FileLog;
+use persist::future::{Future, FutureHandle};
+use persist::indexed::encoding::Id;
+use persist::indexed::Indexed;
 use persist::mem::MemRegistry;
-use persist::storage::{LockInfo, Log};
+use persist::storage::{Blob, LockInfo, Log};
 
 fn bench_write_sync<L: Log>(writer: &mut L, data: Vec<u8>, b: &mut Bencher) {
     b.iter(move || {
@@ -23,7 +27,7 @@ fn bench_write_sync<L: Log>(writer: &mut L, data: Vec<u8>, b: &mut Bencher) {
     })
 }
 
-pub fn bench_writes(c: &mut Criterion) {
+pub fn bench_writes_log(c: &mut Criterion) {
     let data = "entry0".as_bytes().to_vec();
 
     let mut mem_log = MemRegistry::new()
@@ -46,5 +50,56 @@ pub fn bench_writes(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_writes);
+fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, FutureHandle<T>), L: Log, B: Blob>(
+    index: &mut Indexed<L, B>,
+    f: F,
+) -> Result<T, Error> {
+    let (tx, rx) = Future::new();
+    f(index, tx.into());
+    index.step()?;
+    rx.recv()
+}
+
+fn block_on<T, F: FnOnce(FutureHandle<T>)>(f: F) -> Result<T, Error> {
+    let (tx, rx) = Future::new();
+    f(tx.into());
+    rx.recv()
+}
+
+fn bench_write<L: Log, B: Blob>(
+    index: &mut Indexed<L, B>,
+    id: Id,
+    updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    b: &mut Bencher,
+) {
+    b.iter(move || {
+        // We intentionally never call seal, so that the data only gets written
+        // once to Unsealed, and not to Trace.
+        block_on_drain(index, |i, handle| {
+            i.write(vec![(id, updates.clone())], handle)
+        })
+        .unwrap();
+    })
+}
+
+pub fn bench_writes_indexed(c: &mut Criterion) {
+    let mut i = MemRegistry::new().indexed_no_reentrance().unwrap();
+    let id = block_on(|res| i.register("0", "()", "()", res)).unwrap();
+
+    let mut updates = vec![];
+    for x in 0..1_000_000 {
+        updates.push(((format!("{}", x).into(), "".into()), 1, 1));
+    }
+
+    c.bench_function("indexed_write_drain", |b| {
+        bench_write(&mut i, id, updates.clone(), b);
+    });
+
+    updates.sort();
+    c.bench_function("indexed_write_drain_sorted", |b| {
+        bench_write(&mut i, id, updates.clone(), b);
+    });
+}
+
+criterion_group!(benches, bench_writes_log, bench_writes_indexed);
 criterion_main!(benches);
