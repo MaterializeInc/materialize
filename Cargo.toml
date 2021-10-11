@@ -74,3 +74,6 @@ rustc-demangle = { opt-level = 3 }
 # it's unlikely we're going to get interactive access to a debugger in
 # production installations, but we still want useful crash reports.
 debug = 1
+
+[patch."https://github.com/TimelyDataflow/timely-dataflow"]
+timely = { git = "https://github.com/antiguru/timely-dataflow", branch = "container_stream_rework", default-features = false }
