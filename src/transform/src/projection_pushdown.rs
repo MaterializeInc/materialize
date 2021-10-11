@@ -25,6 +25,10 @@
 //! 3) Repetitions are not pushed down at all.
 //!
 //! Some comments have been inherited from the `Demand` transform.
+//!
+//! Note that this transform is one that can operate across views in a dataflow
+//! and thus currently exists outside of both the physical and logical
+//! optimizers.
 
 use std::collections::{BTreeSet, HashMap};
 use std::iter::FromIterator;
@@ -38,6 +42,7 @@ use crate::TransformArgs;
 pub struct ProjectionPushdown;
 
 impl crate::Transform for ProjectionPushdown {
+    // This method is only used during unit testing.
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
