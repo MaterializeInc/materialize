@@ -543,11 +543,21 @@ impl ParsedDateTime {
     /// # Errors
     /// - If year, month, or day overflows their respective parameter in
     ///   [chrono::naive::date::NaiveDate::from_ymd_opt](https://docs.rs/chrono/0.4/chrono/naive/struct.NaiveDate.html#method.from_ymd_opt).
+    ///
+    /// Note: Postgres does not recognize Year 0, but in order to make
+    /// arithmetic work as expected, the Year 1 BC in a ParsedDateTime
+    /// is mapped to the Year 0 in a NaiveDate, and vice-versa.
     pub fn compute_date(&self) -> Result<chrono::NaiveDate, String> {
         match (self.year, self.month, self.day) {
             (Some(year), Some(month), Some(day)) => {
+                // Adjust for BC years
+                let year = if year.unit < 0 {
+                    year.unit + 1
+                } else {
+                    year.unit
+                };
                 let p_err = |e, field| format!("{} in date is invalid: {}", field, e);
-                let year = year.unit.try_into().map_err(|e| p_err(e, "Year"))?;
+                let year = year.try_into().map_err(|e| p_err(e, "Year"))?;
                 let month = month.unit.try_into().map_err(|e| p_err(e, "Month"))?;
                 let day = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
                 NaiveDate::from_ymd_opt(year, month, day)
@@ -788,7 +798,7 @@ impl ParsedDateTime {
     }
     pub fn check_datelike_bounds(&mut self) -> Result<(), String> {
         if let Some(year) = self.year {
-            // 1BC is not represented as year 0 in postgres
+            // 1BC is not represented as year 0 at the parser level, only internally
             if year.unit == 0 {
                 return Err("YEAR cannot be zero".to_string());
             }
