@@ -16,10 +16,9 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, bail, Context};
-use rusoto_core::Region;
+use anyhow::{anyhow, bail};
 
-use aws_util::aws;
+use dataflow_types::{AwsConfig, AwsCredentials};
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
@@ -472,10 +471,10 @@ macro_rules! with_options {
 }
 
 /// Normalizes option values that contain AWS connection parameters.
-pub fn aws_connect_info(
+pub fn aws_config(
     options: &mut BTreeMap<String, Value>,
     region: Option<String>,
-) -> anyhow::Result<aws::ConnectInfo> {
+) -> Result<AwsConfig, anyhow::Error> {
     let mut extract = |key| match options.remove(key) {
         Some(Value::String(key)) => {
             if !key.is_empty() {
@@ -488,52 +487,39 @@ pub fn aws_connect_info(
         _ => Ok(None),
     };
 
-    let region_raw = match region {
+    let region = match region {
         Some(region) => region,
         None => extract("region")?.ok_or_else(|| anyhow!("region is required"))?,
     };
 
-    let region = match region_raw.parse() {
-        Ok(region) => {
-            // ignore/drop the endpoint option if we're pointing at a valid,
-            // non-custom AWS region. Endpoints are meaningless without custom
-            // regions, and this makes writing tests that support both
-            // LocalStack and real AWS much easier.
-            let _ = extract("endpoint");
-            region
+    let endpoint = extract("endpoint")?;
+
+    let access_key_id = extract("access_key_id")?;
+    let secret_access_key = extract("secret_access_key")?;
+    let session_token = extract("token")?;
+    let credentials = match (access_key_id, secret_access_key, session_token) {
+        (None, None, None) => None,
+        (Some(access_key_id), Some(secret_access_key), session_token) => Some(AwsCredentials {
+            access_key_id,
+            secret_access_key,
+            session_token,
+        }),
+        (Some(_), None, _) => {
+            bail!("secret_acccess_key must be specified if access_key_id is specified")
         }
-        Err(e) => {
-            // Region's FromStr doesn't support parsing custom regions.
-            // If a Kinesis stream's ARN indicates it exists in a custom
-            // region, support it iff a valid endpoint for the stream
-            // is also provided.
-            match extract("endpoint").with_context(|| {
-                format!("endpoint is required for custom regions: {:?}", region_raw)
-            })? {
-                Some(endpoint) => Region::Custom {
-                    name: region_raw,
-                    endpoint,
-                },
-                _ => bail!(
-                    "Unable to parse AWS region: {}. If providing a custom \
-                     region, an `endpoint` option must also be provided",
-                    e
-                ),
-            }
-        }
+        (None, Some(_), _) => bail!("secret_acccess_key cannot be specified without access_key_id"),
+        (None, None, Some(_)) => bail!("token cannot be specified without access_key_id"),
     };
 
-    aws::ConnectInfo::new(
+    Ok(AwsConfig {
+        credentials,
         region,
-        extract("access_key_id")?,
-        extract("secret_access_key")?,
-        extract("token")?,
-    )
+        endpoint,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::error::Error;
 
     use ore::collections::CollectionExt;
@@ -557,46 +543,5 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    #[test]
-    fn with_options_errors_if_endpoint_missing_for_invalid_region() {
-        let mut map = BTreeMap::new();
-        map.insert("region".to_string(), Value::String("nonsense".into()));
-        assert!(aws_connect_info(&mut map, None).is_err());
-
-        let mut map = BTreeMap::new();
-        assert!(aws_connect_info(&mut map, Some("nonsense".into())).is_err());
-    }
-
-    #[test]
-    fn with_options_allows_invalid_region_with_endpoint() {
-        let mut map = BTreeMap::new();
-        map.insert("region".to_string(), Value::String("nonsense".into()));
-        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
-        assert!(aws_connect_info(&mut map, None).is_ok());
-
-        let mut map = BTreeMap::new();
-        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
-        assert!(aws_connect_info(&mut map, Some("nonsense".into())).is_ok());
-    }
-
-    #[test]
-    fn with_options_ignores_endpoint_with_valid_region() {
-        let mut map = BTreeMap::new();
-        map.insert("region".to_string(), Value::String("us-east-1".into()));
-        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
-        assert!(aws_connect_info(&mut map, None).is_ok());
-
-        let mut map = BTreeMap::new();
-        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
-        assert!(aws_connect_info(&mut map, Some("us-east-1".into())).is_ok());
-
-        let mut map = BTreeMap::new();
-        map.insert("region".to_string(), Value::String("us-east-1".into()));
-        assert!(aws_connect_info(&mut map, None).is_ok());
-
-        let mut map = BTreeMap::new();
-        assert!(aws_connect_info(&mut map, Some("us-east-1".into())).is_ok());
     }
 }

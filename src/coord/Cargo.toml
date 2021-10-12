@@ -7,7 +7,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.45"
-aws-util = { path = "../aws-util" }
 backtrace = "0.3.63"
 bincode = { version = "1.3.3", optional = true }
 build-info = { path = "../build-info" }
@@ -27,6 +26,7 @@ itertools = "0.10.1"
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
+mz-aws-util = { path = "../aws-util" }
 ore = { path = "../ore" }
 persist = { path = "../persist" }
 pgrepr = { path = "../pgrepr" }

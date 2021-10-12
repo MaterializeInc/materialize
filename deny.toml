@@ -25,6 +25,7 @@ skip = [
 # `md-5` and `sha-1` instead, despite their somewhat suspicious names.
 [[bans.deny]]
 name = "md5"
+wrappers = ["aws-sdk-s3"]
 [[bans.deny]]
 name = "sha1"
 
@@ -42,6 +43,9 @@ name = "thiserror"
 wrappers = [
     # Only list third-party crates here.
     "async-native-tls",
+    "aws-http",
+    "aws-smithy-xml",
+    "aws-sig-auth",
     "pprof",
     "proc-macro-crate",
     "prometheus",
@@ -72,6 +76,13 @@ allow = [
 ]
 copyleft = "deny"
 private = { ignore = true }
+
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 }
+]
 
 [sources]
 unknown-git = "deny"

@@ -19,7 +19,7 @@ from materialize.mzcompose import (
 )
 
 daemons = [
-    Localstack(services=["sts", "iam", "s3", "sqs"]),
+    Localstack(),
     Materialized(environment=["MZ_LOG_FILTER=dataflow::source::s3=trace,info"]),
     Toxiproxy(),
 ]

@@ -125,7 +125,7 @@ impl PersistConfig {
     /// Initializes the persistence runtime and returns a clone-able handle for
     /// interacting with it. Returns None and does not start the runtime if all
     /// persistence features are disabled.
-    pub fn init(
+    pub async fn init(
         &self,
         catalog_id: Uuid,
         reg: &MetricsRegistry,
@@ -150,7 +150,7 @@ impl PersistConfig {
                     )
                 }
                 PersistStorage::S3(s) => {
-                    let config = S3Config::new(s.bucket.clone(), s.prefix.clone())?;
+                    let config = S3Config::new(s.bucket.clone(), s.prefix.clone()).await?;
                     let mut blob = S3Blob::new(config, lock_info)?;
                     persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(

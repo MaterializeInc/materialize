@@ -32,13 +32,13 @@ use sql::plan::{resolve_names, PlanContext, QueryContext, QueryLifetime, Stateme
 // This morally tests the name resolution stuff, but we need access to a
 // catalog.
 
-#[test]
-fn datadriven() {
-    use datadriven::walk;
-
-    walk("tests/testdata", |f| {
+#[tokio::test]
+async fn datadriven() {
+    datadriven::walk_async("tests/testdata", |mut f| async {
         let catalog_file = NamedTempFile::new().unwrap();
-        let mut catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).unwrap();
+        let mut catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone())
+            .await
+            .unwrap();
         let mut id: u32 = 1;
         f.run(|test_case| -> String {
             match test_case.directive.as_str() {
@@ -89,6 +89,8 @@ fn datadriven() {
                 }
                 dir => panic!("unhandled directive {}", dir),
             }
-        })
-    });
+        });
+        f
+    })
+    .await;
 }

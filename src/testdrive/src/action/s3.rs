@@ -8,25 +8,21 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::HashMap;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use aws_sdk_s3::error::{CreateBucketError, CreateBucketErrorKind};
+use aws_sdk_s3::model::{
+    BucketLocationConstraint, CreateBucketConfiguration, Delete, NotificationConfiguration,
+    ObjectIdentifier, QueueConfiguration,
+};
+use aws_sdk_s3::{ByteStream, SdkError};
+use aws_sdk_sqs::model::{DeleteMessageBatchRequestEntry, QueueAttributeName};
 use flate2::write::GzEncoder;
 use flate2::Compression as Flate2Compression;
+
 use ore::result::ResultExt;
-use rusoto_core::{ByteStream, RusotoError};
-use rusoto_s3::{
-    CreateBucketConfiguration, CreateBucketError, CreateBucketRequest, Delete,
-    DeleteObjectsRequest, GetBucketNotificationConfigurationRequest, ObjectIdentifier,
-    PutBucketNotificationConfigurationRequest, PutObjectRequest, QueueConfiguration, S3,
-};
-use rusoto_sqs::{
-    CreateQueueError, CreateQueueRequest, DeleteMessageBatchRequest,
-    DeleteMessageBatchRequestEntry, GetQueueAttributesRequest, GetQueueUrlRequest,
-    ReceiveMessageRequest, SetQueueAttributesRequest, Sqs,
-};
 
 use crate::action::file::{build_compression, Compression};
 use crate::action::{Action, State};
@@ -54,19 +50,28 @@ impl Action for CreateBucketAction {
 
         match state
             .s3_client
-            .create_bucket(CreateBucketRequest {
-                bucket: bucket.clone(),
-                create_bucket_configuration: match state.aws_region.name() {
-                    "us-east-1" => None,
-                    name => Some(CreateBucketConfiguration {
-                        location_constraint: Some(name.to_string()),
-                    }),
-                },
-                ..Default::default()
+            .create_bucket()
+            .bucket(&bucket)
+            .set_create_bucket_configuration(match state.aws_region() {
+                "us-east-1" => None,
+                name => Some(
+                    CreateBucketConfiguration::builder()
+                        .location_constraint(BucketLocationConstraint::from(name))
+                        .build(),
+                ),
             })
+            .send()
             .await
         {
-            Ok(_) | Err(RusotoError::Service(CreateBucketError::BucketAlreadyOwnedByYou(_))) => {
+            Ok(_)
+            | Err(SdkError::ServiceError {
+                err:
+                    CreateBucketError {
+                        kind: CreateBucketErrorKind::BucketAlreadyOwnedByYou(_),
+                        ..
+                    },
+                ..
+            }) => {
                 state.s3_buckets_created.insert(bucket);
                 Ok(())
             }
@@ -122,17 +127,16 @@ impl Action for PutObjectAction {
 
         state
             .s3_client
-            .put_object(PutObjectRequest {
-                bucket,
-                body: Some(ByteStream::from(contents)),
-                content_type: Some("application/octet-stream".to_string()),
-                content_encoding: match self.compression {
-                    Compression::None => None,
-                    Compression::Gzip => Some("gzip".to_string()),
-                },
-                key: self.key.clone(),
-                ..Default::default()
+            .put_object()
+            .bucket(bucket)
+            .body(ByteStream::from(contents))
+            .content_type("application/octet-stream")
+            .set_content_encoding(match self.compression {
+                Compression::None => None,
+                Compression::Gzip => Some("gzip".to_string()),
             })
+            .key(&self.key)
+            .send()
             .await
             .map(|_| ())
             .map_err(|e| format!("putting s3 object: {}", e))
@@ -164,22 +168,20 @@ impl Action for DeleteObjectAction {
         println!("Deleting S3 objects {}: {}", bucket, self.keys.join(", "));
         let result = state
             .s3_client
-            .delete_objects(DeleteObjectsRequest {
-                bucket,
-                delete: Delete {
-                    objects: self
-                        .keys
-                        .iter()
-                        .cloned()
-                        .map(|key| ObjectIdentifier {
-                            key,
-                            version_id: None,
-                        })
-                        .collect(),
-                    quiet: None,
-                },
-                ..Default::default()
-            })
+            .delete_objects()
+            .bucket(bucket)
+            .delete(
+                Delete::builder()
+                    .set_objects(Some(
+                        self.keys
+                            .iter()
+                            .cloned()
+                            .map(|key| ObjectIdentifier::builder().key(key).build())
+                            .collect(),
+                    ))
+                    .build(),
+            )
+            .send()
             .await
             .map(|_| ())
             .map_err(|e| format!("deleting s3 objects: {}", e));
@@ -228,10 +230,9 @@ impl Action for AddBucketNotifications {
 
         let result = state
             .sqs_client
-            .create_queue(CreateQueueRequest {
-                queue_name: queue.clone(),
-                ..Default::default()
-            })
+            .create_queue()
+            .queue_name(&queue)
+            .send()
             .await;
 
         // get queue properties used for the rest of the mutations
@@ -240,13 +241,12 @@ impl Action for AddBucketNotifications {
             Ok(r) => r
                 .queue_url
                 .expect("queue creation should always return the url"),
-            Err(RusotoError::Service(CreateQueueError::QueueNameExists(q))) => {
+            Err(SdkError::ServiceError { err, .. }) if err.is_queue_name_exists() => {
                 let resp = state
                     .sqs_client
-                    .get_queue_url(GetQueueUrlRequest {
-                        queue_name: q,
-                        queue_owner_aws_account_id: None,
-                    })
+                    .get_queue_url()
+                    .queue_name(&queue)
+                    .send()
                     .await
                     .map_err(|e| {
                         format!(
@@ -260,31 +260,29 @@ impl Action for AddBucketNotifications {
             Err(e) => return Err(e.to_string()),
         };
 
-        let queue_arn = state
+        let queue_arn: String = state
             .sqs_client
-            .get_queue_attributes(GetQueueAttributesRequest {
-                attribute_names: Some(vec!["QueueArn".to_string()]),
-                queue_url: queue_url.clone(),
-            })
+            .get_queue_attributes()
+            .queue_url(&queue_url)
+            .attribute_names("QueueArn")
+            .send()
             .await
             .map_err(|e| format!("getting queue {} attributes: {}", queue, e))?
             .attributes
             .ok_or_else(|| "the result should not be empty".to_string())?
-            .remove("QueueArn")
+            .remove(&QueueAttributeName::QueueArn)
             .ok_or_else(|| "QueueArn should be present in arn request".to_string())?;
 
         // Configure the queue to allow the S3 bucket to write to this queue
-        let mut attributes = HashMap::new();
-        attributes.insert(
-            "Policy".to_string(),
-            allow_s3_policy(&queue_arn, &bucket, &state.aws_account),
-        );
         state
             .sqs_client
-            .set_queue_attributes(SetQueueAttributesRequest {
-                queue_url: queue_url.clone(),
-                attributes,
-            })
+            .set_queue_attributes()
+            .queue_url(&queue_url)
+            .attributes(
+                "Policy",
+                allow_s3_policy(&queue_arn, &bucket, &state.aws_account),
+            )
+            .send()
             .await
             .map_err(|e| format!("setting aws queue attributes: {}", e))?;
 
@@ -293,30 +291,35 @@ impl Action for AddBucketNotifications {
         // Configure the s3 bucket to write to the queue, without overwriting any existing configs
         let mut config = state
             .s3_client
-            .get_bucket_notification_configuration(GetBucketNotificationConfigurationRequest {
-                bucket: bucket.clone(),
-                ..Default::default()
-            })
+            .get_bucket_notification_configuration()
+            .bucket(&bucket)
+            .send()
             .await
             .map_err(|e| format!("getting bucket notification_configuration: {}", e))?;
 
         {
             let queue_configs = config.queue_configurations.get_or_insert_with(Vec::new);
 
-            queue_configs.push(QueueConfiguration {
-                events: self.events.clone(),
-                queue_arn,
-                ..Default::default()
-            });
+            queue_configs.push(
+                QueueConfiguration::builder()
+                    .set_events(Some(self.events.iter().map(|e| e.into()).collect()))
+                    .queue_arn(queue_arn)
+                    .build(),
+            );
         }
 
         state
             .s3_client
-            .put_bucket_notification_configuration(PutBucketNotificationConfigurationRequest {
-                bucket: bucket.clone(),
-                notification_configuration: config,
-                ..Default::default()
-            })
+            .put_bucket_notification_configuration()
+            .bucket(&bucket)
+            .notification_configuration(
+                NotificationConfiguration::builder()
+                    .set_topic_configurations(config.topic_configurations)
+                    .set_queue_configurations(config.queue_configurations)
+                    .set_lambda_function_configurations(config.lambda_function_configurations)
+                    .build(),
+            )
+            .send()
             .await
             .map_err(|e| {
                 format!(
@@ -346,23 +349,21 @@ impl Action for AddBucketNotifications {
         while start.elapsed() < sqs_validation_timeout {
             state
                 .s3_client
-                .put_object(PutObjectRequest {
-                    bucket: bucket.clone(),
-                    body: Some(Vec::new().into()),
-                    key: format!("sqs-test/{}", attempts),
-                    ..Default::default()
-                })
+                .put_object()
+                .bucket(&bucket)
+                .body(ByteStream::from_static(&[]))
+                .key(format!("sqs-test/{}", attempts))
+                .send()
                 .await
                 .map_err(|e| format!("creating object to verify sqs: {}", e))?;
             attempts += 1;
 
             let resp = state
                 .sqs_client
-                .receive_message(ReceiveMessageRequest {
-                    queue_url: queue_url.clone(),
-                    wait_time_seconds: Some(1),
-                    ..Default::default()
-                })
+                .receive_message()
+                .queue_url(&queue_url)
+                .wait_time_seconds(1)
+                .send()
                 .await
                 .map_err(|e| format!("reading from sqs for verification: {}", e))?;
 
@@ -376,17 +377,20 @@ impl Action for AddBucketNotifications {
                     }
                     state
                         .sqs_client
-                        .delete_message_batch(DeleteMessageBatchRequest {
-                            queue_url: queue_url.to_string(),
-                            entries: ms
-                                .into_iter()
+                        .delete_message_batch()
+                        .queue_url(&queue_url)
+                        .set_entries(Some(
+                            ms.into_iter()
                                 .enumerate()
-                                .map(|(i, m)| DeleteMessageBatchRequestEntry {
-                                    id: i.to_string(),
-                                    receipt_handle: m.receipt_handle.unwrap(),
+                                .map(|(i, m)| {
+                                    DeleteMessageBatchRequestEntry::builder()
+                                        .id(i.to_string())
+                                        .receipt_handle(m.receipt_handle.unwrap())
+                                        .build()
                                 })
                                 .collect(),
-                        })
+                        ))
+                        .send()
                         .await
                         .map_err(|e| format!("Deleting validation messages from sqs: {}", e))?;
                 }

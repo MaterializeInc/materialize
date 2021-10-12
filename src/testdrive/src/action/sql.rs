@@ -169,6 +169,7 @@ impl Action for SqlAction {
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
                     let disk_state = Catalog::open_debug(path, NOW_ZERO.clone())
+                        .await
                         .map_err_to_string()?
                         .dump();
                     let mem_state = reqwest::get(&format!(

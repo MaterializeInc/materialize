@@ -29,10 +29,9 @@
 ///
 use anyhow::Context;
 use rand::Rng;
-use rusoto_core::Region;
 use structopt::StructOpt;
 
-use aws_util::aws;
+use mz_aws_util::config::AwsConfig;
 use test_util::mz_client;
 
 mod kinesis;
@@ -61,9 +60,9 @@ async fn run() -> Result<(), anyhow::Error> {
     args.materialized_host, args.materialized_port, &stream_name, args.shard_count, args.total_records, args.records_per_second, 1);
 
     // Initialize test resources in Kinesis.
-    let region: Region = args.aws_region.parse().context("parsing AWS region")?;
-    let kinesis_client =
-        aws_util::client::kinesis(aws::ConnectInfo::new(region, None, None, None)?)?;
+    let config = AwsConfig::load_from_env().await;
+    let kinesis_client = mz_aws_util::kinesis::client(&config)?;
+
     let stream_arn =
         kinesis::create_stream(&kinesis_client, &stream_name, args.shard_count).await?;
     log::info!("Created Kinesis stream {}", stream_name);
@@ -124,13 +123,9 @@ pub struct Args {
     #[structopt(long, default_value = "6875")]
     pub materialized_port: u16,
 
-    /// The AWS region of the stream
-    #[structopt(long, default_value = "us-east-2")]
-    pub aws_region: String,
-
     /// The number of shards in the Kinesis stream
     #[structopt(long, default_value = "50")]
-    pub shard_count: i64,
+    pub shard_count: i32,
 
     /// The total number of records to create
     #[structopt(long, default_value = "150000000")]

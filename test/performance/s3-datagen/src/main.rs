@@ -7,16 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(clippy::as_conversions)]
-
 use std::io;
 use std::iter;
 
-use anyhow::Context;
-use rusoto_core::RusotoError;
-use rusoto_s3::{
-    CreateBucketConfiguration, CreateBucketError, CreateBucketRequest, PutObjectRequest, S3,
-};
+use aws_sdk_s3::error::{CreateBucketError, CreateBucketErrorKind};
+use aws_sdk_s3::model::{BucketLocationConstraint, CreateBucketConfiguration};
+use aws_sdk_s3::SdkError;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use structopt::StructOpt;
 use tracing::{error, info, Level};
 use tracing_subscriber::filter::EnvFilter;
@@ -24,6 +21,7 @@ use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+use mz_aws_util::config::AwsConfig;
 use ore::cast::CastFrom;
 
 /// Generate meaningless data in S3 to test download speeds
@@ -52,10 +50,6 @@ struct Args {
     /// All objects will be inserted into this bucket
     #[structopt(short = "b", long)]
     bucket: String,
-
-    /// Which region to operate in
-    #[structopt(short = "r", long, default_value = "us-east-2")]
-    region: String,
 
     /// Number of copy operations to run concurrently
     #[structopt(long, default_value = "50")]
@@ -100,81 +94,69 @@ async fn run() -> anyhow::Result<()> {
         })
         .collect::<String>();
 
-    let conn_info =
-        aws_util::aws::ConnectInfo::new(rusoto_core::Region::default(), None, None, None)?;
-
-    let client = aws_util::client::s3(conn_info).context("creating s3 client")?;
+    let config = AwsConfig::load_from_env().await;
+    let client = mz_aws_util::s3::client(&config)?;
 
     let first_object_key = format!("{}{:>05}", args.key_prefix, 0);
 
     let progressbar = indicatif::ProgressBar::new(u64::cast_from(args.object_count));
 
+    let bucket_config = match config.region().map(|r| r.as_ref()) {
+        // us-east-1 is special and is not accepted as a location constraint.
+        None | Some("us-east-1") => None,
+        Some(r) => Some(
+            CreateBucketConfiguration::builder()
+                .location_constraint(BucketLocationConstraint::from(r.as_ref()))
+                .build(),
+        ),
+    };
     client
-        .create_bucket(CreateBucketRequest {
-            bucket: args.bucket.clone(),
-            create_bucket_configuration: Some(CreateBucketConfiguration {
-                location_constraint: Some(args.region.clone()),
-            }),
-            ..Default::default()
-        })
+        .create_bucket()
+        .bucket(&args.bucket)
+        .set_create_bucket_configuration(bucket_config)
+        .send()
         .await
         .map(|_| info!("created s3 bucket {}", args.bucket))
-        .or_else(|e| {
-            if matches!(
-                e,
-                RusotoError::Service(CreateBucketError::BucketAlreadyOwnedByYou(_))
-            ) {
+        .or_else(|e| match e {
+            SdkError::ServiceError {
+                err:
+                    CreateBucketError {
+                        kind: CreateBucketErrorKind::BucketAlreadyOwnedByYou(_),
+                        ..
+                    },
+                ..
+            } => {
                 tracing::event!(Level::INFO, bucket = %args.bucket, "reusing existing bucket");
                 Ok(())
-            } else {
-                Err(e)
             }
+            _ => Err(e),
         })?;
 
     let mut total_created = 0;
     client
-        .put_object(PutObjectRequest {
-            bucket: args.bucket.clone(),
-            key: first_object_key.clone(),
-            body: Some(object.into_bytes().into()),
-            ..Default::default()
-        })
+        .put_object()
+        .bucket(&args.bucket)
+        .key(&first_object_key)
+        .body(object.into_bytes().into())
+        .send()
         .await?;
     total_created += 1;
     progressbar.inc(1);
 
     let copy_source = format!("{}/{}", args.bucket, first_object_key.clone());
 
-    let mut copy_reqs = Vec::new();
-    let pool_size = args.concurrent_copies;
-    for i in 1..pool_size + 1 {
-        copy_reqs.push(client.copy_object(rusoto_s3::CopyObjectRequest {
-            bucket: args.bucket.clone(),
-            copy_source: copy_source.clone(),
-            key: format!("{}{:>05}", args.key_prefix, i),
-            ..Default::default()
-        }));
+    let copy_reqs = (1..args.object_count).map(|i| {
+        client
+            .copy_object()
+            .bucket(&args.bucket)
+            .copy_source(&copy_source)
+            .key(format!("{}{:>05}", args.key_prefix, i))
+            .send()
+    });
+    let mut copy_reqs_stream = stream::iter(copy_reqs).buffer_unordered(args.concurrent_copies);
+    while let Some(_) = copy_reqs_stream.try_next().await? {
         progressbar.inc(1);
         total_created += 1;
-    }
-
-    for i in (pool_size + 1)..(args.object_count - pool_size) {
-        let (_resp, _, copies) = futures::future::select_all(copy_reqs).await;
-        copy_reqs = copies;
-        copy_reqs.push(client.copy_object(rusoto_s3::CopyObjectRequest {
-            bucket: args.bucket.clone(),
-            copy_source: copy_source.clone(),
-            key: format!("{}{:>05}", args.key_prefix, i),
-            ..Default::default()
-        }));
-        progressbar.inc(1);
-        total_created += 1;
-    }
-    while !copy_reqs.is_empty() {
-        let (_resp, _, copies) = futures::future::select_all(copy_reqs).await;
-        copy_reqs = copies;
-        total_created += 1;
-        progressbar.inc(1);
     }
     drop(progressbar);
 

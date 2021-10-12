@@ -1,0 +1,27 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! AWS SQS client and utilities.
+
+use aws_sdk_sqs::Client;
+
+use crate::config::AwsConfig;
+use crate::util;
+
+/// Constructs a new AWS SQS client that respects the
+/// [system proxy configuration](mz_http_proxy#system-proxy-configuration).
+pub fn client(config: &AwsConfig) -> Result<Client, anyhow::Error> {
+    let mut builder = aws_sdk_sqs::config::Config::builder().region(config.region().cloned());
+    builder.set_credentials_provider(Some(config.credentials_provider().clone()));
+    if let Some(endpoint) = config.endpoint() {
+        builder = builder.endpoint_resolver(endpoint.clone());
+    }
+    let conn = util::connector()?;
+    Ok(Client::from_conf_conn(builder.build(), conn))
+}

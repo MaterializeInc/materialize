@@ -978,13 +978,12 @@ class Localstack(PythonService):
     def __init__(
         self,
         name: str = "localstack",
-        image: str = f"localstack/localstack:0.12.5",
+        # https://github.com/localstack/localstack/pull/4979
+        image: str = f"benesch/localstack:0.13.0-p1",
         port: int = 4566,
-        services: List[str] = ["sts", "iam", "s3", "sqs", "kinesis"],
         environment: List[str] = ["HOSTNAME_EXTERNAL=localstack"],
         volumes: List[str] = ["/var/run/docker.sock:/var/run/docker.sock"],
     ) -> None:
-        environment.append("SERVICES=" + ",".join(services))
         super().__init__(
             name=name,
             config={

@@ -10,7 +10,24 @@
 //! Internal AWS utility library for Materialize.
 
 #![warn(missing_docs, missing_debug_implementations)]
+#![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
-pub mod aws;
-pub mod client;
+mod util;
+
+pub mod config;
+
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "kinesis")))]
+#[cfg(feature = "kinesis")]
 pub mod kinesis;
+
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "s3")))]
+#[cfg(feature = "s3")]
+pub mod s3;
+
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "sqs")))]
+#[cfg(feature = "sqs")]
+pub mod sqs;
+
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "sts")))]
+#[cfg(feature = "sts")]
+pub mod sts;
