@@ -17,7 +17,6 @@ use persist_types::Codec;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::FrontierNotificator;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -355,6 +354,9 @@ where
         let mut primary_data_buffer = Vec::new();
         let mut condition_data_buffer = Vec::new();
 
+        let mut input_frontier =
+            Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
+
         // We only seal from one worker because sealing from multiple workers could lead to a race
         // conditions where one worker seals up to time `t` while another worker is still trying to
         // write data with timestamps that are not beyond `t`.
@@ -369,25 +371,15 @@ where
         let active_seal_operator = self.scope().index() == 0;
 
         seal_op.build(move |mut capabilities| {
-            let mut primary_notificator = FrontierNotificator::new();
-            let mut condition_notificator = FrontierNotificator::new();
-
-            if active_seal_operator {
-                let initial_primary_cap = capabilities.pop().expect("missing capability");
-                let initial_condition_cap = initial_primary_cap.clone();
-
-                // We need to start with some notify. Otherwise, we would not seal a collection that
-                // corresponds to an input that never received any data.
-                primary_notificator.notify_at(initial_primary_cap);
-                condition_notificator.notify_at(initial_condition_cap);
-            }
+            let mut cap = if active_seal_operator {
+                let cap = capabilities.pop().expect("missing capability");
+                Some(cap)
+            } else {
+                None
+            };
 
             move |frontiers| {
                 let mut data_output = data_output.activate();
-
-                let frontiers = &[&frontiers[0], &frontiers[1]];
-                let mut primary_notificator = primary_notificator.monotonic(frontiers, &None);
-                let mut condition_notificator = condition_notificator.monotonic(frontiers, &None);
 
                 // Pass through all data.
                 primary_data_input.for_each(|cap, data| {
@@ -397,109 +389,122 @@ where
 
                     let mut session = data_output.session(&cap);
                     session.give_iterator(as_result);
-
-                    if active_seal_operator {
-                        // Explicitly seal at the time of received data. We also repeatedly set up
-                        // notifies based on the frontier, below, but also using the
-                        // time/capability of incoming data might make things more fine-grained.
-                        primary_notificator.notify_at(cap.retain());
-                    }
                 });
 
                 // Consume condition input data but throw it away. We only use this
                 // input to track the frontier (to know how far we're sealed up).
                 // TODO: There should be a better way for doing this, maybe?
-                condition_data_input.for_each(|cap, data| {
+                condition_data_input.for_each(|_cap, data| {
                     data.swap(&mut condition_data_buffer);
                     condition_data_buffer.drain(..);
-
-                    if active_seal_operator {
-                        // Explicitly seal at the time of received data. We also repeatedly set up
-                        // notifies based on the frontier, below, but also using the
-                        // time/capability of incoming data might make things more fine-grained.
-                        condition_notificator.notify_at(cap.retain());
-                    }
                 });
 
                 if !active_seal_operator {
                     return;
                 }
 
-                (&mut condition_notificator).for_each(|cap, _count, notificator| {
-                    log::trace!(
-                        "In {}, sealing condition input up to {}...",
-                        &operator_name,
-                        cap.time(),
-                    );
+                let mut new_input_frontier = Antichain::new();
+                new_input_frontier.extend(frontiers[0].frontier().into_iter().cloned());
+                new_input_frontier.extend(frontiers[1].frontier().into_iter().cloned());
 
-                    // Notify when the frontier advances again.
-                    let mut combined_frontier: Antichain<u64> = Antichain::new();
-                    combined_frontier.extend(notificator.frontier(0).iter().cloned());
-                    combined_frontier.extend(notificator.frontier(1).iter().cloned());
-                    for frontier_element in combined_frontier {
-                        notificator.notify_at(cap.delayed(&frontier_element));
-                    }
-
-                    // TODO: Don't block on the seal. Instead, we should yield from the
-                    // operator and/or find some other way to wait for the seal to succeed.
-                    let result = condition_write.seal(*cap.time()).recv();
-
-                    log::trace!(
-                        "In {}, finished sealing condition input up to {}",
-                        &operator_name,
-                        cap.time(),
-                    );
-
-                    if let Err(e) = result {
-                        let mut session = data_output.session(&cap);
-                        log::error!(
-                            "Error sealing {} (condition) up to {}: {:?}",
+                // We seal for every element in the new frontier that represents progress compared
+                // to the old frontier. Alternatively, we could always seal to the current
+                // frontier, because sealing is idempotent or seal to the current frontier if there
+                // is any progress compared to the previous frontier.
+                //
+                // The current solution is the one that does the least amount of expected work.
+                // However, with frontiers of Antichain<u64> we will always only have a single
+                // element in the frontier/antichain, so the optimization is somewhat unnecessary.
+                // This way, we are prepared for a future of multi-dimensional frontiers, though.
+                for frontier_element in new_input_frontier.iter() {
+                    if input_frontier.less_than(&frontier_element) {
+                        // First, seal up the condition input.
+                        log::trace!(
+                            "In {}, sealing condition input up to {}...",
                             &operator_name,
-                            cap.time(),
-                            e
+                            frontier_element,
                         );
-                        // TODO: make error retractable? Probably not...
-                        session.give(Err((e.to_string(), *cap.time(), 1)));
-                    }
-                });
 
-                (&mut primary_notificator).for_each(|cap, _count, notificator| {
-                    log::trace!(
-                        "In {}, sealing primary input up to {}...",
-                        &operator_name,
-                        cap.time(),
-                    );
+                        // TODO: Don't block on the seal. Instead, we should yield from the
+                        // operator and/or find some other way to wait for the seal to succeed.
+                        let result = condition_write.seal(*frontier_element).recv();
 
-                    // Notify when the frontier advances again.
-                    let mut combined_frontier: Antichain<u64> = Antichain::new();
-                    combined_frontier.extend(notificator.frontier(0).iter().cloned());
-                    combined_frontier.extend(notificator.frontier(1).iter().cloned());
-                    for frontier_element in combined_frontier {
-                        notificator.notify_at(cap.delayed(&frontier_element));
-                    }
-
-                    // TODO: Don't block on the seal. Instead, we should yield from the
-                    // operator and/or find some other way to wait for the seal to succeed.
-                    let result = primary_write.seal(*cap.time()).recv();
-
-                    log::trace!(
-                        "In {}, finished sealing primary input up to {}",
-                        &operator_name,
-                        cap.time(),
-                    );
-
-                    if let Err(e) = result {
-                        let mut session = data_output.session(&cap);
-                        log::error!(
-                            "Error sealing {} (primary) up to {}: {:?}",
+                        log::trace!(
+                            "In {}, finished sealing condition input up to {}",
                             &operator_name,
-                            cap.time(),
-                            e
+                            frontier_element,
                         );
-                        // TODO: make error retractable? Probably not...
-                        session.give(Err((e.to_string(), *cap.time(), 1)));
+
+                        if let Err(e) = result {
+                            let cap = cap.as_mut().expect("missing capability");
+                            let mut session = data_output.session(cap);
+                            log::error!(
+                                "Error sealing {} (condition) up to {}: {:?}",
+                                &operator_name,
+                                frontier_element,
+                                e
+                            );
+                            // TODO: make error retractable? Probably not...
+                            session.give(Err((e.to_string(), *cap.time(), 1)));
+
+                            // Don't seal the primary collection if sealing the condition
+                            // collection failed.
+                            continue;
+                        }
+
+                        // Then, seal up the primary input.
+                        log::trace!(
+                            "In {}, sealing primary input up to {}...",
+                            &operator_name,
+                            frontier_element,
+                        );
+
+                        // TODO: Don't block on the seal. Instead, we should yield from the
+                        // operator and/or find some other way to wait for the seal to succeed.
+                        let result = primary_write.seal(*frontier_element).recv();
+
+                        log::trace!(
+                            "In {}, finished sealing primary input up to {}",
+                            &operator_name,
+                            frontier_element,
+                        );
+
+                        if let Err(e) = result {
+                            let cap = cap.as_mut().expect("missing capability");
+                            let mut session = data_output.session(cap);
+                            log::error!(
+                                "Error sealing {} (primary) up to {}: {:?}",
+                                &operator_name,
+                                frontier_element,
+                                e
+                            );
+                            // TODO: make error retractable? Probably not...
+                            session.give(Err((e.to_string(), *cap.time(), 1)));
+                        }
                     }
-                });
+                }
+
+                input_frontier.clone_from(&mut new_input_frontier);
+
+                for time in input_frontier.iter() {
+                    let cap = cap.as_mut().expect("missing capability");
+                    if let Err(e) = cap.try_downgrade(time) {
+                        // With Antichain<u64> as frontier, this is guaranteed to succeed. If we
+                        // have multi-dimensional capabilities in the future we have to get
+                        // slightly more clever about managing our capabilities.
+                        panic!(
+                            "In {}, error downgrading capability {:?} to {}: {:?}",
+                            operator_name, cap, time, e
+                        );
+                    }
+                }
+
+                // An empty input frontier signals that we will never receive any input again. We
+                // need to drop our capability to ensure that the empty frontier can propagate
+                // downstream.
+                if input_frontier.is_empty() && cap.is_some() {
+                    cap.take().expect("error dropping capability");
+                }
             }
         });
 
@@ -914,8 +919,6 @@ mod tests {
         //  c) We seal up, even when never receiving any data.
         assert_eq!(
             vec![
-                Sealed::Condition(0),
-                Sealed::Primary(0),
                 Sealed::Condition(1),
                 Sealed::Primary(1),
                 Sealed::Condition(2),
@@ -976,32 +979,12 @@ mod tests {
             .flat_map(|(_, xs)| xs.into_iter())
             .collect::<Vec<_>>();
 
-        let expected = vec![
-            (
-                "failed to commit metadata after appending to unsealed: unavailable: blob set"
-                    .to_string(),
-                0,
-                1,
-            ),
-            (
-                "failed to commit metadata after appending to unsealed: unavailable: blob set"
-                    .to_string(),
-                0,
-                1,
-            ),
-            (
-                "failed to commit metadata after appending to unsealed: unavailable: blob set"
-                    .to_string(),
-                1,
-                1,
-            ),
-            (
-                "failed to commit metadata after appending to unsealed: unavailable: blob set"
-                    .to_string(),
-                1,
-                1,
-            ),
-        ];
+        let expected = vec![(
+            "failed to commit metadata after appending to unsealed: unavailable: blob set"
+                .to_string(),
+            0,
+            1,
+        )];
         assert_eq!(actual, expected);
 
         Ok(())
