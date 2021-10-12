@@ -47,30 +47,5 @@ impl Project {
                 *relation = input.take_dangerous();
             }
         }
-
-        // Any reduce will absorb any project. Also, this happens often.
-        if let MirRelationExpr::Reduce {
-            input,
-            group_key,
-            aggregates,
-            monotonic: _,
-            expected_group_size: _,
-        } = relation
-        {
-            if let MirRelationExpr::Project {
-                input: inner,
-                outputs,
-            } = &mut **input
-            {
-                // Rewrite the group key using `inner` columns.
-                for key in group_key.iter_mut() {
-                    key.permute(&outputs[..]);
-                }
-                for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.permute(&outputs[..]);
-                }
-                *input = Box::new(inner.take_dangerous());
-            }
-        }
     }
 }

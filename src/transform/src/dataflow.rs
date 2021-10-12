@@ -44,6 +44,10 @@ pub fn optimize_dataflow(
     // the filters are applied.
     optimize_dataflow_demand(dataflow);
 
+    // A smaller logical optimization pass after projections and filters are
+    // pushed down across views.
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer2());
+
     // Physical optimization pass
     optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer());
 

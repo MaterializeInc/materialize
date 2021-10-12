@@ -50,6 +50,7 @@ mod tests {
                 .chain(std::iter::once(
                     Box::new(transform::update_let::UpdateLet) as Box<dyn Transform + Send + Sync>
                 ))
+                .chain(Optimizer::logical_optimizer2().transforms.into_iter())
                 .chain(Optimizer::physical_optimizer().transforms.into_iter())
                 .collect::<Vec<_>>();
     }
@@ -311,10 +312,19 @@ mod tests {
             _ => {}
         };
         if test_type == TestType::Opt {
-            let mut optimizer = Optimizer::physical_optimizer();
+            let mut log_optimizer = Optimizer::logical_optimizer2();
+            let mut phys_optimizer = Optimizer::physical_optimizer();
             dataflow = dataflow
                 .into_iter()
-                .map(|(id, rel)| (id, optimizer.optimize(rel).unwrap().into_inner()))
+                .map(|(id, rel)| {
+                    (
+                        id,
+                        phys_optimizer
+                            .optimize(log_optimizer.optimize(rel).unwrap().into_inner())
+                            .unwrap()
+                            .into_inner(),
+                    )
+                })
                 .collect();
         }
         let format_type = get_format_type(args);

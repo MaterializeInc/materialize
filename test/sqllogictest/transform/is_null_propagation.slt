@@ -86,24 +86,22 @@ EXPLAIN SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) ag
 | Filter (#0 = 0)
 | Project ()
 | Negate
+| Map 0
 
 %8 =
 | Get %1 (l1)
 | Filter (#0 = 0)
-| Project ()
+| Map 0
+| Project (#1)
 
 %9 =
-| Union %7 %8
-| Map 0
-
-%10 =
-| Union %6 %9
+| Union %6 %7 %8
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%11 =
-| Join %0 %10 (= #0 #1)
-| | implementation = Differential %0 %10.(#0)
+%10 =
+| Join %0 %9 (= #0 #1)
+| | implementation = Differential %0 %9.(#0)
 | Project ()
 
 EOF
