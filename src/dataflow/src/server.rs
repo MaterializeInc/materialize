@@ -988,38 +988,36 @@ where
                     );
                     match (connector, consistency) {
                         (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
-                            byo_default.add_partition(PartitionId::Kafka(0));
                             // TODO(aljoscha): Hey Ruchir 😃, should we always pull this to +Inf,
                             // and never persist bindings for BYO sources, like this?
                             byo_default.set_durability_frontier(Antichain::new().borrow());
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::Kafka(0));
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::AvroOcf(_), Consistency::BringYourOwn(_)) => {
-                            byo_default.add_partition(PartitionId::None);
+                            byo_default.add_partition(PartitionId::None, None);
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::AvroOcf(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::None);
+                            rt_default.add_partition(PartitionId::None, None);
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::File(_), Consistency::BringYourOwn(_)) => {
-                            byo_default.add_partition(PartitionId::None);
+                            byo_default.add_partition(PartitionId::None, None);
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::File(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::None);
+                            rt_default.add_partition(PartitionId::None, None);
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::Kinesis(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::None);
+                            rt_default.add_partition(PartitionId::None, None);
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::S3(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::None);
+                            rt_default.add_partition(PartitionId::None, None);
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {
@@ -1054,7 +1052,7 @@ where
                 // Add any timestamp bindings that we were already aware of on restart.
                 if let Some(data) = source_timestamp_data {
                     for (pid, timestamp, offset) in bindings {
-                        data.add_partition(pid.clone());
+                        data.add_partition(pid.clone(), None);
                         data.add_binding(pid, timestamp, offset, false);
                     }
 
@@ -1080,11 +1078,12 @@ where
                             history.read_upper(&mut upper);
 
                             if upper.less_equal(&timestamp) {
+                                history.add_partition(pid.clone(), None);
                                 history.add_binding(pid, timestamp, offset + 1, false);
                             }
                         }
                         TimestampSourceUpdate::RealTime(new_partition) => {
-                            history.add_partition(new_partition);
+                            history.add_partition(new_partition, None);
                         }
                     };
 
