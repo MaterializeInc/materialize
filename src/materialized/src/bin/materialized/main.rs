@@ -658,12 +658,21 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
             start_time = Utc::now(),
             num_workers = args.workers.0,
         );
+
+        // The min_step_interval knob allows tuning a tradeoff between latency and storage usage.
+        // As persist gets more sophisticated over time, we'll no longer need this knob,
+        // but in the meantime we need it to make tests reasonably performant.
+        // The --timestamp-frequency flag similarly gives testing a control over
+        // latency vs resource usage, so for simplicity we reuse it here."
+        let min_step_interval = args.timestamp_frequency;
+
         PersistConfig {
             runtime: Some(runtime.clone()),
             storage,
             user_table_enabled,
             system_table_enabled,
             lock_info,
+            min_step_interval,
         }
     };
 

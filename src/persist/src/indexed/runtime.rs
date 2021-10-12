@@ -711,6 +711,7 @@ struct RuntimeImpl<L: Log, B: Blob> {
 /// Configuration for [start]ing a [RuntimeClient].
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
+    /// Minimum step interval to use
     min_step_interval: Duration,
 }
 
@@ -731,6 +732,11 @@ impl RuntimeConfig {
         RuntimeConfig {
             min_step_interval: Duration::from_millis(1),
         }
+    }
+
+    /// A configuration with a configurable min_step_interval
+    pub fn with_min_step_interval(min_step_interval: Duration) -> Self {
+        RuntimeConfig { min_step_interval }
     }
 }
 
