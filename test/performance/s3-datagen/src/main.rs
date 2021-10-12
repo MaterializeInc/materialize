@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::convert::TryInto;
-use std::default::Default;
+#![warn(clippy::as_conversions)]
+
 use std::io;
 use std::iter;
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use rusoto_core::RusotoError;
 use rusoto_s3::{
     CreateBucketConfiguration, CreateBucketError, CreateBucketRequest, PutObjectRequest, S3,
@@ -23,6 +23,8 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
+use ore::cast::CastFrom;
 
 /// Generate meaningless data in S3 to test download speeds
 #[derive(StructOpt)]
@@ -79,7 +81,7 @@ async fn run() -> anyhow::Result<()> {
 
     info!(
         "starting up to create {} of data across {} objects in {}/{}",
-        bytefmt::format((args.object_size * args.object_count).try_into()?),
+        bytefmt::format(u64::cast_from(args.object_size * args.object_count)),
         args.object_count,
         args.bucket,
         args.key_prefix
@@ -105,7 +107,7 @@ async fn run() -> anyhow::Result<()> {
 
     let first_object_key = format!("{}{:>05}", args.key_prefix, 0);
 
-    let progressbar = indicatif::ProgressBar::new(args.object_count as u64);
+    let progressbar = indicatif::ProgressBar::new(u64::cast_from(args.object_count));
 
     client
         .create_bucket(CreateBucketRequest {
@@ -182,8 +184,6 @@ async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_object_size(s: &str) -> anyhow::Result<usize> {
-    bytefmt::parse(s)
-        .map_err(|e| anyhow!("{}", e))
-        .and_then(|b| Ok(b.try_into()?))
+fn parse_object_size(s: &str) -> Result<usize, &str> {
+    bytefmt::parse(s).map(usize::cast_from)
 }
