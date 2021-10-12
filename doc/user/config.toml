@@ -84,6 +84,12 @@ name = "SQL"
 weight = 70
 
 [[menu.main]]
+name = "SQL Overview"
+parent = "sql"
+url = "/sql/"
+weight = 1
+
+[[menu.main]]
 identifier = "guides"
 name = "Guides"
 weight = 75
@@ -97,6 +103,12 @@ weight = 80
 identifier = "demos"
 name = "Demos"
 weight = 100
+
+[[menu.main]]
+name = "Try Materialize"
+parent = "demos"
+url = "/demos/"
+weight = 1
 
 [[menu.main]]
 identifier = "third-party"
