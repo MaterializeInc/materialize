@@ -93,7 +93,7 @@ fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> 
     record.set_interval_start(protobuf_timestamp(interval_start));
     record.set_interval_end(protobuf_timestamp(interval_end));
     record.set_meter(meter);
-    record.set_value(val as u32);
+    record.set_value(val as i32);
     record.set_info(ResourceInfo::random(rng));
 
     record

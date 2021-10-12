@@ -29,17 +29,18 @@ pgrepr = { path = "../pgrepr" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 postgres-util = { path = "../postgres-util" }
+protobuf = "2.23.0"
 protoc = { path = "../../src/protoc" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
 regex = "1.5.4"
 repr = { path = "../repr" }
-reqwest = "0.11.4"
+reqwest = "0.11.5"
 rusoto_core = "0.47.0"
 serde = { version = "1.0.130", features = ["derive"] }
 serde_json = "1.0.68"
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"
-tokio = { version = "1.11.0", features = ["fs"] }
+tokio = { version = "1.12.0", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 uncased = "0.9.6"
 url = "2.2.2"

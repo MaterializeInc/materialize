@@ -276,11 +276,8 @@ impl PredicatePushdown {
                         // Recursively descend on the join
                         self.action(input, get_predicates);
 
-                        if retain.is_empty() {
-                            *relation = (**input).clone();
-                        } else {
-                            *predicates = retain;
-                        }
+                        // remove all predicates that were pushed down from the current Filter node
+                        std::mem::swap(&mut retain, predicates);
                     }
                     MirRelationExpr::Reduce {
                         input: inner,
@@ -336,11 +333,8 @@ impl PredicatePushdown {
                         }
                         self.action(inner, get_predicates);
 
-                        if !retain.is_empty() {
-                            *predicates = retain;
-                        } else {
-                            *relation = input.take_dangerous();
-                        }
+                        // remove all predicates that were pushed down from the current Filter node
+                        std::mem::swap(&mut retain, predicates);
                     }
                     MirRelationExpr::Project { input, outputs } => {
                         let predicates = predicates.drain(..).map(|mut predicate| {
@@ -385,6 +379,21 @@ impl PredicatePushdown {
                         }
                         *relation = result;
                     }
+                    MirRelationExpr::FlatMap { input, .. } => {
+                        let (mut retained, pushdown) =
+                            Self::push_filters_through_flat_map(predicates, input.arity());
+
+                        // remove all predicates that were pushed down from the current Filter node
+                        std::mem::swap(&mut retained, predicates);
+
+                        if !pushdown.is_empty() {
+                            // put the filter on top of the input
+                            **input = input.take_dangerous().filter(pushdown);
+                        }
+
+                        // ... and keep pushing predicates down
+                        self.action(input, get_predicates);
+                    }
                     MirRelationExpr::Union { base, inputs } => {
                         let predicates = std::mem::replace(predicates, Vec::new());
                         *base = Box::new(base.take_dangerous().filter(predicates.clone()));
@@ -402,6 +411,14 @@ impl PredicatePushdown {
                     x => {
                         x.visit1_mut(|e| self.action(e, get_predicates));
                     }
+                }
+
+                // remove empty filters (junk by-product of the actual transform)
+                match relation {
+                    MirRelationExpr::Filter { predicates, input } if predicates.is_empty() => {
+                        *relation = input.take_dangerous();
+                    }
+                    _ => {}
                 }
             }
             MirRelationExpr::Get { id, .. } => {
@@ -681,7 +698,7 @@ impl PredicatePushdown {
         }
     }
 
-    /// Pushes "safe" predicates through a Map.
+    /// Computes "safe" predicates to push through a Map.
     ///
     /// In the case of a Filter { Map {...} }, we can always push down the Filter
     /// by inlining expressions from the Map. We don't want to do this in general,
@@ -691,8 +708,7 @@ impl PredicatePushdown {
     /// Note that this means we can always push down filters that only reference
     /// input columns.
     ///
-    /// Returns the predicates that did not get pushed down, followed by ones
-    /// that did.
+    /// Returns the predicates that can be pushed down, followed by ones that cannot.
     pub fn push_filters_through_map(
         &self,
         scalars: &Vec<MirScalarExpr>,
@@ -724,6 +740,33 @@ impl PredicatePushdown {
                         }
                     }
                 });
+                pushdown.push(predicate);
+            } else {
+                retained.push(predicate);
+            }
+        }
+        (retained, pushdown)
+    }
+
+    /// Computes "safe" predicate to push through a FlatMap.
+    ///
+    /// In the case of a Filter { FlatMap {...} }, we want to push through all predicates
+    /// that (1) are not literal errors and (2) have support exclusively in the columns
+    /// provided by the FlatMap input.
+    ///
+    /// Returns the predicates that can be pushed down, followed by ones that cannot.
+    pub fn push_filters_through_flat_map(
+        predicates: &mut Vec<MirScalarExpr>,
+        input_arity: usize,
+    ) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>) {
+        let mut pushdown = Vec::new();
+        let mut retained = Vec::new();
+        for predicate in predicates.drain(..) {
+            // First, check if we can push this predicate down. We can do so if and only if:
+            // (1) the predicate is not a literal error, and
+            // (2) each column it references is from the input.
+            if (!predicate.is_literal_err()) && predicate.support().iter().all(|c| *c < input_arity)
+            {
                 pushdown.push(predicate);
             } else {
                 retained.push(predicate);

@@ -197,11 +197,16 @@ v1_primary_idx  user
 v2              user
 v2_primary_idx  user
 
-# DROP DATABASE should not support RESTRICT or CASCADE.
+# DROP DATABASE does not support both RESTRICT and CASCADE.
+! DROP DATABASE d RESTRICT CASCADE
+Cannot specify both RESTRICT and CASCADE in DROP
+! DROP DATABASE d CASCADE RESTRICT
+Cannot specify both CASCADE and RESTRICT in DROP
+! DROP DATABASE d CASCADE CASCADE
+Expected end of statement, found CASCADE
+
 ! DROP DATABASE d RESTRICT
-Expected end of statement, found RESTRICT
-! DROP DATABASE d RESTRICT
-Expected end of statement, found RESTRICT
+database 'd' cannot be dropped with RESTRICT while it contains schemas
 
 # DROP DATABASE should succeed even when there are objects in the database.
 > DROP DATABASE d

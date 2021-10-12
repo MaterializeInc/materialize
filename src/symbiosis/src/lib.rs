@@ -42,7 +42,7 @@ use sql::ast::{
     DropObjectsStatement, Expr, InsertStatement, ObjectType, Raw, Statement, TableConstraint,
     UpdateStatement,
 };
-use sql::catalog::Catalog;
+use sql::catalog::SessionCatalog;
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::normalize;
 use sql::plan::{
@@ -138,7 +138,7 @@ END $$;
     pub async fn execute(
         &mut self,
         pcx: &PlanContext,
-        catalog: &dyn Catalog,
+        catalog: &dyn SessionCatalog,
         stmt: &Statement<Raw>,
     ) -> Result<Plan, anyhow::Error> {
         let scx = StatementContext::new(Some(pcx), catalog, Rc::new(RefCell::new(BTreeMap::new())));
@@ -292,7 +292,7 @@ END $$;
             }
             Statement::Delete(DeleteStatement { table_name, .. }) => {
                 let mut updates = vec![];
-                let table = scx.resolve_item(table_name.clone())?;
+                let table = scx.resolve_item(table_name.name().clone())?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
                 for row in self.run_query(table.name(), sql, 0).await? {
                     updates.push((row, -1));
@@ -326,8 +326,8 @@ END $$;
                 ..
             }) => {
                 let mut updates = vec![];
-                let mut sql = format!("SELECT * FROM {}", table_name);
-                let table = scx.resolve_item(table_name.clone())?;
+                let mut sql = format!("SELECT * FROM {}", &table_name.name());
+                let table = scx.resolve_item(table_name.name().clone())?;
                 if let Some(selection) = selection {
                     sql += &format!(" WHERE {}", selection);
                 }

@@ -11,11 +11,13 @@
 
 //! Driver for timely/differential dataflow.
 
+mod activator;
 mod arrangement;
 mod decode;
 mod metrics;
 mod operator;
 mod render;
+mod replay;
 mod server;
 mod sink;
 

@@ -8,6 +8,8 @@ alter_index ::=
     )
     | 'RESET' '(' field ( ',' field )* ')'
   )
+array_agg ::=
+  'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')'
 begin ::=
   'BEGIN' ( transaction_mode ( ',' transaction_mode )* )?
 close ::=
@@ -244,7 +246,7 @@ insert ::=
 discard ::=
   'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
 drop_database ::=
-    'DROP' 'DATABASE' ('IF EXISTS')? database_name
+    'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_index ::=
     'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_role ::=
@@ -321,10 +323,16 @@ join_expr ::=
 	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' | 'ON' expression ) select_post
 join_type ::=
     ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' | )
+jsonb_agg ::=
+    'jsonb_agg' '(' expression ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')'
+jsonb_object_agg ::=
+  'jsonb_object_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')'
 sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('KEY' '(' key_column ( ',' key_column )* ')')?
     ('CONSISTENCY' '(' 'TOPIC' consistency_topic ('FORMAT' consistency_format_spec)? ')' )?
+list_agg ::=
+  'list_agg' '(' value  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')'
 lit_cast ::=
   type val
 op_cast ::=
@@ -378,6 +386,8 @@ show_views ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'VIEWS' ('FROM' schema_name)?
 show_objects ::=
   'SHOW' 'EXTENDED'? 'FULL'?  'OBJECTS' ('FROM' schema_name)?
+string_agg ::=
+  'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')'
 table_ref ::=
   (
     table_name

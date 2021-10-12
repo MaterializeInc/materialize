@@ -32,7 +32,7 @@ rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 repr = { path = "../repr" }
-reqwest = { version = "0.11.4", features = ["native-tls-vendored"] }
+reqwest = { version = "0.11.5", features = ["native-tls-vendored"] }
 rusoto_core = "0.47.0"
 rusoto_credential = "0.47.0"
 rusoto_kinesis = "0.47.0"
@@ -47,7 +47,7 @@ structopt = "0.3.23"
 tempfile = "3.2.0"
 termcolor = "1.1.2"
 tiberius = "0.6.4"
-tokio = "1.11.0"
+tokio = "1.12.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.7"
 tokio-util = { version = "0.6.8", features = ['compat'] }
@@ -55,8 +55,8 @@ url = "2.2.2"
 uuid = "0.8.2"
 
 [dev-dependencies]
-assert_cmd = "2.0.1"
-predicates = "2.0.2"
+assert_cmd = "2.0.2"
+predicates = "2.0.3"
 
 [build-dependencies]
 protoc = { path = "../protoc" }

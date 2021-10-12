@@ -204,83 +204,97 @@ pub async fn init_views(
     kafka_source_name: &str,
     csv_source_name: &str,
 ) -> Result<()> {
+    let billing_raw_data = format!(
+        "CREATE MATERIALIZED VIEW billing_raw_data AS
+        SELECT
+        *
+        FROM
+        {}",
+        kafka_source_name
+    );
+
+    let billing_prices = format!(
+        "CREATE MATERIALIZED VIEW billing_prices AS
+        SELECT
+        column1::int AS client_id,
+        ((column2::float) / 1000.0) AS price_per_cpu_ms,
+        ((column3::float) / 1000.0) AS price_per_gb_ms
+        FROM
+        {}",
+        csv_source_name
+    );
+
+    let billing_batches = r#"CREATE MATERIALIZED VIEW billing_batches AS
+        SELECT
+            billing_raw_data.id,
+            to_timestamp(((billing_raw_data.interval_start)."seconds")::bigint) interval_start,
+            to_timestamp(((billing_raw_data.interval_end)."seconds")::bigint) interval_end
+        FROM
+            billing_raw_data"#
+        .to_string();
+
+    let billing_records = r#"CREATE MATERIALIZED VIEW billing_records AS
+    SELECT
+        (r).id id,
+        billing_raw_data.id batch_id,
+        to_timestamp((((r)."interval_start")."seconds")::bigint) interval_start,
+        to_timestamp((((r)."interval_end")."seconds")::bigint) interval_end,
+        (r).meter meter,
+        ((r)."value")::int value,
+        (((r).info).client_id)::int client_id,
+        (((r).info).vm_id)::int vm_id,
+        (((r).info).cpu_num)::int cpu_num,
+        (((r).info).memory_gb)::int memory_gb,
+        (((r).info).disk_gb)::int disk_gb
+    FROM
+        billing_raw_data,
+        unnest(records) AS r"#
+        .to_string();
+
+    let billing_monthly_statement = "CREATE MATERIALIZED VIEW billing_monthly_statement AS
+    SELECT
+        billing_agg_by_month.month,
+        billing_agg_by_month.client_id,
+        billing_agg_by_month.sum as execution_time_ms,
+        billing_agg_by_month.cpu_num,
+        billing_agg_by_month.memory_gb,
+        floor((billing_agg_by_month.sum * ((billing_agg_by_month.cpu_num * billing_prices.price_per_cpu_ms) + (billing_agg_by_month.memory_gb * billing_prices.price_per_gb_ms)))) as monthly_bill
+    FROM
+        billing_agg_by_month, billing_prices
+    WHERE
+        billing_agg_by_month.client_id = billing_prices.client_id AND billing_agg_by_month.meter = 'execution_time_ms'"
+            .to_string();
+
+    let billing_top_5_months_per_client =
+        "CREATE MATERIALIZED VIEW billing_top_5_months_per_client AS
+    SELECT
+        client_id,
+        month,
+        execution_time_ms,
+        monthly_bill,
+        cpu_num,
+        memory_gb
+    FROM
+        (SELECT DISTINCT client_id FROM billing_monthly_statement) grp,
+        LATERAL
+            (SELECT month, execution_time_ms, monthly_bill, cpu_num, memory_gb
+                FROM
+                    billing_monthly_statement
+                WHERE client_id = grp.client_id
+                ORDER BY monthly_bill DESC LIMIT 5)"
+            .to_string();
+
     let views = vec![
-        format!(
-            "CREATE MATERIALIZED VIEW billing_raw_data AS
-SELECT
-    *
-FROM
-    {}",
-            kafka_source_name
-        ),
-        format!(
-            "CREATE MATERIALIZED VIEW billing_prices AS
-SELECT
-column1::int AS client_id,
-((column2::float) / 1000.0) AS price_per_cpu_ms,
-((column3::float) / 1000.0) AS price_per_gb_ms
-FROM
-{}",
-            csv_source_name
-        ),
-        "CREATE MATERIALIZED VIEW billing_batches AS
-SELECT
-    billing_raw_data.id,
-    to_timestamp((billing_raw_data.interval_start->'seconds')::bigint) interval_start,
-    to_timestamp((billing_raw_data.interval_end->'seconds')::bigint) interval_end
-FROM
-    billing_raw_data"
-            .to_string(),
-        "CREATE MATERIALIZED VIEW billing_records AS
-SELECT
-    r.value->>'id' id,
-    billing_raw_data.id batch_id,
-    to_timestamp((r.value->'interval_start'->'seconds')::bigint) interval_start,
-    to_timestamp((r.value->'interval_end'->'seconds')::bigint)  interval_end,
-    r.value->>'meter' meter,
-    (r.value->'value')::int value,
-    (r.value->'info'->'client_id')::int client_id,
-    (r.value->'info'->'vm_id')::int vm_id,
-    (r.value->'info'->'cpu_num')::int cpu_num,
-    (r.value->'info'->'memory_gb')::int memory_gb,
-    (r.value->'info'->'disk_gb')::int disk_gb
-FROM
-    billing_raw_data,
-    jsonb_array_elements(records) AS r"
-            .to_string(),
+        billing_raw_data,
+        billing_prices,
+        billing_batches,
+        billing_records,
         billing_agg_view("minute"),
         billing_agg_view("hour"),
         billing_agg_view("day"),
         billing_agg_view("month"),
-        "CREATE MATERIALIZED VIEW billing_monthly_statement AS
-SELECT
-    billing_agg_by_month.month,
-    billing_agg_by_month.client_id,
-    billing_agg_by_month.sum as execution_time_ms,
-    billing_agg_by_month.cpu_num,
-    billing_agg_by_month.memory_gb,
-    floor((billing_agg_by_month.sum * ((billing_agg_by_month.cpu_num * billing_prices.price_per_cpu_ms) + (billing_agg_by_month.memory_gb * billing_prices.price_per_gb_ms)))) as monthly_bill
-FROM
-    billing_agg_by_month, billing_prices
-WHERE
-    billing_agg_by_month.client_id = billing_prices.client_id AND billing_agg_by_month.meter = 'execution_time_ms'"
-        .to_string(),
-    "CREATE MATERIALIZED VIEW billing_top_5_months_per_client AS
-SELECT
-    client_id,
-    month,
-    execution_time_ms,
-    monthly_bill,
-    cpu_num,
-    memory_gb
-FROM
-    (SELECT DISTINCT client_id FROM billing_monthly_statement) grp,
-    LATERAL
-        (SELECT month, execution_time_ms, monthly_bill, cpu_num, memory_gb
-            FROM
-                billing_monthly_statement
-            WHERE client_id = grp.client_id
-            ORDER BY monthly_bill DESC LIMIT 5)".to_string(),
+        billing_monthly_statement,
+        billing_top_5_months_per_client,
     ];
 
     for v in views.iter() {

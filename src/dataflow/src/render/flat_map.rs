@@ -33,6 +33,7 @@ where
         let (ok_collection, err_collection) = input.as_collection();
         let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
             let mut datums = DatumVec::new();
+            let mut row_builder = Row::default();
             move |(input_row, time, diff)| {
                 let temp_storage = RowArena::new();
                 // Unpack datums and capture its length (to rewind MFP eval).
@@ -46,7 +47,7 @@ where
                     Ok(exprs) => exprs,
                     Err(e) => return vec![(Err((e.into(), time, diff)))],
                 };
-                let output_rows = match func.eval(exprs, &temp_storage) {
+                let output_rows = match func.eval(&exprs, &temp_storage) {
                     Ok(exprs) => exprs,
                     Err(e) => return vec![(Err((e.into(), time, diff)))],
                 };
@@ -55,6 +56,7 @@ where
                 let temp_storage = &temp_storage;
                 let mfp_plan = &mfp_plan;
                 let output_rows_vec: Vec<_> = output_rows.collect();
+                let row_builder = &mut row_builder;
                 output_rows_vec
                     .iter()
                     .flat_map(move |(output_row, r)| {
@@ -63,7 +65,13 @@ where
                         // Extend datums with additional columns, replace some with dummy values.
                         datums_local.extend(output_row.iter());
                         mfp_plan
-                            .evaluate(&mut datums_local, temp_storage, time, diff * *r)
+                            .evaluate(
+                                &mut datums_local,
+                                temp_storage,
+                                time,
+                                diff * *r,
+                                row_builder,
+                            )
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>()

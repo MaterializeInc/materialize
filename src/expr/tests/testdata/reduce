@@ -305,6 +305,27 @@ reduce
 ----
 (#0 || #1)
 
+## Record get/create optimizations
+
+reduce
+(call_unary (record_get 0) (call_variadic (record_create ["f1" "f2"]) [#0 #1]))
+[int32 int32]
+----
+#0
+
+reduce
+(call_unary (record_get 0)
+    (call_variadic coalesce
+        [
+            (call_variadic (record_create ["f1" "f2"]) [#0 #1])
+            (call_variadic (record_create ["f1" "f2"]) [null null])
+        ]
+    )
+)
+[int32 int32]
+----
+record_get[0](coalesce(record_create(#0, #1), [null, null]))
+
 ## undistribute_and/or works despite multiple copies of the same expression in
 ## the intersection
 

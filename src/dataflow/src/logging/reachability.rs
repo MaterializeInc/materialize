@@ -19,9 +19,11 @@ use timely::dataflow::operators::capture::EventLink;
 use timely::logging::WorkerIdentifier;
 
 use super::{LogVariant, TimelyLog};
+use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
+use crate::replay::MzReplay;
 use dataflow_types::logging::LoggingConfig;
 use ore::iter::IteratorExt;
 use repr::{Datum, Row, RowArena, Timestamp};
@@ -43,17 +45,19 @@ pub fn construct<A: Allocate>(
             ),
         >,
     >,
+    activator: RcActivator,
 ) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
         use differential_dataflow::collection::AsCollection;
-        use timely::dataflow::operators::capture::Replay;
 
-        let logs = Some(linked).replay_core(
+        let logs = Some(linked).mz_replay(
             scope,
-            Some(Duration::from_nanos(config.granularity_ns as u64)),
+            "reachability logs",
+            Duration::from_nanos(config.granularity_ns as u64),
+            activator,
         );
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;

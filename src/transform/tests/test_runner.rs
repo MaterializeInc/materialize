@@ -20,9 +20,15 @@ mod tests {
     use std::fmt::Write;
 
     use anyhow::{anyhow, Error};
-    use expr::MirRelationExpr;
-    use expr_test_util::{build_rel, json_to_spec, TestCatalog};
+    use expr::{GlobalId, Id, MirRelationExpr};
+    use expr_test_util::{
+        build_rel, json_to_spec, MirRelationExprDeserializeContext, TestCatalog, RTI,
+    };
+    use lazy_static::lazy_static;
+    use lowertest::{deserialize, tokenize};
     use ore::str::separated;
+    use proc_macro2::TokenTree;
+    use transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
     use transform::{Optimizer, Transform, TransformArgs};
 
     // Global options
@@ -31,6 +37,22 @@ mod tests {
     // Values that can be supplied for global options
     const JSON: &str = "json";
     const TEST: &str = "test";
+
+    lazy_static! {
+        static ref FULL_TRANSFORM_LIST: Vec<Box<dyn Transform + Send + Sync>> =
+            Optimizer::logical_optimizer()
+                .transforms
+                .into_iter()
+                .chain(std::iter::once(
+                    Box::new(transform::projection_pushdown::ProjectionPushdown)
+                        as Box<dyn Transform + Send + Sync>,
+                ))
+                .chain(std::iter::once(
+                    Box::new(transform::update_let::UpdateLet) as Box<dyn Transform + Send + Sync>
+                ))
+                .chain(Optimizer::physical_optimizer().transforms.into_iter())
+                .collect::<Vec<_>>();
+    }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     enum FormatType<'a> {
@@ -44,6 +66,21 @@ mod tests {
         Build,
         Opt,
         Steps,
+    }
+
+    /// Parses the output format from `args[format]`.
+    fn get_format_type<'a>(args: &'a HashMap<String, Vec<String>>) -> FormatType<'a> {
+        if let Some(format) = args.get(FORMAT) {
+            if format.iter().any(|s| s == TEST) {
+                FormatType::Test
+            } else if format.iter().any(|s| s == JSON) {
+                FormatType::Json
+            } else {
+                FormatType::Explain(args.get(FORMAT))
+            }
+        } else {
+            FormatType::Explain(args.get(FORMAT))
+        }
     }
 
     // Converts string to MirRelationExpr. `args[in]` specifies which input
@@ -61,8 +98,7 @@ mod tests {
         build_rel(s, cat).map_err(|e| anyhow!(e))
     }
 
-    // Converts MirRelationExpr back. `args[format]` specifies which output
-    // format to use.
+    /// Converts MirRelationExpr to `format_type`.
     fn convert_rel_to_string(
         rel: &MirRelationExpr,
         cat: &TestCatalog,
@@ -78,7 +114,7 @@ mod tests {
         }
     }
 
-    fn run_testcase(
+    fn run_single_view_testcase(
         s: &str,
         cat: &TestCatalog,
         args: &HashMap<String, Vec<String>>,
@@ -97,32 +133,19 @@ mod tests {
             )?;
         }
 
-        let format_type = if let Some(format) = args.get(FORMAT) {
-            if format.iter().any(|s| s == TEST) {
-                FormatType::Test
-            } else if format.iter().any(|s| s == JSON) {
-                FormatType::Json
-            } else {
-                FormatType::Explain(args.get(FORMAT))
-            }
-        } else {
-            FormatType::Explain(args.get(FORMAT))
-        };
-
-        let mut logical_opt = Optimizer::logical_optimizer();
-        let mut physical_opt = Optimizer::physical_optimizer();
+        let format_type = get_format_type(args);
 
         let out = match test_type {
             TestType::Opt => {
-                rel = logical_opt
-                    .optimize(rel, &HashMap::new())
-                    .unwrap()
-                    .into_inner();
-                rel = physical_opt
-                    .optimize(rel, &HashMap::new())
-                    .unwrap()
-                    .into_inner();
-
+                for transform in FULL_TRANSFORM_LIST.iter() {
+                    transform.transform(
+                        &mut rel,
+                        TransformArgs {
+                            id_gen: &mut id_gen,
+                            indexes: &indexes,
+                        },
+                    )?;
+                }
                 convert_rel_to_string(&rel, &cat, &format_type)
             }
             TestType::Build => convert_rel_to_string(&rel, &cat, &format_type),
@@ -136,11 +159,7 @@ mod tests {
                 writeln!(out, "{}", convert_rel_to_string(&rel, &cat, &format_type))?;
                 writeln!(out, "====")?;
 
-                for transform in logical_opt
-                    .transforms
-                    .iter()
-                    .chain(physical_opt.transforms.iter())
-                {
+                for transform in FULL_TRANSFORM_LIST.iter() {
                     let prev = rel.clone();
                     transform.transform(
                         &mut rel,
@@ -228,11 +247,142 @@ mod tests {
             "UnionBranchCancellation" => {
                 Ok(Box::new(transform::union_cancel::UnionBranchCancellation))
             }
+            "UnionFusion" => Ok(Box::new(transform::fusion::union::Union)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name
             )),
         }
+    }
+
+    // TODO: have multiview test case accept the "in" argument
+    fn run_multiview_testcase(
+        s: &str,
+        cat: &mut TestCatalog,
+        args: &HashMap<String, Vec<String>>,
+        test_type: TestType,
+    ) -> Result<String, String> {
+        let mut input_stream = tokenize(&s)?.into_iter();
+        let mut dataflow = Vec::new();
+        while let Some(token) = input_stream.next() {
+            match token {
+                TokenTree::Group(group) => {
+                    let mut inner_iter = group.stream().into_iter();
+                    let name = match inner_iter.next() {
+                        Some(TokenTree::Ident(ident)) => ident.to_string(),
+                        other => {
+                            return Err(format!("Could not parse {:?} as view name", other));
+                        }
+                    };
+                    let rel: MirRelationExpr = deserialize(
+                        &mut inner_iter,
+                        "MirRelationExpr",
+                        &RTI,
+                        &mut MirRelationExprDeserializeContext::new(cat),
+                    )?;
+                    let id = cat.insert(&name, rel.typ(), true)?;
+                    dataflow.push((id, rel));
+                }
+                other => return Err(format!("Could not parse {:?} as view", other)),
+            }
+        }
+        if dataflow.is_empty() {
+            return Err("Empty dataflow".to_string());
+        }
+        let mut out = String::new();
+        if test_type == TestType::Opt {
+            let mut optimizer = Optimizer::logical_optimizer();
+            dataflow = dataflow
+                .into_iter()
+                .map(|(id, rel)| (id, optimizer.optimize(rel).unwrap().into_inner()))
+                .collect();
+        }
+        match test_type {
+            TestType::Build => {
+                for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
+                    out.push_str(&apply_cross_view_transform(t, &mut dataflow, cat)?[..]);
+                }
+            }
+            TestType::Opt => {
+                for t in ["filter", "project"] {
+                    out.push_str(&apply_cross_view_transform(t, &mut dataflow, cat)?[..]);
+                }
+            }
+            _ => {}
+        };
+        if test_type == TestType::Opt {
+            let mut optimizer = Optimizer::physical_optimizer();
+            dataflow = dataflow
+                .into_iter()
+                .map(|(id, rel)| (id, optimizer.optimize(rel).unwrap().into_inner()))
+                .collect();
+        }
+        let format_type = get_format_type(args);
+        out = format!(
+            "{}\n====\n{}",
+            out,
+            separated(
+                "====\n",
+                dataflow.into_iter().map(|(id, rel)| format!(
+                    "View {}:\n{}\n",
+                    cat.get_source_name(&id).unwrap(),
+                    convert_rel_to_string(&rel, cat, &format_type)
+                ))
+            )
+        );
+        cat.remove_transient_objects();
+        Ok(out)
+    }
+
+    /// Applies a transform across the set of `MirRelationExpr`.
+    ///
+    /// Returns a string describing information pushed down to sources.
+    fn apply_cross_view_transform(
+        transform: &str,
+        dataflow: &mut Vec<(GlobalId, MirRelationExpr)>,
+        cat: &TestCatalog,
+    ) -> Result<String, String> {
+        let result = match transform {
+            "filter" => {
+                let mut predicates = HashMap::new();
+                optimize_dataflow_filters_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut predicates);
+                format!("Pushed-down predicates:\n{}", log_pushed_outside_of_dataflow(predicates, cat))
+            }
+            "project" => {
+                let mut demand = HashMap::new();
+                if let Some((id, rel)) = dataflow.last() {
+                    demand.insert(Id::Global(*id), (0..rel.arity()).collect());
+                }
+                optimize_dataflow_demand_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut demand);
+                format!("Pushed-down demand:\n{}", log_pushed_outside_of_dataflow(demand, cat))
+            }
+            _ => return Err(format!(
+                "no cross-view transform named {} (you might have to add it to apply_cross_view_transform)",
+                transform
+            ))
+        };
+        Ok(result)
+    }
+
+    /// Converts a map of (source) -> (information pushed to source) into a string.
+    fn log_pushed_outside_of_dataflow<D>(map: HashMap<Id, D>, cat: &TestCatalog) -> String
+    where
+        D: std::fmt::Debug + Clone,
+    {
+        let mut result = String::new();
+        for (id, obj) in map {
+            if let Id::Global(GlobalId::User(id)) = id {
+                result.push_str(
+                    &format!(
+                        "Source {}: {:?}",
+                        cat.get_source_name(&GlobalId::User(id)).unwrap(),
+                        obj
+                    )[..],
+                );
+                result.push('\n');
+            }
+        }
+        result
     }
 
     #[test]
@@ -245,25 +395,61 @@ mod tests {
                         Ok(()) => String::from("ok\n"),
                         Err(err) => format!("error: {}\n", err),
                     },
-                    "build" => match run_testcase(&s.input, &catalog, &s.args, TestType::Build) {
-                        // Generally, explanations for fully optimized queries
-                        // are not allowed to have whitespace at the end;
-                        // however, a partially optimized query can.
-                        // Since clippy rejects test results with trailing
-                        // whitespace, remove whitespace before comparing results.
-                        Ok(msg) => {
-                            format!("{}", separated("\n", msg.split('\n').map(|s| s.trim_end())))
+                    "build" => {
+                        match run_single_view_testcase(&s.input, &catalog, &s.args, TestType::Build)
+                        {
+                            // Generally, explanations for fully optimized queries
+                            // are not allowed to have whitespace at the end;
+                            // however, a partially optimized query can.
+                            // Since clippy rejects test results with trailing
+                            // whitespace, remove whitespace before comparing results.
+                            Ok(msg) => {
+                                format!(
+                                    "{}",
+                                    separated("\n", msg.split('\n').map(|s| s.trim_end()))
+                                )
+                            }
+                            Err(err) => format!("error: {}\n", err),
                         }
-                        Err(err) => format!("error: {}\n", err),
-                    },
-                    "opt" => match run_testcase(&s.input, &catalog, &s.args, TestType::Opt) {
-                        Ok(msg) => msg,
-                        Err(err) => format!("error: {}\n", err),
-                    },
-                    "steps" => match run_testcase(&s.input, &catalog, &s.args, TestType::Steps) {
-                        Ok(msg) => msg,
-                        Err(err) => format!("error: {}\n", err),
-                    },
+                    }
+                    "opt" => {
+                        match run_single_view_testcase(&s.input, &catalog, &s.args, TestType::Opt) {
+                            Ok(msg) => msg,
+                            Err(err) => format!("error: {}\n", err),
+                        }
+                    }
+                    "steps" => {
+                        match run_single_view_testcase(&s.input, &catalog, &s.args, TestType::Steps)
+                        {
+                            Ok(msg) => msg,
+                            Err(err) => format!("error: {}\n", err),
+                        }
+                    }
+                    "crossview" => {
+                        match run_multiview_testcase(
+                            &s.input,
+                            &mut catalog,
+                            &s.args,
+                            TestType::Build,
+                        ) {
+                            Ok(msg) => format!(
+                                "{}",
+                                separated("\n", msg.split('\n').map(|s| s.trim_end()))
+                            ),
+                            Err(err) => format!("error: {}\n", err),
+                        }
+                    }
+                    "crossviewopt" => {
+                        match run_multiview_testcase(
+                            &s.input,
+                            &mut catalog,
+                            &s.args,
+                            TestType::Build,
+                        ) {
+                            Ok(msg) => msg,
+                            Err(err) => format!("error: {}\n", err),
+                        }
+                    }
                     _ => panic!("unknown directive: {}", s.directive),
                 }
             })

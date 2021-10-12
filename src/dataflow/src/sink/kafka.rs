@@ -238,6 +238,7 @@ struct KafkaSinkToken {
 
 impl Drop for KafkaSinkToken {
     fn drop(&mut self) {
+        debug!("dropping kafka sink");
         self.shutdown_flag.store(true, Ordering::SeqCst);
     }
 }
@@ -400,14 +401,18 @@ impl KafkaSinkState {
         P: ToBytes + ?Sized,
     {
         if let Err((e, _)) = self.producer.send(record) {
-            error!("unable to produce message in {}: {}", self.name, e);
             self.metrics.message_send_errors_counter.inc();
 
             if let KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) = e {
+                debug!("unable to produce message in {}: rdkafka queue full. Retrying after 60 seconds.", self.name);
                 self.activator.activate_after(Duration::from_secs(60));
                 Err(true)
             } else {
                 // We've received an error that is not transient
+                error!(
+                    "unable to produce message in {}: {}. Shutting down sink.",
+                    self.name, e
+                );
                 self.shutdown_flag.store(true, Ordering::SeqCst);
                 Err(false)
             }
@@ -697,7 +702,10 @@ where
         _,
     >| {
         if s.shutdown_flag.load(Ordering::SeqCst) {
-            info!("shutting down sink: {}", &s.name);
+            debug!("shutting down sink: {}", &s.name);
+            // Indicate that the sink is closed to everyone else who
+            // might be tracking its write frontier.
+            s.write_frontier.borrow_mut().clear();
             return false;
         }
 
@@ -898,7 +906,10 @@ where
                         }
                     }
                     SendState::Shutdown => {
-                        s.shutdown_flag.store(false, Ordering::SeqCst);
+                        s.shutdown_flag.store(true, Ordering::SeqCst);
+                        // Indicate that the sink is closed to everyone else who
+                        // might be tracking its write frontier.
+                        info!("shutting down kafka sink: {}", &s.name);
                         break;
                     }
                 };

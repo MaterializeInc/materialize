@@ -56,6 +56,7 @@ use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
 
 use self::metrics::{ServerMetrics, WorkerMetrics};
+use crate::activator::RcActivator;
 
 mod metrics;
 
@@ -387,38 +388,52 @@ where
         let mut d_traces = HashMap::new();
         let mut m_traces = HashMap::new();
 
+        let activate_after = 128;
+
+        let t_activator = RcActivator::new("t_activator".into(), activate_after);
+        let r_activator = RcActivator::new("r_activator".into(), activate_after);
+        let d_activator = RcActivator::new("d_activator".into(), activate_after);
+        let m_activator = RcActivator::new("m_activator".into(), activate_after);
+
         if !logging.log_logging {
             // Construct logging dataflows and endpoints before registering any.
             t_traces.extend(logging::timely::construct(
                 &mut self.timely_worker,
                 logging,
                 t_linked.clone(),
+                t_activator.clone(),
             ));
             r_traces.extend(logging::reachability::construct(
                 &mut self.timely_worker,
                 logging,
                 r_linked.clone(),
+                r_activator.clone(),
             ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
                 d_linked.clone(),
+                d_activator.clone(),
             ));
             m_traces.extend(logging::materialized::construct(
                 &mut self.timely_worker,
                 logging,
                 m_linked.clone(),
+                m_activator.clone(),
             ));
         }
 
         // Register each logger endpoint.
+        let mut activator = t_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "timely",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
-                t_logger.publish_batch(time, data)
+                t_logger.publish_batch(time, data);
+                activator.activate();
             }),
         );
 
+        let mut activator = r_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "timely/reachability",
             Logger::new(
@@ -463,22 +478,27 @@ where
                             }
                         }
                     }
-                    r_logger.publish_batch(time, &mut converted_updates)
+                    r_logger.publish_batch(time, &mut converted_updates);
+                    activator.activate();
                 },
             ),
         );
 
+        let mut activator = d_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "differential/arrange",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
-                d_logger.publish_batch(time, data)
+                d_logger.publish_batch(time, data);
+                activator.activate();
             }),
         );
 
+        let mut activator = m_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "materialized",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
-                m_logger.publish_batch(time, data)
+                m_logger.publish_batch(time, data);
+                activator.activate();
             }),
         );
 
@@ -503,21 +523,25 @@ where
                 &mut self.timely_worker,
                 logging,
                 t_linked,
+                t_activator,
             ));
             r_traces.extend(logging::reachability::construct(
                 &mut self.timely_worker,
                 logging,
                 r_linked,
+                r_activator,
             ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
                 d_linked,
+                d_activator,
             ));
             m_traces.extend(logging::materialized::construct(
                 &mut self.timely_worker,
                 logging,
                 m_linked,
+                m_activator,
             ));
         }
 

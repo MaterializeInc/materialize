@@ -1401,12 +1401,16 @@ pub mod plan {
         /// If `self` contains only non-temporal predicates, the result will either be `(time, diff)`,
         /// or an evaluation error. If `self contains temporal predicates, the results can be times
         /// that are greater than the input `time`, and may contain negated `diff` values.
+        ///
+        /// The `row_builder` is not cleared first, but emptied if the function
+        /// returns an iterator with any `Ok(_)` element.
         pub fn evaluate<'b, 'a: 'b, E: From<EvalError>>(
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
             time: repr::Timestamp,
             diff: Diff,
+            row_builder: &mut Row,
         ) -> impl Iterator<Item = Result<(Row, repr::Timestamp, Diff), (E, repr::Timestamp, Diff)>>
         {
             match self.mfp.evaluate_inner(datums, &arena) {
@@ -1522,14 +1526,23 @@ pub mod plan {
             // Produce an output only if the upper bound exceeds the lower bound,
             // and if we did not encounter a `null` in our evaluation.
             if lower_bound != upper_bound && !null_eval {
-                // Allocate a row to produce as output.
-                let capacity =
-                    repr::datums_size(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
-                let mut row = Row::with_capacity(capacity);
-                row.extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
-                // TODO: avoid the clone if `upper_opt` is `None`.
-                let lower_opt = lower_bound.map(|time| Ok((row.clone(), time, diff)));
-                let upper_opt = upper_bound.map(|time| Ok((row, time, -diff)));
+                row_builder.clear();
+                row_builder.extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
+                let (lower_opt, upper_opt) = match (lower_bound, upper_bound) {
+                    (Some(lower_bound), Some(upper_bound)) => (
+                        Some(Ok((row_builder.clone(), lower_bound, diff))),
+                        Some(Ok((row_builder.finish_and_reuse(), upper_bound, -diff))),
+                    ),
+                    (Some(lower_bound), None) => (
+                        Some(Ok((row_builder.finish_and_reuse(), lower_bound, diff))),
+                        None,
+                    ),
+                    (None, Some(upper_bound)) => (
+                        None,
+                        Some(Ok((row_builder.finish_and_reuse(), upper_bound, -diff))),
+                    ),
+                    _ => (None, None),
+                };
                 lower_opt.into_iter().chain(upper_opt.into_iter())
             } else {
                 None.into_iter().chain(None.into_iter())

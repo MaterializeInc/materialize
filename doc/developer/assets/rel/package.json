@@ -10,6 +10,6 @@
   "dependencies": {
     "@gitgraph/js": "^1.3.3",
     "puppeteer": "^2.1.1",
-    "svgo": "^1.3.2"
+    "svgo": "^2.7.0"
   }
 }

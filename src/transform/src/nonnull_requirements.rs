@@ -137,9 +137,7 @@ impl NonNullRequirements {
                 // of `columns` that refer to columns created by the FlatMap, we
                 // may be able to propagate some non-null requirements based on
                 // which columns created by the FlatMap cannot be null. However,
-                // as there are no TableFuncs for which
-                // `!func.empty_on_null_input()`, it is yet unknown what should
-                // be done in this case.
+                // we have been too lazy to handle this so far.
 
                 self.action(input, columns, gets);
             }

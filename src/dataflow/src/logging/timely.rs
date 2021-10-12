@@ -17,14 +17,15 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
-use timely::dataflow::operators::capture::Replay;
 use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
 use super::{LogVariant, TimelyLog};
+use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::render::datum_vec::DatumVec;
+use crate::replay::MzReplay;
 use dataflow_types::logging::LoggingConfig;
 use repr::{datum_list_size, datum_size, Datum, Row, Timestamp};
 
@@ -33,15 +34,18 @@ pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
+    activator: RcActivator,
 ) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
     let peers = worker.peers();
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely logging", move |scope| {
-        let logs = Some(linked).replay_core(
+        let logs = Some(linked).mz_replay(
             scope,
-            Some(Duration::from_nanos(config.granularity_ns as u64)),
+            "timely logs",
+            Duration::from_nanos(config.granularity_ns as u64),
+            activator,
         );
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;

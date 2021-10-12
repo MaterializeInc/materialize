@@ -24,7 +24,7 @@ from setuptools import find_packages
 # without bumping the dbt-postgres version, change version_suffix to ".post1",
 # ".post2", etc. Reset version_suffix back to "" when bumping the
 # dbt_postgres_version.
-dbt_postgres_version = "0.20.2"
+dbt_postgres_version = "0.21.0"
 version_suffix = ""
 
 setup(
@@ -34,7 +34,7 @@ setup(
     long_description=(Path(__file__).parent / "README.md").open().read(),
     long_description_content_type="text/markdown",
     author="Materialize, Inc.",
-    author_email="support@materialize.io",
+    author_email="support@materialize.com",
     url="https://github.com/MaterializeInc/dbt-materialize",
     packages=find_packages(),
     package_data={

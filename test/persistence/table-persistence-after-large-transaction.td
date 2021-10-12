@@ -7,7 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: smith-fuzz
-pre-image:
-  - type: cargo-build
-    bin: smith-fuzz
+> SELECT LENGTH(f1) = 100 * 1024 * 1024 FROM wide_transaction;
+true
+
+> SELECT COUNT(*) = 1000000, COUNT(DISTINCT f1) = 1000000 FROM long_transaction;
+true true

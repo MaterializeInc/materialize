@@ -21,8 +21,8 @@ use rdkafka::{Message, Offset, TopicPartitionList};
 
 use dataflow_types::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
-    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkConnector,
-    SinkConnectorBuilder,
+    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkConsistencyConnector,
+    PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
@@ -88,7 +88,14 @@ fn get_latest_ts(
 
     let partition = partitions.into_element();
 
-    // Seek to end-1 offset
+    // We scan from the beginning and see if we can find an END record. We have
+    // to do it like this because Kafka Control Batches mess with offsets. We
+    // therefore cannot simply take the last offset from the back and expect an
+    // END message there. With a transactional producer, the OffsetTail(1) will
+    // not point to an END message but a control message. With aborted
+    // transactions, there might even be a lot of garbage at the end of the
+    // topic or in between.
+
     let mut tps = TopicPartitionList::new();
     tps.add_partition(consistency_topic, partition);
     tps.set_partition_offset(consistency_topic, partition, Offset::Beginning)?;
@@ -99,14 +106,6 @@ fn get_latest_ts(
             consistency_topic, partition
         )
     })?;
-
-    // We scan from the beginning and see if we can find an END record. We have
-    // to do it like this because Kafka Control Batches mess with offsets. We
-    // therefore cannot simply take the last offset from the back and expect an
-    // END message there. With a transactional producer, the OffsetTail(1) will
-    // not point to an END message but a control message. With aborted
-    // transactions, there might even be a lot of garbage at the end of the
-    // topic or in between.
 
     let mut latest_message = None;
     while let Some(message) = get_next_message(consumer, timeout)? {
@@ -189,6 +188,7 @@ async fn register_kafka_topic(
     mut partition_count: i32,
     mut replication_factor: i32,
     succeed_if_exists: bool,
+    retention: KafkaSinkConnectorRetention,
 ) -> Result<(), CoordError> {
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
@@ -272,13 +272,24 @@ async fn register_kafka_topic(
         }
     }
 
+    let mut kafka_topic = NewTopic::new(
+        &topic,
+        partition_count,
+        TopicReplication::Fixed(replication_factor),
+    );
+
+    let retention_ms_str = retention.retention_ms.map(|s| s.to_string());
+    let retention_bytes_str = retention.retention_bytes.map(|s| s.to_string());
+    if let Some(ref retention_ms) = retention_ms_str {
+        kafka_topic = kafka_topic.set("retention.ms", retention_ms);
+    }
+    if let Some(ref retention_bytes) = retention_bytes_str {
+        kafka_topic = kafka_topic.set("retention.bytes", retention_bytes);
+    }
+
     let res = client
         .create_topics(
-            &[NewTopic::new(
-                &topic,
-                partition_count,
-                TopicReplication::Fixed(replication_factor),
-            )],
+            &[kafka_topic],
             &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
         )
         .await
@@ -376,6 +387,7 @@ async fn build_kafka(
         builder.partition_count,
         builder.replication_factor,
         builder.reuse_topic,
+        builder.retention,
     )
     .await
     .context("error registering kafka topic for sink")?;
@@ -424,6 +436,7 @@ async fn build_kafka(
                 1,
                 builder.replication_factor,
                 builder.reuse_topic,
+                KafkaSinkConnectorRetention::default(),
             )
             .await
             .context("error registering kafka consistency topic for sink")?;

@@ -16,6 +16,6 @@ rusoto_core = "0.47.0"
 rusoto_credential = "0.47.0"
 rusoto_s3 = "0.47.0"
 structopt = "0.3.23"
-tokio = { version = "1.11.0", features = ["macros", "net", "rt", "time"] }
-tracing = "0.1.28"
-tracing-subscriber = { version = "0.2.23", default-features = false, features = ["env-filter", "fmt"] }
+tokio = { version = "1.12.0", features = ["macros", "net", "rt", "time"] }
+tracing = "0.1.29"
+tracing-subscriber = { version = "0.2.25", default-features = false, features = ["env-filter", "fmt"] }

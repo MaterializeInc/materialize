@@ -57,7 +57,7 @@ SELECT * FROM onecolumn AS a(x) JOIN onecolumn AS b(y) ON a.x = b.y
 42 42
 
 query I colnames
-SELECT * FROM onecolumn AS a JOIN onecolumn as b USING(x) ORDER BY x
+SELECT * FROM onecolumn AS a JOIN onecolumn as b USING (x) ORDER BY x
 ----
  x
 42
@@ -79,7 +79,7 @@ NULL  NULL
   42    42
 
 query I colnames
-SELECT * FROM onecolumn AS a LEFT OUTER JOIN onecolumn AS b USING(x) ORDER BY x
+SELECT * FROM onecolumn AS a LEFT OUTER JOIN onecolumn AS b USING (x) ORDER BY x
 ----
    x
 NULL
@@ -108,7 +108,7 @@ SELECT * FROM onecolumn AS a(x) RIGHT OUTER JOIN onecolumn AS b(y) ON a.x = b.y
 NULL  NULL
 
 query I colnames
-SELECT * FROM onecolumn AS a RIGHT OUTER JOIN onecolumn AS b USING(x) ORDER BY x
+SELECT * FROM onecolumn AS a RIGHT OUTER JOIN onecolumn AS b USING (x) ORDER BY x
 ----
    x
 NULL
@@ -157,7 +157,7 @@ NULL 43
 44   NULL
 
 query I colnames
-SELECT * FROM onecolumn AS a FULL OUTER JOIN othercolumn AS b USING(x) ORDER BY x
+SELECT * FROM onecolumn AS a FULL OUTER JOIN othercolumn AS b USING (x) ORDER BY x
 ----
 x
 NULL
@@ -169,7 +169,7 @@ NULL
 # Check that the source columns can be selected separately from the
 # USING column (#12033).
 query III colnames
-SELECT x AS s, a.x, b.x FROM onecolumn AS a FULL OUTER JOIN othercolumn AS b USING(x) ORDER BY s
+SELECT x AS s, a.x, b.x FROM onecolumn AS a FULL OUTER JOIN othercolumn AS b USING (x) ORDER BY s
 ----
    s      x      x
 NULL   NULL   NULL
@@ -212,7 +212,7 @@ SELECT * FROM onecolumn AS a(x) JOIN empty AS b(y) ON a.x = b.y
 ----
 
 query I
-SELECT * FROM onecolumn AS a JOIN empty AS b USING(x)
+SELECT * FROM onecolumn AS a JOIN empty AS b USING (x)
 ----
 
 query II
@@ -220,7 +220,7 @@ SELECT * FROM empty AS a(x) JOIN onecolumn AS b(y) ON a.x = b.y
 ----
 
 query I
-SELECT * FROM empty AS a JOIN onecolumn AS b USING(x)
+SELECT * FROM empty AS a JOIN onecolumn AS b USING (x)
 ----
 
 query II colnames
@@ -232,7 +232,7 @@ NULL  NULL
 44    NULL
 
 query I colnames
-SELECT * FROM onecolumn AS a LEFT OUTER JOIN empty AS b USING(x) ORDER BY x
+SELECT * FROM onecolumn AS a LEFT OUTER JOIN empty AS b USING (x) ORDER BY x
 ----
 x
 NULL
@@ -244,7 +244,7 @@ SELECT * FROM empty AS a(x) LEFT OUTER JOIN onecolumn AS b(y) ON a.x = b.y
 ----
 
 query I
-SELECT * FROM empty AS a LEFT OUTER JOIN onecolumn AS b USING(x)
+SELECT * FROM empty AS a LEFT OUTER JOIN onecolumn AS b USING (x)
 ----
 
 query II
@@ -252,7 +252,7 @@ SELECT * FROM onecolumn AS a(x) RIGHT OUTER JOIN empty AS b(y) ON a.x = b.y
 ----
 
 query I
-SELECT * FROM onecolumn AS a RIGHT OUTER JOIN empty AS b USING(x)
+SELECT * FROM onecolumn AS a RIGHT OUTER JOIN empty AS b USING (x)
 ----
 
 query II colnames
@@ -264,7 +264,7 @@ NULL  42
 NULL  44
 
 query I colnames
-SELECT * FROM empty AS a FULL OUTER JOIN onecolumn AS b USING(x) ORDER BY x
+SELECT * FROM empty AS a FULL OUTER JOIN onecolumn AS b USING (x) ORDER BY x
 ----
 x
 NULL
@@ -280,7 +280,7 @@ NULL  NULL
 44    NULL
 
 query I colnames
-SELECT * FROM onecolumn AS a FULL OUTER JOIN empty AS b USING(x) ORDER BY x
+SELECT * FROM onecolumn AS a FULL OUTER JOIN empty AS b USING (x) ORDER BY x
 ----
 x
 NULL
@@ -296,7 +296,7 @@ NULL  42
 NULL  44
 
 query I colnames
-SELECT * FROM empty AS a FULL OUTER JOIN onecolumn AS b USING(x) ORDER BY x
+SELECT * FROM empty AS a FULL OUTER JOIN onecolumn AS b USING (x) ORDER BY x
 ----
 x
 NULL
@@ -453,26 +453,26 @@ x    x    y
 
 # Check sub-queries as data sources.
 query I colnames
-SELECT * FROM onecolumn JOIN (VALUES (41),(42),(43)) AS a(x) USING(x)
+SELECT * FROM onecolumn JOIN (VALUES (41),(42),(43)) AS a(x) USING (x)
 ----
 x
 42
 
 query I colnames
-SELECT * FROM onecolumn JOIN (SELECT x + 2 AS x FROM onecolumn) USING(x)
+SELECT * FROM onecolumn JOIN (SELECT x + 2 AS x FROM onecolumn) USING (x)
 ----
 x
 44
 
 # Check that a single column can have multiple table aliases.
 query IIII colnames
-SELECT * FROM (twocolumn AS a JOIN twocolumn AS b USING(x) JOIN twocolumn AS c USING(x)) ORDER BY x LIMIT 1
+SELECT * FROM (twocolumn AS a JOIN twocolumn AS b USING (x) JOIN twocolumn AS c USING (x)) ORDER BY x LIMIT 1
 ----
 x  y  y  y
 42 53 53 53
 
 query IIIIII colnames
-SELECT a.x AS s, b.x, c.x, a.y, b.y, c.y FROM (twocolumn AS a JOIN twocolumn AS b USING(x) JOIN twocolumn AS c USING(x)) ORDER BY s
+SELECT a.x AS s, b.x, c.x, a.y, b.y, c.y FROM (twocolumn AS a JOIN twocolumn AS b USING (x) JOIN twocolumn AS c USING (x)) ORDER BY s
 ----
  s   x   x   y   y   y
  42  42  42  53  53  53
@@ -480,22 +480,22 @@ SELECT a.x AS s, b.x, c.x, a.y, b.y, c.y FROM (twocolumn AS a JOIN twocolumn AS 
  45  45  45  45  45  45
 
 query error pgcode 42703 column "y" does not exist
-SELECT * FROM (onecolumn AS a JOIN onecolumn AS b USING(y))
+SELECT * FROM (onecolumn AS a JOIN onecolumn AS b USING (y))
 
 query error pgcode 42701 column "x" appears more than once in USING clause
-SELECT * FROM (onecolumn AS a JOIN onecolumn AS b USING(x, x))
+SELECT * FROM (onecolumn AS a JOIN onecolumn AS b USING (x, x))
 
 statement ok
 CREATE TABLE othertype (x TEXT)
 
 query error pgcode 42804 Int32 and String are not comparable \(in NATURAL/USING join on x\)
-SELECT * FROM (onecolumn AS a JOIN othertype AS b USING(x))
+SELECT * FROM (onecolumn AS a JOIN othertype AS b USING (x))
 
 query error pgcode 42712 source name "onecolumn" specified more than once \(missing AS clause\)
-SELECT * FROM (onecolumn JOIN onecolumn USING(x))
+SELECT * FROM (onecolumn JOIN onecolumn USING (x))
 
 query error pgcode 42712 source name "onecolumn" specified more than once \(missing AS clause\)
-SELECT * FROM (onecolumn JOIN twocolumn USING(x) JOIN onecolumn USING(x))
+SELECT * FROM (onecolumn JOIN twocolumn USING (x) JOIN onecolumn USING (x))
 
 # Check that star expansion works across anonymous sources.
 query II rowsort
@@ -513,7 +513,7 @@ NULL   NULL
 
 # Check that anonymous sources are properly looked up without ambiguity.
 query I
-SELECT x FROM (onecolumn JOIN othercolumn USING (x)) JOIN (onecolumn AS a JOIN othercolumn AS b USING(x)) USING(x)
+SELECT x FROM (onecolumn JOIN othercolumn USING (x)) JOIN (onecolumn AS a JOIN othercolumn AS b USING (x)) USING (x)
 ----
 42
 
@@ -733,7 +733,7 @@ statement ok
 INSERT INTO t2 VALUES (100, 1, 1, 101), (200, 1, 201, 2), (400, 1, 401, 4)
 
 query IIIIIII
-SELECT * FROM t1 JOIN t2 USING(x)
+SELECT * FROM t1 JOIN t2 USING (x)
 ----
 1    10    11    1    100    1    101
 
@@ -748,7 +748,7 @@ SELECT * FROM t1 JOIN t2 ON t2.x=t1.x
 10    1    11    1    100    1    1    101
 
 query IIIIIII rowsort
-SELECT * FROM t1 FULL OUTER JOIN t2 USING(x)
+SELECT * FROM t1 FULL OUTER JOIN t2 USING (x)
 ----
    1      10      11       1     100       1     101
    2      20      21       1    NULL    NULL    NULL
@@ -776,13 +776,13 @@ NULL    NULL    NULL    NULL     400       1     401       4
 
 # not in spec
 # query III
-# SELECT t2.x, t1.x, x FROM t1 JOIN t2 USING(x)
+# SELECT t2.x, t1.x, x FROM t1 JOIN t2 USING (x)
 # ----
 # 1    1    1
 
 # not in spec
 # query III rowsort
-# SELECT t2.x, t1.x, x FROM t1 FULL OUTER JOIN t2 USING(x)
+# SELECT t2.x, t1.x, x FROM t1 FULL OUTER JOIN t2 USING (x)
 # ----
 #    1       1      1
 # NULL       2      2
@@ -824,14 +824,14 @@ CREATE TABLE pkBAD (a INT, b INT, c INT, d INT, PRIMARY KEY(b,a,d))
 # INSERT INTO str2 VALUES (1, 'A' COLLATE en_u_ks_level1), (2, 'B' COLLATE en_u_ks_level1), (3, 'C' COLLATE en_u_ks_level1), (4, 'E' COLLATE en_u_ks_level1)
 #
 # query TTT rowsort
-# SELECT s, str1.s, str2.s FROM str1 INNER JOIN str2 USING(s)
+# SELECT s, str1.s, str2.s FROM str1 INNER JOIN str2 USING (s)
 # ----
 # a  a  A
 # A  A  A
 # c  c  C
 #
 # query TTT rowsort
-# SELECT s, str1.s, str2.s FROM str1 LEFT OUTER JOIN str2 USING(s)
+# SELECT s, str1.s, str2.s FROM str1 LEFT OUTER JOIN str2 USING (s)
 # ----
 # a  a  A
 # A  A  A
@@ -839,7 +839,7 @@ CREATE TABLE pkBAD (a INT, b INT, c INT, d INT, PRIMARY KEY(b,a,d))
 # D  D  NULL
 #
 # query TTT rowsort
-# SELECT s, str1.s, str2.s FROM str1 RIGHT OUTER JOIN str2 USING(s)
+# SELECT s, str1.s, str2.s FROM str1 RIGHT OUTER JOIN str2 USING (s)
 # ----
 # a  a     A
 # A  A     A
@@ -848,7 +848,7 @@ CREATE TABLE pkBAD (a INT, b INT, c INT, d INT, PRIMARY KEY(b,a,d))
 # E  NULL  E
 #
 # query TTT rowsort
-# SELECT s, str1.s, str2.s FROM str1 FULL OUTER JOIN str2 USING(s)
+# SELECT s, str1.s, str2.s FROM str1 FULL OUTER JOIN str2 USING (s)
 # ----
 # a  a     A
 # A  A     A
@@ -871,26 +871,26 @@ statement ok
 INSERT INTO xyv VALUES (1, 1, 1), (2, 2, 2), (3, 1, 31), (3, 3, 33), (5, 5, 55)
 
 query IIII
-SELECT * FROM xyu INNER JOIN xyv USING(x, y) WHERE x > 2
+SELECT * FROM xyu INNER JOIN xyv USING (x, y) WHERE x > 2
 ----
 3  1  31  31
 
 query IIII rowsort
-SELECT * FROM xyu LEFT OUTER JOIN xyv USING(x, y) WHERE x > 2
+SELECT * FROM xyu LEFT OUTER JOIN xyv USING (x, y) WHERE x > 2
 ----
 3  1  31  31
 3  2  32  NULL
 4  4  44  NULL
 
 query IIII rowsort
-SELECT * FROM xyu RIGHT OUTER JOIN xyv USING(x, y) WHERE x > 2
+SELECT * FROM xyu RIGHT OUTER JOIN xyv USING (x, y) WHERE x > 2
 ----
 3  1  31    31
 3  3  NULL  33
 5  5  NULL  55
 
 query IIII rowsort
-SELECT * FROM xyu FULL OUTER JOIN xyv USING(x, y) WHERE x > 2
+SELECT * FROM xyu FULL OUTER JOIN xyv USING (x, y) WHERE x > 2
 ----
 3  1  31    31
 3  2  32    NULL
@@ -930,21 +930,21 @@ NULL  NULL  NULL  2  2  2
 # Test OUTER joins that are run in the distSQL merge joiner
 
 query IIII rowsort
-SELECT * FROM (SELECT * FROM xyu ORDER BY x, y) AS xyu LEFT OUTER JOIN (SELECT * FROM xyv ORDER BY x, y) AS xyv USING(x, y) WHERE x > 2
+SELECT * FROM (SELECT * FROM xyu ORDER BY x, y) AS xyu LEFT OUTER JOIN (SELECT * FROM xyv ORDER BY x, y) AS xyv USING (x, y) WHERE x > 2
 ----
 3  1  31  31
 3  2  32  NULL
 4  4  44  NULL
 
 query IIII rowsort
-SELECT * FROM (SELECT * FROM xyu ORDER BY x, y) AS xyu RIGHT OUTER JOIN (SELECT * FROM xyv ORDER BY x, y) AS xyv USING(x, y) WHERE x > 2
+SELECT * FROM (SELECT * FROM xyu ORDER BY x, y) AS xyu RIGHT OUTER JOIN (SELECT * FROM xyv ORDER BY x, y) AS xyv USING (x, y) WHERE x > 2
 ----
 3  1  31    31
 3  3  NULL  33
 5  5  NULL  55
 
 query IIII rowsort
-SELECT * FROM (SELECT * FROM xyu ORDER BY x, y) AS xyu FULL OUTER JOIN (SELECT * FROM xyv ORDER BY x, y) AS xyv USING(x, y) WHERE x > 2
+SELECT * FROM (SELECT * FROM xyu ORDER BY x, y) AS xyu FULL OUTER JOIN (SELECT * FROM xyv ORDER BY x, y) AS xyv USING (x, y) WHERE x > 2
 ----
 3  1  31    31
 3  2  32    NULL
@@ -986,22 +986,22 @@ statement ok
 INSERT INTO r VALUES (2), (3), (4)
 
 query I
-SELECT * FROM l LEFT OUTER JOIN r USING(a) WHERE a = 1
+SELECT * FROM l LEFT OUTER JOIN r USING (a) WHERE a = 1
 ----
 1
 
 query I
-SELECT * FROM l LEFT OUTER JOIN r USING(a) WHERE a = 2
+SELECT * FROM l LEFT OUTER JOIN r USING (a) WHERE a = 2
 ----
 2
 
 query I
-SELECT * FROM l RIGHT OUTER JOIN r USING(a) WHERE a = 3
+SELECT * FROM l RIGHT OUTER JOIN r USING (a) WHERE a = 3
 ----
 3
 
 query I
-SELECT * FROM l RIGHT OUTER JOIN r USING(a) WHERE a = 4
+SELECT * FROM l RIGHT OUTER JOIN r USING (a) WHERE a = 4
 ----
 4
 

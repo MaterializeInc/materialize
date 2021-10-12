@@ -12,15 +12,17 @@
 //!
 //! This is directly a persistent analog of [differential_dataflow::trace::Trace].
 
+use std::collections::VecDeque;
 use std::mem;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use differential_dataflow::trace::Description;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::future::Future;
+use crate::indexed::background::{CompactTraceReq, Maintainer};
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{TraceBatchMeta, TraceMeta};
 use crate::indexed::{BlobTraceBatch, Id, Snapshot};
@@ -241,92 +243,13 @@ impl Trace {
         }
     }
 
-    /// Merge two batches into one, forwarding all updates not beyond the current
-    /// `since` frontier to the `since` frontier.
-    fn merge<B: Blob>(
-        &mut self,
-        first: &TraceBatchMeta,
-        second: &TraceBatchMeta,
-        blob: &mut BlobCache<B>,
-    ) -> Result<TraceBatchMeta, Error> {
-        if first.desc.upper() != second.desc.lower() {
-            return Err(Error::from(format!(
-                "invalid merge of non-consecutive batches {:?} and {:?}",
-                first, second
-            )));
-        }
-
-        // Sanity check that both batches being merged are at identical compaction
-        // levels.
-        debug_assert_eq!(first.level, second.level);
-
-        let desc = Description::new(
-            first.desc.lower().clone(),
-            second.desc.upper().clone(),
-            self.since.clone(),
-        );
-
-        let mut updates = vec![];
-
-        updates.extend(
-            blob.get_trace_batch_async(&first.key)
-                .recv()?
-                .updates
-                .iter()
-                .cloned(),
-        );
-        updates.extend(
-            blob.get_trace_batch_async(&second.key)
-                .recv()?
-                .updates
-                .iter()
-                .cloned(),
-        );
-
-        for ((_, _), t, _) in updates.iter_mut() {
-            for since_ts in self.since.elements().iter() {
-                if *t < *since_ts {
-                    *t = *since_ts;
-                }
-            }
-        }
-
-        differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-        let new_batch = BlobTraceBatch {
-            desc: desc.clone(),
-            updates,
-        };
-
-        let key = self.new_blob_key();
-        // TODO: actually clear the unwanted batches from the blob storage
-        let size_bytes = blob.set_trace_batch(key.clone(), new_batch)?;
-
-        // Only upgrade the compaction level if we know this new batch represents
-        // an increase in data over both of its parents so that we know we need
-        // even more additional batches to amortize the cost of compacting it in
-        // the future.
-        let merged_level = if size_bytes > first.size_bytes && size_bytes > second.size_bytes {
-            first.level + 1
-        } else {
-            first.level
-        };
-
-        Ok(TraceBatchMeta {
-            key,
-            desc,
-            level: merged_level,
-            size_bytes,
-        })
-    }
-
     /// Take one step towards compacting the trace.
     ///
     /// Returns a list of trace batches that can now be physically deleted after
     /// the compaction step is committed to durable storage.
     pub fn step<B: Blob>(
         &mut self,
-        blob: &mut BlobCache<B>,
+        maintainer: &Maintainer<B>,
     ) -> Result<(u64, Vec<TraceBatchMeta>), Error> {
         let mut written_bytes = 0;
         let mut deleted = vec![];
@@ -335,10 +258,17 @@ impl Trace {
             if (self.batches[i - 1].level == self.batches[i].level)
                 && PartialOrder::less_equal(self.batches[i].desc.upper(), &self.since)
             {
-                let first = self.batches[i - 1].clone();
-                let second = self.batches[i].clone();
+                let b0 = self.batches[i - 1].clone();
+                let b1 = self.batches[i].clone();
 
-                let mut new_batch = self.merge(&first, &second, blob)?;
+                let req = CompactTraceReq {
+                    b0,
+                    b1,
+                    since: self.since.clone(),
+                    output_key: self.new_blob_key(),
+                };
+                let res = maintainer.compact_trace(req).recv()?;
+                let mut new_batch = res.merged;
                 written_bytes += new_batch.size_bytes;
 
                 // TODO: more performant way to do this?
@@ -373,20 +303,73 @@ pub struct TraceSnapshot {
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
-    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(
-        &mut self,
-        buf: &mut E,
-    ) -> Result<bool, Error> {
-        if let Some(batch) = self.batches.pop() {
-            let batch = batch.recv()?;
-            buf.extend(batch.updates.iter().cloned());
+    type Iter = TraceSnapshotIter;
+
+    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
+        let mut iters = Vec::with_capacity(num_iters.get());
+        iters.resize_with(num_iters.get(), || TraceSnapshotIter::default());
+        // TODO: This should probably distribute batches based on size, but for
+        // now it's simpler to round-robin them.
+        for (i, batch) in self.batches.into_iter().enumerate() {
+            let iter_idx = i % num_iters;
+            iters[iter_idx].batches.push_back(batch);
         }
-        Ok(!self.batches.is_empty())
+        iters
+    }
+}
+
+/// An [Iterator] representing one part of the data in a [TraceSnapshot].
+//
+// This intentionally stores the batches as a VecDeque so we can return the data
+// in roughly increasing timestamp order, but it's unclear if this is in any way
+// important.
+pub struct TraceSnapshotIter {
+    current_batch: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    batches: VecDeque<Future<Arc<BlobTraceBatch>>>,
+}
+
+impl Default for TraceSnapshotIter {
+    fn default() -> Self {
+        TraceSnapshotIter {
+            current_batch: Vec::new(),
+            batches: VecDeque::new(),
+        }
+    }
+}
+
+impl Iterator for TraceSnapshotIter {
+    type Item = Result<((Vec<u8>, Vec<u8>), u64, isize), Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if !self.current_batch.is_empty() {
+                let update = self.current_batch.pop().unwrap();
+                return Some(Ok(update));
+            } else {
+                // current_batch is empty, find a new one.
+                let b = match self.batches.pop_front() {
+                    None => return None,
+                    Some(b) => b,
+                };
+                match b.recv() {
+                    Ok(b) => {
+                        // Reverse the updates so we can pop them off the back
+                        // in roughly increasing time order.
+                        self.current_batch.extend(b.updates.iter().rev().cloned());
+                        continue;
+                    }
+                    Err(err) => return Some(Err(err)),
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use differential_dataflow::trace::Description;
+    use tokio::runtime::Runtime;
+
     use crate::indexed::encoding::Id;
     use crate::indexed::metrics::Metrics;
     use crate::indexed::SnapshotExt;
@@ -477,6 +460,7 @@ mod tests {
     #[test]
     fn trace_compact() -> Result<(), Error> {
         let mut blob = BlobCache::new(Metrics::default(), MemRegistry::new().blob_no_reentrance()?);
+        let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
         let mut t = Trace::new(TraceMeta::new(Id(0)));
         t.update_seal(10);
 
@@ -506,7 +490,7 @@ mod tests {
 
         t.validate_allow_compaction(&Antichain::from_elem(3))?;
         t.allow_compaction(Antichain::from_elem(3));
-        let (written_bytes, deleted_batches) = t.step(&mut blob)?;
+        let (written_bytes, deleted_batches) = t.step(&maintainer)?;
         // Change this to a >0 check if it starts to be a maintenance burden.
         assert_eq!(written_bytes, 322);
         assert_eq!(
@@ -518,7 +502,7 @@ mod tests {
         );
 
         // Check that step doesn't do anything when there's nothing to compact.
-        let (written_bytes, deleted_batches) = t.step(&mut blob)?;
+        let (written_bytes, deleted_batches) = t.step(&maintainer)?;
         assert_eq!(written_bytes, 0);
         assert_eq!(deleted_batches, vec![]);
 
@@ -565,7 +549,7 @@ mod tests {
         assert_eq!(t.append(batch, &mut blob), Ok(()));
         t.validate_allow_compaction(&Antichain::from_elem(10))?;
         t.allow_compaction(Antichain::from_elem(10));
-        let (written_bytes, deleted_batches) = t.step(&mut blob)?;
+        let (written_bytes, deleted_batches) = t.step(&maintainer)?;
         assert_eq!(written_bytes, 186);
         assert_eq!(
             deleted_batches
