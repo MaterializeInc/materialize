@@ -11,11 +11,7 @@
 
 const fs = require("fs").promises;
 const puppeteer = require("puppeteer");
-const Svgo = require("svgo");
-
-const svgo = new Svgo({
-    js2svg: {pretty: true},
-});
+const svgo = require("svgo");
 
 const html = `<!doctype html>
 <html>
@@ -202,7 +198,7 @@ const graphs = [
         // SVG to have contents before scraping it.
         await page.waitForSelector("#gitgraph svg *");
         const svg = await page.$eval("#gitgraph", e => e.innerHTML);
-        await fs.writeFile(`${graph.name}.svg`, (await svgo.optimize(svg)).data);
+        await fs.writeFile(`${graph.name}.svg`, svgo.optimize(svg, {js2svg: {pretty: true}}).data);
     }
 
     await browser.close();
