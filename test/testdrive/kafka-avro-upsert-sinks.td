@@ -257,6 +257,18 @@ $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 $ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
 {"a": 1} {"a": 1, "b": 1}
 
+# NOT ENFORCED Keys
+
+$ kafka-create-topic topic=non-keyed-input
+
+> CREATE MATERIALIZED SOURCE non_keyed_input
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-keyed-input-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+
+> CREATE SINK not_enforced_key FROM non_keyed_input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'not-enforced-sink' KEY (a) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+
 # Bad upsert keys
 
 ! CREATE SINK invalid_key FROM input

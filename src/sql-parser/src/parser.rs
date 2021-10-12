@@ -2077,7 +2077,18 @@ impl<'a> Parser<'a> {
                     && self.peek_nth_token(1) != Some(Token::Keyword(FORMAT))
                 {
                     let _ = self.expect_keyword(KEY);
-                    Some(self.parse_parenthesized_column_list(Mandatory)?)
+                    let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
+
+                    let not_enforced = if self.peek_keywords(&[NOT, ENFORCED]) {
+                        let _ = self.expect_keywords(&[NOT, ENFORCED])?;
+                        true
+                    } else {
+                        false
+                    };
+                    Some(KafkaSinkKey {
+                        key_columns,
+                        not_enforced,
+                    })
                 } else {
                     None
                 };
