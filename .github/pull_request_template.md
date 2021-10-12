@@ -1,3 +1,13 @@
+<!--
+
+Describe the contents of the PR briefly but completely.
+
+If you write detailed commit messages, it is acceptable to copy/paste them
+here, or write "see commit messages for details." If there is only one commit
+in the PR, GitHub will have already added its commit message above.
+
+-->
+
 ### Motivation
 
 <!--
@@ -24,17 +34,6 @@ Which of the following best describes the motivation behind this PR?
 
 -->
 
-### Description
-
-<!--
-
-Describe the contents of the PR briefly but completely.
-
-If you write detailed commit messages, it is acceptable to copy/paste them
-here, or write "see commit messages for details."
-
--->
-
 ### Tips for reviewer
 
 <!--
@@ -52,4 +51,5 @@ Delete this section if no tips.
 ### Checklist
 
 - [ ] This PR has adequate test coverage / QA involvement has been duly considered.
-- [ ] This PR adds a release note for any user-facing behavior changes.
+- [ ] This PR adds a release note for any
+  [user-facing behavior changes](/doc/user/content/release-notes.md#What-changes-require-a-release-note).
