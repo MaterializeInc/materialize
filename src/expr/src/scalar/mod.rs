@@ -344,9 +344,17 @@ impl MirScalarExpr {
                     MirScalarExpr::Column(_)
                     | MirScalarExpr::Literal(_, _)
                     | MirScalarExpr::CallNullary(_) => (),
-                    MirScalarExpr::CallUnary { expr, .. } => {
+                    MirScalarExpr::CallUnary { func, expr } => {
                         if expr.is_literal() {
                             *e = eval(e);
+                        } else if let UnaryFunc::RecordGet(i) = *func {
+                            if let MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate { .. },
+                                exprs,
+                            } = &mut **expr
+                            {
+                                *e = exprs.swap_remove(i);
+                            }
                         }
                     }
                     MirScalarExpr::CallBinary { func, expr1, expr2 } => {
