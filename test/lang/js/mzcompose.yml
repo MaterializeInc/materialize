@@ -15,7 +15,7 @@ services:
     environment:
       - MZ_DEV=1
   js:
-    image: node:13.12.0
+    image: node:14.15.0
     command: /workdir/test/lang/js/test.sh
     volumes:
       - ../../../:/workdir
