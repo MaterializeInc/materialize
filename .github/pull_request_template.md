@@ -52,4 +52,10 @@ Delete this section if no tips.
 ### Checklist
 
 - [ ] This PR has adequate test coverage.
-- [ ] This PR adds a release note for any user-facing behavior changes.
+- [ ] This PR adds a [release note][] for any user-facing behavior change, including
+  but not limited to:
+  * New Features
+  * Bug Fixes
+  * GitHub issues that are closed by this PR
+
+[release note]: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md#how-to-write-a-good-release-note
