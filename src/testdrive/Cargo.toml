@@ -56,7 +56,7 @@ uuid = "0.8.2"
 
 [dev-dependencies]
 assert_cmd = "2.0.2"
-predicates = "2.0.2"
+predicates = "2.0.3"
 
 [build-dependencies]
 protoc = { path = "../protoc" }
