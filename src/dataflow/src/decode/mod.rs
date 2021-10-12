@@ -14,7 +14,6 @@ use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration
 use ::regex::Regex;
 use dataflow_types::AvroEncoding;
 use dataflow_types::AvroOcfEncoding;
-use dataflow_types::ProtobufEncoding;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
@@ -342,13 +341,9 @@ fn get_decoder(
                 DataEncoding::Regex(RegexEncoding { regex }) => {
                     PreDelimitedFormat::Regex(regex, Default::default())
                 }
-                DataEncoding::Protobuf(ProtobufEncoding {
-                    descriptors,
-                    message_name,
-                }) => PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(
-                    &descriptors,
-                    message_name,
-                )),
+                DataEncoding::Protobuf(encoding) => {
+                    PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(encoding))
+                }
                 DataEncoding::Bytes => PreDelimitedFormat::Bytes,
                 DataEncoding::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
