@@ -10,10 +10,10 @@
     "@babel/core": "^7.9.0",
     "@babel/preset-env": "^7.9.5",
     "@babel/preset-typescript": "^7.9.0",
-    "@types/jest": "^25.2.1",
+    "@types/jest": "^27.0.0",
     "@types/pg": "^7.14.3",
-    "babel-jest": "^25.3.0",
-    "jest": "^25.3.0",
+    "babel-jest": "^27.0.0",
+    "jest": "^27.0.0",
     "pg": "^8.4.1",
     "prettier": "^2.0.4"
   },
