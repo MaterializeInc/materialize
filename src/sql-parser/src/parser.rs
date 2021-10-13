@@ -2097,6 +2097,8 @@ impl<'a> Parser<'a> {
         let default_index = self.parse_keyword(DEFAULT);
         self.expect_keyword(INDEX)?;
 
+        let is_temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
+
         let if_not_exists = self.parse_if_not_exists()?;
         let name = if self.parse_keyword(ON) {
             if if_not_exists && !default_index {
@@ -2131,6 +2133,7 @@ impl<'a> Parser<'a> {
         let with_options = self.parse_opt_with_options()?;
 
         Ok(Statement::CreateIndex(CreateIndexStatement {
+            is_temporary,
             name,
             on_name,
             key_parts,

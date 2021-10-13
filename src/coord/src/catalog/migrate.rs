@@ -187,6 +187,7 @@ fn ast_rewrite_pg_catalog_char_to_text_0_9_1(
         }) => TypeNormalizer.visit_query_mut(query),
 
         Statement::CreateIndex(CreateIndexStatement {
+            is_temporary: _,
             name: _,
             on_name: _,
             key_parts,
@@ -332,6 +333,7 @@ fn ast_use_pg_catalog_0_7_1(stmt: &mut sql::ast::Statement<Raw>) -> Result<(), a
         }) => FuncNormalizer.visit_query_mut(query),
 
         Statement::CreateIndex(CreateIndexStatement {
+            is_temporary: _,
             name: _,
             on_name: _,
             key_parts,
@@ -430,6 +432,7 @@ fn ast_rewrite_type_references_0_6_1(
         }) => TypeNormalizer.visit_query_mut(query),
 
         Statement::CreateIndex(CreateIndexStatement {
+            is_temporary: _,
             name: _,
             on_name: _,
             key_parts,

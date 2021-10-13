@@ -1886,6 +1886,7 @@ pub fn plan_create_index(
     mut stmt: CreateIndexStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateIndexStatement {
+        is_temporary,
         name,
         on_name,
         key_parts,
@@ -1966,6 +1967,7 @@ pub fn plan_create_index(
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
+    let is_temporary = *is_temporary;
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
     let mut depends_on = vec![on.id()];
     depends_on.extend(exprs_depend_on);
@@ -1975,6 +1977,7 @@ pub fn plan_create_index(
         index: Index {
             create_sql,
             on: on.id(),
+            is_temporary,
             keys,
             depends_on,
         },

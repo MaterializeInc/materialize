@@ -740,6 +740,7 @@ impl Catalog {
                                 name,
                                 &log.variant.desc(),
                                 &log.variant.index_by(),
+                                false,
                             ),
                             conn_id: None,
                             depends_on: vec![log.id],
@@ -756,6 +757,7 @@ impl Catalog {
                         name.clone(),
                         &table.desc,
                         &index_columns,
+                        false,
                     );
                     let oid = catalog.allocate_oid()?;
                     let persist = if table.persistent {

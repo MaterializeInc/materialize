@@ -382,6 +382,7 @@ pub struct View {
 pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
+    pub is_temporary: bool,
     pub keys: Vec<::expr::MirScalarExpr>,
     pub depends_on: Vec<GlobalId>,
 }

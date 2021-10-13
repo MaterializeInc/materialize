@@ -675,6 +675,7 @@ impl_display_t!(CreateTableStatement);
 /// `CREATE INDEX`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateIndexStatement<T: AstInfo> {
+    pub is_temporary: bool,
     /// Optional index name.
     pub name: Option<Ident>,
     /// `ON` table or view name
@@ -689,6 +690,9 @@ pub struct CreateIndexStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE ");
+        if self.is_temporary {
+            f.write_str("TEMPORARY ");
+        }
         if self.key_parts.is_none() {
             f.write_str("DEFAULT ");
         }

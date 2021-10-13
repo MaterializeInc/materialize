@@ -1704,7 +1704,7 @@ impl Coordinator {
                 tx.send(self.sequence_create_views(&mut session, plan), session);
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(plan), session);
+                tx.send(self.sequence_create_index(&mut session, plan), session);
             }
             Plan::CreateType(plan) => {
                 tx.send(self.sequence_create_type(plan), session);
@@ -2403,6 +2403,7 @@ impl Coordinator {
 
     fn sequence_create_index(
         &mut self,
+        session: &mut Session,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateIndexPlan {
@@ -2412,16 +2413,28 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
-        for key in &mut index.keys {
+        let sql::plan::Index {
+            create_sql,
+            mut keys,
+            on,
+            is_temporary,
+            depends_on,
+        } = index;
+
+        for key in &mut keys {
             Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
         }
         let id = self.catalog.allocate_id()?;
         let index = catalog::Index {
-            create_sql: index.create_sql,
-            keys: index.keys,
-            on: index.on,
-            conn_id: None,
-            depends_on: index.depends_on,
+            create_sql: create_sql,
+            keys: keys,
+            on: on,
+            conn_id: if is_temporary {
+                Some(session.conn_id())
+            } else {
+                None
+            },
+            depends_on: depends_on,
             enabled: self.catalog.index_enabled_by_default(&id),
         };
         let oid = self.catalog.allocate_oid()?;
@@ -4441,7 +4454,13 @@ fn auto_generate_primary_idx(
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
     catalog::Index {
-        create_sql: index_sql(index_name, on_name, &on_desc, &default_key),
+        create_sql: index_sql(
+            index_name,
+            on_name,
+            &on_desc,
+            &default_key,
+            on_id.is_transient(),
+        ),
         on: on_id,
         keys: default_key
             .iter()
@@ -4460,10 +4479,12 @@ pub fn index_sql(
     view_name: FullName,
     view_desc: &RelationDesc,
     keys: &[usize],
+    is_temporary: bool,
 ) -> String {
     use sql::ast::{Expr, Value};
 
     CreateIndexStatement::<Raw> {
+        is_temporary,
         name: Some(Ident::new(index_name)),
         on_name: sql::normalize::unresolve(view_name),
         key_parts: Some(

@@ -345,6 +345,7 @@ pub fn create_statement(
         }
 
         Statement::CreateIndex(CreateIndexStatement {
+            is_temporary: _,
             name: _,
             on_name,
             key_parts,
