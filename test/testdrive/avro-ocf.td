@@ -199,5 +199,5 @@ $ avro-ocf-verify sink=materialize.public.basic_sink_${testdrive.seed}
   INTO AVRO OCF '${testdrive.temp-dir}/date-sink.ocf'
 
 $ avro-ocf-verify sink=materialize.public.date_sink_${testdrive.seed}
-{"before": null, "after": {"row": {"d": 10988}}}
 {"before": null, "after": {"row": {"d": 10957}}}
+{"before": null, "after": {"row": {"d": 10988}}}
