@@ -153,7 +153,7 @@ where
 }
 
 /// Extension trait for [`Stream`].
-pub trait Seal<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
+pub trait Seal<G: Scope<Timestamp = u64>, D: TimelyData> {
     /// Passes through each element of the stream and seals the given collection (the `write`
     /// handle) when the input frontier advances.
     ///
@@ -161,14 +161,14 @@ pub trait Seal<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// wait for the seal to be successful before allowing the frontier to advance. In other words,
     /// this operator is holding on to capabilities as long as seals corresponding to their
     /// timestamp are not done.
-    fn seal(
+    fn seal<K, V>(
         &self,
         name: &str,
         write: StreamWriteHandle<K, V>,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    );
+    ) -> (Stream<G, (D, u64, isize)>, Stream<G, (String, u64, isize)>)
+    where
+        K: Codec,
+        V: Codec;
 
     /// Passes through each element of the stream and seals the given primary and condition
     /// collections, respectively, when their frontier advances. The primary collection is only
@@ -178,35 +178,34 @@ pub trait Seal<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// however, wait for the seals to be successful before allowing the frontier to advance. In
     /// other words, this operator is holding on to capabilities as long as seals corresponding to
     /// their timestamp are not done.
-    fn conditional_seal<K2, V2>(
+    fn conditional_seal<D2: TimelyData, K, V, K2, V2>(
         &self,
         name: &str,
-        condition_input: &Stream<G, ((K2, V2), u64, isize)>,
+        condition_input: &Stream<G, (D2, u64, isize)>,
         primary_write: StreamWriteHandle<K, V>,
         condition_write: StreamWriteHandle<K2, V2>,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    )
+    ) -> (Stream<G, (D, u64, isize)>, Stream<G, (String, u64, isize)>)
     where
+        K: Codec,
+        V: Codec,
         K2: TimelyData + Codec,
         V2: TimelyData + Codec;
 }
 
-impl<G, K, V> Seal<G, K, V> for Stream<G, ((K, V), u64, isize)>
+impl<G, D> Seal<G, D> for Stream<G, (D, u64, isize)>
 where
     G: Scope<Timestamp = u64>,
-    K: TimelyData + Codec,
-    V: TimelyData + Codec,
+    D: TimelyData,
 {
-    fn seal(
+    fn seal<K, V>(
         &self,
         name: &str,
         write: StreamWriteHandle<K, V>,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    ) {
+    ) -> (Stream<G, (D, u64, isize)>, Stream<G, (String, u64, isize)>)
+    where
+        K: Codec,
+        V: Codec,
+    {
         let operator_name = format!("seal({})", name);
         let mut seal_op = OperatorBuilder::new(operator_name.clone(), self.scope());
 
@@ -332,17 +331,16 @@ where
         (data_output_stream, error_output_stream)
     }
 
-    fn conditional_seal<K2, V2>(
+    fn conditional_seal<D2: TimelyData, K, V, K2, V2>(
         &self,
         name: &str,
-        condition_input: &Stream<G, ((K2, V2), u64, isize)>,
+        condition_input: &Stream<G, (D2, u64, isize)>,
         primary_write: StreamWriteHandle<K, V>,
         condition_write: StreamWriteHandle<K2, V2>,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    )
+    ) -> (Stream<G, (D, u64, isize)>, Stream<G, (String, u64, isize)>)
     where
+        K: Codec,
+        V: Codec,
         K2: TimelyData + Codec,
         V2: TimelyData + Codec,
     {
@@ -747,7 +745,7 @@ mod tests {
 
         timely::execute_directly(move |worker| {
             let (mut input, probe) = worker.dataflow(|scope| {
-                let (write, _read) = p.create_or_load("1").unwrap();
+                let (write, _read) = p.create_or_load::<(), ()>("1").unwrap();
                 let mut input = Handle::new();
                 let (ok_stream, _) = input.to_stream(scope).seal("test", write);
                 let probe = ok_stream.probe();
@@ -858,7 +856,7 @@ mod tests {
                 .dataflow(|scope| {
                     let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
                     let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
-                    let mut primary_input = Handle::new();
+                    let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
                     let mut condition_input = Handle::new();
                     let primary_stream = primary_input.to_stream(scope);
                     let condition_stream = condition_input.to_stream(scope);
