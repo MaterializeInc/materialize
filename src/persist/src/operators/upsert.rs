@@ -60,6 +60,7 @@ pub trait PersistentUpsert<G, K: Codec, V: Codec, T> {
     /// also seal the persistent collection.
     fn persistent_upsert(
         &self,
+        name: &str,
         as_of_frontier: Antichain<u64>,
         persist_config: PersistentUpsertConfig<K, V>,
     ) -> Stream<G, ((K, V), u64, isize)>
@@ -103,13 +104,14 @@ where
 {
     fn persistent_upsert(
         &self,
+        name: &str,
         as_of_frontier: Antichain<u64>,
         persist_config: PersistentUpsertConfig<K, V>,
     ) -> Stream<G, ((K, V), u64, isize)>
     where
         G: Scope<Timestamp = u64>,
     {
-        let operator_name = format!("persistent_upsert()");
+        let operator_name = format!("persistent_upsert({})", name);
 
         let (restored_upsert_oks, _state_errs) = {
             let snapshot = persist_config
@@ -118,7 +120,7 @@ where
                 .expect("cannot take snapshot");
             let (restored_oks, restored_errs) = self.scope().replay(snapshot);
             let restored_upsert_oks = restored_oks.filter_and_retract_future_updates(
-                "upsert_state",
+                name,
                 persist_config.write_handle.clone(),
                 persist_config.upper_seal_ts,
             );
@@ -263,7 +265,7 @@ where
         );
 
         let (new_upsert_oks, _new_upsert_persist_errs) =
-            new_upsert_oks.persist("upsert_state", persist_config.write_handle);
+            new_upsert_oks.persist(name, persist_config.write_handle);
 
         // Also pull the timestamp of restored data up to the as_of_frontier. We are doing this in
         // two steps: first, we are modifying the timestamp in the data itself, then we're delaying
