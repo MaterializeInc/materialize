@@ -44,9 +44,9 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 
 ## New &amp; updated
 
-* [Version 0.9.6 Release Notes](release-notes/#v0.9.6)
-* [Materialize Cloud](/cloud/) - Now in open beta!
-* [Change Data Capture with Postgres Guide](/guides/cdc-postgres/)
+- [Release Notes](release-notes/)
+- [CDC with MySQL](/guides/cdc-mysql/)
+- [Materialize Cloud](/cloud/) - Now in open beta!
 
 ## Learn more
 
