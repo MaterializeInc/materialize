@@ -630,7 +630,10 @@ pub fn datum_size(datum: &Datum) -> usize {
         }
         Datum::Uuid(_) => 1 + size_of::<uuid::Bytes>(),
         Datum::Array(array) => {
-            1 + size_of::<u8>() + array.dims.data.len() + array.elements.data.len()
+            1 + size_of::<u8>()
+                + array.dims.data.len()
+                + size_of::<u64>()
+                + array.elements.data.len()
         }
         Datum::List(list) => 1 + size_of::<u64>() + list.data.len(),
         Datum::Map(dict) => 1 + size_of::<u64>() + dict.data.len(),
@@ -668,7 +671,7 @@ where
     I: IntoIterator<Item = D>,
     D: Borrow<Datum<'a>>,
 {
-    1 + size_of::<usize>() + datums_size(iter)
+    1 + size_of::<u64>() + datums_size(iter)
 }
 
 // --------------------------------------------------------------------------------
