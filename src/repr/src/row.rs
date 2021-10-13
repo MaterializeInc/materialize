@@ -366,11 +366,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::StringShort
         | Tag::StringLong
         | Tag::StringHuge => read_lengthed_datum(data, offset, tag),
-        Tag::Uuid => {
-            let mut b: uuid::Bytes = [0; 16];
-            b.copy_from_slice(read_untagged_bytes(data, offset));
-            Datum::Uuid(Uuid::from_bytes(b))
-        }
+        Tag::Uuid => Datum::Uuid(Uuid::from_bytes(read_byte_array(data, offset))),
         Tag::Array => {
             // See the comment in `Row::push_array` for details on the encoding
             // of arrays.
@@ -534,7 +530,7 @@ where
         }
         Datum::Uuid(u) => {
             data.push(Tag::Uuid.into());
-            push_untagged_bytes(data, u.as_bytes());
+            data.extend_from_slice(u.as_bytes());
         }
         Datum::Array(array) => {
             // See the comment in `Row::push_array` for details on the encoding
@@ -632,7 +628,7 @@ pub fn datum_size(datum: &Datum) -> usize {
             };
             1 + bytes_for_length + string.len()
         }
-        Datum::Uuid(_) => 1 + size_of::<Uuid>(),
+        Datum::Uuid(_) => 1 + size_of::<uuid::Bytes>(),
         Datum::Array(array) => {
             1 + size_of::<u8>() + array.dims.data.len() + array.elements.data.len()
         }
