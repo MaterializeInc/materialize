@@ -4,7 +4,6 @@ description: "Find out how Materialize can extract meaningful data from logs in 
 menu:
   main:
     parent: 'demos'
-    weight: 4
 ---
 
 **tl;dr** Materialize can extract meaningful data from logs in real time.

@@ -462,10 +462,17 @@ where
             let mfp_plan = mfp.into_plan().unwrap();
             let (stream, errors) = self.flat_map(key_val, {
                 let mut datums = crate::render::datum_vec::DatumVec::new();
+                let mut row_builder = Row::default();
                 move |data, time, diff| {
                     let temp_storage = repr::RowArena::new();
                     let mut datums_local = datums.borrow_with(&data);
-                    mfp_plan.evaluate(&mut datums_local, &temp_storage, time.clone(), diff.clone())
+                    mfp_plan.evaluate(
+                        &mut datums_local,
+                        &temp_storage,
+                        time.clone(),
+                        diff.clone(),
+                        &mut row_builder,
+                    )
                 }
             });
 

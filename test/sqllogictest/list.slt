@@ -2433,9 +2433,52 @@ SELECT (list_agg(a ORDER BY a) FILTER (WHERE b > '2050-01-01'))::text FROM t2
 ----
 {}
 
-# Unsupported.
-query error ORDER BY must specify unmodified columns
-SELECT list_agg(a ORDER BY a-1) FROM t2
+query T
+SELECT list_agg(a ORDER BY b)::text FROM (VALUES (1, -1), (2, -2), (3, -3)) _ (a, b)
+----
+{3,2,1}
+
+query T
+SELECT list_agg(a ORDER BY abs(b))::text FROM (VALUES (1, -1), (2, -2), (3, -3)) _ (a, b)
+----
+{1,2,3}
+
+query T
+SELECT list_agg(a ORDER BY a > 10, -a)::text FROM (VALUES (1, -1), (2, -2), (3, -3)) _ (a, b)
+----
+{3,2,1}
+
+query T
+SELECT list_agg(a ORDER BY (SELECT abs(-b)))::text FROM (VALUES (1, -1), (2, -2), (3, -3)) _ (a, b)
+----
+{1,2,3}
+
+query T
+SELECT list_agg(a ORDER BY a+1 DESC)::text FROM (VALUES (1, -1), (2, -2), (3, -3)) _ (a, b)
+----
+{3,2,1}
+
+query T
+SELECT list_agg(a ORDER BY -a DESC)::text FROM (VALUES (1, -1), (2, -2), (3, -3)) _ (a, b)
+----
+{1,2,3}
+
+query error column "no_such_column" does not exist
+SELECT array_agg(a ORDER BY no_such_column)::text FROM (VALUES (1, -1)) AS a(a);
+
+query error division by zero
+SELECT array_agg(a ORDER BY a/0)::text FROM (VALUES (1, -1)) AS a(a);
+
+query error more than one record produced in subquery
+SELECT list_agg(a ORDER BY (SELECT 'a' FROM t2))::text FROM t2;
+
+query error Expected subselect to return 1 column, got 2 columns
+SELECT list_agg(a ORDER BY (SELECT * FROM t2)) FROM t2
+
+query T
+SELECT array_agg(column1 ORDER BY 1234)::text FROM (VALUES (1)) _;
+----
+{1}
 
 # Test that a function that does not support ORDER BY is correct.
 query T

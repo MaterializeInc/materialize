@@ -2,6 +2,8 @@
 name: "Internal: release checklist"
 about: >
   A tracking issue for a new release of Materialize. Contributor use only.
+title: "Release: v"
+labels: release-tracker
 ---
 
 ## Current status: 🚢 Progressing 🚢
@@ -44,7 +46,7 @@ production readiness.
   should be (see `--help` for all the release types):
 
   ```shell
-  bin/mkrelease new-rc biweekly
+  bin/mkrelease new-rc weekly
   ```
 
 - [ ] Update the [release notes][] to include a new "unreleased" version so that new
@@ -102,11 +104,12 @@ a release is published.
   issue links, one to point to the unreviewed PRs issue you went through above, and one
   to point to this issue:
 
-  > @relnotes-team the release is in progress, now's a great time to verify or
-  > prepare the release notes and any announcement posts.
-  > * release notes: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md
-  > * All PRs in this release: https://github.com/MaterializeInc/materialize/issues/`<unreviewed PRs issue>`
-  > * Release: https://github.com/MaterializeInc/materialize/issues/`<this issue>`
+  ```text
+  @relnotes-team the release is in progress; now's a great time to verify or prepare the release notes and any announcement posts.
+  * release notes: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md
+  * All PRs in this release: https://github.com/MaterializeInc/materialize/issues/<unreviewed PRs issue>
+  * Release: https://github.com/MaterializeInc/materialize/issues/<this issue>
+  ```
 
 ### Test the release candidate
 
@@ -116,22 +119,17 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 [load-instr]: https://github.com/MaterializeInc/infra/blob/main/doc/starting-a-load-test.md
 
-- [ ] Kick off a [full SQL logic test run](https://buildkite.com/materialize/sql-logic-tests)
-  by clicking the 'New Build' button. For the values requested, use the following:
+- [ ] [A full SQL logic test run][slts] will be automatically triggered when the [deploy
+  job][] for your release has been completed. Find it [here][slts] and link to it, don't
+  check this checkmark off until it has succeeded.
 
-    - Message: Leave blank
-    - Commit - Use the default `HEAD`
-    - Branch - Enter the release candidate tag (i.e. `v0.4.2-rc1`)
+- [ ] Wait for the [deploy job][] for the currently-releasing version tag to complete and
+  then start the load tests according to [these instructions][load-instr], using your
+  release tag as the `git-ref` value for the release benchmarks. You can use [This
+  commit][] as an example to follow.
 
-  You can continue on to the next step, but remember to verify that this test passes. Link to it
-  here, and don't check this off until you've verified that it passed:
-
-  - [ ] "link to test run"
-
-- [ ] Wait for the docker build of the tag to complete and then start the load tests according to
-  [these instructions][load-instr], using your release tag as the `git-ref` value for the release
-  benchmarks. You can use [This commit][] as an example to follow.
-
+[slts]: https://buildkite.com/materialize/sql-logic-tests
+[deploy job]: https://buildkite.com/materialize/deploy
 [This commit]: https://github.com/MaterializeInc/infra/commit/fd7f594d6f9fb2fda3a604f21b730f8d401fe81c
 
 - [ ] Create the Grafana links for the load-test results using the `mkrelease

@@ -15,33 +15,35 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fs;
-use std::io::{self, Write};
 use std::iter;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 use aws_arn::ARN;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error};
+use protobuf::Message;
 use regex::Regex;
 use reqwest::Url;
 
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, ColumnSpec,
     Consistency, CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSinkFormat, KafkaSourceConnector,
-    KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
-    PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
-    SourceConnector, SourceDataEncoding, SourceEnvelope, Timeline,
+    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat,
+    KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
+    ProtobufEncoding, PubNubSourceConnector, RegexEncoding, S3SourceConnector,
+    SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceDataEncoding, SourceEnvelope,
+    Timeline,
 };
 use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
+use protoc::Protoc;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::ast::{CreateSourceFormat, CsvColumns, KeyConstraint};
 
@@ -1122,34 +1124,18 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
 }
 
 fn compile_proto(schema: &str) -> Result<Vec<u8>, anyhow::Error> {
-    // Write schema string to a file to compile it.
+    // Compiling a protobuf schema requires writing the schema to disk.
+    let include_dir = tempfile::tempdir()?;
+    let schema_path = include_dir.path().join("schema.proto");
     let schema_bytes = strconv::parse_bytes(schema)?;
-    let include_dir = tempfile::tempdir()?.into_path();
-    let mut file = tempfile::NamedTempFile::new_in(&include_dir)?;
-    file.write_all(&schema_bytes)?;
-    file.flush()?;
+    fs::write(&schema_path, &schema_bytes)?;
 
-    // Destroy and recreate the build directory, in case any inputs have
-    // been deleted since the last invocation.
-    let out_dir = tempfile::tempdir()?.into_path();
-    match fs::remove_dir_all(&out_dir) {
-        Ok(()) => (),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
-        Err(e) => {
-            return Err(anyhow::Error::new(e))
-                .with_context(|| format!("removing existing out directory {}", out_dir.display()))
-        }
-    }
-    fs::create_dir(&out_dir)
-        .with_context(|| format!("creating out directory {}", out_dir.display()))?;
-
-    // Compile schema string.
-    match protoc::Protoc::new()
-        .include(&include_dir)
-        .input(file.path())
-        .compile_into(&out_dir)
+    match Protoc::new()
+        .include(include_dir.path())
+        .input(schema_path)
+        .parse()
     {
-        Ok(()) => (),
+        Ok(fds) => Ok(fds.write_to_bytes()?),
         Err(e) => {
             lazy_static! {
                 static ref MISSING_IMPORT_ERROR: Regex = Regex::new(
@@ -1165,12 +1151,10 @@ fn compile_proto(schema: &str) -> Result<Vec<u8>, anyhow::Error> {
                     &captures["reference"]
                 )
             } else {
-                return Err(e);
+                Err(e)
             }
         }
     }
-
-    Ok(fs::read(out_dir.join("file_descriptor_set.pb").as_path())?)
 }
 
 fn get_key_envelope(
@@ -1483,6 +1467,30 @@ fn kafka_sink_builder(
         );
     }
 
+    let retention_ms = match with_options.remove("retention_ms") {
+        None => None,
+        Some(Value::Number(n)) => Some(n.parse::<i64>()?),
+        Some(_) => bail!("retention ms for sink topics must be an integer"),
+    };
+
+    if retention_ms.unwrap_or(0) < -1 {
+        bail!("retention ms for sink topics must be greater than or equal to -1");
+    }
+
+    let retention_bytes = match with_options.remove("retention_bytes") {
+        None => None,
+        Some(Value::Number(n)) => Some(n.parse::<i64>()?),
+        Some(_) => bail!("retention bytes for sink topics must be an integer"),
+    };
+
+    if retention_bytes.unwrap_or(0) < -1 {
+        bail!("retention bytes for sink topics must be greater than or equal to -1");
+    }
+    let retention = KafkaSinkConnectorRetention {
+        retention_ms,
+        retention_bytes,
+    };
+
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
@@ -1502,6 +1510,7 @@ fn kafka_sink_builder(
         value_desc,
         reuse_topic,
         transitive_source_dependencies,
+        retention,
     }))
 }
 
@@ -2145,10 +2154,23 @@ pub fn describe_drop_database(
 
 pub fn plan_drop_database(
     scx: &StatementContext,
-    DropDatabaseStatement { name, if_exists }: DropDatabaseStatement,
+    DropDatabaseStatement {
+        name,
+        if_exists,
+        restrict,
+    }: DropDatabaseStatement,
 ) -> Result<Plan, anyhow::Error> {
     let name = match scx.resolve_database_ident(name) {
-        Ok(database) => database.name().into(),
+        Ok(database) => {
+            let name = String::from(database.name());
+            if restrict && database.has_schemas() {
+                bail!(
+                    "database '{}' cannot be dropped with RESTRICT while it contains schemas",
+                    database.name(),
+                );
+            }
+            name
+        }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the database
             // does not exist.
@@ -2215,8 +2237,7 @@ pub fn plan_drop_schema(
                     schema.name()
                 );
             }
-            let mut items = scx.catalog.list_items(schema.name());
-            if !cascade && items.next().is_some() {
+            if !cascade && schema.has_items() {
                 bail!(
                     "schema '{}' cannot be dropped without CASCADE while it contains objects",
                     schema.name(),

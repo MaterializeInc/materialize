@@ -880,7 +880,10 @@ impl Runner {
                     _ => panic!("unexpected"),
                 })
                 .collect::<Vec<_>>(),
-            Err(error) => vec![error.to_string()],
+            // Errors can contain multiple lines (say if there are details), and rewrite
+            // sticks them each on their own line, so we need to split up the lines here to
+            // each be its own String in the Vec.
+            Err(error) => error.to_string().lines().map(|s| s.to_string()).collect(),
         });
         if *output != actual {
             Ok(Outcome::OutputFailure {

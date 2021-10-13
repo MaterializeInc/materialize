@@ -4,6 +4,7 @@ description: "Get details about using Materialize with dbt"
 menu:
   main:
     parent: 'third-party'
+weight: 2
 ---
 
 You can use [dbt] to easily create views and materialized views in your `materialized`

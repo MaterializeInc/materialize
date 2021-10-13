@@ -528,7 +528,7 @@ impl<T: AstInfo> AstDisplay for Join<T> {
                             f.write_node(expr);
                         }
                         JoinConstraint::Using(attrs) => {
-                            f.write_str(" USING(");
+                            f.write_str(" USING (");
                             f.write_node(&display::comma_separated(attrs));
                             f.write_str(")");
                         }

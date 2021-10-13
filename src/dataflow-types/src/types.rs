@@ -1162,6 +1162,13 @@ pub struct KafkaSinkConnectorBuilder {
     pub reuse_topic: bool,
     // Source dependencies for exactly-once sinks.
     pub transitive_source_dependencies: Vec<GlobalId>,
+    pub retention: KafkaSinkConnectorRetention,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaSinkConnectorRetention {
+    pub retention_ms: Option<i64>,
+    pub retention_bytes: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

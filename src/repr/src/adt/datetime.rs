@@ -787,6 +787,12 @@ impl ParsedDateTime {
         Ok(())
     }
     pub fn check_datelike_bounds(&mut self) -> Result<(), String> {
+        if let Some(year) = self.year {
+            // 1BC is not represented as year 0 in postgres
+            if year.unit == 0 {
+                return Err("YEAR cannot be zero".to_string());
+            }
+        }
         if let Some(month) = self.month {
             if month.unit < 1 || month.unit > 12 {
                 return Err(format!("MONTH must be [1, 12], got {}", month.unit));
@@ -913,10 +919,6 @@ fn fill_pdt_date(
                 } else {
                     val += 1900;
                 }
-            }
-            // 1BC is not represented as year 0 in postgres
-            if val == 0 {
-                return Err("YEAR cannot be zero".into());
             }
             pdt.year = Some(DateTimeFieldValue::new(val, 0));
             actual.pop_front();

@@ -21,7 +21,7 @@ rusoto_core = "0.47.0"
 serde = { version = "1.0.130", features = ["derive"] }
 serde_regex = "1.1.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.11.0"
+tokio = "1.12.0"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 

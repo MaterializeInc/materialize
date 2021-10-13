@@ -1,0 +1,75 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests pushing filter + project information across views.
+
+cat
+(defsource x [int32 int32 int32])
+----
+ok
+
+crossview apply=project
+[a (project (get x) [2 1])]
+[b (project (get a) [0])]
+----
+----
+Pushed-down demand:
+Source x: {2}
+
+====
+View a:
+%0 =
+| Get x (u0)
+| Project (#2)
+
+====
+View b:
+%0 =
+| Get a (t1)
+
+----
+----
+
+crossview apply=project
+[a (map (get x) [(call_unary neg_int32 #2)])]
+[b (project (get a) [2])]
+[c (project (join [(get a) (get b)] [[#1 #4]]) [1 4])]
+----
+----
+Pushed-down demand:
+Source x: {1, 2}
+
+====
+View a:
+%0 =
+| Get x (u0)
+| Project (#1, #2)
+| Map
+
+====
+View b:
+%0 =
+| Get a (t1)
+| Project (#1)
+
+====
+View c:
+%0 =
+| Get a (t1)
+| Project (#0)
+
+%1 =
+| Get b (t2)
+
+%2 =
+| Join %0 %1 (= #0 #1)
+| | implementation = Unimplemented
+
+----
+----

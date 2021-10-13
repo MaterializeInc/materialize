@@ -22,7 +22,9 @@ use crate::error::Error;
 pub struct Future<T>(oneshot::Receiver<Result<T, Error>>);
 
 impl<T> Future<T> {
-    pub(crate) fn new() -> (FutureHandle<T>, Future<T>) {
+    /// Create a new instance of [Future], and the corresponding [FutureHandle]
+    /// to fill it.
+    pub fn new() -> (FutureHandle<T>, Future<T>) {
         let (tx, rx) = oneshot::channel();
         (FutureHandle(tx), Future(rx))
     }

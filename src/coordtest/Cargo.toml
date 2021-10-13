@@ -20,4 +20,4 @@ structopt = "0.3.23"
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.11.0"
+tokio = "1.12.0"

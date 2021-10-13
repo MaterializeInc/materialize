@@ -19,11 +19,11 @@ ore = { path = "../../src/ore" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 protobuf = "2.23.0"
 rand = "0.8.4"
-rand_distr = "0.4.1"
+rand_distr = "0.4.2"
 repr = { path = "../../src/repr" }
 structopt = "0.3.23"
 test-util = { path = "../../test/test-util" }
-tokio = "1.11.0"
+tokio = "1.12.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 uuid = { version = "0.8.2", features = ["v4"] }
 

@@ -6,13 +6,25 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
+use std::convert::TryFrom;
+
 use anyhow::bail;
 
 use super::util;
 
+// https://github.com/postgres/postgres/blob/REL_14_0/src/include/access/htup_details.h#L577-L584
+pub const MAX_LENGTH: i32 = 10_485_760;
+
 pub fn extract_typ_mod(typ_mod: &[u64]) -> Result<Option<usize>, anyhow::Error> {
-    let typ_mod =
-        util::extract_typ_mod::<usize>("character varying", typ_mod, &[("length", 1, 10_485_760)])?;
+    let typ_mod = util::extract_typ_mod::<usize>(
+        "character varying",
+        typ_mod,
+        &[(
+            "length",
+            1,
+            usize::try_from(MAX_LENGTH).expect("max length is positive"),
+        )],
+    )?;
     Ok(typ_mod.get(0).cloned())
 }
 

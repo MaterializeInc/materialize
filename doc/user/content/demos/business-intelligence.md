@@ -4,7 +4,6 @@ description: "Find out how Materialize can help improve your team's business int
 menu:
     main:
         parent: "demos"
-        weight: 4
 ---
 
 **tl;dr** Materialize can enable real-time monitoring within business

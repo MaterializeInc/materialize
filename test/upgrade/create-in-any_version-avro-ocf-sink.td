@@ -9,8 +9,4 @@
 
 > CREATE TABLE avro_ocf_table (f1 INTEGER NOT NULL);
 
-> INSERT INTO avro_ocf_table VALUES (1);
-
 > CREATE SINK avro_ocf_sink FROM avro_ocf_table INTO AVRO OCF '${testdrive.temp-dir}/avro_ocf_sink.ocf'
-
-> INSERT INTO avro_ocf_table VALUES (2);

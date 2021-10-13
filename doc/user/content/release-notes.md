@@ -48,6 +48,32 @@ Wrap your release notes at the 80 character mark.
 Put breaking changes before other release notes.
 {{< /comment >}}
 
+{{% version-header v0.9.9 %}}
+
+- Optimize some `(table).field1.field2` expressions to only generate the
+  columns from `table` that are accessed subsequently. This avoids performance
+  issues when extracting a single field from a table expression with several
+  columns, for example records generated from [`ROW`](/sql/types/record).
+  {{% gh 8596 %}}
+
+- Let users express `JOIN`-like `DELETE`s with `DELETE...USING`.
+
+{{% version-header v0.9.8 %}}
+
+- Throw errors on floating point arithmetic overflow and underflow.
+
+{{% version-header v0.9.7 %}}
+
+- Support the `IS TRUE`, `IS FALSE`, `IS UNKNOWN` operators (and their `NOT`
+  variations). {{% gh 8455 %}}
+- Add support for retention settings on Kafka sinks.
+
+- Support explicit `DROP DATABASE ... (CASCADE | RESTRICT)` statements.  The
+  default behavior remains CASCADE.
+
+- Fix a bug that prevented some users from creating Protobuf-formatted
+  sources. {{% gh 8528 %}}
+
 {{% version-header v0.9.6 %}}
 
 - Correctly handle TOASTed columns when using PostgreSQL sources. {{% gh 8371 %}}
@@ -85,7 +111,7 @@ Put breaking changes before other release notes.
 - Ignore the trailing newline character of POSIX compliant files instead of
   decoding it as an empty byte row. {{% gh 8142 %}}
 
-- Support `ORDER BY` in aggregate functions.
+- Support `ORDER BY` in [aggregate functions](/sql/functions/#aggregate-func).
 
 - When issuing `COMMIT` or `ROLLBACK` commands outside of an explicit
   transaction, always return a warning. Previously, the warning could be suppressed.

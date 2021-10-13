@@ -46,7 +46,7 @@ unable to automatically determine a query timestamp
 4
 
 ! SELECT c FROM unindexed ORDER BY c
-transactions can only reference nearby relations
+Transactions can only reference objects in the same timedomain
 
 > ROLLBACK
 
@@ -59,7 +59,7 @@ transactions can only reference nearby relations
 4
 
 ! SELECT * FROM v_unindexed
-transactions can only reference nearby relations
+Transactions can only reference objects in the same timedomain
 
 > ROLLBACK
 

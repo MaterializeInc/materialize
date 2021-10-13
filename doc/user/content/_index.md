@@ -30,8 +30,9 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 {{</ linkbox >}}
 {{< linkbox icon="doc" title="Guides" >}}
 - [Materialize &amp; Postgres CDC](/guides/cdc-postgres/)
+- [Exactly-Once Sinks](/guides/reuse-topic-for-kafka-sink)
 - [Materialize &amp; Node.js](/guides/node-js/)
-- - [Time-windowed computation](/guides/temporal-filters/)
+- [Time-windowed computation](/guides/temporal-filters/)
 {{</ linkbox >}}
 {{< linkbox icon="book" title="Reference" >}}
 - [`CREATE SOURCE`](/sql/create-source)
@@ -45,11 +46,11 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 
 - [Release Notes](release-notes/)
 - [Materialize & Node.js](/guides/node_js/)
-- [Kafka Sink Topic Reuse (Exactly-Once) Sinks Guide](/guides/reuse-topic-for-kafka-sink)
+- [Materialize Cloud](/cloud/) - Now in open beta!
 
 ## Learn more
 
-- [**Install Materialize**](./install) to try it out.
+- [**Install Materialize**](./install) to try it out or try [Materialize Cloud](/cloud/) for free.
 - [**What is Materialize?**](./overview/what-is-materialize) to learn
 more about what Materialize does and how it works.
 - [**Architecture documentation**](./overview/architecture) for a deeper dive into the `materialized` binary's components and deployment.

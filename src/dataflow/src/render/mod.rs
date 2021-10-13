@@ -1192,4 +1192,40 @@ pub mod plan {
 
         *mfp = map_filter_project;
     }
+
+    /// Helper method to convert linear operators to MapFilterProject instances.
+    ///
+    /// This method produces a `MapFilterProject` instance that first applies any predicates,
+    /// and then introduces `Datum::Dummy` literals in columns that are not demanded.
+    /// The `RelationType` is required so that we can fill in the correct type of `Datum::Dummy`.
+    pub fn linear_to_mfp(
+        linear: dataflow_types::LinearOperator,
+        typ: &repr::RelationType,
+    ) -> MapFilterProject {
+        let crate::render::LinearOperator {
+            predicates,
+            projection,
+        } = linear;
+
+        let arity = typ.arity();
+        let mut dummies = Vec::new();
+        let mut demand_projection = Vec::new();
+        for (column, typ) in typ.column_types.iter().enumerate() {
+            if projection.contains(&column) {
+                demand_projection.push(column);
+            } else {
+                demand_projection.push(arity + dummies.len());
+                dummies.push(MirScalarExpr::literal_ok(
+                    Datum::Dummy,
+                    typ.scalar_type.clone(),
+                ));
+            }
+        }
+
+        // First filter, then introduce and reposition `Datum::Dummy` values.
+        MapFilterProject::new(arity)
+            .filter(predicates)
+            .map(dummies)
+            .project(demand_projection)
+    }
 }

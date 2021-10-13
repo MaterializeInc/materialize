@@ -22,7 +22,7 @@ components not accounted for there are:
 Our load generator (`simple-loadgen`) populates MySQL with 3 tables: `region`,
 `user`, and `purchase`.
 
-![simple demo schema](../../www/static/images/simple_demo_schema.png)
+![simple_demo_schema](https://user-images.githubusercontent.com/23521087/136808547-9aa91293-3a03-4bf2-99d9-5ca220a21781.png)
 
 The database gets seeded with regions, users in those regions, and the purchases
 those users make. After seeding, users continue making purchases (~10/second for

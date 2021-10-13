@@ -140,10 +140,11 @@ where
     if let Some(plan) = temporal_plan {
         let (oks2, errs2) = oks.flat_map_fallible("UpsertTemporalOperators", {
             let mut datums = crate::render::datum_vec::DatumVec::new();
+            let mut row_builder = Row::default();
             move |(row, time, diff)| {
                 let arena = repr::RowArena::new();
                 let mut datums_local = datums.borrow_with(&row);
-                plan.evaluate(&mut datums_local, &arena, time, diff)
+                plan.evaluate(&mut datums_local, &arena, time, diff, &mut row_builder)
             }
         });
 

@@ -15,8 +15,11 @@ use std::sync::{Arc, Mutex};
 
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
+use tokio::runtime::Runtime;
 
 use crate::error::Error;
+use crate::indexed::background::Maintainer;
+use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use crate::indexed::Indexed;
@@ -220,10 +223,8 @@ impl MemBlobCore {
 
     fn delete(&mut self, key: &str) -> Result<(), Error> {
         self.ensure_open()?;
-        match self.dataz.remove(key) {
-            Some(_) => Ok(()),
-            None => Err(format!("key does not exist: {}", key).into()),
-        }
+        self.dataz.remove(key);
+        Ok(())
     }
 }
 
@@ -338,9 +339,10 @@ impl MemRegistry {
     /// this registry.
     pub fn indexed_no_reentrance(&mut self) -> Result<Indexed<MemLog, MemBlob>, Error> {
         let log = self.log_no_reentrance()?;
-        let blob = self.blob_no_reentrance()?;
         let metrics = Metrics::register_with(&MetricsRegistry::new());
-        Indexed::new(log, blob, metrics)
+        let blob = BlobCache::new(metrics.clone(), self.blob_no_reentrance()?);
+        let compacter = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        Indexed::new(log, blob, compacter, metrics)
     }
 
     /// Starts a [RuntimeClient] using the [MemLog] and [MemBlob] contained by
@@ -353,6 +355,7 @@ impl MemRegistry {
             log,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     }
 
@@ -371,6 +374,7 @@ impl MemRegistry {
             log,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     }
 }
@@ -426,6 +430,7 @@ impl MemMultiRegistry {
             log,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     }
 }

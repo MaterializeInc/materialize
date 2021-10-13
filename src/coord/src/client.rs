@@ -28,7 +28,7 @@ use crate::command::{
 };
 use crate::error::CoordError;
 use crate::id_alloc::IdAllocator;
-use crate::session::{EndTransactionAction, Session};
+use crate::session::{EndTransactionAction, PreparedStatement, Session};
 
 /// A handle to a running coordinator.
 ///
@@ -246,6 +246,24 @@ impl SessionClient {
         // and thus run in a loop. Figure out a way to have the future only resolve on
         // a Cancelled message.
         let _ = self.cancel_tx.send(Cancelled::NotCancelled);
+    }
+
+    // Verify and return the named prepared statement. We need to verify each use
+    // to make sure the prepared statement is still safe to use.
+    pub async fn get_prepared_statement(
+        &mut self,
+        name: &str,
+    ) -> Result<&PreparedStatement, CoordError> {
+        self.send(|tx, session| Command::VerifyPreparedStatement {
+            name: name.to_string(),
+            session,
+            tx,
+        })
+        .await?;
+        Ok(self
+            .session()
+            .get_prepared_statement_unverified(&name)
+            .expect("must exist"))
     }
 
     /// Saves the specified statement as a prepared statement.

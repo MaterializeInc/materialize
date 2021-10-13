@@ -21,6 +21,29 @@ sqlfunc!(
     }
 );
 
+// TODO: Once issue #7581 is fixed, we can remove `IsTrue` and `IsFalse` and
+// replace them with `BinaryFunc::eq`.  We can't do this yet because that
+// function propagates NULLs which we do not want here.
+sqlfunc!(
+    #[sqlname = "istrue"]
+    #[propagates_nulls = false]
+    #[introduces_nulls = false]
+    #[preserves_uniqueness = false]
+    fn is_true(a: Datum<'_>) -> Result<Option<bool>, EvalError> {
+        Ok(Some(a == Datum::True))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "isfalse"]
+    #[propagates_nulls = false]
+    #[introduces_nulls = false]
+    #[preserves_uniqueness = false]
+    fn is_false(a: Datum<'_>) -> Result<Option<bool>, EvalError> {
+        Ok(Some(a == Datum::False))
+    }
+);
+
 sqlfunc!(
     #[sqlname = "pg_column_size"]
     #[propagates_nulls = true]

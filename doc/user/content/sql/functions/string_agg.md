@@ -11,22 +11,23 @@ input values (i.e. `value`) into [`text`](/sql/types/text). Each value after the
 first is preceded by its corresponding `delimiter`, where _null_ values are
 equivalent to an empty string.
 
+## Syntax
+
+{{< diagram "string-agg.svg" >}}
+
 ## Signatures
 
 Parameter | Type | Description
 ----------|------|------------
 _value_    | `text`  | The values to concatenate.
-_delimiter_  | `text`  | The values to precede the concatenated value.
+_delimiter_  | `text`  | The value to precede each concatenated value.
 
 ### Return value
 
 `string_agg` returns a [`text`](/sql/types/text) value.
 
-Currently, this functions always executes on the data from `value` as if it were
-sorted in ascending order before the function call. Any specified ordering is
-ignored. If you need to control the ordering of this function's return results,
-you can follow [this GitHub
-issue](https://github.com/MaterializeInc/materialize/issues/2415).
+This function always executes on the data from `value` as if it were sorted in ascending order before the function call. Any specified ordering is
+ignored. If you need to perform aggregation in a specific order, you must specify `ORDER BY` within the aggregate function call itself. Otherwise incoming rows are not guaranteed any order.
 
 ### Usage in dataflows
 
@@ -42,7 +43,7 @@ statements:
 
 ```sql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
-CREATE VIEW bar AS string_agg(foo_view.bar, ',');
+CREATE VIEW bar AS SELECT string_agg(foo_view.bar, ',');
 ```
 
 ## Examples
@@ -59,8 +60,7 @@ FROM (
  a #m !z
 ```
 
-Note that in the following example, the `ORDER BY` of the subquery feeding into
-`string_agg` gets ignored.
+Note that in the following example, the `ORDER BY` of the subquery feeding into `string_agg` gets ignored.
 
 ```sql
 SELECT column1, column2
@@ -89,4 +89,8 @@ FROM (
  string_agg
 ------------
  a #m !z
+```
+
+```sql
+SELECT string_agg(b, ',' ORDER BY a DESC) FROM table;
 ```

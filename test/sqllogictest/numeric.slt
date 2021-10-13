@@ -1183,16 +1183,38 @@ SELECT log(-100.000)
 query error function log10 is not defined for zero
 SELECT log(0::numeric)
 
-# This documented behavior of the library:
-# > Inexact results will almost always be correctly rounded, but may be up to 1
-# > ulp (unit in last place) in error in rare cases.
-# See decNumberLog10 at http://speleotrove.com/decimal/dnnumb.html
+# These results used to end up with some errant digits in the least significant digit.
 query R
 SELECT log(2::numeric, 64)
 ----
-5.99999999999999999999999999999999999999
+6
 
-# However, doesn't happen everywhere
+query R
+SELECT log(4::numeric, 4096);
+----
+6
+
+query R
+SELECT log(6::numeric, 279936);
+----
+7
+
+query R
+SELECT log(6::numeric, 1679616);
+----
+8
+
+query R
+SELECT log(8::numeric, 16777216);
+----
+8
+
+query R
+SELECT log(8::numeric, 134217728);
+----
+9
+
+# This result has never been incorrect
 query R
 SELECT log(2::numeric, 128)
 ----

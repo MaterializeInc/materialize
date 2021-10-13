@@ -8,12 +8,38 @@ This upgrade test framework serves to verify that objects created in a previous 
 The framework does the following:
 - fires an old version of Materialize
 - runs the applicable 'create-in' .td tests against it
-- kills the old version and starts a Materialize binary from your branch, preserving the mzdata directory across restarts
+- kills the old version and starts a Materialize binary from your current source, preserving the mzdata directory across restarts
 - runs the applicable 'check-from' .td tests
 
-Kafka and the Schema Registry are not restarted.
+The external services (Kafka, Schema Registry, Postgres) are not restarted.
 
-A separate sub-workflow also tests the "upgrade" from your branch back to your branch.
+The "upgrade" from your current source to your current source is also tested.
+
+## Running
+
+To run the entire sequence of tests:
+
+```
+./mzcompose down -v ; ./mzcompose run upgrade
+```
+
+To run the tests against a particular version and all following versions:
+
+```
+./mzcompose down -v ; MIN_TESTED_TAG=0.9.6 ./mzcompose run upgrade
+```
+
+To run the tests upgrading from the current source to the current source:
+
+```
+./mzcompose down -v ; MIN_TESTED_TAG=99.99.99 ./mzcompose run upgrade
+```
+
+To run just a particular test or tests:
+
+```
+./mzcompose down -v ; TD_GLOB=persistent-user-tables ./mzcompose run upgrade
+```
 
 ## Test naming convention
 
@@ -33,30 +59,6 @@ There are also two other special version identifiers:
 
 - ```current_source``` will only run when testing the "upgrade" from your current source to your current source
 - ```any_version``` tests will run when upgrading from any version
-
-## Adding a new Materialize version to the test
-
-1. Add a step under ```upgrade``` in ```mzcompose.yml```
-
-  ```
-  upgrade:
-    steps:
-      - step: workflow
-        workflow: upgrade-from-0_6_1
-  ```
-2. Add a section:
-
-```
-  upgrade-from-0_8_2:
-    env:
-      UPGRADE_FROM_VERSION: v0.8.2
-      TESTS: any_version|v0.6.1|v0.7.3|v0.8.0|v0.8.1|v0.8.2
-    steps:
-      - step: workflow
-        workflow: test-upgrade-from-version
-```
-
-Make sure the ```TESTS``` line includes the version under test **and all other** versions prior to it that are already in the file.
 
 ## Adding a new test
 

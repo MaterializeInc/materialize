@@ -41,6 +41,10 @@ fn test_parse_date_errors() {
         "invalid input syntax for type date: YEAR cannot be zero: \"00000203\"",
     );
     run_test_parse_date_errors(
+        "0000-02-03",
+        "invalid input syntax for type date: YEAR cannot be zero: \"0000-02-03\"",
+    );
+    run_test_parse_date_errors(
         "0010230",
         "invalid input syntax for type date: invalid or out-of-range date: \"0010230\"",
     );

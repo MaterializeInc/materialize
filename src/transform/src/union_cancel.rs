@@ -11,6 +11,7 @@
 
 use crate::{TransformArgs, TransformError};
 use expr::MirRelationExpr;
+use itertools::Itertools;
 
 /// Detects an input being unioned with its negation and cancels them out
 #[derive(Debug)]
@@ -55,33 +56,78 @@ impl UnionBranchCancellation {
     /// Detects an input being unioned with its negation and cancels them out
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         if let MirRelationExpr::Union { base, inputs } = relation {
+            // Compares a union branch against the remaining branches in the union
+            // with opposite sign until it finds a branch that cancels the given one
+            // and returns its position.
             let matching_negation = |input: &MirRelationExpr,
+                                     sign: bool,
                                      inputs: &[MirRelationExpr],
+                                     input_signs: &[bool],
                                      start_idx: usize|
              -> Option<usize> {
                 for i in start_idx..inputs.len() {
-                    if let BranchCmp::Inverse = Self::compare_branches(input, &inputs[i]) {
-                        return Some(i);
+                    // Only compare branches with opposite signs
+                    if sign != input_signs[i] {
+                        if let BranchCmp::Inverse = Self::compare_branches(input, &inputs[i]) {
+                            return Some(i);
+                        }
                     }
                 }
                 None
             };
 
-            if let Some(j) = matching_negation(&*base, inputs, 0) {
-                let relation_typ = base.typ();
-                **base = MirRelationExpr::constant(vec![], relation_typ.clone());
-                inputs[j] = MirRelationExpr::constant(vec![], relation_typ);
-            }
+            let base_sign = Self::branch_sign(base);
+            let input_signs = inputs
+                .iter()
+                .map(|input| Self::branch_sign(input))
+                .collect_vec();
 
-            for i in 0..inputs.len() {
-                if let Some(j) = matching_negation(&inputs[i], inputs, i + 1) {
-                    let relation_typ = inputs[i].typ();
-                    inputs[i] = MirRelationExpr::constant(vec![], relation_typ.clone());
+            // Compare branches if there is at least a negated branch
+            if std::iter::once(&base_sign).chain(&input_signs).any(|x| *x) {
+                if let Some(j) = matching_negation(&*base, base_sign, inputs, &input_signs, 0) {
+                    let relation_typ = base.typ();
+                    **base = MirRelationExpr::constant(vec![], relation_typ.clone());
                     inputs[j] = MirRelationExpr::constant(vec![], relation_typ);
+                }
+
+                for i in 0..inputs.len() {
+                    if let Some(j) =
+                        matching_negation(&inputs[i], input_signs[i], inputs, &input_signs, i + 1)
+                    {
+                        let relation_typ = inputs[i].typ();
+                        inputs[i] = MirRelationExpr::constant(vec![], relation_typ.clone());
+                        inputs[j] = MirRelationExpr::constant(vec![], relation_typ);
+                    }
                 }
             }
         }
         Ok(())
+    }
+
+    /// Returns the sign of a given union branch. The sign is `true` if the branch contains
+    /// an odd number of Negate operators within a chain of Map, Filter and Project
+    /// operators, and `false` otherwise.
+    ///
+    /// This sign is pre-computed for all union branches in order to avoid performing
+    /// expensive comparisons of branches with the same sign since they can't possibly
+    /// cancel each other.
+    fn branch_sign(branch: &MirRelationExpr) -> bool {
+        let mut relation = branch;
+        let mut sign = false;
+        loop {
+            match relation {
+                MirRelationExpr::Negate { input } => {
+                    sign ^= true;
+                    relation = &**input;
+                }
+                MirRelationExpr::Map { input, .. }
+                | MirRelationExpr::Filter { input, .. }
+                | MirRelationExpr::Project { input, .. } => {
+                    relation = &**input;
+                }
+                _ => return sign,
+            }
+        }
     }
 
     /// Compares two branches to check whether they produce the same results but

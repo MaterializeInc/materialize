@@ -29,7 +29,7 @@ mzworkflows:
   # Specify the `TD_TEST` environment variable to select a specific test to run.
   # Otherwise, this workflow runs against the test files in this directory that
   # use a Kafka action but do *not* use:
-  # - `kafka-add-partition`(Redpanda does not yet support dynamically adding partitions to a topic)
+  # - `kafka-time-offset.td` (https://github.com/vectorizedio/redpanda/issues/2397)
   # - `format=protobuf` with `publish=true` (Redpanda does not support schema publication for protobuf/json)
   testdrive-redpanda:
     steps:
@@ -53,7 +53,7 @@ mzworkflows:
           --kafka-addr=redpanda:9092
           --schema-registry-url=http://redpanda:8081
           --materialized-url=postgres://materialize@materialized:6875
-          ${TD_TEST:-$(grep -lF '$ kafka' $(grep -LF '$ kafka-add-partitions' $(grep -L '$ kafka-ingest.\+format=protobuf.\+publish=true' *.td)))}
+          ${TD_TEST:-$(grep -lF '$ kafka' $(grep -L 'kafka_time_offset' $(grep -L '$ kafka-ingest.\+format=protobuf.\+publish=true' *.td)))}
 
   # Run tests, requires AWS credentials to be present. See guide-testing for
   # details.
@@ -186,7 +186,7 @@ services:
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka, zookeeper]
   redpanda:
-    image: vectorized/redpanda:v21.8.2
+    image: vectorized/redpanda:v21.9.3
     # Most of these options are simply required when using Redpanda in Docker.
     # See: https://vectorized.io/docs/quick-start-docker/#Single-command-for-a-1-node-cluster
     # The `enable_transactions` and `enable_idempotence` feature flags enable
@@ -198,6 +198,7 @@ services:
       --node-id=0 --check=false
       --set "redpanda.enable_transactions=true"
       --set "redpanda.enable_idempotence=true"
+      --set "redpanda.auto_create_topics_enabled=false"
       --advertise-kafka-addr redpanda:9092
   localstack:
     image: localstack/localstack:0.12.5

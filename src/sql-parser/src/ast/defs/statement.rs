@@ -24,7 +24,7 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat,
     CreateSourceKeyEnvelope, DataType, Envelope, Expr, Format, Ident, KeyConstraint, Query,
-    TableConstraint, UnresolvedObjectName, Value,
+    TableAlias, TableConstraint, TableWithJoins, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -71,6 +71,9 @@ pub enum Statement<T: AstInfo> {
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement),
     Close(CloseStatement),
+    Prepare(PrepareStatement<T>),
+    Execute(ExecuteStatement<T>),
+    Deallocate(DeallocateStatement),
 }
 
 impl<T: AstInfo> Statement<T> {
@@ -126,6 +129,9 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Declare(stmt) => f.write_node(stmt),
             Statement::Close(stmt) => f.write_node(stmt),
             Statement::Fetch(stmt) => f.write_node(stmt),
+            Statement::Prepare(stmt) => f.write_node(stmt),
+            Statement::Execute(stmt) => f.write_node(stmt),
+            Statement::Deallocate(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -269,8 +275,8 @@ impl_display_t!(CopyStatement);
 /// `UPDATE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UpdateStatement<T: AstInfo> {
-    /// TABLE
-    pub table_name: UnresolvedObjectName,
+    /// `FROM`
+    pub table_name: T::ObjectName,
     /// Column assignments
     pub assignments: Vec<Assignment<T>>,
     /// WHERE
@@ -297,7 +303,11 @@ impl_display_t!(UpdateStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeleteStatement<T: AstInfo> {
     /// `FROM`
-    pub table_name: UnresolvedObjectName,
+    pub table_name: T::ObjectName,
+    /// `AS`
+    pub alias: Option<TableAlias>,
+    /// `USING`
+    pub using: Vec<TableWithJoins<T>>,
     /// `WHERE`
     pub selection: Option<Expr<T>>,
 }
@@ -306,6 +316,14 @@ impl<T: AstInfo> AstDisplay for DeleteStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DELETE FROM ");
         f.write_node(&self.table_name);
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
+        if !self.using.is_empty() {
+            f.write_str(" USING ");
+            f.write_node(&display::comma_separated(&self.using));
+        }
         if let Some(selection) = &self.selection {
             f.write_str(" WHERE ");
             f.write_node(selection);
@@ -898,6 +916,7 @@ impl_display!(DiscardTarget);
 pub struct DropDatabaseStatement {
     pub name: Ident,
     pub if_exists: bool,
+    pub restrict: bool,
 }
 
 impl AstDisplay for DropDatabaseStatement {
@@ -907,6 +926,9 @@ impl AstDisplay for DropDatabaseStatement {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&self.name);
+        if self.restrict {
+            f.write_str(" RESTRICT");
+        }
     }
 }
 impl_display!(DropDatabaseStatement);
@@ -1655,3 +1677,57 @@ impl AstDisplay for FetchDirection {
     }
 }
 impl_display!(FetchDirection);
+
+/// `PREPARE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PrepareStatement<T: AstInfo> {
+    pub name: Ident,
+    pub stmt: Box<Statement<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for PrepareStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("PREPARE ");
+        f.write_node(&self.name);
+        f.write_str(" AS ");
+        f.write_node(&self.stmt);
+    }
+}
+impl_display_t!(PrepareStatement);
+
+/// `EXECUTE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExecuteStatement<T: AstInfo> {
+    pub name: Ident,
+    pub params: Vec<Expr<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ExecuteStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXECUTE ");
+        f.write_node(&self.name);
+        if !self.params.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.params));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(ExecuteStatement);
+
+/// `DEALLOCATE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeallocateStatement {
+    pub name: Option<Ident>,
+}
+
+impl AstDisplay for DeallocateStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DEALLOCATE ");
+        match &self.name {
+            Some(name) => f.write_node(name),
+            None => f.write_str("ALL"),
+        };
+    }
+}
+impl_display!(DeallocateStatement);

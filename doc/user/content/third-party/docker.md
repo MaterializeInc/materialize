@@ -4,6 +4,7 @@ description: "Get details about using Materialize with Docker"
 menu:
   main:
     parent: 'third-party'
+weight: 4
 ---
 
 Many of our demos rely on [Docker] and [Docker Compose] to make it easy to deploy

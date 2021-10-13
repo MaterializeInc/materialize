@@ -54,26 +54,19 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FROM (VALUES (1, 'b'))
 ----
 %0 =
-| Constant
-
-%1 =
-| Constant ()
-| Map 1, "b"
-
-%2 =
-| Union %0 %1
-| Map select(%3), select(%4)
+| CallTable wrap2(1, "b")
+| Map select(%1), select(%2)
 | |
-| | %3 =
+| | %1 =
 | | | Constant ()
 | | | Map #^1
 | |
 | |
-| | %4 =
+| | %2 =
 | | | Constant ()
-| | | Map select(%5)
+| | | Map select(%3)
 | | | |
-| | | | %5 =
+| | | | %3 =
 | | | | | Constant ()
 | | | | | Map #^^0
 | | | |
@@ -86,27 +79,14 @@ query T multiline
 EXPLAIN TYPED RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FROM (VALUES (1, 'b'))
 ----
 %0 =
-| Constant
+| CallTable wrap2(1, "b")
 | | types = (integer, text)
 | | keys = ()
-
-%1 =
-| Constant ()
-| | types = ()
-| | keys = ()
-| Map 1, "b"
-| | types = (integer, text)
-| | keys = ()
-
-%2 =
-| Union %0 %1
-| | types = (integer, text)
-| | keys = ()
-| Map select(%3), select(%4)
+| Map select(%1), select(%2)
 | | types = (integer, text, text?, integer?)
 | | keys = ()
 | |
-| | %3 =
+| | %1 =
 | | | Constant ()
 | | | | types = ()
 | | | | keys = ()
@@ -115,15 +95,15 @@ EXPLAIN TYPED RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FR
 | | | | keys = ()
 | |
 | |
-| | %4 =
+| | %2 =
 | | | Constant ()
 | | | | types = ()
 | | | | keys = ()
-| | | Map select(%5)
+| | | Map select(%3)
 | | | | types = (integer?)
 | | | | keys = ()
 | | | |
-| | | | %5 =
+| | | | %3 =
 | | | | | Constant ()
 | | | | | | types = ()
 | | | | | | keys = ()

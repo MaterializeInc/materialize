@@ -79,7 +79,7 @@ pub trait Blob: Send + 'static {
 
     /// Remove a key from the map.
     ///
-    /// Errors if the key does not exist.
+    /// Succeeds if the key does not exist.
     fn delete(&mut self, key: &str) -> Result<(), Error>;
 
     /// Synchronously closes the blob, releasing exclusive-writer locks and
@@ -330,8 +330,6 @@ pub mod tests {
         mut new_fn: F,
     ) -> Result<(), Error> {
         let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
-        // let sub_entries =
-        //     |r: RangeInclusive<usize>| -> Vec<Vec<u8>> { entries[r].iter().cloned().collect() };
 
         let _ = new_fn(PathAndReentranceId {
             path: "path0",
@@ -377,10 +375,10 @@ pub mod tests {
         blob0.delete("k0")?;
         // Can no longer get a deleted key.
         assert_eq!(blob0.get("k0")?, None);
-        // Cannot double delete a key.
-        assert!(blob0.delete("k0").is_err());
-        // Cannot delete a key that does not exist.
-        assert!(blob0.delete("nope").is_err());
+        // Double deleting a key succeeds.
+        assert_eq!(blob0.delete("k0"), Ok(()));
+        // Deleting a key that does not exist succeeds.
+        assert_eq!(blob0.delete("nope"), Ok(()));
         // Can reset a deleted key to some other value.
         blob0.set("k0", values[1].clone(), false)?;
         assert_eq!(blob0.get("k0")?, Some(values[1].clone()));

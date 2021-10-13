@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
@@ -25,7 +25,7 @@ use sql::plan::ExecuteTimeout;
 use tokio::sync::watch;
 
 use crate::error::CoordError;
-use crate::session::{EndTransactionAction, Session};
+use crate::session::{EndTransactionAction, RowBatchStream, Session};
 
 #[derive(Debug)]
 pub enum Command {
@@ -47,6 +47,12 @@ pub enum Command {
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
+        session: Session,
+        tx: oneshot::Sender<Response<()>>,
+    },
+
+    VerifyPreparedStatement {
+        name: String,
         session: Session,
         tx: oneshot::Sender<Response<()>>,
     },
@@ -205,6 +211,10 @@ pub enum ExecuteResponse {
     },
     /// The requested type was created.
     CreatedType,
+    /// The requested prepared statement was removed.
+    Deallocate {
+        all: bool,
+    },
     /// The requested cursor was declared.
     DeclaredCursor,
     /// The specified number of rows were deleted from the requested table.
@@ -244,6 +254,8 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
+    /// The specified prepared statement was created.
+    Prepare,
     /// Rows will be delivered via the specified future.
     SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
     /// The specified variable was set to a new value.
@@ -257,7 +269,7 @@ pub enum ExecuteResponse {
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
     Tailing {
-        rx: mpsc::UnboundedReceiver<Vec<Row>>,
+        rx: RowBatchStream,
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),

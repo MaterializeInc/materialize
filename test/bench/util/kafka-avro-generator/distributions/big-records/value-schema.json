@@ -1,0 +1,39 @@
+{
+    "name": "testrecord",
+    "type": "record",
+    "namespace": "com.acme.avro",
+    "fields": [
+	{
+	    "name": "outer_array",
+	    "type": {
+		"type": "array",
+		"items": {
+		    "name": "inner",
+		    "type": "record",
+		    "fields": [
+			{
+			    "name": "f1",
+			    "type": "int"
+			},
+			{
+			    "name": "f2",
+			    "type": "string"
+			},
+			{
+			    "name": "f3",
+			    "type": ["null", "string"]
+			},
+			{
+			    "name": "f4",
+			    "type": "double"
+			},
+			{
+			    "name": "f5",
+			    "type": "long"
+			}
+		    ]
+		}
+	    }
+	}
+    ]
+}

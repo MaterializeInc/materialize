@@ -10,7 +10,6 @@
 import concurrent.futures
 import os
 import re
-import subprocess
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -353,7 +352,6 @@ def update_upgrade_tests_inner(released_version: Version, force: bool = False) -
 
     upgrade_dir = Path("./test/upgrade")
     version = f"v{released_version}"
-    readme = upgrade_dir.joinpath("README.md")
     need_upgrade = [
         str(p) for p in upgrade_dir.glob("*current_source*") if "example" not in str(p)
     ]
@@ -362,85 +360,8 @@ def update_upgrade_tests_inner(released_version: Version, force: bool = False) -
     for path in need_upgrade:
         spawn.runv(["git", "mv", path, path.replace("current_source", version)])
 
-    mzcompose = upgrade_dir.joinpath("mzcompose.yml")
-    with mzcompose.open() as fh:
-        contents = fh.readlines()
-
-    workflow_version = str(released_version).replace(".", "_")
-    step = f"""
-      - step: workflow
-        workflow: upgrade-from-{workflow_version}
-"""
-    found = False
-    for i, line in enumerate(contents):
-        if "mkrelease.py will place new versions here" in line:
-            contents.insert(i - 1, step)
-            found = True
-            break
-    if not found:
-        _mzcompose_confused(readme)
-        return
-
-    tests = None
-    new_workflow_location = None
-    found = 0
-    for i, line in enumerate(contents):
-        if "TESTS:" in line:
-            tests = line.split(":")[1].strip()
-
-        if "upgrade-from-latest:" in line:
-            new_workflow_location = i - 1
-            workflow = f"""
-  upgrade-from-{workflow_version}:
-    env:
-      UPGRADE_FROM_VERSION: {version}
-      TESTS: {tests}|{version}
-    steps:
-      - step: workflow
-        workflow: test-upgrade-from-version
-"""
-
-        if new_workflow_location and "TESTS:" in line:
-            if tests is None:
-                _mzcompose_confused(readme)
-                return
-            latest_tests = line.rstrip().split("|")
-            if "current_source" in latest_tests:
-                latest_tests.insert(-1, version)
-            else:
-                latest_tests.append(version)
-            contents[i] = "|".join(latest_tests) + "\n"
-            found += 1
-            if found == 2:
-                contents.insert(new_workflow_location, workflow)
-                break
-
-    with mzcompose.open("w") as fh:
-        fh.write("".join(contents))
-
-    if found != 2:
-        _mzcompose_confused(readme)
-        return
-
-    try:
-        spawn.capture(
-            "bin/mzcompose --mz-find upgrade list-workflows".split(), stderr_too=True
-        )
-    except subprocess.CalledProcessError:
-        say(
-            f"The generated test/upgrade/mzcompose.yml file appears to be broken, "
-            f"please consult {readme}"
-        )
-
     git.commit_all_changed(
         f"Rename {len(need_upgrade)} current_source upgrade tests to {version}"
-    )
-
-
-def _mzcompose_confused(readme_path: Path) -> None:
-    say(
-        f"It appears that the format for upgrade's mzcompose.yml has changed.\n"
-        f"Please update it yourself using the instructions in {readme_path}."
     )
 
 

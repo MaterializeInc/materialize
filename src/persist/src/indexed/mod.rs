@@ -11,6 +11,7 @@
 //! Diff)` updates.
 
 // NB: These really don't need to be public, but the public doc lint is nice.
+pub mod background;
 pub mod cache;
 pub mod encoding;
 pub mod metrics;
@@ -19,9 +20,11 @@ pub mod trace;
 pub mod unsealed;
 
 use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::time::Instant;
 
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use timely::progress::{Antichain, Timestamp};
@@ -29,13 +32,14 @@ use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::future::FutureHandle;
+use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration, TraceMeta, UnsealedMeta,
 };
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
-use crate::indexed::trace::{Trace, TraceSnapshot};
-use crate::indexed::unsealed::{Unsealed, UnsealedSnapshot};
+use crate::indexed::trace::{Trace, TraceSnapshot, TraceSnapshotIter};
+use crate::indexed::unsealed::{Unsealed, UnsealedSnapshot, UnsealedSnapshotIter};
 use crate::storage::{Blob, Log, SeqNo};
 
 enum PendingResponse {
@@ -68,6 +72,91 @@ impl PendingResponse {
                 }
             }
         }
+    }
+}
+
+/// This struct holds changes to [Indexed] that have not been committed to
+/// persistent storage or sent to downstream listeners.
+struct Pending {
+    writes: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>>,
+    responses: Vec<PendingResponse>,
+    seals: HashMap<Id, u64>,
+}
+
+impl Pending {
+    fn new() -> Self {
+        Self {
+            writes: HashMap::new(),
+            responses: Vec::new(),
+            seals: HashMap::new(),
+        }
+    }
+
+    // Validate that there are no pending writes, seals or responses.
+    #[cfg(any(debug_assertions, test))]
+    fn validate_empty(&self) -> Result<(), Error> {
+        if !self.writes.is_empty() {
+            return Err(Error::from(format!(
+                "still have {} pending writes after draining pending writes, expected 0.",
+                self.writes.len()
+            )));
+        }
+
+        if !self.responses.is_empty() {
+            return Err(Error::from(format!(
+                "still have {} pending responses after draining pending responses, expected 0.",
+                self.responses.len()
+            )));
+        }
+
+        if !self.seals.is_empty() {
+            return Err(Error::from(format!(
+                "still have {} pending seals after draining pending seals, expected 0.",
+                self.seals.len()
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn add_writes(&mut self, updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>) {
+        for (id, updates) in updates {
+            self.writes.entry(id).or_default().extend(updates);
+        }
+    }
+
+    fn add_response(&mut self, resp: PendingResponse) {
+        self.responses.push(resp);
+    }
+
+    fn add_seals(&mut self, ids: Vec<Id>, seal: u64) {
+        for id in ids {
+            self.seals.insert(id, seal);
+        }
+    }
+
+    /// Take the set of pending writes out of [Pending], leaving an empty hashmap.
+    fn take_writes(&mut self) -> HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> {
+        std::mem::take(&mut self.writes)
+    }
+
+    /// Take the set of pending responses out of [Pending], leaving an empty vector.
+    fn take_responses(&mut self) -> Vec<PendingResponse> {
+        std::mem::take(&mut self.responses)
+    }
+
+    /// Take the set of pending seals out of [Pending], leaving an empty hashmap.
+    fn take_seals(&mut self) -> HashMap<Id, u64> {
+        std::mem::take(&mut self.seals)
+    }
+
+    /// Return true if [Pending] has at least one pending response.
+    ///
+    /// TODO: It's unclear whether this API is worth doing. We could alternatively
+    /// just make writes and responses public and avoid having this function and
+    /// the various getter functions.
+    fn has_responses(&self) -> bool {
+        !self.responses.is_empty()
     }
 }
 
@@ -113,22 +202,24 @@ pub struct Indexed<L: Log, B: Blob> {
     // Indexed or somewhere else.
     log: L,
     blob: BlobCache<B>,
+    maintainer: Maintainer<B>,
     unsealeds: BTreeMap<Id, Unsealed>,
     traces: BTreeMap<Id, Trace>,
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
     metrics: Metrics,
-    // Only drained by drain_pending_writes.
-    pending_writes: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-    // Only drained by drain_pending.
-    pending_responses: Vec<PendingResponse>,
+    pending: Pending,
     prev_meta: BlobMeta,
 }
 
 impl<L: Log, B: Blob> Indexed<L, B> {
     /// Returns a new Indexed, initializing each Unsealed and Trace with the
     /// existing data for them in the blob storage, if any.
-    pub fn new(mut log: L, blob: B, metrics: Metrics) -> Result<Self, Error> {
-        let mut blob = BlobCache::new(metrics.clone(), blob);
+    pub fn new(
+        mut log: L,
+        mut blob: BlobCache<B>,
+        maintainer: Maintainer<B>,
+        metrics: Metrics,
+    ) -> Result<Self, Error> {
         let meta = blob
             .get_meta()
             .map_err(|err| {
@@ -165,12 +256,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             graveyard: meta.graveyard,
             log,
             blob,
+            maintainer,
             unsealeds,
             traces,
             listeners: HashMap::new(),
             metrics,
-            pending_writes: Vec::new(),
-            pending_responses: Vec::new(),
+            pending: Pending::new(),
             prev_meta: meta_copy,
         };
 
@@ -444,20 +535,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         // The postconditions are strictly more general than the preconditions so validate those as well.
         self.validate_drain_pending_preconditions()?;
 
-        if !self.pending_writes.is_empty() {
-            return Err(Error::from(format!(
-                "still have {} pending writes after draining pending writes, expected 0.",
-                self.pending_writes.len()
-            )));
-        }
-
-        if !self.pending_responses.is_empty() {
-            return Err(Error::from(format!(
-                "still have {} pending responses after draining pending responses, expected 0.",
-                self.pending_responses.len()
-            )));
-        }
-
+        self.pending.validate_empty()?;
         Ok(())
     }
 
@@ -470,16 +548,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
         let ret = match self.drain_pending_inner() {
             Ok(_) => {
-                self.pending_responses.drain(..).for_each(|r| r.fill());
+                let mut responses = self.pending.take_responses();
+                responses.drain(..).for_each(|r| r.fill());
                 Ok(())
             }
             Err(e) => {
+                let mut responses = self.pending.take_responses();
                 self.metrics
                     .cmd_failed_count
-                    .inc_by(u64::cast_from(self.pending_responses.len()));
-                self.pending_responses
-                    .drain(..)
-                    .for_each(|r| r.fill_err(e.clone()));
+                    .inc_by(u64::cast_from(responses.len()));
+                responses.drain(..).for_each(|r| r.fill_err(e.clone()));
                 Err(e)
             }
         };
@@ -502,7 +580,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
             deleted_unsealed_batches.extend(unsealed.truncate(trace.ts_upper())?);
-            let (written_bytes, deleted_batches) = trace.step(&mut self.blob)?;
+            let (written_bytes, deleted_batches) = trace.step(&self.maintainer)?;
             total_written_bytes += written_bytes;
             deleted_trace_batches.extend(deleted_batches);
         }
@@ -605,10 +683,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         let resp = self.validate_write(&updates);
 
         if resp.is_ok() {
-            self.pending_writes.extend(updates);
+            self.pending.add_writes(updates);
         }
-        self.pending_responses
-            .push(PendingResponse::SeqNo(res, resp));
+        self.pending.add_response(PendingResponse::SeqNo(res, resp));
     }
 
     /// Drain pending writes to unsealed.
@@ -667,46 +744,13 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ///
     /// The caller is responsible for draining any pending responses after this.
     fn drain_pending_inner(&mut self) -> Result<(), Error> {
-        let mut updates_by_id: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> = HashMap::new();
-        for (id, updates) in self.pending_writes.drain(..) {
-            updates_by_id.entry(id).or_default().extend(updates);
-        }
+        let updates_by_id = self.pending.take_writes();
+        let mut seals_by_id = self.pending.take_seals();
 
-        let updates_for_listeners = updates_by_id.clone();
+        let mut updates_for_listeners = updates_by_id.clone();
         if let Err(e) = self.drain_pending_writes(updates_by_id) {
             self.restore();
             return Err(format!("failed to append to unsealed: {}", e).into());
-        }
-
-        let mut seal_updates: HashMap<Id, Antichain<u64>> = HashMap::new();
-
-        let prev_traces: HashMap<_, _> = self
-            .prev_meta
-            .traces
-            .clone()
-            .drain(..)
-            .map(|trace| (trace.id, trace))
-            .collect();
-        for (id, trace) in self.traces.iter() {
-            let id = *id;
-            let curr_seal = trace.get_seal();
-            let prev_seal = match prev_traces.get(&id) {
-                Some(trace) => &trace.seal,
-                None => {
-                    self.restore();
-                    return Err(format!(
-                        "invalid current {:?} and previous {:?} metadata: missing trace for {:?}",
-                        self.serialize_meta(),
-                        self.prev_meta,
-                        id
-                    )
-                    .into());
-                }
-            };
-
-            if PartialOrder::less_than(prev_seal, &curr_seal) {
-                seal_updates.insert(id, curr_seal);
-            }
         }
 
         // TODO: only update meta if something has changed, instead of unconditionally.
@@ -734,23 +778,22 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 .inc_by(u64::cast_from(update_bytes));
         }
 
-        for (id, updates) in updates_for_listeners.iter() {
+        for (id, updates) in updates_for_listeners.drain() {
             if let Some(listen_fns) = self.listeners.get(&id) {
-                for listen_fn in listen_fns.iter() {
-                    listen_fn(ListenEvent::Records(updates.clone()));
+                if listen_fns.len() == 1 {
+                    listen_fns[0](ListenEvent::Records(updates));
+                } else {
+                    for listen_fn in listen_fns.iter() {
+                        listen_fn(ListenEvent::Records(updates.clone()));
+                    }
                 }
             }
         }
 
-        for (id, seal) in seal_updates.iter() {
+        for (id, seal) in seals_by_id.drain() {
             if let Some(listen_fns) = self.listeners.get(&id) {
                 for listen_fn in listen_fns.iter() {
-                    // TODO: perhaps this event should take an antichain directly? If
-                    // the downstream user held a timely::CapabilitySet they could
-                    // use the antichain directly as well.
-                    for seal_ts in seal.elements().iter() {
-                        listen_fn(ListenEvent::Sealed(*seal_ts));
-                    }
+                    listen_fn(ListenEvent::Sealed(seal));
                 }
             }
         }
@@ -829,21 +872,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
             // Move a batch of data from unsealed into trace by reading a
             // snapshot from unsealed...
-            let mut updates = Vec::new();
-            {
-                let mut snap =
-                    unsealed.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
-                let mut more = true;
-                while more {
-                    match snap.read(&mut updates) {
-                        Ok(m) => more = m,
-                        Err(err) => {
-                            self.restore();
-                            return Err(format!("failed to fetch snapshot: {}", err).into());
-                        }
-                    };
-                }
-            }
+            let snap = unsealed.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
+            let mut updates = snap
+                .into_iter()
+                .collect::<Result<Vec<_>, Error>>()
+                .map_err(|err| format!("failed to fetch snapshot: {}", err))?;
 
             // Don't bother minting empty trace batches that we'll just have to
             // compact later, it's wasteful of precious storage bandwidth and
@@ -910,8 +943,10 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// `sealed_frontier` for details.
     pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: FutureHandle<()>) {
         let resp = self.do_seal(&ids, seal_ts);
-        self.pending_responses
-            .push(PendingResponse::Unit(res, resp));
+        if resp.is_ok() {
+            self.pending.add_seals(ids, seal_ts);
+        }
+        self.pending.add_response(PendingResponse::Unit(res, resp));
     }
 
     fn do_allow_compaction(&mut self, id_sinces: Vec<(Id, Antichain<u64>)>) -> Result<(), Error> {
@@ -943,8 +978,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         res: FutureHandle<()>,
     ) {
         let response = self.do_allow_compaction(id_sinces);
-        self.pending_responses
-            .push(PendingResponse::Unit(res, response));
+        self.pending
+            .add_response(PendingResponse::Unit(res, response));
     }
 
     /// Appends the given `batch` to the unsealed for `id`, writing the data into
@@ -1005,19 +1040,31 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
     /// Registers a callback to be invoked on successful writes and seals.
     //
+    // Also returns a copy of the snapshot so that users can, if they want,
+    // apply their logic to a consistent read of the entire stream.
+    //
     // TODO: Finish the naming bikeshed for this. Other options so far include
     // tail, subscribe, tee, inspect, and capture.
-    pub fn listen(&mut self, id: Id, listen_fn: ListenFn<Vec<u8>, Vec<u8>>, res: FutureHandle<()>) {
+    pub fn listen(
+        &mut self,
+        id: Id,
+        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+        res: FutureHandle<IndexedSnapshot>,
+    ) {
         let resp = self.do_listen(id, listen_fn);
         res.fill(resp);
     }
 
-    fn do_listen(&mut self, id: Id, listen_fn: ListenFn<Vec<u8>, Vec<u8>>) -> Result<(), Error> {
+    fn do_listen(
+        &mut self,
+        id: Id,
+        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+    ) -> Result<IndexedSnapshot, Error> {
         self.drain_pending()?;
         // Verify that id has been registered.
         let _ = self.sealed_frontier(id)?;
         self.listeners.entry(id).or_default().push(listen_fn);
-        Ok(())
+        self.do_snapshot(id)
     }
 }
 
@@ -1040,28 +1087,31 @@ pub type ListenFn<K, V> = Box<dyn Fn(ListenEvent<K, V>) + Send>;
 /// updates.
 //
 // TODO: This <K, V> allows Snapshot to be generic over both IndexedSnapshot
-// (and friends) and DecodedSnapshot, but does that get us anything? Does
-// Snapshot even get us anything over regular Iterator?
-pub trait Snapshot<K, V> {
-    /// A partial read of the data in the snapshot.
-    ///
-    /// Returns true if read needs to be called again for more data.
-    /// TODO: this API is easy to misuse (callers want to be able to say:
-    /// while foo.read() { do_stuff() }
-    /// where this API requires a more complicated control flow. If we instead
-    /// changed the semantics to "Return false when no more data has been added,
-    /// nor will ever be added to the destination" then we could support the
-    /// desired control flow.
-    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> Result<bool, Error>;
+// (and friends) and DecodedSnapshot, but does that get us anything?
+pub trait Snapshot<K, V>: Sized {
+    /// The kind of iterator we are turning this into.
+    type Iter: Iterator<Item = Result<((K, V), u64, isize), Error>>;
+
+    /// Returns a set of `num_iters` [Iterator]s that each output roughly
+    /// `1/num_iters` of the data represented by this snapshot.
+    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter>;
+
+    /// Returns a single [Iterator] that outputs the data represented by this
+    /// snapshot.
+    fn into_iter(self) -> Self::Iter {
+        let mut iters = self.into_iters(NonZeroUsize::new(1).unwrap());
+        assert_eq!(iters.len(), 1);
+        iters.remove(0)
+    }
 }
 
 /// Extension methods on `Snapshot<K, V>` for use in tests.
 #[cfg(test)]
 pub trait SnapshotExt<K: Ord, V: Ord>: Snapshot<K, V> + Sized {
     /// A full read of the data in the snapshot.
-    fn read_to_end(mut self) -> Result<Vec<((K, V), u64, isize)>, Error> {
-        let mut buf = Vec::new();
-        while self.read(&mut buf)? {}
+    fn read_to_end(self) -> Result<Vec<((K, V), u64, isize)>, Error> {
+        let iter = self.into_iter();
+        let mut buf = iter.collect::<Result<Vec<_>, Error>>()?;
         buf.sort();
         Ok(buf)
     }
@@ -1098,11 +1148,52 @@ impl IndexedSnapshot {
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for IndexedSnapshot {
-    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(
-        &mut self,
-        buf: &mut E,
-    ) -> Result<bool, Error> {
-        Ok(self.0.read(buf)? || self.1.read(buf)?)
+    type Iter = IndexedSnapshotIter;
+
+    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<IndexedSnapshotIter> {
+        let since = self.since();
+        let IndexedSnapshot(unsealed, trace, _, _) = self;
+        let unsealed_iters = unsealed.into_iters(num_iters);
+        let trace_iters = trace.into_iters(num_iters);
+        // I don't love the non-debug asserts, but it doesn't seem worth it to
+        // plumb an error around here.
+        assert_eq!(unsealed_iters.len(), num_iters.get());
+        assert_eq!(trace_iters.len(), num_iters.get());
+        unsealed_iters
+            .into_iter()
+            .zip(trace_iters.into_iter())
+            .map(|(unsealed_iter, trace_iter)| IndexedSnapshotIter {
+                since: since.clone(),
+                iter: trace_iter.chain(unsealed_iter),
+            })
+            .collect()
+    }
+}
+
+/// An [Iterator] representing one part of the data in a [IndexedSnapshot].
+//
+// This intentionally chains trace before unsealed so we get the data in roughly
+// increasing timestamp order, but it's unclear if this is in any way important.
+pub struct IndexedSnapshotIter {
+    since: Antichain<u64>,
+    iter: std::iter::Chain<TraceSnapshotIter, UnsealedSnapshotIter>,
+}
+
+impl Iterator for IndexedSnapshotIter {
+    type Item = Result<((Vec<u8>, Vec<u8>), u64, isize), Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|x| {
+            x.map(|(kv, mut ts, diff)| {
+                // When reading a snapshot, the contract of since is that all
+                // update timestamps will be advanced to it. We do this
+                // physically during compaction, but don't have hard guarantees
+                // about how long that takes, so we have to account for
+                // un-advanced batches on reads.
+                ts.advance_by(self.since.borrow());
+                (kv, ts, diff)
+            })
+        })
     }
 }
 
@@ -1112,7 +1203,6 @@ mod tests {
 
     use crate::error::Error;
     use crate::future::Future;
-    use crate::indexed::runtime::DecodedSnapshot;
     use crate::mem::MemRegistry;
 
     use super::*;
@@ -1437,14 +1527,11 @@ mod tests {
             i.allow_compaction(vec![(id, Antichain::from_elem(3))], res)
         })?;
         let snap = block_on(|res| i.snapshot(id, res))?;
-        // NB: We won't need this hack after the ts advancement logic is moved
-        // to IndexedSnapshot where it should be.
-        let mut snap = DecodedSnapshot::<String, String>::new(snap);
 
         // Now verify that the snapshot has the right since and that the data in
         // it has been advanced as expected.
         assert_eq!(snap.since(), Antichain::from_elem(3));
-        let actual = snap.read_to_end_flattened()?;
+        let actual = snap.read_to_end()?;
         let expected = vec![
             (("1".into(), "".into()), 3, 1),
             (("1".into(), "".into()), 10, -1),

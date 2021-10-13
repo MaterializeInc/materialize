@@ -11,10 +11,11 @@ fn main() {
     protoc::Protoc::new()
         .serde(true)
         .include("src/format/protobuf")
+        .input("src/format/protobuf/no_messages.proto")
+        .input("src/format/protobuf/imported.proto")
         .input("src/format/protobuf/billing.proto")
         .input("src/format/protobuf/recursive.proto")
         .input("src/format/protobuf/simple.proto")
         .input("src/format/protobuf/nested.proto")
-        .input("src/format/protobuf/imported.proto")
         .build_script_exec();
 }

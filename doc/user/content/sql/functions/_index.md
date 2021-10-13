@@ -5,7 +5,7 @@ menu:
   main:
     identifier: sql-functions
     parent: sql
-    weight: 2
+    weight: 20
 disable_list: true
 disable_toc: true
 ---
@@ -42,6 +42,12 @@ Operator | Computes
 `a IS NULL` | `a = NULL`
 `a ISNULL` | `a = NULL`
 `a IS NOT NULL` | `a != NULL`
+`a IS TRUE` | `a` is true, requiring `a` to be a boolean
+`a IS NOT TRUE` | `a` is not true, requiring `a` to be a boolean
+`a IS FALSE` | `a` is false, requiring `a` to be a boolean
+`a IS NOT FALSE` | `a` is not false, requiring `a` to be a boolean
+`a IS UNKNOWN` | `a = NULL`, requiring `a` to be a boolean
+`a IS NOT UNKNOWN` | `a != NULL`, requiring `a` to be a boolean
 `a LIKE match_expr` | `a` matches `match_expr`, using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 `a ILIKE match_expr` | `a` matches `match_expr`, using case-insensitive [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 

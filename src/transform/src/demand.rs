@@ -48,13 +48,20 @@ impl crate::Transform for Demand {
 
 impl Demand {
     /// Columns to be produced.
-    pub fn action(
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
         mut columns: HashSet<usize>,
         gets: &mut HashMap<Id, HashSet<usize>>,
     ) {
-        let relation_type = relation.typ();
+        // A valid relation type is only needed for Maps, but we can't borrow
+        // the relation in the corresponding branch of the match statement, since
+        // it is already borrowed mutably.
+        let relation_type = if matches!(relation, MirRelationExpr::Map { .. }) {
+            Some(relation.typ())
+        } else {
+            None
+        };
         match relation {
             MirRelationExpr::Constant { .. } => {
                 // Nothing clever to do with constants, that I can think of.
@@ -83,6 +90,7 @@ impl Demand {
                 );
             }
             MirRelationExpr::Map { input, scalars } => {
+                let relation_type = relation_type.as_ref().unwrap();
                 let arity = input.arity();
                 // contains columns whose supports have yet to be explored
                 let mut new_columns = columns.clone();

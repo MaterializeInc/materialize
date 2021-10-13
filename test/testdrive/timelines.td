@@ -261,5 +261,5 @@ At least one input has no complete timestamps yet
 > BEGIN;
 > SELECT * FROM input_table;
 ! SELECT * FROM source_byo;
-transactions can only reference nearby relations
+Transactions can only reference objects in the same timedomain
 > ROLLBACK;

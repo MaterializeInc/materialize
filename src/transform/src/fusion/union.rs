@@ -28,7 +28,7 @@ impl crate::Transform for Union {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
+        relation.visit_mut(&mut |e| {
             self.action(e);
         });
         Ok(())

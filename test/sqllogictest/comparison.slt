@@ -28,3 +28,55 @@ query B
 select null isnull
 ----
 true
+
+query B
+select 1 = 1 is true
+----
+true
+
+query B
+select 1 = 1 is false
+----
+false
+
+query B
+select NULL = 1 is unknown
+----
+true
+
+query B
+select 2 = 1 is not unknown
+----
+true
+
+query B
+select 'true' is true
+----
+true
+
+query error clause must have type boolean
+select 'true'::text is true
+
+query error clause must have type boolean
+select 'true'::text is unknown
+
+query B
+select 'true'::text is NULL
+----
+false
+
+query B
+select NULL is true
+----
+false
+
+query error invalid input syntax for type boolean
+select '1 = 1' is true
+
+query B
+select '1 = 1' is null
+----
+false
+
+query error clause must have type boolean
+select 2 is true

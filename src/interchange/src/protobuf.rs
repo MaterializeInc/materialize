@@ -17,7 +17,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_protobuf::descriptor::{Descriptors, FieldDescriptor, FieldLabel, FieldType};
 
 use ore::str::StrExt;
-use repr::{ColumnType, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnName, ColumnType, RelationDesc, RelationType, ScalarType};
 
 fn proto_message_name(message_name: &str) -> String {
     // Prepend a . (following the serde-protobuf naming scheme to list root paths
@@ -30,113 +30,100 @@ fn proto_message_name(message_name: &str) -> String {
     }
 }
 
-fn validate_proto_field<'a>(
+fn derive_scalar_type_from_proto_field<'a>(
     seen_messages: &mut HashSet<&'a str>,
     field: &'a FieldDescriptor,
     descriptors: &'a Descriptors,
 ) -> Result<ScalarType> {
-    Ok(match field.field_label() {
+    let field_type = field.field_type(descriptors);
+    match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
         FieldLabel::Repeated => {
-            validate_proto_field_resolved(seen_messages, field, descriptors)?;
-            ScalarType::Jsonb
-        }
-        FieldLabel::Optional => match field.field_type(descriptors) {
-            FieldType::Bool => ScalarType::Bool,
-            FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,
-            FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => ScalarType::Int64,
-            FieldType::Enum(_) => ScalarType::String,
-            FieldType::Float => ScalarType::Float32,
-            FieldType::Double => ScalarType::Float64,
-            FieldType::UInt32 => bail!("Protobuf type \"uint32\" is not supported"),
-            FieldType::UInt64 => bail!("Protobuf type \"uint64\" is not supported"),
-            FieldType::Fixed32 => bail!("Protobuf type \"fixed32\" is not supported"),
-            FieldType::Fixed64 => bail!("Protobuf type \"fixed64\" is not supported"),
-            FieldType::String => ScalarType::String,
-            FieldType::Bytes => ScalarType::Bytes,
-            FieldType::Message(m) => {
-                if seen_messages.contains(m.name()) {
-                    bail!("Recursive types are not supported: {}", m.name());
-                }
-                seen_messages.insert(m.name());
-                for f in m.fields().iter() {
-                    validate_proto_field_resolved(seen_messages, &f, descriptors)?;
-                }
-                seen_messages.remove(m.name());
-                ScalarType::Jsonb
+            if let FieldType::Bytes = field_type {
+                bail!("Arrays or nested messages with bytes objects are not currently supported")
             }
-            FieldType::Group => bail!("Unions are currently not supported"),
-            FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
-            FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
+        }
+        FieldLabel::Optional => (),
+    }
+
+    let typ = derive_scalar_type(seen_messages, field, descriptors)?;
+    Ok(match field.field_label() {
+        FieldLabel::Repeated => ScalarType::List {
+            element_type: Box::new(typ),
+            custom_oid: None,
         },
+        _ => typ,
     })
 }
 
-fn validate_proto_field_resolved<'a>(
+fn derive_scalar_type<'a>(
     seen_messages: &mut HashSet<&'a str>,
     field: &'a FieldDescriptor,
     descriptors: &'a Descriptors,
-) -> Result<()> {
-    match field.field_label() {
-        FieldLabel::Required => bail!("Required field {} not supported", field.name()),
-        FieldLabel::Repeated | FieldLabel::Optional => match field.field_type(descriptors) {
-            FieldType::Bool
-            | FieldType::Int32
-            | FieldType::SInt32
-            | FieldType::SFixed32
-            | FieldType::Int64
-            | FieldType::SInt64
-            | FieldType::SFixed64
-            | FieldType::UInt32
-            | FieldType::Fixed32
-            | FieldType::UInt64
-            | FieldType::Fixed64
-            | FieldType::Float
-            | FieldType::Double
-            | FieldType::String
-            | FieldType::Enum(_) => (),
-
-            FieldType::Message(m) => {
-                if seen_messages.contains(m.name()) {
-                    bail!("Recursive types are not supported: {}", m.name());
-                }
-                seen_messages.insert(m.name());
-                for f in m.fields().iter() {
-                    validate_proto_field_resolved(seen_messages, &f, descriptors)?;
-                }
-                seen_messages.remove(m.name());
+) -> Result<ScalarType> {
+    Ok(match field.field_type(descriptors) {
+        FieldType::Bool => ScalarType::Bool,
+        FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,
+        FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => ScalarType::Int64,
+        FieldType::Enum(_) => ScalarType::String,
+        FieldType::Float => ScalarType::Float32,
+        FieldType::Double => ScalarType::Float64,
+        FieldType::UInt32 => bail!("Protobuf type \"uint32\" is not supported"),
+        FieldType::UInt64 => bail!("Protobuf type \"uint64\" is not supported"),
+        FieldType::Fixed32 => bail!("Protobuf type \"fixed32\" is not supported"),
+        FieldType::Fixed64 => bail!("Protobuf type \"fixed64\" is not supported"),
+        FieldType::String => ScalarType::String,
+        FieldType::Bytes => ScalarType::Bytes,
+        FieldType::Message(m) => {
+            if seen_messages.contains(m.name()) {
+                bail!("Recursive types are not supported: {}", m.name());
             }
-            FieldType::Bytes => {
-                bail!("Arrays or nested messages with bytes objects are not currently supported")
+            seen_messages.insert(m.name());
+            let mut fields = Vec::with_capacity(m.fields().len());
+            for field in m.fields() {
+                let column_name = ColumnName::from(field.name());
+                let scalar_type =
+                    derive_scalar_type_from_proto_field(seen_messages, field, descriptors)?;
+                let nullable = match field.field_label() {
+                    FieldLabel::Optional => true,
+                    FieldLabel::Repeated | FieldLabel::Required => false,
+                };
+                let column_type = ColumnType {
+                    scalar_type,
+                    nullable,
+                };
+                fields.push((column_name, column_type))
             }
-            FieldType::Group => bail!("Unions are currently not supported"),
-            FieldType::UnresolvedMessage(a) => bail!("Nested message type {} unresolved", a),
-            FieldType::UnresolvedEnum(e) => bail!("Unresolved enum type {}", e),
-        },
-    }
-
-    Ok(())
+            seen_messages.remove(m.name());
+            ScalarType::Record {
+                fields,
+                custom_oid: None,
+                custom_name: None,
+            }
+        }
+        FieldType::Group => bail!("Unions are currently not supported"),
+        FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
+        FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
+    })
 }
 
 pub fn decode_descriptors(descriptors: &[u8]) -> Result<decode::DecodedDescriptors> {
     let proto: protobuf::descriptor::FileDescriptorSet =
         protobuf::Message::parse_from_bytes(descriptors)
             .context("parsing encoded protobuf descriptors failed")?;
-    let name = proto
-        .file
-        .iter()
-        .next()
-        .ok_or_else(|| anyhow!("file descriptor set must have file"))?
-        .get_message_type()
-        .iter()
-        .next()
-        .ok_or_else(|| anyhow!("proto must have at least one message"))?
-        .get_name()
-        .to_owned();
-    Ok(decode::DecodedDescriptors {
-        descriptors: Descriptors::from_proto(&proto),
-        first_message_name: format!(".{}", name),
-    })
+
+    // Iterate through the FileDescriptors to get the first Message name,
+    // which might not be in the first file!
+    for file in proto.file.iter() {
+        if let Some(message) = file.get_message_type().iter().next() {
+            return Ok(decode::DecodedDescriptors {
+                descriptors: Descriptors::from_proto(&proto),
+                first_message_name: format!(".{}", message.get_name().to_owned()),
+            });
+        }
+    }
+
+    Err(anyhow!("file descriptor set must have a message"))
 }
 
 pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Result<RelationDesc> {
@@ -163,7 +150,11 @@ pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Re
                 /// All the fields have to be optional, so mark a field as
                 /// nullable if it doesn't have any defaults
                 nullable: f.default_value().is_none(),
-                scalar_type: validate_proto_field(&mut seen_messages, &f, descriptors)?,
+                scalar_type: derive_scalar_type_from_proto_field(
+                    &mut seen_messages,
+                    &f,
+                    descriptors,
+                )?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -201,6 +192,35 @@ mod tests {
         message: &MessageDescriptor,
         descriptors: &Descriptors,
     ) -> Result<(), Error> {
+        let check_types = |name: &str,
+                           field_type: FieldType,
+                           field_label: FieldLabel,
+                           scalar_type: &ScalarType| {
+            match (field_type, scalar_type) {
+            (FieldType::Bool, ScalarType::Bool)
+            | (FieldType::Int32, ScalarType::Int32)
+            | (FieldType::SInt32, ScalarType::Int32)
+            | (FieldType::SFixed32, ScalarType::Int32)
+            | (FieldType::Enum(_), ScalarType::String)
+            | (FieldType::Int64, ScalarType::Int64)
+            | (FieldType::SInt64, ScalarType::Int64)
+            | (FieldType::SFixed64, ScalarType::Int64)
+            | (FieldType::Float, ScalarType::Float32)
+            | (FieldType::Double, ScalarType::Float64)
+            | (FieldType::UInt32, ScalarType::Numeric {scale: Some(0)})
+            | (FieldType::Fixed32, ScalarType::Numeric {scale: Some(0)})
+            | (FieldType::UInt64, ScalarType::Numeric {scale: Some(0)})
+            | (FieldType::Fixed64, ScalarType::Numeric {scale: Some(0)})
+            | (FieldType::String, ScalarType::String)
+            | (FieldType::Bytes, ScalarType::Bytes)
+            | (FieldType::Message(_), ScalarType::Record { .. }) => return Ok(()),
+            | (ft, st) => bail!(
+                "Mismatched field types for proto field {:?} proto type {:?} label {:?} scalar type {:?}",
+                name, ft, field_label, st
+            ),
+        }
+        };
+
         for (field_descriptor, (column_name, column_type)) in
             message.fields().iter().zip(relation.iter())
         {
@@ -213,42 +233,33 @@ mod tests {
                 );
             }
 
-            match (
-                field_descriptor.field_type(descriptors),
-                field_descriptor.field_label(),
-                &column_type.scalar_type,
-            ) {
-                (FieldType::Bool, FieldLabel::Optional, ScalarType::Bool)
-                | (FieldType::Int32, FieldLabel::Optional, ScalarType::Int32)
-                | (FieldType::SInt32, FieldLabel::Optional, ScalarType::Int32)
-                | (FieldType::SFixed32, FieldLabel::Optional, ScalarType::Int32)
-                | (FieldType::Enum(_), FieldLabel::Optional, ScalarType::String)
-                | (FieldType::Int64, FieldLabel::Optional, ScalarType::Int64)
-                | (FieldType::SInt64, FieldLabel::Optional, ScalarType::Int64)
-                | (FieldType::SFixed64, FieldLabel::Optional, ScalarType::Int64)
-                | (FieldType::Float, FieldLabel::Optional, ScalarType::Float32)
-                | (FieldType::Double, FieldLabel::Optional, ScalarType::Float64)
-                | (FieldType::UInt32, FieldLabel::Optional, ScalarType::Numeric {scale: Some(0)})
-                | (FieldType::Fixed32, FieldLabel::Optional, ScalarType::Numeric {scale: Some(0)})
-                | (FieldType::UInt64, FieldLabel::Optional, ScalarType::Numeric {scale: Some(0)})
-                | (FieldType::Fixed64, FieldLabel::Optional, ScalarType::Numeric {scale: Some(0)})
-                | (FieldType::String, FieldLabel::Optional, &ScalarType::String)
-                | (FieldType::Bytes, FieldLabel::Optional, ScalarType::Bytes)
-                | (FieldType::Message(_), FieldLabel::Optional, ScalarType::Jsonb) => (),
-
-                (ft, FieldLabel::Optional, st) => bail!("Incorrect protobuf optional type {:?} mapping to Materialize type {:?}", ft, st),
-                (ft, FieldLabel::Repeated, ScalarType::Jsonb) => {
-                    match ft {
-                        FieldType::UnresolvedMessage(_) | FieldType::UnresolvedEnum(_) | FieldType::Group => {
-                            bail!("Unsupported repeated type {:?}", ft)
-                        }
-                        _ => (),
-                    }
+            match field_descriptor.field_label() {
+                FieldLabel::Required => {
+                    bail!("Unsupported required type {:?}", field_descriptor.name())
                 }
-                (ft, label, st) => bail!(
-                    "Mismatched field types for proto field {:?} proto type {:?} label {:?} relationtype {:?}",
-                    field_descriptor.name(), ft, label, st
-                ),
+                FieldLabel::Optional => check_types(
+                    field_descriptor.name(),
+                    field_descriptor.field_type(descriptors),
+                    FieldLabel::Optional,
+                    &column_type.scalar_type,
+                )?,
+                FieldLabel::Repeated => {
+                    let inner_typ =
+                        if let ScalarType::List { element_type, .. } = &column_type.scalar_type {
+                            *element_type.clone()
+                        } else {
+                            bail!(
+                                "Expected list for FieldLabel::Repeated, got {:?}",
+                                &column_type.scalar_type
+                            )
+                        };
+                    check_types(
+                        field_descriptor.name(),
+                        field_descriptor.field_type(descriptors),
+                        FieldLabel::Repeated,
+                        &inner_typ,
+                    )?
+                }
             }
         }
 
@@ -413,14 +424,11 @@ mod tests {
 
         let d = datums[0];
         if let Datum::List(d) = d {
-            let datumlist = d.iter().collect::<Vec<Datum>>();
+            let mut datumlist = d.iter().collect::<Vec<Datum>>();
+            datumlist.sort();
             assert_eq!(
                 datumlist,
-                vec![
-                    Datum::Float64(OrderedFloat::from(1.0)),
-                    Datum::Float64(OrderedFloat::from(2.0)),
-                    Datum::Float64(OrderedFloat::from(3.0))
-                ]
+                vec![Datum::Int32(1), Datum::Int32(2), Datum::Int32(3)]
             );
         } else {
             panic!("Expected the first field to be a list of datums!");
@@ -452,21 +460,22 @@ mod tests {
             .unwrap();
         let datums = row.iter().collect::<Vec<_>>();
         let d = datums[0];
-        if let Datum::Map(d) = d {
-            let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
+        if let Datum::List(d) = d {
+            let mut datumlist = d.iter().collect::<Vec<Datum>>();
+            datumlist.sort();
             assert_eq!(
-                datumdict,
+                datumlist,
                 vec![
-                    ("color_field", Datum::String("RED")),
-                    ("double_field", Datum::Float64(OrderedFloat::from(0.0))),
-                    ("float_field", Datum::Float64(OrderedFloat::from(0.0))),
-                    ("int64_field", Datum::Float64(OrderedFloat::from(0.0))),
-                    ("int_field", Datum::Float64(OrderedFloat::from(1.0))),
-                    ("string_field", Datum::String("one")),
+                    Datum::Int32(1),
+                    Datum::Float64(OrderedFloat(0.0)),
+                    Datum::Float64(OrderedFloat(0.0)),
+                    Datum::Float64(OrderedFloat(0.0)),
+                    Datum::String("RED"),
+                    Datum::String("one")
                 ]
-            );
+            )
         } else {
-            panic!("Expected the first field to be a dict of datums!");
+            panic!("Expected the first field to be a list of datums!");
         }
 
         assert_eq!(datums[1], Datum::Null);
@@ -490,33 +499,32 @@ mod tests {
         let datums = row2.iter().collect::<Vec<_>>();
 
         let d = datums[1];
-        if let Datum::Map(d) = d {
-            let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
+        if let Datum::List(d) = d {
+            let mut datumlist = d.iter().collect::<Vec<Datum>>();
+            datumlist.sort();
 
-            for (name, datum) in datumdict.iter() {
-                match (name, datum) {
-                    (&"string_field", Datum::List(d)) => {
-                        let datumlist = d.iter().collect::<Vec<Datum>>();
-                        assert_eq!(
-                            datumlist,
-                            vec![
-                                Datum::String("start"),
-                                Datum::String("two"),
-                                Datum::String("three"),
-                            ]
-                        );
-                    }
-                    (&"int_field", d) => {
-                        assert_eq!(*d, Datum::List(DatumList::empty()));
-                    }
-                    (&"double_field", d) => {
-                        assert_eq!(*d, Datum::List(DatumList::empty()));
-                    }
-                    _ => panic!("Nested arrays test failed"),
-                }
+            let first = datumlist[0];
+            assert_eq!(first, Datum::List(DatumList::empty()));
+
+            let second = datumlist[1];
+            assert_eq!(second, Datum::List(DatumList::empty()));
+
+            let third = datumlist[2];
+            if let Datum::List(dl) = third {
+                let third_datumlist = dl.iter().collect::<Vec<Datum>>();
+                assert_eq!(
+                    third_datumlist,
+                    vec![
+                        Datum::String("start"),
+                        Datum::String("two"),
+                        Datum::String("three"),
+                    ]
+                );
+            } else {
+                panic!("expected datum to be list")
             }
         } else {
-            panic!("Expected the second field to be a dict of datums!");
+            panic!("Expected the second field to be a list of datums!");
         }
     }
 
@@ -548,21 +556,22 @@ mod tests {
             let datumlist = d.iter().collect::<Vec<Datum>>();
 
             for datum in datumlist {
-                if let Datum::Map(d) = datum {
-                    let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
+                if let Datum::List(d) = datum {
+                    let mut inner_datumlist = d.iter().collect::<Vec<Datum>>();
+                    inner_datumlist.sort();
                     assert_eq!(
-                        datumdict,
+                        inner_datumlist,
                         vec![
-                            ("color_field", Datum::String("RED")),
-                            ("double_field", Datum::Float64(OrderedFloat::from(0.0))),
-                            ("float_field", Datum::Float64(OrderedFloat::from(0.0))),
-                            ("int64_field", Datum::Float64(OrderedFloat::from(0.0))),
-                            ("int_field", Datum::Float64(OrderedFloat::from(1.0))),
-                            ("string_field", Datum::String("")),
+                            Datum::Int32(1),
+                            Datum::Float64(OrderedFloat(0.0)),
+                            Datum::Float64(OrderedFloat(0.0)),
+                            Datum::Float64(OrderedFloat(0.0)),
+                            Datum::String(""),
+                            Datum::String("RED")
                         ]
-                    );
+                    )
                 } else {
-                    panic!("Expected the inner elements to be dicts of datums");
+                    panic!("Expected the inner elements to be lists of datums");
                 }
             }
         } else {

@@ -130,6 +130,10 @@ impl Transcoder {
                         Self::decode_json::<_, protobuf::gen::nested::NestedOuter>(row)?
                             .map(convert)
                     }
+                    protobuf::MessageType::SimpleNestedOuter => {
+                        Self::decode_json::<_, protobuf::gen::nested::SimpleNestedOuter>(row)?
+                            .map(convert)
+                    }
                     protobuf::MessageType::Imported => {
                         Self::decode_json::<_, protobuf::gen::imported::Imported>(row)?.map(convert)
                     }

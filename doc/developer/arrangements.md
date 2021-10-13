@@ -166,6 +166,36 @@ In -> <Other agg 1 branch > -> Concat -> CollationInA -> CollationOutA -> Out
    < Other agg 2 branch > ------>
 ```
 
+### Aggregations on distinct values
+
+`Min` and `Max` aggregations on distinct values are computed the same as `min`
+and `max` aggregations on non-distinct values because they have the same
+result.
+
+Each other aggregation on distinct values requires an additional
+pair of arrangements on top of the arrangements required for the particular
+aggregation type. The
+arrangements have row count `<count(distinct <key + aggregation columns>)>`
+and row width `<width of key> + <width of aggregation columns>`.
+
+For example, if we had
+```
+select sum(distinct col1), sum(distinct col2), sum(col3)
+from t
+group by key
+```
+there would be a pair of arrangements for the fact that all aggregations are
+accumulable. There would be two more pairs of arrangements for the fact that two
+of the aggregations are on distinct values.
+
+```
+In -> Distinct1InA -> Distinct1OutA -> Concat -> AccumulableInA -> AccumulableOutA -> Out
+ \ \                                /   /
+  \ Distinct2InA -> Distinct2OutA ->   /
+   \                                  /
+    --------------------------------->
+```
+
 ### Combination of different types of aggregations
 
 The dataflow splits into `n` branches, where `n` is the number of different

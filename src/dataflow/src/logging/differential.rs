@@ -18,15 +18,16 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::EventLink;
-use timely::dataflow::operators::capture::Replay;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::WorkerIdentifier;
 
 use super::{DifferentialLog, LogVariant};
+use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::render::datum_vec::DatumVec;
+use crate::replay::MzReplay;
 use repr::{Datum, Row, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
@@ -34,13 +35,16 @@ pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &dataflow_types::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
+    activator: RcActivator,
 ) -> HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        let logs = Some(linked).replay_core(
+        let logs = Some(linked).mz_replay(
             scope,
-            Some(Duration::from_nanos(config.granularity_ns as u64)),
+            "differential logs",
+            Duration::from_nanos(config.granularity_ns as u64),
+            activator,
         );
 
         let mut demux =

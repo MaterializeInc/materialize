@@ -51,7 +51,6 @@ members = [
     "test/performance/perf-kinesis",
     "test/performance/perf-upsert",
     "test/performance/s3-datagen",
-    "test/smith",
     "test/test-util",
 ]
 # Use Cargo's new feature resolver, which can handle target-specific features.

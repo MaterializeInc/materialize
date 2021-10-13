@@ -27,10 +27,10 @@ def run(args: argparse.Namespace) -> int:
 
     topic= args.topic
 
-    key_schema = pathlib.Path(DISTRIBUTIONS, "key-schema.json").read_text().strip()
-    value_schema = pathlib.Path(DISTRIBUTIONS, "value-schema.json").read_text().strip()
-
     distribution_dir = pathlib.Path(DISTRIBUTIONS, args.distribution)
+    key_schema = pathlib.Path(distribution_dir, "key-schema.json").read_text().strip()
+    value_schema = pathlib.Path(distribution_dir, "value-schema.json").read_text().strip()
+
     key_distribution = (
         pathlib.Path(distribution_dir, "key-distribution.json").read_text().strip()
     )

@@ -51,5 +51,5 @@ Delete this section if no tips.
 
 ### Checklist
 
-- [ ] This PR has adequate test coverage.
+- [ ] This PR has adequate test coverage / QA involvement has been duly considered.
 - [ ] This PR adds a release note for any user-facing behavior changes.
