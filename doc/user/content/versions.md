@@ -133,6 +133,7 @@ Materialize's stable interface:
     * The [health check endpoint](/ops/monitoring#health-check)
     * [Prometheus metrics](/ops/monitoring#prometheus)
   * Objects in the [system catalog](/sql/system-tables)
+  * The [`EXPLAIN`](/sql/explain) SQL statement
   * Any undocumented features or behavior
 
 These unstable interfaces are not subject to the backwards-compatibility policy.
