@@ -255,12 +255,6 @@ It is not uncommon to re-use this arrangement, as we find that such groupings ar
 The `mz_arrangement_sharing` logging source reports the number of times each arrangement is shared.
 An arrangement is identified by the worker and operator that created it.
 
-## Caveats: Demand Analysis
-
-When users present queries and views to us, we can determine that some fields are not required.
-We blank out any field that is not required.
-This can reduce the number of distinct `data` in an arrangement, which will reduce the size of the arrangement.
-
 ## Caveats: Delta Joins
 
 In certain circumstances, we plan `Join` operators using a different pattern which avoids the intermediate arrangements.
@@ -278,3 +272,15 @@ But, we would also need to create similar dataflow graphs for each of `In2`, `In
 In each case they only require arrangements of the input, but they may be by different keys.
 
 If a `Join` is implemented by a Delta Join pattern, it will create zero additional arrangements.
+
+## Caveats: Demand Analysis
+
+> Obsolete as of v0.9.4. We now delete fields that are not required
+> instead of blanking them out. Plans prior to v0.9.4 will show something like
+> `| | demand = (#6, #8, #12, #15, #22, #23, #27)` for the `Join` and `FlatMap`
+> operators, listing which field will be blanked out.
+
+When users present queries and views to us, we can determine that some fields are not required.
+We blank out any field that is not required.
+This can reduce the number of distinct `data` in an arrangement, which will
+reduce the size of the arrangement.
