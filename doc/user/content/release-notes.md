@@ -50,6 +50,12 @@ Put breaking changes before other release notes.
 
 {{% version-header v0.9.9 %}}
 
+- Optimize some `(table).field1.field2` expressions to only generate the
+  columns from `table` that are accessed subsequently. This avoids performance
+  issues when extracting a single field from a table expression with several
+  columns, for example records generated from [`ROW`](/sql/types/record).
+  {{% gh 8596 %}}
+
 {{% version-header v0.9.8 %}}
 - Throw errors on floating point arithmetic overflow and underflow.
 
