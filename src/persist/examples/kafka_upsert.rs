@@ -148,6 +148,7 @@ where
         .map(|((key, value), source_ts, _assigned_ts, _diff)| (key, Some(value), source_ts));
 
     let upsert_oks = source_records.persistent_upsert(
+        "kafka_example",
         Antichain::from_elem(u64::MIN),
         PersistentUpsertConfig::new(start_ts, out_read, out_write.clone()),
     );
