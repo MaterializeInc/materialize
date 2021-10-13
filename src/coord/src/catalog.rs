@@ -2301,7 +2301,9 @@ impl Catalog {
             let name = entry.name();
             if let Some(schema) = self.get_schema(&name.database, &name.schema, conn_id) {
                 for id in schema.items.values() {
-                    match self.get_by_id(id).item_type() {
+                    let entry = self.get_by_id(id);
+                    let ty = entry.item_type();
+                    match ty {
                         SqlCatalogItemType::Table => {
                             relations.insert(*id);
                         }
@@ -2311,6 +2313,21 @@ impl Catalog {
                             // Add in the view/source if fully materialized.
                             if unmaterialized.is_empty() {
                                 relations.insert(*id);
+                                if let SqlCatalogItemType::View = ty {
+                                    // Add transitive items from views.
+                                    if let CatalogItem::View(view) = entry.item() {
+                                        for view_id in &view.depends_on {
+                                            if matches!(
+                                                self.get_by_id(&view_id).item_type(),
+                                                SqlCatalogItemType::Table
+                                                    | SqlCatalogItemType::View
+                                                    | SqlCatalogItemType::Source,
+                                            ) {
+                                                relations.insert(*view_id);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         _ => {}
