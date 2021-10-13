@@ -173,33 +173,58 @@ impl HirRelationExpr {
                     .collect::<Vec<_>>();
                 input.project(outputs)
             }
-            Map { input, scalars } => {
+            Map { input, mut scalars } => {
                 // Scalar expressions may contain correlated subqueries. We must be cautious!
                 let mut input = input.applied_to(id_gen, get_outer, col_map);
 
-                let old_arity = input.arity();
-                let (with_subqueries, subquery_map) =
-                    HirScalarExpr::lower_subqueries(&scalars, id_gen, col_map, input);
-                input = with_subqueries;
+                // Lower subqueries in maximally sized batches, such as no subquery in the current
+                // batch depends on columns from the same batch.
+                // Note that subqueries in this projection may reference columns added by this
+                // Map operator, so we need to ensure these columns exist before lowering the
+                // subquery.
+                while !scalars.is_empty() {
+                    let old_arity = input.arity();
 
-                // We will proceed sequentially through the scalar expressions, for each transforming the decorrelated `input`
-                // into a relation with potentially more columns capable of addressing the needs of the scalar expression.
-                // Having done so, we add the scalar value of interest and trim off any other newly added columns.
-                //
-                // The sequential traversal is present as expressions are allowed to depend on the values of prior expressions.
-                let first_scalar = input.arity();
-                let num_scalars = scalars.len();
-                for scalar in scalars {
-                    let scalar =
-                        scalar.applied_to(id_gen, col_map, &mut input, &Some(&subquery_map));
-                    input = input.map(vec![scalar]);
+                    let end_idx = scalars
+                        .iter_mut()
+                        .position(|s| {
+                            let mut requires_nonexistent_column = false;
+                            s.visit_columns(0, &mut |depth, col| {
+                                if col.level == depth {
+                                    requires_nonexistent_column |= (col.column + 1) > old_arity
+                                }
+                            });
+                            requires_nonexistent_column
+                        })
+                        .unwrap_or(scalars.len());
+
+                    let scalars = scalars.drain(0..end_idx).collect_vec();
+                    let (with_subqueries, subquery_map) =
+                        HirScalarExpr::lower_subqueries(&scalars, id_gen, col_map, input);
+                    input = with_subqueries;
+
+                    // We will proceed sequentially through the scalar expressions, for each transforming
+                    // the decorrelated `input` into a relation with potentially more columns capable of
+                    // addressing the needs of the scalar expression.
+                    // Having done so, we add the scalar value of interest and trim off any other newly
+                    // added columns.
+                    //
+                    // The sequential traversal is present as expressions are allowed to depend on the
+                    // values of prior expressions.
+                    let first_scalar = input.arity();
+                    let num_scalars = scalars.len();
+                    for scalar in scalars {
+                        let scalar =
+                            scalar.applied_to(id_gen, col_map, &mut input, &Some(&subquery_map));
+                        input = input.map(vec![scalar]);
+                    }
+
+                    input = input.project(
+                        (0..old_arity)
+                            .chain(first_scalar..first_scalar + num_scalars)
+                            .collect(),
+                    );
                 }
-
-                input = input.project(
-                    (0..old_arity)
-                        .chain(first_scalar..first_scalar + num_scalars)
-                        .collect(),
-                );
 
                 input
             }
