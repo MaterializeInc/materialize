@@ -12,6 +12,7 @@
 use std::convert::TryFrom;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ore::metrics::MetricsRegistry;
 use persist::error::{Error, ErrorLog};
@@ -102,6 +103,7 @@ pub struct PersistConfig {
     /// investigating an unexpected lock file (e.g. hostname and materialize
     /// version of the creating process).
     pub lock_info: String,
+    pub min_step_interval: Duration,
 }
 
 impl PersistConfig {
@@ -112,6 +114,7 @@ impl PersistConfig {
             user_table_enabled: false,
             system_table_enabled: false,
             lock_info: Default::default(),
+            min_step_interval: Duration::default(),
         }
     }
 
@@ -131,7 +134,7 @@ impl PersistConfig {
                 PersistStorage::File(s) => {
                     let blob = FileBlob::new(&s.blob_path, lock_info)?;
                     runtime::start(
-                        RuntimeConfig::default(),
+                        RuntimeConfig::with_min_step_interval(self.min_step_interval),
                         log,
                         blob,
                         reg,
@@ -142,7 +145,7 @@ impl PersistConfig {
                     let config = S3Config::new(s.bucket.clone(), s.prefix.clone())?;
                     let blob = S3Blob::new(config, lock_info)?;
                     runtime::start(
-                        RuntimeConfig::default(),
+                        RuntimeConfig::with_min_step_interval(self.min_step_interval),
                         log,
                         blob,
                         reg,
