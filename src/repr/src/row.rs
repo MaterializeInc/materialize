@@ -445,16 +445,16 @@ fn push_date<D>(data: &mut D, date: NaiveDate)
 where
     D: Vector<u8>,
 {
-    data.extend_from_slice(&date.year().to_le_bytes());
-    data.extend_from_slice(&date.ordinal().to_le_bytes());
+    data.extend_from_slice(&i32::to_le_bytes(date.year()));
+    data.extend_from_slice(&u32::to_le_bytes(date.ordinal()));
 }
 
 fn push_time<D>(data: &mut D, time: NaiveTime)
 where
     D: Vector<u8>,
 {
-    data.extend_from_slice(&time.num_seconds_from_midnight().to_le_bytes());
-    data.extend_from_slice(&time.nanosecond().to_le_bytes());
+    data.extend_from_slice(&u32::to_le_bytes(time.num_seconds_from_midnight()));
+    data.extend_from_slice(&u32::to_le_bytes(time.nanosecond()));
 }
 
 fn push_datum<D>(data: &mut D, datum: Datum)
