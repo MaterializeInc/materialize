@@ -56,6 +56,7 @@ use crate::source::timestamp::TimestampBindingRc;
 mod file;
 mod kafka;
 mod kinesis;
+mod loki;
 pub(super) mod metrics;
 mod postgres;
 mod pubnub;
