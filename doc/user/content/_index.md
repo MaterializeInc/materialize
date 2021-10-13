@@ -45,7 +45,7 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 ## New &amp; updated
 
 - [Release Notes](release-notes/)
-- [Materialize & Node.js](/guides/node_js/)
+- [CDC with MySQL](/guides/cdc-mysql/)
 - [Materialize Cloud](/cloud/) - Now in open beta!
 
 ## Learn more
