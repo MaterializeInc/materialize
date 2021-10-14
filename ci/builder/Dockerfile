@@ -99,7 +99,7 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.2.0/au
     && echo '39c501aaca6aae3f3c7fc125b3c3af779ddbe4e67e4ebdc44c2ae5cba76c847f  shellcheck.tar.xz' | sha256sum --check \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.7.0/shellcheck \
     && rm shellcheck.tar.xz \
-    && curl -fsSL "https://github.com/docker/compose/releases/download/1.25.4/docker-compose-Linux-x86_64" > /usr/local/bin/docker-compose \
+    && curl -fsSL "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-Linux-x86_64" > /usr/local/bin/docker-compose \
     && chmod +x /usr/local/bin/docker-compose
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
