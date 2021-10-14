@@ -2913,9 +2913,11 @@ fn plan_array(
         let out = coerce_homogeneous_exprs("ARRAY expression", ecx, out, type_hint)?;
         (ecx.scalar_type(&out[0]), out)
     };
-
-    if matches!(elem_type, ScalarType::Char { .. }) {
-        bail_unsupported!("char[]");
+    if matches!(
+        elem_type,
+        ScalarType::Char { .. } | ScalarType::List { .. } | ScalarType::Map { .. }
+    ) {
+        bail_unsupported!(format!("{}[]", ecx.humanize_scalar_type(&elem_type)));
     }
 
     Ok(HirScalarExpr::CallVariadic {
@@ -3487,12 +3489,28 @@ pub fn scalar_type_from_sql(
 ) -> Result<ScalarType, anyhow::Error> {
     Ok(match data_type {
         DataType::Array(elem_type) => {
-            ScalarType::Array(Box::new(scalar_type_from_sql(scx, &elem_type)?))
+            let elem_type = scalar_type_from_sql(scx, &elem_type)?;
+            if matches!(
+                elem_type,
+                ScalarType::Char { .. } | ScalarType::List { .. } | ScalarType::Map { .. }
+            ) {
+                bail_unsupported!(format!("{}[]", scx.humanize_scalar_type(&elem_type)));
+            }
+
+            ScalarType::Array(Box::new(elem_type))
         }
-        DataType::List(elem_type) => ScalarType::List {
-            element_type: Box::new(scalar_type_from_sql(scx, &elem_type)?),
-            custom_oid: None,
-        },
+        DataType::List(elem_type) => {
+            let elem_type = scalar_type_from_sql(scx, &elem_type)?;
+
+            if matches!(elem_type, ScalarType::Char { .. }) {
+                bail_unsupported!("char list");
+            }
+
+            ScalarType::List {
+                element_type: Box::new(elem_type),
+                custom_oid: None,
+            }
+        }
         DataType::Map {
             key_type,
             value_type,

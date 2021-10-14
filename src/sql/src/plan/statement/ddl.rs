@@ -2041,17 +2041,17 @@ pub fn plan_create_type(
                 item_name.name().clone(),
             )?)?;
         let item_id = item.id();
-        if scx
-            .catalog
-            .try_get_lossy_scalar_type_by_id(&item_id)
-            .is_none()
-        {
-            bail!(
+        match scx.catalog.try_get_lossy_scalar_type_by_id(&item_id) {
+            None => bail!(
                 "{} must be of class type, but received {} which is of class {}",
                 key,
                 item.name(),
                 item.item_type()
-            );
+            ),
+            Some(ScalarType::Char { .. }) if as_type == CreateTypeAs::List => {
+                bail_unsupported!("char list")
+            }
+            _ => {}
         }
         ids.push(item_id);
     }
