@@ -120,7 +120,7 @@ use expr::{GlobalId, Id, MirScalarExpr};
 use itertools::Itertools;
 use ore::collections::CollectionExt as _;
 use ore::now::NowFn;
-use repr::{RelationType, Row, Timestamp};
+use repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::metrics::Metrics;
@@ -241,7 +241,7 @@ pub fn build_dataflow<A: Allocate>(
                     region,
                     *idx_id,
                     &idx.0,
-                    &idx.1,
+                    idx.1.arity(),
                 );
             }
 
@@ -287,7 +287,7 @@ where
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        typ: &RelationType,
+        arity: usize,
     ) {
         if let Some(traces) = render_state.traces.get_mut(&idx_id) {
             let token = traces.to_drop().clone();
@@ -308,7 +308,7 @@ where
                 CollectionBundle::from_expressions(
                     idx.keys.clone(),
                     ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
-                    typ.column_types.len(),
+                    arity,
                 ),
             );
             tokens
