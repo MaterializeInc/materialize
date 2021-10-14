@@ -70,9 +70,11 @@ where
         // them through `src`.
         let mut linear_operators = src.operators.take();
 
+        let arity = src.bare_desc.arity();
+
         // Blank out trivial linear operators.
         if let Some(operator) = &linear_operators {
-            if operator.is_trivial(src.bare_desc.arity()) {
+            if operator.is_trivial(arity) {
                 linear_operators = None;
             }
         }
@@ -145,6 +147,7 @@ where
                     crate::render::CollectionBundle::from_collections(
                         ok_collection,
                         err_collection,
+                        arity,
                     ),
                 );
             }
@@ -521,7 +524,11 @@ where
                 // Introduce the stream by name, as an unarranged collection.
                 self.insert_id(
                     Id::Global(src_id),
-                    crate::render::CollectionBundle::from_collections(collection, err_collection),
+                    crate::render::CollectionBundle::from_collections(
+                        collection,
+                        err_collection,
+                        arity,
+                    ),
                 );
 
                 let token = Rc::new(capability);

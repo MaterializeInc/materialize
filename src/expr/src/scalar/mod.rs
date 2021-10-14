@@ -290,6 +290,14 @@ impl MirScalarExpr {
         matches!(self, MirScalarExpr::Literal(Err(_), _typ))
     }
 
+    pub fn as_column(&self) -> Option<usize> {
+        if let MirScalarExpr::Column(c) = self {
+            Some(*c)
+        } else {
+            None
+        }
+    }
+
     /// Reduces a complex expression where possible.
     ///
     /// Also canonicalizes the expression.

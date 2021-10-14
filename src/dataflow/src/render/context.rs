@@ -165,7 +165,10 @@ where
     /// This method presents the contents as they are, without further computation.
     /// For some cases, the [CollectionBundle] provides the same or more specific functions,
     /// specifically [CollectionBundle::as_collection_core].
-    pub fn as_collection(&self) -> (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>) {
+    pub fn as_collection(
+        &self,
+        permutation: &[usize],
+    ) -> (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>) {
         match self {
             ArrangementFlavor::Local(oks, errs) => (
                 oks.as_collection(|_k, v| v.clone()),
@@ -175,6 +178,69 @@ where
                 oks.as_collection(|_k, v| v.clone()),
                 errs.as_collection(|k, _v| k.clone()),
             ),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ArrangementWrapper<S, V, T>
+where
+    S: Scope,
+    V: Data,
+    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
+{
+    pub permutation: Vec<usize>,
+    pub flavor: ArrangementFlavor<S, V, T>,
+}
+
+impl<S, V, T> ArrangementWrapper<S, V, T>
+where
+    S: Scope,
+    V: Data,
+    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
+{
+    fn new(permutation: Vec<usize>, flavor: ArrangementFlavor<S, V, T>) -> Self {
+        Self {
+            permutation,
+            flavor,
+        }
+    }
+
+    fn as_collection(&self) -> (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>) {
+        self.flavor.as_collection(&self.permutation)
+    }
+
+    pub fn flat_map<I, L>(
+        &self,
+        key: Option<V>,
+        mut logic: L,
+    ) -> (
+        timely::dataflow::Stream<S, I::Item>,
+        Collection<S, DataflowError, Diff>,
+    )
+    where
+        I: IntoIterator,
+        I::Item: Data,
+        L: for<'a, 'b> FnMut(RefOrMut<'b, V>, &'a S::Timestamp, &'a Diff) -> I + 'static,
+    {
+        // Set a number of tuples after which the operator should yield.
+        // This allows us to remain responsive even when enumerating a substantial
+        // arrangement, as well as provides time to accumulate our produced output.
+        let refuel = 1000000;
+
+        match &self.flavor {
+            ArrangementFlavor::Local(oks, errs) => {
+                let oks = CollectionBundle::<S, V, T>::flat_map_core(&oks, key, logic, refuel);
+                let errs = errs.as_collection(|k, _v| k.clone());
+                return (oks, errs);
+            }
+            ArrangementFlavor::Trace(_, oks, errs) => {
+                let oks = CollectionBundle::<S, V, T>::flat_map_core(&oks, key, logic, refuel);
+                let errs = errs.as_collection(|k, _v| k.clone());
+                return (oks, errs);
+            }
         }
     }
 }
@@ -190,7 +256,8 @@ where
     S::Timestamp: Lattice + Refines<T>,
 {
     pub collection: Option<(Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
-    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, V, T>>,
+    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementWrapper<S, V, T>>,
+    pub arity: usize,
 }
 
 impl<S: Scope, V: Data, T: Lattice> CollectionBundle<S, V, T>
@@ -202,8 +269,10 @@ where
     pub fn from_collections(
         oks: Collection<S, V, Diff>,
         errs: Collection<S, DataflowError, Diff>,
+        arity: usize,
     ) -> Self {
         Self {
+            arity,
             collection: Some((oks, errs)),
             arranged: BTreeMap::default(),
         }
@@ -213,10 +282,20 @@ where
     pub fn from_expressions(
         exprs: Vec<MirScalarExpr>,
         arrangements: ArrangementFlavor<S, V, T>,
+        arity: usize,
     ) -> Self {
         let mut arranged = BTreeMap::new();
+
+        let permutation = (exprs.len()..exprs.len() + arity).collect();
+        dbg!(value_expr(&exprs, arity));
+        let arrangements = ArrangementWrapper {
+            permutation,
+            flavor: arrangements,
+        };
+
         arranged.insert(exprs, arrangements);
         Self {
+            arity,
             collection: None,
             arranged,
         }
@@ -226,12 +305,13 @@ where
     pub fn from_columns<I: IntoIterator<Item = usize>>(
         columns: I,
         arrangements: ArrangementFlavor<S, V, T>,
+        arity: usize,
     ) -> Self {
         let mut keys = Vec::new();
         for column in columns {
             keys.push(MirScalarExpr::Column(column));
         }
-        Self::from_expressions(keys, arrangements)
+        Self::from_expressions(keys, arrangements, arity)
     }
 
     /// Presents `self` as a stream of updates.
@@ -272,26 +352,11 @@ where
         I::Item: Data,
         L: for<'a, 'b> FnMut(RefOrMut<'b, V>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
-        // Set a number of tuples after which the operator should yield.
-        // This allows us to remain responsive even when enumerating a substantial
-        // arrangement, as well as provides time to accumulate our produced output.
-        let refuel = 1000000;
         // If `key_val` is set, and we have the arrangement by that key, we should
         // use that arrangement.
         if let Some((key, val)) = key_val {
             if let Some(flavor) = self.arrangement(&key) {
-                match flavor {
-                    ArrangementFlavor::Local(oks, errs) => {
-                        let oks = Self::flat_map_core(&oks, Some(val), logic, refuel);
-                        let errs = errs.as_collection(|k, _v| k.clone());
-                        return (oks, errs);
-                    }
-                    ArrangementFlavor::Trace(_, oks, errs) => {
-                        let oks = Self::flat_map_core(&oks, Some(val), logic, refuel);
-                        let errs = errs.as_collection(|k, _v| k.clone());
-                        return (oks, errs);
-                    }
-                }
+                return flavor.flat_map(Some(val), logic);
             }
         }
 
@@ -300,18 +365,7 @@ where
         // We should now prefer to use an arrangement if available (avoids allocation),
         // and resort to using a collection if not available (copies all rows).
         if let Some(flavor) = self.arranged.values().next() {
-            match flavor {
-                ArrangementFlavor::Local(oks, errs) => {
-                    let oks = Self::flat_map_core(&oks, None, logic, refuel);
-                    let errs = errs.as_collection(|k, _v| k.clone());
-                    (oks, errs)
-                }
-                ArrangementFlavor::Trace(_, oks, errs) => {
-                    let oks = Self::flat_map_core(&oks, None, logic, refuel);
-                    let errs = errs.as_collection(|k, _v| k.clone());
-                    (oks, errs)
-                }
-            }
+            flavor.flat_map(None, logic)
         } else {
             use timely::dataflow::operators::Map;
             let (oks, errs) = self.as_collection();
@@ -387,7 +441,7 @@ where
     ///
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
-    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, V, T>> {
+    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementWrapper<S, V, T>> {
         self.arranged.get(key).map(|x| x.clone())
     }
 }
@@ -428,8 +482,11 @@ where
                 let errs = errs
                     .concat(&errs_keyed)
                     .arrange_named::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
-                self.arranged
-                    .insert(key, ArrangementFlavor::Local(oks, errs));
+                let permutation = (key.len()..key.len() + self.arity).collect();
+                self.arranged.insert(
+                    key,
+                    ArrangementWrapper::new(permutation, ArrangementFlavor::Local(oks, errs)),
+                );
             }
         }
         self
@@ -487,8 +544,10 @@ where
     }
 }
 
+use crate::render::value_expr;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::Capability;
+
 struct PendingWork<K, V, T: Timestamp, R, C: Cursor<K, V, T, R>> {
     capability: Capability<T>,
     cursor: C,

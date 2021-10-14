@@ -204,6 +204,7 @@ where
         inputs: Vec<CollectionBundle<G, Row, G::Timestamp>>,
         join_plan: DeltaJoinPlan,
         scope: &mut G,
+        arity: usize,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
         // Collects error streams for the ambient scope.
         let mut scope_errs = Vec::new();
@@ -481,7 +482,7 @@ where
                 differential_dataflow::collection::concatenate(scope, scope_errs),
             )
         });
-        CollectionBundle::from_collections(oks, errs)
+        CollectionBundle::from_collections(oks, errs, arity)
     }
 }
 
@@ -613,6 +614,7 @@ where
                             let mut cursor = batch.cursor();
                             while let Some(_key) = cursor.get_key(batch) {
                                 while let Some(val) = cursor.get_val(batch) {
+                                    // TODO(mh): Undo key-val permutation
                                     cursor.map_times(batch, |time, diff| {
                                         // note: only the delta path for the first relation will see
                                         // updates at start-up time

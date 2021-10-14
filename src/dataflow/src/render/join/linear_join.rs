@@ -28,6 +28,7 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context};
 use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
+use crate::render::permute_in_place;
 
 // TODO(mcsherry): Identical to `DeltaPathPlan`; consider unifying.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -184,6 +185,7 @@ where
         inputs: Vec<CollectionBundle<G, Row, T>>,
         linear_plan: LinearJoinPlan,
         scope: &mut G,
+        arity: usize,
     ) -> CollectionBundle<G, Row, T> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
@@ -283,6 +285,7 @@ where
             CollectionBundle::from_collections(
                 joined,
                 differential_dataflow::collection::concatenate(scope, errors),
+                arity,
             )
         } else {
             panic!("Unexpectedly arranged join output");
@@ -332,42 +335,43 @@ where
         let lookup_relation = lookup_relation.ensure_arrangements(Some(lookup_key.clone()));
 
         // Demultiplex the four different cross products of arrangement types we might have.
+        let arrangement = lookup_relation
+            .arrangement(&lookup_key[..])
+            .expect("Arrangement absent despite explicit construction");
         match joined {
             JoinedFlavor::Collection(_) => {
                 unreachable!("JoinedFlavor::Collection variant avoided at top of method");
             }
-            JoinedFlavor::Local(local) => match lookup_relation.arrangement(&lookup_key[..]) {
-                Some(ArrangementFlavor::Local(oks, errs1)) => {
-                    let (oks, errs2) = self.differential_join_inner(local, oks, closure);
+            JoinedFlavor::Local(local) => match arrangement.flavor {
+                ArrangementFlavor::Local(oks, errs1) => {
+                    let (oks, errs2) =
+                        self.differential_join_inner(local, oks, closure, arrangement.permutation);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
                 }
-                Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
-                    let (oks, errs2) = self.differential_join_inner(local, oks, closure);
+                ArrangementFlavor::Trace(_gid, oks, errs1) => {
+                    let (oks, errs2) =
+                        self.differential_join_inner(local, oks, closure, arrangement.permutation);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
-                }
-                None => {
-                    unreachable!("Arrangement absent despite explicit construction");
                 }
             },
-            JoinedFlavor::Trace(trace) => match lookup_relation.arrangement(&lookup_key[..]) {
-                Some(ArrangementFlavor::Local(oks, errs1)) => {
-                    let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
+            JoinedFlavor::Trace(trace) => match arrangement.flavor {
+                ArrangementFlavor::Local(oks, errs1) => {
+                    let (oks, errs2) =
+                        self.differential_join_inner(trace, oks, closure, arrangement.permutation);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
                 }
-                Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
-                    let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
+                ArrangementFlavor::Trace(_gid, oks, errs1) => {
+                    let (oks, errs2) =
+                        self.differential_join_inner(trace, oks, closure, arrangement.permutation);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
-                }
-                None => {
-                    unreachable!("Arrangement absent despite explicit construction");
                 }
             },
         }
@@ -381,6 +385,7 @@ where
         prev_keyed: J,
         next_input: Arranged<G, Tr2>,
         closure: JoinClosure,
+        permutation: Vec<usize>,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
         J: JoinCore<G, Row, Row, repr::Diff>,
@@ -397,11 +402,14 @@ where
         let mut datums = DatumVec::new();
         let mut row_builder = Row::default();
         let (oks, err) = prev_keyed
-            .join_core(&next_input, move |_keys, old, new| {
+            .join_core(&next_input, move |key, old, new| {
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow();
+                datums_local.extend(key.iter());
                 datums_local.extend(old.iter());
                 datums_local.extend(new.iter());
+
+                permute_in_place(&mut datums_local, &permutation);
 
                 closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)

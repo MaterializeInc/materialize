@@ -143,13 +143,13 @@ where
     {
         ArrangementFlavor::Local(oks, errs) => {
             let oks = threshold_arrangement(&oks, "Threshold local", |count| *count > 0);
-            CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs))
+            CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs), arity)
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_arrangement(&oks, "Threshold trace", |count| *count > 0);
             use differential_dataflow::operators::arrange::ArrangeBySelf;
             let errs = errs.as_collection(|k, _| k.clone()).arrange_by_self();
-            CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs))
+            CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs), arity)
         }
     }
 }
@@ -191,7 +191,7 @@ where
         .negate()
         .concat(&oks)
         .consolidate();
-    CollectionBundle::from_collections(oks, errs)
+    CollectionBundle::from_collections(oks, errs, arity)
 }
 
 impl<G, T> Context<G, Row, T>

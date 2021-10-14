@@ -116,11 +116,11 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id};
+use expr::{GlobalId, Id, MirScalarExpr};
 use itertools::Itertools;
 use ore::collections::CollectionExt as _;
 use ore::now::NowFn;
-use repr::{Row, Timestamp};
+use repr::{RelationType, Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::metrics::Metrics;
@@ -234,7 +234,15 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared indexes into the rendering context.
             for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(render_state, &mut tokens, scope, region, *idx_id, &idx.0);
+                context.import_index(
+                    render_state,
+                    &mut tokens,
+                    scope,
+                    region,
+                    *idx_id,
+                    &idx.0,
+                    &idx.1,
+                );
             }
 
             // Build declared objects.
@@ -279,6 +287,7 @@ where
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        typ: &RelationType,
     ) {
         if let Some(traces) = render_state.traces.get_mut(&idx_id) {
             let token = traces.to_drop().clone();
@@ -299,6 +308,7 @@ where
                 CollectionBundle::from_expressions(
                     idx.keys.clone(),
                     ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
+                    typ.column_types.len(),
                 ),
             );
             tokens
@@ -354,32 +364,33 @@ where
                 Id::Global(idx_id)
             )
         });
-        match bundle.arrangement(&idx.keys) {
-            Some(ArrangementFlavor::Local(oks, errs)) => {
-                render_state.traces.set(
-                    idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(tokens),
-                );
+        if let Some(arrangement) = bundle.arrangement(&idx.keys) {
+            match arrangement.flavor {
+                ArrangementFlavor::Local(oks, errs) => {
+                    render_state.traces.set(
+                        idx_id,
+                        TraceBundle::new(oks.trace, errs.trace).with_drop(tokens),
+                    );
+                }
+                ArrangementFlavor::Trace(gid, _, _) => {
+                    // Duplicate of existing arrangement with id `gid`, so
+                    // just create another handle to that arrangement.
+                    let trace = render_state.traces.get(&gid).unwrap().clone();
+                    render_state.traces.set(idx_id, trace);
+                }
             }
-            Some(ArrangementFlavor::Trace(gid, _, _)) => {
-                // Duplicate of existing arrangement with id `gid`, so
-                // just create another handle to that arrangement.
-                let trace = render_state.traces.get(&gid).unwrap().clone();
-                render_state.traces.set(idx_id, trace);
-            }
-            None => {
-                println!("collection available: {:?}", bundle.collection.is_none());
-                println!(
-                    "keys available: {:?}",
-                    bundle.arranged.keys().collect::<Vec<_>>()
-                );
-                panic!(
-                    "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
-                    Id::Global(idx_id),
-                    &idx.keys
-                );
-            }
-        };
+        } else {
+            println!("collection available: {:?}", bundle.collection.is_none());
+            println!(
+                "keys available: {:?}",
+                bundle.arranged.keys().collect::<Vec<_>>()
+            );
+            panic!(
+                "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
+                Id::Global(idx_id),
+                &idx.keys
+            );
+        }
     }
 }
 
@@ -399,7 +410,7 @@ where
     ) -> CollectionBundle<G, Row, G::Timestamp> {
         use plan::Plan;
         match plan {
-            Plan::Constant { rows } => {
+            Plan::Constant { rows, arity } => {
                 // Determine what this worker will contribute.
                 let locally = if worker_index == 0 { rows } else { Ok(vec![]) };
                 // Produce both rows and errs to avoid conditional dataflow construction.
@@ -424,7 +435,7 @@ where
                     .to_stream(scope)
                     .as_collection();
 
-                CollectionBundle::from_collections(ok_collection, err_collection)
+                CollectionBundle::from_collections(ok_collection, err_collection, arity)
             }
             Plan::Get {
                 id,
@@ -444,8 +455,9 @@ where
                     collection.arranged.retain(|key, _value| keys.contains(key));
                     collection
                 } else {
+                    let arity = mfp.projection.len();
                     let (oks, errs) = collection.as_collection_core(mfp, key_val);
-                    CollectionBundle::from_collections(oks, errs)
+                    CollectionBundle::from_collections(oks, errs, arity)
                 }
             }
             Plan::Let { id, value, body } => {
@@ -468,8 +480,9 @@ where
                 if mfp.is_identity() {
                     input
                 } else {
+                    let arity = mfp.projection.len();
                     let (oks, errs) = input.as_collection_core(mfp, key_val);
-                    CollectionBundle::from_collections(oks, errs)
+                    CollectionBundle::from_collections(oks, errs, arity)
                 }
             }
             Plan::FlatMap {
@@ -481,17 +494,21 @@ where
                 let input = self.render_plan(*input, scope, worker_index);
                 self.render_flat_map(input, func, exprs, mfp)
             }
-            Plan::Join { inputs, plan } => {
+            Plan::Join {
+                inputs,
+                plan,
+                arity,
+            } => {
                 let inputs = inputs
                     .into_iter()
                     .map(|input| self.render_plan(input, scope, worker_index))
                     .collect();
                 match plan {
                     crate::render::join::JoinPlan::Linear(linear_plan) => {
-                        self.render_join(inputs, linear_plan, scope)
+                        self.render_join(inputs, linear_plan, scope, arity)
                     }
                     crate::render::join::JoinPlan::Delta(delta_plan) => {
-                        self.render_delta_join(inputs, delta_plan, scope)
+                        self.render_delta_join(inputs, delta_plan, scope, arity)
                     }
                 }
             }
@@ -499,18 +516,23 @@ where
                 input,
                 key_val_plan,
                 plan,
+                arity,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_reduce(input, key_val_plan, plan)
+                self.render_reduce(input, key_val_plan, plan, arity)
             }
-            Plan::TopK { input, top_k_plan } => {
+            Plan::TopK {
+                input,
+                top_k_plan,
+                arity,
+            } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_topk(input, top_k_plan)
+                self.render_topk(input, top_k_plan, arity)
             }
-            Plan::Negate { input } => {
+            Plan::Negate { input, arity } => {
                 let input = self.render_plan(*input, scope, worker_index);
                 let (oks, errs) = input.as_collection();
-                CollectionBundle::from_collections(oks.negate(), errs)
+                CollectionBundle::from_collections(oks.negate(), errs, arity)
             }
             Plan::Threshold {
                 input,
@@ -519,7 +541,7 @@ where
                 let input = self.render_plan(*input, scope, worker_index);
                 self.render_threshold(input, threshold_plan)
             }
-            Plan::Union { inputs } => {
+            Plan::Union { inputs, arity } => {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
@@ -529,7 +551,7 @@ where
                 }
                 let oks = differential_dataflow::collection::concatenate(scope, oks);
                 let errs = differential_dataflow::collection::concatenate(scope, errs);
-                CollectionBundle::from_collections(oks, errs)
+                CollectionBundle::from_collections(oks, errs, arity)
             }
             Plan::ArrangeBy { input, keys } => {
                 let input = self.render_plan(*input, scope, worker_index);
@@ -575,6 +597,18 @@ pub mod datum_vec {
         pub fn borrow_with<'a>(&'a mut self, row: &'a Row) -> DatumVecBorrow<'a> {
             let mut borrow = self.borrow();
             borrow.extend(row.iter());
+            borrow
+        }
+
+        /// Borrow an instance with a specific lifetime, and pre-populate with `Row`s.
+        pub fn borrow_with_many<'a, I: IntoIterator<Item = &'a Row>>(
+            &'a mut self,
+            rows: I,
+        ) -> DatumVecBorrow<'a> {
+            let mut borrow = self.borrow();
+            for row in rows {
+                borrow.extend(row.iter());
+            }
             borrow
         }
     }
@@ -636,6 +670,8 @@ pub mod plan {
         Constant {
             /// Explicit update triples for the collection.
             rows: Result<Vec<(Row, repr::Timestamp, Diff)>, EvalError>,
+            /// Arity of the rows
+            arity: usize,
         },
         /// A reference to a bound collection.
         ///
@@ -736,6 +772,8 @@ pub mod plan {
             /// any map, filter, project work that we might follow the join with, but
             /// potentially pushed down into the implementation of the join.
             plan: JoinPlan,
+            /// Arity of the join's production
+            arity: usize,
         },
         /// Aggregation by key.
         Reduce {
@@ -749,6 +787,8 @@ pub mod plan {
             /// on the properties of the reduction, and the input itself. Please check
             /// out the documentation for this type for more detail.
             plan: ReducePlan,
+            /// Arity of the output
+            arity: usize,
         },
         /// Key-based "Top K" operator, retaining the first K records in each group.
         TopK {
@@ -760,11 +800,15 @@ pub mod plan {
             /// on the properties of the reduction, and the input itself. Please check
             /// out the documentation for this type for more detail.
             top_k_plan: TopKPlan,
+            /// Arity of the output
+            arity: usize,
         },
         /// Inverts the sign of each update.
         Negate {
             /// The input collection.
             input: Box<Plan>,
+            /// Arity of the output
+            arity: usize,
         },
         /// Filters records that accumulate negatively.
         ///
@@ -789,6 +833,8 @@ pub mod plan {
         Union {
             /// The input collections.
             inputs: Vec<Plan>,
+            /// The arity
+            arity: usize,
         },
         /// The `input` plan, but with additional arrangements.
         ///
@@ -825,6 +871,7 @@ pub mod plan {
             expr: &MirRelationExpr,
             arrangements: &mut BTreeMap<Id, Vec<Vec<MirScalarExpr>>>,
         ) -> Result<(Self, Vec<Vec<MirScalarExpr>>), ()> {
+            let arity = expr.arity();
             // Extract a maximally large MapFilterProject from `expr`.
             // We will then try and push this in to the resulting expression.
             //
@@ -854,6 +901,7 @@ pub mod plan {
                                 .map(|(row, diff)| (row, repr::Timestamp::minimum(), diff))
                                 .collect()
                         }),
+                        arity,
                     };
                     // The plan, not arranged in any way.
                     (plan, Vec::new())
@@ -994,6 +1042,7 @@ pub mod plan {
                         Plan::Join {
                             inputs: plans,
                             plan,
+                            arity,
                         },
                         Vec::new(),
                     )
@@ -1020,6 +1069,7 @@ pub mod plan {
                             input: Box::new(input),
                             key_val_plan,
                             plan: reduce_plan,
+                            arity,
                         },
                         output_keys,
                     )
@@ -1032,14 +1082,14 @@ pub mod plan {
                     offset,
                     monotonic,
                 } => {
-                    let arity = input.arity();
+                    let input_arity = input.arity();
                     let (input, _keys) = Self::from_mir(input, arrangements)?;
                     let top_k_plan = TopKPlan::create_from(
                         group_key.clone(),
                         order_key.clone(),
                         *offset,
                         *limit,
-                        arity,
+                        input_arity,
                         *monotonic,
                     );
                     // Return the plan, and no arrangements.
@@ -1047,16 +1097,19 @@ pub mod plan {
                         Plan::TopK {
                             input: Box::new(input),
                             top_k_plan,
+                            arity,
                         },
                         Vec::new(),
                     )
                 }
                 MirRelationExpr::Negate { input } => {
+                    let arity = input.arity();
                     let (input, _keys) = Self::from_mir(input, arrangements)?;
                     // Return the plan, and no arrangements.
                     (
                         Plan::Negate {
                             input: Box::new(input),
+                            arity,
                         },
                         Vec::new(),
                     )
@@ -1076,6 +1129,7 @@ pub mod plan {
                     )
                 }
                 MirRelationExpr::Union { base, inputs } => {
+                    let arity = base.arity();
                     let mut plans = Vec::with_capacity(1 + inputs.len());
                     let (plan, _keys) = Self::from_mir(base, arrangements)?;
                     plans.push(plan);
@@ -1084,7 +1138,13 @@ pub mod plan {
                         plans.push(plan)
                     }
                     // Return the plan and no arrangements.
-                    (Plan::Union { inputs: plans }, Vec::new())
+                    (
+                        Plan::Union {
+                            inputs: plans,
+                            arity,
+                        },
+                        Vec::new(),
+                    )
                 }
                 MirRelationExpr::ArrangeBy { input, keys } => {
                     let (input, mut input_keys) = Self::from_mir(input, arrangements)?;
@@ -1227,5 +1287,43 @@ pub mod plan {
             .filter(predicates)
             .map(dummies)
             .project(demand_projection)
+    }
+}
+
+fn value_expr(key_expr: &[MirScalarExpr], arity: usize) -> (Vec<usize>, Vec<MirScalarExpr>) {
+    // Construct a mapping of columns `c` found in key at position `i`
+    // Each value column and value is unique
+    let columns_in_key = key_expr
+        .iter()
+        .enumerate()
+        .flat_map(|(i, expr)| MirScalarExpr::as_column(expr).map(|c| (c, i)))
+        .collect::<HashMap<_, _>>();
+    // Construct a mapping to undo the permutation
+    let permutation = (0..arity)
+        .map(|c| {
+            if let Some(c) = columns_in_key.get(&c) {
+                // Column is in key
+                *c
+            } else {
+                // Column remains in value
+                c + key_expr.len()
+            }
+        })
+        .collect();
+
+    let value_expr = (0..arity)
+        .filter(move |c| !columns_in_key.contains_key(&c))
+        .map(MirScalarExpr::column)
+        .collect::<Vec<_>>();
+    (permutation, value_expr)
+}
+
+pub fn permute_in_place<T>(data: &mut [T], permutation: &[usize]) {
+    for (i, mut p) in permutation.iter().copied().enumerate() {
+        while p < i {
+            p = permutation[p];
+        }
+
+        data.swap(i, p);
     }
 }
