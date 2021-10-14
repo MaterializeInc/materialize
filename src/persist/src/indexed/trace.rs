@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use uuid::Uuid;
 
 use crate::error::Error;
 use crate::future::Future;
@@ -75,8 +76,6 @@ use crate::storage::Blob;
 /// - TODO: Space usage.
 pub struct Trace {
     id: Id,
-    /// The next ID used to assign a Blob key for this trace.
-    pub next_blob_id: u64,
     // NB: We may at some point need to break this up into separate logical and
     // physical compaction frontiers.
     since: Antichain<u64>,
@@ -85,6 +84,10 @@ pub struct Trace {
     // The frontier the trace has been sealed up to.
     seal: Antichain<u64>,
     batches: Vec<TraceBatchMeta>,
+
+    // TODO: next_blob_id is deprecated, remove this once we can safely bump
+    // BlobMeta::CURRENT_VERSION.
+    deprecated_next_blob_id: u64,
 }
 
 impl Trace {
@@ -93,18 +96,16 @@ impl Trace {
     pub fn new(meta: TraceMeta) -> Self {
         Trace {
             id: meta.id,
-            next_blob_id: meta.next_blob_id,
             since: meta.since,
             seal: meta.seal,
             batches: meta.batches,
+            deprecated_next_blob_id: meta.next_blob_id,
         }
     }
 
-    fn new_blob_key(&mut self) -> String {
-        let key = format!("{:?}-trace-{:?}", self.id, self.next_blob_id);
-        self.next_blob_id += 1;
-
-        key
+    /// Returns a new key to write to the Blob store for a trace.
+    pub fn new_blob_key() -> String {
+        Uuid::new_v4().to_string()
     }
 
     /// Serializes the state of this Trace for later re-instantiation.
@@ -114,7 +115,7 @@ impl Trace {
             since: self.since.clone(),
             seal: self.seal.clone(),
             batches: self.batches.clone(),
-            next_blob_id: self.next_blob_id,
+            next_blob_id: self.deprecated_next_blob_id,
         }
     }
 
@@ -215,7 +216,7 @@ impl Trace {
             )));
         }
         let desc = batch.desc.clone();
-        let key = self.new_blob_key();
+        let key = Trace::new_blob_key();
         let size_bytes = blob.set_trace_batch(key.clone(), batch)?;
         // As mentioned above, batches are inserted into the trace with compaction
         // level set to 0.
@@ -265,7 +266,6 @@ impl Trace {
                     b0,
                     b1,
                     since: self.since.clone(),
-                    output_key: self.new_blob_key(),
                 };
                 let res = maintainer.compact_trace(req).recv()?;
                 let mut new_batch = res.merged;
@@ -385,6 +385,18 @@ mod tests {
         )
     }
 
+    // Keys are randomly generated, so clear them before we do any comparisons.
+    fn cleared_keys(batches: &[TraceBatchMeta]) -> Vec<TraceBatchMeta> {
+        batches
+            .iter()
+            .cloned()
+            .map(|mut b| {
+                b.key = "KEY".to_string();
+                b
+            })
+            .collect()
+    }
+
     #[test]
     fn test_allow_compaction() -> Result<(), Error> {
         let mut t: Trace = Trace::new(TraceMeta {
@@ -496,9 +508,9 @@ mod tests {
         assert_eq!(
             deleted_batches
                 .into_iter()
-                .map(|b| b.key)
+                .map(|b| b.desc)
                 .collect::<Vec<_>>(),
-            vec!["Id(0)-trace-1".to_string(), "Id(0)-trace-0".to_string()]
+            vec![desc_from(1, 3, 0), desc_from(0, 1, 0)]
         );
 
         // Check that step doesn't do anything when there's nothing to compact.
@@ -507,16 +519,16 @@ mod tests {
         assert_eq!(deleted_batches, vec![]);
 
         assert_eq!(
-            t.batches,
+            cleared_keys(&t.batches),
             vec![
                 TraceBatchMeta {
-                    key: "Id(0)-trace-3".to_string(),
+                    key: "KEY".to_string(),
                     desc: desc_from(0, 3, 3),
                     level: 1,
                     size_bytes: 322,
                 },
                 TraceBatchMeta {
-                    key: "Id(0)-trace-2".to_string(),
+                    key: "KEY".to_string(),
                     desc: desc_from(3, 9, 0),
                     level: 0,
                     size_bytes: 186,
@@ -554,24 +566,24 @@ mod tests {
         assert_eq!(
             deleted_batches
                 .into_iter()
-                .map(|b| b.key)
+                .map(|b| b.desc)
                 .collect::<Vec<_>>(),
-            vec!["Id(0)-trace-4".to_string(), "Id(0)-trace-2".to_string()]
+            vec![desc_from(9, 10, 0), desc_from(3, 9, 0)]
         );
 
         // Check that compactions which do not result in a batch larger than both
         // parents do not increment the result batch's compaction level.
         assert_eq!(
-            t.batches,
+            cleared_keys(&t.batches),
             vec![
                 TraceBatchMeta {
-                    key: "Id(0)-trace-3".to_string(),
+                    key: "KEY".to_string(),
                     desc: desc_from(0, 3, 3),
                     level: 1,
                     size_bytes: 322,
                 },
                 TraceBatchMeta {
-                    key: "Id(0)-trace-5".to_string(),
+                    key: "KEY".to_string(),
                     desc: desc_from(3, 10, 10),
                     level: 0,
                     size_bytes: 186,

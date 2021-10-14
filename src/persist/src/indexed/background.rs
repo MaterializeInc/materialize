@@ -21,6 +21,7 @@ use crate::error::Error;
 use crate::future::Future;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{BlobTraceBatch, TraceBatchMeta};
+use crate::indexed::trace::Trace;
 use crate::storage::Blob;
 
 /// A request to merge two trace batches and write the results to blob storage.
@@ -33,8 +34,6 @@ pub struct CompactTraceReq {
     /// The since frontier to be used for the output batch. This must be at or
     /// in advance of the since frontier for both of the input batch.
     pub since: Antichain<u64>,
-    /// The blob key to write the resulting batch to.
-    pub output_key: String,
 }
 
 /// A successful merge.
@@ -149,7 +148,8 @@ impl<B: Blob> Maintainer<B> {
             updates,
         };
 
-        let size_bytes = blob.set_trace_batch(req.output_key.clone(), new_batch)?;
+        let merged_key = Trace::new_blob_key();
+        let size_bytes = blob.set_trace_batch(merged_key.clone(), new_batch)?;
 
         // Only upgrade the compaction level if we know this new batch represents
         // an increase in data over both of its parents so that we know we need
@@ -162,7 +162,7 @@ impl<B: Blob> Maintainer<B> {
         };
 
         let merged = TraceBatchMeta {
-            key: req.output_key.clone(),
+            key: merged_key,
             desc,
             level: merged_level,
             size_bytes,
@@ -226,24 +226,23 @@ mod tests {
                 size_bytes: b1_size_bytes,
             },
             since: Antichain::from_elem(2),
-            output_key: "b2".into(),
         };
 
         let expected_res = CompactTraceRes {
             req: req.clone(),
             merged: TraceBatchMeta {
-                key: "b2".into(),
+                key: "MERGED_KEY".into(),
                 desc: desc_from(0, 3, 2),
                 level: 1,
                 size_bytes: 322,
             },
         };
-        assert_eq!(
-            maintainer.compact_trace(req).recv(),
-            Ok(expected_res.clone())
-        );
+        let mut res = maintainer.compact_trace(req).recv()?;
+        let merged_key = res.merged.key.clone();
+        res.merged.key = "MERGED_KEY".into();
+        assert_eq!(res, expected_res);
 
-        let b2 = blob.get_trace_batch_async("b2").recv()?;
+        let b2 = blob.get_trace_batch_async(&merged_key).recv()?;
         let expected_updates = vec![
             (("k".into(), "v".into()), 2, 2),
             (("k2".into(), "v2".into()), 2, 1),
@@ -274,7 +273,6 @@ mod tests {
                 size_bytes: 0,
             },
             since: Antichain::from_elem(0),
-            output_key: "".into(),
         };
         assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [3] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
 
@@ -293,7 +291,6 @@ mod tests {
                 size_bytes: 0,
             },
             since: Antichain::from_elem(0),
-            output_key: "".into(),
         };
         assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
 
@@ -312,7 +309,6 @@ mod tests {
                 size_bytes: 0,
             },
             since: Antichain::from_elem(0),
-            output_key: "".into(),
         };
         assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("output since Antichain { elements: [0] } must be at or in advance of input since Antichain { elements: [1] }")));
 
@@ -331,7 +327,6 @@ mod tests {
                 size_bytes: 0,
             },
             since: Antichain::from_elem(0),
-            output_key: "".into(),
         };
         assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("output since Antichain { elements: [0] } must be at or in advance of input since Antichain { elements: [1] }")));
 

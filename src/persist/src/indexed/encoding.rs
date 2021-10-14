@@ -122,7 +122,9 @@ pub struct UnsealedMeta {
     pub ts_lower: Antichain<u64>,
     /// The batches that make up the Unsealed.
     pub batches: Vec<UnsealedBatchMeta>,
-    /// The next id used to assign a Blob key for this unsealed.
+
+    /// TODO: next_blob_id is deprecated, remove this once we can safely bump
+    /// BlobMeta::CURRENT_VERSION.
     pub next_blob_id: u64,
 }
 
@@ -169,7 +171,9 @@ pub struct TraceMeta {
     pub since: Antichain<u64>,
     /// Frontier this trace has been sealed up to.
     pub seal: Antichain<u64>,
-    /// The next id used to assign a Blob key for this trace.
+
+    /// TODO: next_blob_id is deprecated, remove this once we can safely bump
+    /// BlobMeta::CURRENT_VERSION.
     pub next_blob_id: u64,
 }
 

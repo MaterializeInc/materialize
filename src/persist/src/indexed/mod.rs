@@ -284,38 +284,19 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         self.id_mapping = meta.id_mapping;
         self.graveyard = meta.graveyard;
 
-        let mut restored_unsealeds: BTreeMap<Id, Unsealed> = meta
+        let restored_unsealeds: BTreeMap<Id, Unsealed> = meta
             .unsealeds
             .into_iter()
             .map(|meta| (meta.id, Unsealed::new(meta)))
             .collect();
 
-        // TODO: ideally we would be able to do something smarter here that didn't
-        // require manually remembering the next blob id. Also, since this state
-        // isn't stored in persistent storage, it can be an issue across restarts.
-        // One potentially reasonable fix is to assign blob keys based on stream
-        // id and the batch [lower, upper, since] description, instead of an opaque
-        // incrementing id. That way if we collide on a key on we know that it has
-        // the required data and we can happily reuse it.
-        for (id, restored_unsealed) in restored_unsealeds.iter_mut() {
-            if let Some(unsealed) = self.unsealeds.get(id) {
-                restored_unsealed.next_blob_id = unsealed.next_blob_id;
-            }
-        }
-
         self.unsealeds = restored_unsealeds;
 
-        let mut restored_traces: BTreeMap<Id, Trace> = meta
+        let restored_traces: BTreeMap<Id, Trace> = meta
             .traces
             .into_iter()
             .map(|meta| (meta.id, Trace::new(meta)))
             .collect();
-
-        for (id, restored_trace) in restored_traces.iter_mut() {
-            if let Some(trace) = self.traces.get(id) {
-                restored_trace.next_blob_id = trace.next_blob_id;
-            }
-        }
 
         self.traces = restored_traces;
     }
