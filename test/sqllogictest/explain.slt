@@ -127,10 +127,14 @@ EXPLAIN DECORRELATED PLAN FOR SELECT * FROM (SELECT 1)
 %1 =
 | Constant ()
 
-%2 =
+%2 = Let l1 =
 | Join %0 %1
 | | implementation = Unimplemented
+
+%3 =
+| Get %2 (l1)
 | Map 1
+| Project (#0)
 
 EOF
 
@@ -162,10 +166,14 @@ EXPLAIN DECORRELATED PLAN FOR VIEW foo
 %1 =
 | Constant ()
 
-%2 =
+%2 = Let l1 =
 | Join %0 %1
 | | implementation = Unimplemented
+
+%3 =
+| Get %2 (l1)
 | Map 1
+| Project (#0)
 
 EOF
 
@@ -190,12 +198,22 @@ EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 | | types = ()
 | | keys = (())
 
-%2 =
+%2 = Let l1 =
 | Join %0 %1
 | | implementation = Unimplemented
 | | types = ()
 | | keys = (())
+
+%3 =
+| Get %2 (l1)
+| | types = ()
+| | keys = (())
+| | types = ()
+| | keys = (())
 | Map 1
+| | types = (integer)
+| | keys = (())
+| Project (#0)
 | | types = (integer)
 | | keys = (())
 | | types = (integer)
