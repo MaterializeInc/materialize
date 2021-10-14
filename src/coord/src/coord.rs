@@ -2775,7 +2775,7 @@ impl Coordinator {
     fn timedomain_for(
         &self,
         source_ids: &[GlobalId],
-        source_timeline: &Option<TimelineId>,
+        source_timeline: &TimelineId,
         conn_id: u32,
     ) -> Result<Vec<GlobalId>, CoordError> {
         let mut timedomain_ids = self
@@ -2792,12 +2792,8 @@ impl Coordinator {
             match (&id_timeline, &source_timeline) {
                 // If this id doesn't have a timeline, we can keep it.
                 (None, _) => true,
-                // If there's no source timeline, we have the option to opt into a timeline,
-                // so optimistically choose epoch ms. This is useful when the first query in a
-                // transaction is on a static view.
-                (Some(id_timeline), None) => id_timeline == &TimelineId::EpochMilliseconds,
                 // Otherwise check if timelines are the same.
-                (Some(id_timeline), Some(source_timeline)) => id_timeline == source_timeline,
+                (Some(id_timeline), source_timeline) => &id_timeline == source_timeline,
             }
         });
 
@@ -2823,7 +2819,13 @@ impl Coordinator {
         } = plan;
 
         let source_ids = source.global_uses();
-        let timeline = self.validate_timeline(source_ids.clone())?;
+        // Fetch the timeline, or use the system timeline if none exists (a peek with
+        // no sources or tables). Using the system timeline in that case allows the
+        // first query in a transaction to reference a static view and work as expected
+        // for the remainder of the transaction.
+        let timeline = self
+            .validate_timeline(source_ids.clone())?
+            .unwrap_or(TimelineId::EpochMilliseconds);
         let conn_id = session.conn_id();
         let in_transaction = matches!(
             session.transaction(),
@@ -2849,7 +2851,7 @@ impl Coordinator {
                     let (timestamp, timestamp_ids) = self.determine_timestamp(
                         &timedomain_ids,
                         PeekWhen::Immediately,
-                        timeline.clone(),
+                        Some(timeline.clone()),
                     )?;
                     // Add the used indexes to the recorded ids.
                     timedomain_ids.extend(&timestamp_ids);
@@ -2915,7 +2917,8 @@ impl Coordinator {
             // we don't need to worry about preventing compaction or choosing a valid
             // timestamp for future queries.
             (false, when @ PeekWhen::Immediately) => {
-                self.determine_timestamp(&source_ids, when, timeline)?.0
+                self.determine_timestamp(&source_ids, when, Some(timeline))?
+                    .0
             }
         };
 

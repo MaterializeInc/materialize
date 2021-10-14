@@ -101,3 +101,14 @@ Transactions can only reference objects in the same timedomain
 3
 
 > COMMIT
+
+# Ensure that a transaction with an initial query on a static view opts itself
+# in to the system timeline correctly.
+> CREATE TABLE t (i INT);
+> CREATE VIEW v_static AS VALUES (1)
+> BEGIN
+> SELECT * FROM v_static
+1
+
+> SELECT * FROM t
+> COMMIT
