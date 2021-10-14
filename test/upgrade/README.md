@@ -38,7 +38,7 @@ To run the tests upgrading from the current source to the current source:
 To run just a particular test or tests:
 
 ```
-./mzcompose down -v ; TD_GLOB=persistent-user-tables ./mzcompose run upgrade
+./mzcompose down -v ; TD_GLOB='persistent-user-tables*' ./mzcompose run upgrade
 ```
 
 ## Test naming convention
