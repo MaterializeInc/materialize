@@ -50,6 +50,8 @@ Put breaking changes before other release notes.
 
 {{% version-header v0.9.9 %}}
 
+- Support arrays of maps and arrays of lists as column types. {{% gh 8677 %}}
+
 {{% version-header v0.9.8 %}}
 - Throw errors on floating point arithmetic overflow and underflow.
 
