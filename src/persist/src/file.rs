@@ -362,6 +362,31 @@ impl Blob for FileBlob {
 
         Ok(())
     }
+
+    fn list_keys(&self) -> Result<Vec<String>, Error> {
+        let mut ret = vec![];
+        if let Some(base_dir) = self.base_dir.as_ref() {
+            for entry in fs::read_dir(base_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                // The file name is guaranteed to be non-None iff the path is a
+                // normal file or directory.
+                let file_name = path.file_name();
+                if let Some(name) = file_name {
+                    let name = name.to_str();
+                    if let Some(name) = name {
+                        ret.push(name.to_owned());
+                    }
+                }
+            }
+        } else {
+            return Err(Error::from("FileBlob unexpectedly closed"));
+        };
+
+        ret.sort();
+        Ok(ret)
+    }
+
     fn close(&mut self) -> Result<bool, Error> {
         if let Some(base_dir) = self.base_dir.as_ref() {
             let lockfile_path = Self::lockfile_path(&base_dir);

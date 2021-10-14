@@ -221,6 +221,13 @@ impl MemBlobCore {
         Ok(())
     }
 
+    fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.ensure_open()?;
+        let mut ret: Vec<_> = self.dataz.keys().cloned().collect();
+        ret.sort();
+        Ok(ret)
+    }
+
     fn delete(&mut self, key: &str) -> Result<(), Error> {
         self.ensure_open()?;
         self.dataz.remove(key);
@@ -289,6 +296,10 @@ impl Blob for MemBlob {
 
     fn delete(&mut self, key: &str) -> Result<(), Error> {
         self.core.lock()?.delete(key)
+    }
+
+    fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.core.lock()?.list_keys()
     }
 
     fn close(&mut self) -> Result<bool, Error> {

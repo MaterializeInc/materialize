@@ -12,7 +12,8 @@
 use aws_util::aws::ConnectInfo;
 use rusoto_core::{ByteStream, Region, RusotoError};
 use rusoto_s3::{
-    DeleteObjectRequest, GetObjectError, GetObjectRequest, PutObjectRequest, S3Client, S3,
+    DeleteObjectRequest, GetObjectError, GetObjectRequest, ListObjectsV2Request, PutObjectRequest,
+    S3Client, S3,
 };
 use tokio::io::AsyncReadExt;
 
@@ -186,6 +187,11 @@ impl Blob for S3Blob {
         futures_executor::block_on(self.blob_async.delete(key))
     }
 
+    fn list_keys(&self) -> Result<Vec<String>, Error> {
+        // TODO: Make Blob async. See the productionize comment on [S3Blob].
+        futures_executor::block_on(self.blob_async.list_keys())
+    }
+
     fn close(&mut self) -> Result<bool, Error> {
         // TODO: Make Blob async. See the productionize comment on [S3Blob].
         futures_executor::block_on(self.blob_async.close())
@@ -283,6 +289,41 @@ impl S3BlobAsync {
             .await
             .map_err(|err| Error::from(err.to_string()))?;
         Ok(())
+    }
+
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        let mut ret = vec![];
+        let client = self.ensure_open()?;
+        let mut list_objects_req = ListObjectsV2Request {
+            bucket: self.bucket.clone(),
+            prefix: Some(self.prefix.clone()),
+            max_keys: Some(1_000),
+            ..Default::default()
+        };
+
+        loop {
+            match client.list_objects_v2(list_objects_req.clone()).await {
+                Ok(resp) => {
+                    resp.contents.map(|contents| {
+                        for object in contents.iter() {
+                            if let Some(key) = object.key.as_ref() {
+                                ret.push(key.clone());
+                            }
+                        }
+                    });
+
+                    if resp.next_continuation_token.is_some() {
+                        list_objects_req.continuation_token = resp.next_continuation_token;
+                    } else {
+                        break;
+                    }
+                }
+                Err(err) => return Err(Error::from(err.to_string())),
+            }
+        }
+
+        ret.sort();
+        Ok(ret)
     }
 
     async fn delete(&self, key: &str) -> Result<(), Error> {
