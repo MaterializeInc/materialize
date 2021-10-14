@@ -109,7 +109,7 @@ where
     R: ReduceCore<G, Row, Row, Diff>,
     L: Fn(&Diff) -> bool + 'static,
 {
-    arrangement.reduce_abelian(name, move |_k, s, t| {
+    arrangement.reduce_abelian(name, move |_key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
                 t.push(((*record).clone(), *count));
@@ -137,19 +137,27 @@ where
         all_columns.push(expr::MirScalarExpr::Column(column));
     }
     let input = input.ensure_arrangements(Some(all_columns.clone()));
-    match input
+    let arrangement = input
         .arrangement(&all_columns)
-        .expect("Arrangement ensured to exist")
-    {
-        ArrangementFlavor::Local(oks, errs) => {
+        .expect("Arrangement ensured to exist");
+    match arrangement {
+        ArrangementFlavor::Local(oks, errs, permutation) => {
             let oks = threshold_arrangement(&oks, "Threshold local", |count| *count > 0);
-            CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs))
+            CollectionBundle::from_expressions(
+                all_columns,
+                ArrangementFlavor::Local(oks, errs, permutation),
+                arity,
+            )
         }
-        ArrangementFlavor::Trace(_, oks, errs) => {
+        ArrangementFlavor::Trace(_, oks, errs, permutation) => {
             let oks = threshold_arrangement(&oks, "Threshold trace", |count| *count > 0);
             use differential_dataflow::operators::arrange::ArrangeBySelf;
             let errs = errs.as_collection(|k, _| k.clone()).arrange_by_self();
-            CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs))
+            CollectionBundle::from_expressions(
+                all_columns,
+                ArrangementFlavor::Local(oks, errs, permutation),
+                arity,
+            )
         }
     }
 }
@@ -178,10 +186,10 @@ where
         .arrangement(&all_columns)
         .expect("Arrangement ensured to exist");
     let negatives = match &arrangement {
-        ArrangementFlavor::Local(oks, _) => {
+        ArrangementFlavor::Local(oks, _, _) => {
             threshold_arrangement(oks, "Threshold retractions local", |count| *count < 0)
         }
-        ArrangementFlavor::Trace(_, oks, _) => {
+        ArrangementFlavor::Trace(_, oks, _, _) => {
             threshold_arrangement(oks, "Threshold retractions trace", |count| *count < 0)
         }
     };
@@ -191,7 +199,7 @@ where
         .negate()
         .concat(&oks)
         .consolidate();
-    CollectionBundle::from_collections(oks, errs)
+    CollectionBundle::from_collections(oks, errs, arity)
 }
 
 impl<G, T> Context<G, Row, T>

@@ -4826,7 +4826,7 @@ pub mod fast_path_peek {
         {
             match &dataflow_plan.objects_to_build[0].view {
                 // In the case of a constant, we can return the result now.
-                dataflow::Plan::Constant { rows } => {
+                dataflow::Plan::Constant { rows, arity: _ } => {
                     return Ok(Plan::Constant(rows.clone()));
                 }
                 // In the case of a bare `Get`, we may be able to directly index an arrangement.

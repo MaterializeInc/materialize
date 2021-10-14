@@ -28,6 +28,7 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context};
 use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
+use crate::render::Permutation;
 
 // TODO(mcsherry): Identical to `DeltaPathPlan`; consider unifying.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -57,6 +58,8 @@ pub struct LinearStagePlan {
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
     stream_key: Vec<MirScalarExpr>,
+    /// The arity of the stream
+    stream_arity: usize,
     /// The key expressions to use for the lookup relation.
     lookup_key: Vec<MirScalarExpr>,
     /// The closure to apply to the concatenation of columns
@@ -93,6 +96,8 @@ impl LinearJoinPlan {
         // Track the set of bound input relations, for equivalence resolution.
         let mut bound_inputs = vec![source_relation];
 
+        // The arity of the stream of updates, to be modified for each lookup relation
+        let mut stream_arity = input_mapper.input_arity(source_relation);
         // Iterate through the join order instructions, assembling keys and
         // closures to use.
         for (lookup_relation, lookup_key) in join_order.iter() {
@@ -124,6 +129,7 @@ impl LinearJoinPlan {
                 input_mapper.global_columns(*lookup_relation),
                 &lookup_key_rebased,
             );
+            let next_stream_arity = closure.before.projection.len();
 
             bound_inputs.push(*lookup_relation);
 
@@ -131,9 +137,12 @@ impl LinearJoinPlan {
             stage_plans.push(LinearStagePlan {
                 lookup_relation: *lookup_relation,
                 stream_key,
+                stream_arity,
                 lookup_key: lookup_key.clone(),
                 closure,
             });
+
+            stream_arity = next_stream_arity;
         }
 
         // determine a final closure, and complete the path plan.
@@ -168,9 +177,9 @@ where
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(Arrangement<G, Row>),
+    Local(Arrangement<G, Row>, Permutation),
     /// An imported arrangement.
-    Trace(ArrangementImport<G, Row, T>),
+    Trace(ArrangementImport<G, Row, T>, Permutation),
 }
 
 impl<G, T> Context<G, Row, T>
@@ -184,6 +193,7 @@ where
         inputs: Vec<CollectionBundle<G, Row, T>>,
         linear_plan: LinearJoinPlan,
         scope: &mut G,
+        arity: usize,
     ) -> CollectionBundle<G, Row, T> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
@@ -198,13 +208,13 @@ where
             .and_then(|stage| inputs[linear_plan.source_relation].arrangement(&stage.stream_key));
         // We can use an arrangement if it exists and an initial closure does not.
         let mut joined = match (arrangement, linear_plan.initial_closure) {
-            (Some(ArrangementFlavor::Local(oks, errs)), None) => {
+            (Some(ArrangementFlavor::Local(oks, errs, permutation)), None) => {
                 errors.push(errs.as_collection(|k, _v| k.clone()));
-                JoinedFlavor::Local(oks)
+                JoinedFlavor::Local(oks, permutation)
             }
-            (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
+            (Some(ArrangementFlavor::Trace(_gid, oks, errs, permutation)), None) => {
                 errors.push(errs.as_collection(|k, _v| k.clone()));
-                JoinedFlavor::Trace(oks)
+                JoinedFlavor::Trace(oks, permutation)
             }
             (_, initial_closure) => {
                 // TODO: extract closure from the first stage in the join plan, should it exist.
@@ -246,6 +256,7 @@ where
             let stream = self.differential_join(
                 joined,
                 stage_plan.stream_key,
+                stage_plan.stream_arity,
                 inputs[stage_plan.lookup_relation].clone(),
                 stage_plan.lookup_key,
                 stage_plan.closure,
@@ -283,6 +294,7 @@ where
             CollectionBundle::from_collections(
                 joined,
                 differential_dataflow::collection::concatenate(scope, errors),
+                arity,
             )
         } else {
             panic!("Unexpectedly arranged join output");
@@ -296,6 +308,7 @@ where
         &mut self,
         mut joined: JoinedFlavor<G, T>,
         stream_key: Vec<MirScalarExpr>,
+        stream_arity: usize,
         lookup_relation: CollectionBundle<G, Row, T>,
         lookup_key: Vec<MirScalarExpr>,
         closure: JoinClosure,
@@ -303,14 +316,22 @@ where
     ) -> Collection<G, Row> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
+            let (permutation, value_expr) =
+                Permutation::construct_from_expr(&stream_key, stream_arity);
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
                 move |row| {
                     let temp_storage = RowArena::new();
                     let datums_local = datums.borrow_with(&row);
+                    assert_eq!(datums_local.len(), stream_arity);
                     let key = Row::try_pack(
                         stream_key
+                            .iter()
+                            .map(|e| e.eval(&datums_local, &temp_storage)),
+                    )?;
+                    let value = Row::try_pack(
+                        value_expr
                             .iter()
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
@@ -319,55 +340,56 @@ where
                     // TODO(mcsherry): We could remove any columns used only for `key`.
                     // This cannot be done any earlier, for example in a prior closure,
                     // because we need the columns for key production.
-                    Ok((key, row))
+                    Ok((key, value))
                 }
             });
             errors.push(errs);
             use crate::arrangement::manager::RowSpine;
             let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
-            joined = JoinedFlavor::Local(arranged);
+            joined = JoinedFlavor::Local(arranged, permutation);
         }
 
         // Ensure that the correct arrangement exists.
         let lookup_relation = lookup_relation.ensure_arrangements(Some(lookup_key.clone()));
 
         // Demultiplex the four different cross products of arrangement types we might have.
+        let arrangement = lookup_relation
+            .arrangement(&lookup_key[..])
+            .expect("Arrangement absent despite explicit construction");
         match joined {
             JoinedFlavor::Collection(_) => {
                 unreachable!("JoinedFlavor::Collection variant avoided at top of method");
             }
-            JoinedFlavor::Local(local) => match lookup_relation.arrangement(&lookup_key[..]) {
-                Some(ArrangementFlavor::Local(oks, errs1)) => {
-                    let (oks, errs2) = self.differential_join_inner(local, oks, closure);
+            JoinedFlavor::Local(local, prev_perm) => match arrangement {
+                ArrangementFlavor::Local(oks, errs1, next_perm) => {
+                    let (oks, errs2) =
+                        self.differential_join_inner(local, oks, closure, prev_perm, next_perm);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
                 }
-                Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
-                    let (oks, errs2) = self.differential_join_inner(local, oks, closure);
+                ArrangementFlavor::Trace(_gid, oks, errs1, next_perm) => {
+                    let (oks, errs2) =
+                        self.differential_join_inner(local, oks, closure, prev_perm, next_perm);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
-                }
-                None => {
-                    unreachable!("Arrangement absent despite explicit construction");
                 }
             },
-            JoinedFlavor::Trace(trace) => match lookup_relation.arrangement(&lookup_key[..]) {
-                Some(ArrangementFlavor::Local(oks, errs1)) => {
-                    let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
+            JoinedFlavor::Trace(trace, prev_perm) => match arrangement {
+                ArrangementFlavor::Local(oks, errs1, next_perm) => {
+                    let (oks, errs2) =
+                        self.differential_join_inner(trace, oks, closure, prev_perm, next_perm);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
                 }
-                Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
-                    let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
+                ArrangementFlavor::Trace(_gid, oks, errs1, next_perm) => {
+                    let (oks, errs2) =
+                        self.differential_join_inner(trace, oks, closure, prev_perm, next_perm);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
-                }
-                None => {
-                    unreachable!("Arrangement absent despite explicit construction");
                 }
             },
         }
@@ -381,6 +403,8 @@ where
         prev_keyed: J,
         next_input: Arranged<G, Tr2>,
         closure: JoinClosure,
+        prev_permutation: Permutation,
+        next_permutation: Permutation,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
         J: JoinCore<G, Row, Row, repr::Diff>,
@@ -396,13 +420,13 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
         let mut row_builder = Row::default();
-        let (oks, err) = prev_keyed
-            .join_core(&next_input, move |_keys, old, new| {
-                let temp_storage = RowArena::new();
-                let mut datums_local = datums.borrow();
-                datums_local.extend(old.iter());
-                datums_local.extend(new.iter());
+        let permutation = prev_permutation.join(&next_permutation);
 
+        let (oks, err) = prev_keyed
+            .join_core(&next_input, move |key, old, new| {
+                let temp_storage = RowArena::new();
+                let mut datums_local = datums.borrow_with_many(&[key, old, new]);
+                permutation.permute_in_place(&mut datums_local);
                 closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
                     .map_err(DataflowError::from)

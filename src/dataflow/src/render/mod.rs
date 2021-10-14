@@ -116,7 +116,7 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id};
+use expr::{GlobalId, Id, MirScalarExpr};
 use itertools::Itertools;
 use ore::collections::CollectionExt as _;
 use ore::now::NowFn;
@@ -234,7 +234,15 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared indexes into the rendering context.
             for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(render_state, &mut tokens, scope, region, *idx_id, &idx.0);
+                context.import_index(
+                    render_state,
+                    &mut tokens,
+                    scope,
+                    region,
+                    *idx_id,
+                    &idx.0,
+                    idx.1.arity(),
+                );
             }
 
             // We first determine indexes and sinks to export, then build the declared object, and
@@ -294,6 +302,7 @@ where
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        arity: usize,
     ) {
         if let Some(traces) = render_state.traces.get_mut(&idx_id) {
             let token = traces.to_drop().clone();
@@ -309,11 +318,13 @@ where
             );
             let ok_arranged = ok_arranged.enter(region);
             let err_arranged = err_arranged.enter(region);
+            let permutation = traces.permutation().clone();
             self.update_id(
                 Id::Global(idx.on_id),
                 CollectionBundle::from_expressions(
                     idx.keys.clone(),
-                    ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
+                    ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged, permutation),
+                    arity,
                 ),
             );
             tokens
@@ -370,13 +381,13 @@ where
             )
         });
         match bundle.arrangement(&idx.keys) {
-            Some(ArrangementFlavor::Local(oks, errs)) => {
+            Some(ArrangementFlavor::Local(oks, errs, permutation)) => {
                 render_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(tokens),
+                    TraceBundle::new(oks.trace, errs.trace, permutation).with_drop(tokens),
                 );
             }
-            Some(ArrangementFlavor::Trace(gid, _, _)) => {
+            Some(ArrangementFlavor::Trace(gid, _, _, _)) => {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = render_state.traces.get(&gid).unwrap().clone();
@@ -414,7 +425,7 @@ where
     ) -> CollectionBundle<G, Row, G::Timestamp> {
         use plan::Plan;
         match plan {
-            Plan::Constant { rows } => {
+            Plan::Constant { rows, arity } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (mut rows, errs) = match rows {
                     Ok(rows) => (rows, Vec::new()),
@@ -437,7 +448,7 @@ where
                     .to_stream(scope)
                     .as_collection();
 
-                CollectionBundle::from_collections(ok_collection, err_collection)
+                CollectionBundle::from_collections(ok_collection, err_collection, arity)
             }
             Plan::Get {
                 id,
@@ -457,8 +468,9 @@ where
                     collection.arranged.retain(|key, _value| keys.contains(key));
                     collection
                 } else {
+                    let arity = mfp.projection.len();
                     let (oks, errs) = collection.as_collection_core(mfp, key_val);
-                    CollectionBundle::from_collections(oks, errs)
+                    CollectionBundle::from_collections(oks, errs, arity)
                 }
             }
             Plan::Let { id, value, body } => {
@@ -481,8 +493,9 @@ where
                 if mfp.is_identity() {
                     input
                 } else {
+                    let arity = mfp.projection.len();
                     let (oks, errs) = input.as_collection_core(mfp, key_val);
-                    CollectionBundle::from_collections(oks, errs)
+                    CollectionBundle::from_collections(oks, errs, arity)
                 }
             }
             Plan::FlatMap {
@@ -494,17 +507,21 @@ where
                 let input = self.render_plan(*input, scope, worker_index);
                 self.render_flat_map(input, func, exprs, mfp)
             }
-            Plan::Join { inputs, plan } => {
+            Plan::Join {
+                inputs,
+                plan,
+                arity,
+            } => {
                 let inputs = inputs
                     .into_iter()
                     .map(|input| self.render_plan(input, scope, worker_index))
                     .collect();
                 match plan {
                     crate::render::join::JoinPlan::Linear(linear_plan) => {
-                        self.render_join(inputs, linear_plan, scope)
+                        self.render_join(inputs, linear_plan, scope, arity)
                     }
                     crate::render::join::JoinPlan::Delta(delta_plan) => {
-                        self.render_delta_join(inputs, delta_plan, scope)
+                        self.render_delta_join(inputs, delta_plan, scope, arity)
                     }
                 }
             }
@@ -512,18 +529,23 @@ where
                 input,
                 key_val_plan,
                 plan,
+                arity,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_reduce(input, key_val_plan, plan)
+                self.render_reduce(input, key_val_plan, plan, arity)
             }
-            Plan::TopK { input, top_k_plan } => {
+            Plan::TopK {
+                input,
+                top_k_plan,
+                arity,
+            } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_topk(input, top_k_plan)
+                self.render_topk(input, top_k_plan, arity)
             }
-            Plan::Negate { input } => {
+            Plan::Negate { input, arity } => {
                 let input = self.render_plan(*input, scope, worker_index);
                 let (oks, errs) = input.as_collection();
-                CollectionBundle::from_collections(oks.negate(), errs)
+                CollectionBundle::from_collections(oks.negate(), errs, arity)
             }
             Plan::Threshold {
                 input,
@@ -532,7 +554,7 @@ where
                 let input = self.render_plan(*input, scope, worker_index);
                 self.render_threshold(input, threshold_plan)
             }
-            Plan::Union { inputs } => {
+            Plan::Union { inputs, arity } => {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
@@ -542,7 +564,7 @@ where
                 }
                 let oks = differential_dataflow::collection::concatenate(scope, oks);
                 let errs = differential_dataflow::collection::concatenate(scope, errs);
-                CollectionBundle::from_collections(oks, errs)
+                CollectionBundle::from_collections(oks, errs, arity)
             }
             Plan::ArrangeBy { input, keys } => {
                 let input = self.render_plan(*input, scope, worker_index);
@@ -588,6 +610,15 @@ pub mod datum_vec {
         pub fn borrow_with<'a>(&'a mut self, row: &'a Row) -> DatumVecBorrow<'a> {
             let mut borrow = self.borrow();
             borrow.extend(row.iter());
+            borrow
+        }
+
+        /// Borrow an instance with a specific lifetime, and pre-populate with `Row`s.
+        pub fn borrow_with_many<'a>(&'a mut self, rows: &[&'a Row]) -> DatumVecBorrow<'a> {
+            let mut borrow = self.borrow();
+            for row in rows {
+                borrow.extend(row.iter());
+            }
             borrow
         }
     }
@@ -649,6 +680,8 @@ pub mod plan {
         Constant {
             /// Explicit update triples for the collection.
             rows: Result<Vec<(Row, repr::Timestamp, Diff)>, EvalError>,
+            /// Arity of the rows
+            arity: usize,
         },
         /// A reference to a bound collection.
         ///
@@ -749,6 +782,8 @@ pub mod plan {
             /// any map, filter, project work that we might follow the join with, but
             /// potentially pushed down into the implementation of the join.
             plan: JoinPlan,
+            /// Arity of the join's production
+            arity: usize,
         },
         /// Aggregation by key.
         Reduce {
@@ -762,6 +797,8 @@ pub mod plan {
             /// on the properties of the reduction, and the input itself. Please check
             /// out the documentation for this type for more detail.
             plan: ReducePlan,
+            /// Arity of the output
+            arity: usize,
         },
         /// Key-based "Top K" operator, retaining the first K records in each group.
         TopK {
@@ -773,11 +810,15 @@ pub mod plan {
             /// on the properties of the reduction, and the input itself. Please check
             /// out the documentation for this type for more detail.
             top_k_plan: TopKPlan,
+            /// Arity of the output
+            arity: usize,
         },
         /// Inverts the sign of each update.
         Negate {
             /// The input collection.
             input: Box<Plan>,
+            /// Arity of the output
+            arity: usize,
         },
         /// Filters records that accumulate negatively.
         ///
@@ -802,6 +843,8 @@ pub mod plan {
         Union {
             /// The input collections.
             inputs: Vec<Plan>,
+            /// The arity
+            arity: usize,
         },
         /// The `input` plan, but with additional arrangements.
         ///
@@ -859,7 +902,7 @@ pub mod plan {
                     panic!("This operator should have been extracted");
                 }
                 // These operators may not have been extracted, and need to result in a `Plan`.
-                MirRelationExpr::Constant { rows, typ: _ } => {
+                MirRelationExpr::Constant { rows, typ } => {
                     use timely::progress::Timestamp;
                     let plan = Plan::Constant {
                         rows: rows.clone().map(|rows| {
@@ -867,6 +910,7 @@ pub mod plan {
                                 .map(|(row, diff)| (row, repr::Timestamp::minimum(), diff))
                                 .collect()
                         }),
+                        arity: typ.arity(),
                     };
                     // The plan, not arranged in any way.
                     (plan, Vec::new())
@@ -1007,6 +1051,7 @@ pub mod plan {
                         Plan::Join {
                             inputs: plans,
                             plan,
+                            arity: mfp.projection.len(),
                         },
                         Vec::new(),
                     )
@@ -1027,12 +1072,14 @@ pub mod plan {
                         *expected_group_size,
                     );
                     let output_keys = reduce_plan.keys(group_key.len());
+                    let arity = group_key.len() + aggregates.len();
                     // Return the plan, and the keys it produces.
                     (
                         Plan::Reduce {
                             input: Box::new(input),
                             key_val_plan,
                             plan: reduce_plan,
+                            arity,
                         },
                         output_keys,
                     )
@@ -1045,14 +1092,14 @@ pub mod plan {
                     offset,
                     monotonic,
                 } => {
-                    let arity = input.arity();
+                    let input_arity = input.arity();
                     let (input, _keys) = Self::from_mir(input, arrangements)?;
                     let top_k_plan = TopKPlan::create_from(
                         group_key.clone(),
                         order_key.clone(),
                         *offset,
                         *limit,
-                        arity,
+                        input_arity,
                         *monotonic,
                     );
                     // Return the plan, and no arrangements.
@@ -1060,16 +1107,19 @@ pub mod plan {
                         Plan::TopK {
                             input: Box::new(input),
                             top_k_plan,
+                            arity: input_arity,
                         },
                         Vec::new(),
                     )
                 }
                 MirRelationExpr::Negate { input } => {
+                    let arity = input.arity();
                     let (input, _keys) = Self::from_mir(input, arrangements)?;
                     // Return the plan, and no arrangements.
                     (
                         Plan::Negate {
                             input: Box::new(input),
+                            arity,
                         },
                         Vec::new(),
                     )
@@ -1089,6 +1139,7 @@ pub mod plan {
                     )
                 }
                 MirRelationExpr::Union { base, inputs } => {
+                    let arity = base.arity();
                     let mut plans = Vec::with_capacity(1 + inputs.len());
                     let (plan, _keys) = Self::from_mir(base, arrangements)?;
                     plans.push(plan);
@@ -1097,7 +1148,11 @@ pub mod plan {
                         plans.push(plan)
                     }
                     // Return the plan and no arrangements.
-                    (Plan::Union { inputs: plans }, Vec::new())
+                    let plan = Plan::Union {
+                        inputs: plans,
+                        arity,
+                    };
+                    (plan, Vec::new())
                 }
                 MirRelationExpr::ArrangeBy { input, keys } => {
                     let (input, mut input_keys) = Self::from_mir(input, arrangements)?;
@@ -1178,7 +1233,7 @@ pub mod plan {
         pub fn clone_for_worker(&self, index: usize, peers: usize) -> Self {
             match self {
                 // For constants, balance the rows across the workers.
-                Plan::Constant { rows } => Plan::Constant {
+                Plan::Constant { rows, arity } => Plan::Constant {
                     rows: match rows {
                         Ok(rows) => Ok(rows
                             .iter()
@@ -1194,6 +1249,7 @@ pub mod plan {
                             }
                         }
                     },
+                    arity: *arity,
                 },
 
                 // For all other variants, just replace inputs with appropriately sharded versions.
@@ -1234,28 +1290,41 @@ pub mod plan {
                     exprs: exprs.clone(),
                     mfp: mfp.clone(),
                 },
-                Plan::Join { inputs, plan } => Plan::Join {
+                Plan::Join {
+                    inputs,
+                    plan,
+                    arity,
+                } => Plan::Join {
                     inputs: inputs
                         .iter()
                         .map(|input| input.clone_for_worker(index, peers))
                         .collect(),
                     plan: plan.clone(),
+                    arity: *arity,
                 },
                 Plan::Reduce {
                     input,
                     key_val_plan,
                     plan,
+                    arity,
                 } => Plan::Reduce {
                     input: Box::new(input.clone_for_worker(index, peers)),
                     key_val_plan: key_val_plan.clone(),
                     plan: plan.clone(),
+                    arity: *arity,
                 },
-                Plan::TopK { input, top_k_plan } => Plan::TopK {
+                Plan::TopK {
+                    input,
+                    top_k_plan,
+                    arity,
+                } => Plan::TopK {
                     input: Box::new(input.clone_for_worker(index, peers)),
                     top_k_plan: top_k_plan.clone(),
+                    arity: *arity,
                 },
-                Plan::Negate { input } => Plan::Negate {
+                Plan::Negate { input, arity } => Plan::Negate {
                     input: Box::new(input.clone_for_worker(index, peers)),
+                    arity: *arity,
                 },
                 Plan::Threshold {
                     input,
@@ -1264,11 +1333,12 @@ pub mod plan {
                     input: Box::new(input.clone_for_worker(index, peers)),
                     threshold_plan: threshold_plan.clone(),
                 },
-                Plan::Union { inputs } => Plan::Union {
+                Plan::Union { inputs, arity } => Plan::Union {
                     inputs: inputs
                         .iter()
                         .map(|input| input.clone_for_worker(index, peers))
                         .collect(),
+                    arity: *arity,
                 },
                 Plan::ArrangeBy { input, keys } => Plan::ArrangeBy {
                     input: Box::new(input.clone_for_worker(index, peers)),
@@ -1343,5 +1413,134 @@ pub mod plan {
             .filter(predicates)
             .map(dummies)
             .project(demand_projection)
+    }
+}
+
+/// A description of how `[key, value]`-pairs need to be permuted to produce the original row.
+#[derive(Clone, Debug)]
+pub struct Permutation {
+    key_arity: usize,
+    permutation: Vec<usize>,
+}
+
+impl Permutation {
+    /// Construct a [Permutation] from a precomputed `columns_in_key` map.
+    ///
+    /// This serves as an internal helper to serve different `construct_*` functions.
+    fn construct_internal<'a>(
+        key_arity: usize,
+        arity: usize,
+        columns_in_key: &'a HashMap<usize, usize>,
+    ) -> (Self, impl Iterator<Item = usize> + 'a) {
+        // Construct a mapping to undo the permutation
+        let mut skipped = 0;
+        let permutation = (0..arity)
+            .map(|c| {
+                if let Some(c) = columns_in_key.get(&c) {
+                    // Column is in key
+                    skipped += 1;
+                    *c
+                } else {
+                    // Column remains in value
+                    c + key_arity - skipped
+                }
+            })
+            .collect();
+
+        let value_expr = (0..arity).filter(move |c| !columns_in_key.contains_key(&c));
+        let permutation = Self {
+            key_arity,
+            permutation,
+        };
+        (permutation, value_expr)
+    }
+
+    /// Construct a permutation and thinning expression from a key description and the relation's
+    /// arity.
+    ///
+    /// This constructs a permutation that removes redundant columns from the value if they are
+    /// part of the key.
+    #[allow(dead_code)]
+    pub(crate) fn construct_from_columns(key_cols: &[usize], arity: usize) -> (Self, Vec<usize>) {
+        // Construct a mapping of columns `c` found in key at position `i`
+        // Each value column and value is unique
+        let columns_in_key = key_cols
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (*c, i))
+            .collect::<HashMap<_, _>>();
+        let (permutation, expr) = Self::construct_internal(key_cols.len(), arity, &columns_in_key);
+        (permutation, expr.collect())
+    }
+
+    /// Construct a permutation and thinning expression from a key description and the relation's
+    /// arity.
+    ///
+    /// This constructs a permutation that removes redundant columns from the value if they are
+    /// part of the key.
+    pub(crate) fn construct_from_expr(
+        key_expr: &[MirScalarExpr],
+        arity: usize,
+    ) -> (Self, Vec<MirScalarExpr>) {
+        // Construct a mapping of columns `c` found in key at position `i`
+        // Each value column and value is unique
+        let columns_in_key = key_expr
+            .iter()
+            .enumerate()
+            .flat_map(|(i, expr)| MirScalarExpr::as_column(expr).map(|c| (c, i)))
+            .collect::<HashMap<_, _>>();
+        let (permutation, expr) = Self::construct_internal(key_expr.len(), arity, &columns_in_key);
+        let expr = expr.map(MirScalarExpr::column).collect();
+        (permutation, expr)
+    }
+
+    /// Construct an identity [Permutation] that expects all data in the value.
+    pub fn identity(key_arity: usize, arity: usize) -> Self {
+        let permutation: Vec<_> = (key_arity..key_arity + arity).collect();
+        Self {
+            permutation,
+            key_arity,
+        }
+    }
+
+    /// Compute the join of two permutations.
+    ///
+    /// This assumes two relations `[key, value_1]` and `[key, value_2]` are joined into
+    /// `[key, value_1, value_2]` and constructs a permutation accordingly.
+    pub fn join(&self, other: &Self) -> Self {
+        assert_eq!(self.key_arity, other.key_arity);
+        let mut permutation = Vec::with_capacity(self.permutation.len() + other.permutation.len());
+        permutation.extend_from_slice(&self.permutation);
+        permutation.extend_from_slice(&other.permutation);
+        // Determine the arity of the value part of the left side of the join
+        let offset = self
+            .permutation
+            .iter()
+            .filter(|p| **p >= self.key_arity)
+            .count();
+        for c in &mut permutation[self.permutation.len()..] {
+            if *c >= self.key_arity {
+                *c += offset;
+            }
+        }
+        Self {
+            permutation,
+            key_arity: self.key_arity,
+        }
+    }
+
+    /// Permute a `[key, value]` row to reconstruct a non-permuted variant.
+    ///
+    /// The function truncates the data to the length of the permutation, which should match
+    /// the expectation of any subsequent map/filter/project or opertator.
+    pub fn permute_in_place<T>(&self, data: &mut Vec<T>) {
+        for (i, mut p) in self.permutation.iter().copied().enumerate() {
+            while p < i {
+                p = self.permutation[p];
+            }
+            data.swap(i, p);
+        }
+        // Truncate to not leave unused key values in the data
+        data.truncate(self.permutation.len());
     }
 }
