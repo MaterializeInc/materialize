@@ -43,6 +43,7 @@ use rusoto_sqs::{
     ChangeMessageVisibilityBatchRequest, ChangeMessageVisibilityBatchRequestEntry,
     DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs,
 };
+use sha2::{Digest, Sha256};
 use timely::scheduling::SyncActivator;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -72,6 +73,10 @@ mod notifications;
 
 type Out = MessagePayload;
 struct InternalMessage {
+    /// This is the sha256(bucket_name + "/" + object_path) truncated to 128bit. It is used so that
+    /// downstream consumers can distinguish the multiple object streams and potentially decode in
+    /// parallel.
+    object_id: u128,
     record: Out,
 }
 /// Size of data chunks we send to dataflow
@@ -153,6 +158,7 @@ async fn download_objects_task(
     }
     let mut seen_buckets: HashMap<String, BucketInfo> = HashMap::new();
 
+    let mut hasher = Sha256::new();
     loop {
         let msg = tokio::select! {
             msg = rx.recv() => {
@@ -197,6 +203,12 @@ async fn download_objects_task(
                 let (tx, activator, client, msg_ref, sid) =
                     (&tx, &activator, &client, &msg, &source_id);
 
+                hasher.update(&msg_ref.bucket);
+                hasher.update("/");
+                hasher.update(&msg_ref.key);
+                let hash: [u8; 16] = hasher.finalize_reset().as_slice().try_into().unwrap();
+                let object_id = u128::from_le_bytes(hash);
+
                 let (status, update) = download_object(
                     tx,
                     &activator,
@@ -205,6 +217,7 @@ async fn download_objects_task(
                     &msg_ref.key,
                     compression,
                     sid,
+                    object_id,
                 )
                 .await;
 
@@ -700,6 +713,7 @@ async fn download_object(
     key: &str,
     compression: Compression,
     source_id: &str,
+    object_id: u128,
 ) -> (DownloadStatus, Option<DownloadMetricUpdate>) {
     let retry_reader = RetryReader::new(|state, offset| async move {
         let range = if offset == 0 {
@@ -770,10 +784,10 @@ async fn download_object(
     };
 
     let (mut download_status, metric_update) = match compression {
-        Compression::None => read_object_chunked(source_id, reader, tx).await,
+        Compression::None => read_object_chunked(source_id, object_id, reader, tx).await,
         Compression::Gzip => {
             let decoder = GzipDecoder::new(reader);
-            read_object_chunked(source_id, decoder, tx).await
+            read_object_chunked(source_id, object_id, decoder, tx).await
         }
     };
 
@@ -787,6 +801,7 @@ async fn download_object(
 
     if matches!(download_status, DownloadStatus::Ok) {
         let sent = tx.send(Ok(InternalMessage {
+            object_id,
             record: MessagePayload::EOF,
         }));
         if sent.await.is_err() {
@@ -799,6 +814,7 @@ async fn download_object(
 
 async fn read_object_chunked<R>(
     source_id: &str,
+    object_id: u128,
     reader: R,
     tx: &Sender<Result<InternalMessage, S3Error>>,
 ) -> (DownloadStatus, Option<DownloadMetricUpdate>)
@@ -816,6 +832,7 @@ where
                 chunks += 1;
                 if tx
                     .send(Ok(InternalMessage {
+                        object_id,
                         record: MessagePayload::Data(chunk.to_vec()),
                     }))
                     .await
@@ -944,10 +961,10 @@ impl SourceReader for S3SourceReader {
 
     fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
         match self.receiver_stream.recv().now_or_never() {
-            Some(Some(Ok(InternalMessage { record }))) => {
+            Some(Some(Ok(InternalMessage { object_id, record }))) => {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
-                    partition: PartitionId::None,
+                    partition: PartitionId::S3(object_id),
                     offset: self.offset.into(),
                     upstream_time_millis: None,
                     key: None,

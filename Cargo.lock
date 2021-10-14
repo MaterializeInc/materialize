@@ -961,6 +961,7 @@ dependencies = [
  "rusoto_sqs",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "timely",
  "tokio",

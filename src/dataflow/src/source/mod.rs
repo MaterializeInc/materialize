@@ -563,6 +563,11 @@ impl ConsistencyInfo {
                 let hash = (self.source_id.source_id.hashed() >> 32) + *p as u64;
                 (hash % self.worker_count as u64) == self.worker_id as u64
             }
+            PartitionId::S3(p) => {
+                // Same as above
+                let hash = (self.source_id.source_id.hashed() >> 32) + *p as u64;
+                (hash % self.worker_count as u64) == self.worker_id as u64
+            }
         }
     }
 
