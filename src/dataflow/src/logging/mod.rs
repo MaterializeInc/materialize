@@ -91,7 +91,7 @@ where
                 ));
             }
 
-            self.buffer.extend(data.drain(..));
+            self.buffer.append(data);
         }
         if self.time_ms < new_time_ms {
             // Flush buffered events that may need to advance.

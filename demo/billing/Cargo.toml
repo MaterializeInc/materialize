@@ -2,7 +2,7 @@
 name = "billing-demo"
 description = "Microservice demo using Materialize to power a real-time billing usecase"
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

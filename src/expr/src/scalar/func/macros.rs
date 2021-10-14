@@ -78,7 +78,6 @@ macro_rules! sqlfunc {
             }
 
             mod [<__ $fn_name _impl>] {
-                use std::convert::TryInto;
                 use std::fmt;
 
                 use repr::{ColumnType, Datum, FromTy, RowArena, ScalarType, WithArena};

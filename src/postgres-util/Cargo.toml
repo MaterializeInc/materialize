@@ -2,7 +2,7 @@
 name = "postgres-util"
 description = "Internal postgres utility library for Materialize."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

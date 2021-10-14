@@ -1135,7 +1135,6 @@ pub fn memoize_expr(
 pub mod plan {
 
     use serde::{Deserialize, Serialize};
-    use std::convert::TryFrom;
 
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc};
     use repr::adt::numeric::Numeric;

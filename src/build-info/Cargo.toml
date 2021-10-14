@@ -2,7 +2,7 @@
 name = "build-info"
 description = "Metadata about a Materialize build."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]

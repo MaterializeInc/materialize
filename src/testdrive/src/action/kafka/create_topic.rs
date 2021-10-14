@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::convert::TryFrom;
 use std::time::Duration;
 
 use async_trait::async_trait;

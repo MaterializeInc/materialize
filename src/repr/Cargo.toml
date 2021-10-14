@@ -2,7 +2,7 @@
 name = "repr"
 description = "The core data types for Materialize."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [[bench]]

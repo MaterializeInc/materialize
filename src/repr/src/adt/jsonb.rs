@@ -75,7 +75,6 @@
 //! ```
 
 use std::borrow::Cow;
-use std::convert::TryFrom;
 use std::fmt;
 use std::io;
 use std::str::{self, FromStr};

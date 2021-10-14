@@ -9,7 +9,6 @@
 
 //! Integration tests for pgwire functionality.
 
-use std::convert::TryInto;
 use std::error::Error;
 use std::io::{Read, Write};
 use std::net::TcpStream;

@@ -11,7 +11,6 @@
 //!
 //! <https://www.postgresql.org/docs/current/functions-formatting.html>
 
-use std::convert::TryFrom;
 use std::fmt;
 
 use aho_corasick::AhoCorasickBuilder;

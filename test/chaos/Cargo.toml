@@ -2,7 +2,7 @@
 name = "chaos"
 description = "Chaos test integrations with Materialize."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

@@ -13,7 +13,6 @@
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 
 use anyhow::bail;
 

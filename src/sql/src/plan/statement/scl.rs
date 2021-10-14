@@ -12,8 +12,6 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use std::convert::TryFrom;
-
 use anyhow::bail;
 use uncased::UncasedStr;
 

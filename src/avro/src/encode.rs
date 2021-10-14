@@ -21,7 +21,6 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
-use std::convert::TryInto;
 use std::mem::transmute;
 
 use crate::schema::{Schema, SchemaNode, SchemaPiece};

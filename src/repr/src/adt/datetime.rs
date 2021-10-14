@@ -12,7 +12,6 @@
 #![allow(missing_docs)]
 
 use std::collections::VecDeque;
-use std::convert::TryInto;
 use std::fmt;
 use std::str::FromStr;
 

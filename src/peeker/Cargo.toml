@@ -2,7 +2,7 @@
 name = "peeker"
 description = "Run peek against materialized, reporting metrics"
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

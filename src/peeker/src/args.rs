@@ -10,7 +10,6 @@
 //! CLI argument and config file parsing.
 
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::env;
 use std::fs;
 use std::time::Duration;

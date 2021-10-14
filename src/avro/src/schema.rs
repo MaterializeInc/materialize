@@ -27,7 +27,6 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::fmt;
 use std::rc::Rc;
 use std::str::FromStr;

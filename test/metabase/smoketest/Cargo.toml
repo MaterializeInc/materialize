@@ -2,7 +2,7 @@
 name = "metabase-smoketest"
 description = "A simple smoke test for Metabase and Materialize."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

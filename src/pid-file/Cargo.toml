@@ -2,7 +2,7 @@
 name = "pid-file"
 description = "PID file management."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

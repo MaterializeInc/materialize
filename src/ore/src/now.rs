@@ -9,7 +9,6 @@
 
 //! Now utilities.
 
-use std::convert::TryInto;
 use std::time::SystemTime;
 
 #[cfg(feature = "chrono")]

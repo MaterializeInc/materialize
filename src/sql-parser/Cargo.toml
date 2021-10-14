@@ -3,7 +3,7 @@ name = "sql-parser"
 description = "The lexer and parser for Materialize's SQL dialect."
 version = "0.0.0"
 exclude = ["tests/testdata"]
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

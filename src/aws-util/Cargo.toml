@@ -2,7 +2,7 @@
 name = "aws-util"
 description = "Internal AWS utility library for Materialize."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

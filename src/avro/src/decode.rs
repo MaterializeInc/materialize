@@ -716,7 +716,6 @@ pub mod public_decoders {
             impl AvroDecode for $name {
                 type Out = $out;
                 fn scalar(self, scalar: Scalar) -> Result<$out, AvroError> {
-                    use std::convert::TryInto;
                     let out = match scalar {
                         $(
                             Scalar::$scalar_branch(inner) => {inner.try_into()?}

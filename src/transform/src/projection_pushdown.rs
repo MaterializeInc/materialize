@@ -31,7 +31,6 @@
 //! optimizers.
 
 use std::collections::{BTreeSet, HashMap};
-use std::iter::FromIterator;
 
 use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 

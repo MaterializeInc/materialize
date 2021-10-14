@@ -2,7 +2,7 @@
 name = "protoc"
 description = "A pure Rust protobuf compiler."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [[bin]]

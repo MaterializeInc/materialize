@@ -2,7 +2,7 @@
 name = "expr_test_util"
 description = "Utilities for creating objects in the expr crate for testing"
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

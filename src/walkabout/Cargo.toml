@@ -2,7 +2,7 @@
 name = "walkabout"
 description = "AST visitor generation."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

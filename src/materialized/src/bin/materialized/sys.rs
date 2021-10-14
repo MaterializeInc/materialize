@@ -10,7 +10,6 @@
 //! System support functions.
 
 use std::alloc::{self, Layout};
-use std::convert::TryInto;
 use std::io::{self, Write};
 use std::process;
 use std::ptr;
@@ -50,7 +49,6 @@ pub fn adjust_rlimits() {
     let hard = {
         use ore::result::ResultExt;
         use std::cmp;
-        use std::convert::TryFrom;
         use sysctl::Sysctl;
 
         // On macOS, getrlimit by default reports that the hard limit is

@@ -2,7 +2,7 @@
 name = "perf-kinesis"
 description = "Tool to test Materialize's performance with AWS Kinesis."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]
