@@ -98,6 +98,9 @@ Put breaking changes before other release notes, and mark them with
 
 {{% version-header v0.9.9 %}}
 
+- **Breaking change.** Fix a bug that inadvertently let users create `char
+  list` columns and custom types. This type is not meant to be supported.
+
 - Optimize some `(table).field1.field2` expressions to only generate the
   columns from `table` that are accessed subsequently. This avoids performance
   issues when extracting a single field from a table expression with several
@@ -105,6 +108,9 @@ Put breaking changes before other release notes, and mark them with
   {{% gh 8596 %}}
 
 - Let users express `JOIN`-like `DELETE`s with `DELETE...USING`.
+
+- Fix a bug that inadvertently let users create an [`array`] with elements of
+  type [`list`] or [`map`], which crashes Materialize. {{% gh 8672 %}}
 
 {{% version-header v0.9.8 %}}
 
@@ -1395,6 +1401,7 @@ Put breaking changes before other release notes, and mark them with
 * [What is Materialize?](/overview/what-is-materialize/)
 * [Architecture overview](/overview/architecture/)
 
+[`array`]: /sql/types/array/
 [`bytea`]: /sql/types/bytea
 [`ALTER INDEX`]: /sql/alter-index
 [`CREATE INDEX`]: /sql/create-index
@@ -1404,9 +1411,10 @@ Put breaking changes before other release notes, and mark them with
 [`date`]: /sql/types/date
 [`double precision`]: /sql/types/float8
 [`interval`]: /sql/types/interval
+[`list`]: /sql/types/list/
+[`map`]: /sql/types/map/
 [`real`]: /sql/types/float4
 [`pgcrypto`]: https://www.postgresql.org/docs/current/pgcrypto.html
-[`real`]: /sql/types/real
 [`SHOW CREATE SOURCE`]: /sql/show-create-source
 [`SHOW CREATE VIEW`]: /sql/show-create-view
 [`text`]: /sql/types/text
