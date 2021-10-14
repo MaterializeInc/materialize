@@ -624,87 +624,24 @@ impl HirScalarExpr {
             // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
             Exists(expr) => {
                 let apply_requires_distinct_outer = true;
-                *inner = branch(
+                *inner = apply_existential_subquery(
                     id_gen,
                     inner.take_dangerous(),
                     col_map,
                     *expr,
                     apply_requires_distinct_outer,
-                    |id_gen, expr, get_inner, col_map| {
-                        let exists = expr
-                            // compute for every row in get_inner
-                            .applied_to(id_gen, get_inner.clone(), col_map)
-                            // throw away actual values and just remember whether or not there were __any__ rows
-                            .distinct_by((0..get_inner.arity()).collect())
-                            // Append true to anything that returned any rows. This
-                            // join is logically equivalent to
-                            // `.map(vec![Datum::True])`, but using a join allows
-                            // for potential predicate pushdown and elision in the
-                            // optimizer.
-                            .product(expr::MirRelationExpr::constant(
-                                vec![vec![Datum::True]],
-                                RelationType::new(vec![ScalarType::Bool.nullable(false)]),
-                            ));
-                        // append False to anything that didn't return any rows
-                        let default = vec![(Datum::False, ScalarType::Bool.nullable(false))];
-                        get_inner.lookup(id_gen, exists, default)
-                    },
                 );
                 SS::Column(inner.arity() - 1)
             }
 
             Select(expr) => {
                 let apply_requires_distinct_outer = true;
-                *inner = branch(
+                *inner = apply_scalar_subquery(
                     id_gen,
                     inner.take_dangerous(),
                     col_map,
                     *expr,
                     apply_requires_distinct_outer,
-                    |id_gen, expr, get_inner, col_map| {
-                        let select = expr
-                            // compute for every row in get_inner
-                            .applied_to(id_gen, get_inner.clone(), col_map);
-                        let col_type = select.typ().column_types.into_last();
-
-                        let inner_arity = get_inner.arity();
-                        // We must determine a count for each `get_inner` prefix,
-                        // and report an error if that count exceeds one.
-                        let guarded = select.let_in(id_gen, |_id_gen, get_select| {
-                            // Count for each `get_inner` prefix.
-                            let counts = get_select.clone().reduce(
-                                (0..inner_arity).collect::<Vec<_>>(),
-                                vec![expr::AggregateExpr {
-                                    func: expr::AggregateFunc::Count,
-                                    expr: expr::MirScalarExpr::literal_ok(
-                                        Datum::True,
-                                        ScalarType::Bool,
-                                    ),
-                                    distinct: false,
-                                }],
-                                None,
-                            );
-                            // Errors should result from counts > 1.
-                            let errors = counts
-                                .filter(vec![expr::MirScalarExpr::Column(inner_arity).call_binary(
-                                    expr::MirScalarExpr::literal_ok(
-                                        Datum::Int64(1),
-                                        ScalarType::Int64,
-                                    ),
-                                    expr::BinaryFunc::Gt,
-                                )])
-                                .project((0..inner_arity).collect::<Vec<_>>())
-                                .map(vec![expr::MirScalarExpr::literal(
-                                    Err(expr::EvalError::MultipleRowsFromSubquery),
-                                    col_type.clone().scalar_type,
-                                )]);
-                            // Return `get_select` and any errors added in.
-                            get_select.union(errors)
-                        });
-                        // append Null to anything that didn't return any rows
-                        let default = vec![(Datum::Null, col_type.nullable(true))];
-                        get_inner.lookup(id_gen, guarded, default)
-                    },
                 );
                 SS::Column(inner.arity() - 1)
             }
@@ -902,6 +839,95 @@ where
             joined
         })
     })
+}
+
+fn apply_scalar_subquery(
+    id_gen: &mut expr::IdGen,
+    outer: expr::MirRelationExpr,
+    col_map: &ColumnMap,
+    scalar_subquery: HirRelationExpr,
+    apply_requires_distinct_outer: bool,
+) -> expr::MirRelationExpr {
+    branch(
+        id_gen,
+        outer,
+        col_map,
+        scalar_subquery,
+        apply_requires_distinct_outer,
+        |id_gen, expr, get_inner, col_map| {
+            let select = expr
+                // compute for every row in get_inner
+                .applied_to(id_gen, get_inner.clone(), col_map);
+            let col_type = select.typ().column_types.into_last();
+
+            let inner_arity = get_inner.arity();
+            // We must determine a count for each `get_inner` prefix,
+            // and report an error if that count exceeds one.
+            let guarded = select.let_in(id_gen, |_id_gen, get_select| {
+                // Count for each `get_inner` prefix.
+                let counts = get_select.clone().reduce(
+                    (0..inner_arity).collect::<Vec<_>>(),
+                    vec![expr::AggregateExpr {
+                        func: expr::AggregateFunc::Count,
+                        expr: expr::MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool),
+                        distinct: false,
+                    }],
+                    None,
+                );
+                // Errors should result from counts > 1.
+                let errors = counts
+                    .filter(vec![expr::MirScalarExpr::Column(inner_arity).call_binary(
+                        expr::MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+                        expr::BinaryFunc::Gt,
+                    )])
+                    .project((0..inner_arity).collect::<Vec<_>>())
+                    .map(vec![expr::MirScalarExpr::literal(
+                        Err(expr::EvalError::MultipleRowsFromSubquery),
+                        col_type.clone().scalar_type,
+                    )]);
+                // Return `get_select` and any errors added in.
+                get_select.union(errors)
+            });
+            // append Null to anything that didn't return any rows
+            let default = vec![(Datum::Null, col_type.nullable(true))];
+            get_inner.lookup(id_gen, guarded, default)
+        },
+    )
+}
+
+fn apply_existential_subquery(
+    id_gen: &mut expr::IdGen,
+    outer: expr::MirRelationExpr,
+    col_map: &ColumnMap,
+    subquery_expr: HirRelationExpr,
+    apply_requires_distinct_outer: bool,
+) -> expr::MirRelationExpr {
+    branch(
+        id_gen,
+        outer,
+        col_map,
+        subquery_expr,
+        apply_requires_distinct_outer,
+        |id_gen, expr, get_inner, col_map| {
+            let exists = expr
+                // compute for every row in get_inner
+                .applied_to(id_gen, get_inner.clone(), col_map)
+                // throw away actual values and just remember whether or not there were __any__ rows
+                .distinct_by((0..get_inner.arity()).collect())
+                // Append true to anything that returned any rows. This
+                // join is logically equivalent to
+                // `.map(vec![Datum::True])`, but using a join allows
+                // for potential predicate pushdown and elision in the
+                // optimizer.
+                .product(expr::MirRelationExpr::constant(
+                    vec![vec![Datum::True]],
+                    RelationType::new(vec![ScalarType::Bool.nullable(false)]),
+                ));
+            // append False to anything that didn't return any rows
+            let default = vec![(Datum::False, ScalarType::Bool.nullable(false))];
+            get_inner.lookup(id_gen, exists, default)
+        },
+    )
 }
 
 impl AggregateExpr {
