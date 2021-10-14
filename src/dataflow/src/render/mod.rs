@@ -601,10 +601,7 @@ pub mod datum_vec {
         }
 
         /// Borrow an instance with a specific lifetime, and pre-populate with `Row`s.
-        pub fn borrow_with_many<'a, I: IntoIterator<Item = &'a Row>>(
-            &'a mut self,
-            rows: I,
-        ) -> DatumVecBorrow<'a> {
+        pub fn borrow_with_many<'a>(&'a mut self, rows: &[&'a Row]) -> DatumVecBorrow<'a> {
             let mut borrow = self.borrow();
             for row in rows {
                 borrow.extend(row.iter());

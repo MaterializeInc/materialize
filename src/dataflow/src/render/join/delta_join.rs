@@ -231,14 +231,15 @@ where
                     arrangements
                         .entry((lookup_idx, lookup_key.clone()))
                         .or_insert_with(|| {
-                            match inputs[lookup_idx]
+                            let wrapper = inputs[lookup_idx]
                                 .arrangement(&lookup_key)
                                 .unwrap_or_else(|| {
                                     panic!(
                                         "Arrangement alarmingly absent!: {}, {:?}",
                                         lookup_idx, lookup_key,
                                     )
-                                }) {
+                                });
+                            let result = match wrapper.flavor {
                                 ArrangementFlavor::Local(oks, errs) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
                                         scope_errs.push(errs.as_collection(|k, _v| k.clone()));
@@ -251,7 +252,8 @@ where
                                     }
                                     Err(oks.enter(inner))
                                 }
-                            }
+                            };
+                            (wrapper.permutation, result)
                         });
                 }
             }
@@ -292,7 +294,7 @@ where
                     use timely::dataflow::operators::Map;
 
                     // Ensure this input is rendered, and extract its update stream.
-                    let update_stream = if let Some((_key, val)) = arrangements
+                    let update_stream = if let Some((_key, (permutation, val))) = arrangements
                         .iter()
                         .find(|(key, _val)| key.0 == source_relation)
                     {
@@ -305,6 +307,7 @@ where
                                     as_of,
                                     source_relation,
                                     initial_closure,
+                                    permutation.to_vec(),
                                 );
                                 region_errs.push(err_stream);
                                 update_stream
@@ -316,6 +319,7 @@ where
                                     as_of,
                                     source_relation,
                                     initial_closure,
+                                    permutation.to_vec(),
                                 );
                                 region_errs.push(err_stream);
                                 update_stream
@@ -386,7 +390,7 @@ where
                         // we might have: either dataflow-local or an imported trace.
                         let (oks, errs) =
                             match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
-                                Ok(local) => {
+                                (permutation, Ok(local)) => {
                                     if source_relation < lookup_relation {
                                         build_halfjoin(
                                             update_stream,
@@ -405,7 +409,7 @@ where
                                         )
                                     }
                                 }
-                                Err(trace) => {
+                                (permutation, Err(trace)) => {
                                     if source_relation < lookup_relation {
                                         build_halfjoin(
                                             update_stream,
@@ -486,6 +490,7 @@ where
     }
 }
 
+use crate::render::permute_in_place;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::Cursor;
@@ -587,6 +592,7 @@ fn build_update_stream<G, Tr>(
     as_of: Antichain<G::Timestamp>,
     source_relation: usize,
     initial_closure: Option<JoinClosure>,
+    permutation: Vec<usize>,
 ) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
     G: Scope<Timestamp = repr::Timestamp>,
@@ -614,15 +620,16 @@ where
                             let mut cursor = batch.cursor();
                             while let Some(_key) = cursor.get_key(batch) {
                                 while let Some(val) = cursor.get_val(batch) {
-                                    // TODO(mh): Undo key-val permutation
                                     cursor.map_times(batch, |time, diff| {
                                         // note: only the delta path for the first relation will see
                                         // updates at start-up time
                                         if source_relation == 0 || !as_of.elements().contains(&time)
                                         {
+                                            let temp_storage = RowArena::new();
+                                            let mut datums_local =
+                                                datums.borrow_with_many(&[_key, val]);
+                                            permute_in_place(&mut datums_local, &permutation);
                                             if let Some(initial_closure) = &initial_closure {
-                                                let temp_storage = RowArena::new();
-                                                let mut datums_local = datums.borrow_with(&val);
                                                 match initial_closure
                                                     .apply(
                                                         &mut datums_local,
@@ -645,7 +652,9 @@ where
                                                 }
                                             } else {
                                                 ok_session.give((
-                                                    val.clone(),
+                                                    Row::pack_slice(
+                                                        &datums_local[..permutation.len()],
+                                                    ),
                                                     time.clone(),
                                                     diff.clone(),
                                                 ));
