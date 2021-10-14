@@ -248,7 +248,6 @@ pub struct CopyFromPlan {
 #[derive(Debug)]
 pub struct ExplainPlan {
     pub raw_plan: HirRelationExpr,
-    pub decorrelated_plan: ::expr::MirRelationExpr,
     pub row_set_finishing: Option<RowSetFinishing>,
     pub stage: ExplainStage,
     pub options: ExplainOptions,
