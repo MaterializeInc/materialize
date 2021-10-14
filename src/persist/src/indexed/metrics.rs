@@ -116,7 +116,7 @@ pub struct Metrics {
 
 impl Metrics {
     /// Returns a new [Metrics] instance connected to the given registry.
-    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
+    pub fn register_with(registry: &MetricsRegistry) -> Self {
         Metrics {
             stream_count: registry.register_third_party_visible(metric!(
                 name: "mz_persist_stream_count",
