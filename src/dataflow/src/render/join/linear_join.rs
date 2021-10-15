@@ -335,17 +335,12 @@ where
                             .iter()
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
-                    let value = Row::try_pack(
-                        value_expr
-                            .iter()
-                            .map(|e| e.eval(&datums_local, &temp_storage)),
-                    )?;
                     // Explicit drop here to allow `row` to be returned.
                     drop(datums_local);
                     // TODO(mcsherry): We could remove any columns used only for `key`.
                     // This cannot be done any earlier, for example in a prior closure,
                     // because we need the columns for key production.
-                    Ok((key, value))
+                    Ok((key, row))
                 }
             });
             errors.push(errs);
@@ -452,11 +447,8 @@ where
             .join_core(&next_input, move |key, old, new| {
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow();
-                datums_local.extend(key.iter());
                 datums_local.extend(old.iter());
                 datums_local.extend(new.iter());
-
-                permutation.permute_in_place(&mut datums_local);
 
                 closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)

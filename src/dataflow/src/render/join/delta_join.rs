@@ -572,10 +572,11 @@ where
         comparison,
         |timer, _count| timer.elapsed().ge(&std::time::Duration::from_millis(10)),
         // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-        move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+        move |_key, stream_row, lookup_row, initial, time, diff1, diff2| {
             let temp_storage = RowArena::new();
-            let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
-            permutation.permute_in_place(&mut datums_local);
+            let mut datums_local = datums.borrow();
+            datums_local.extend(stream_row.iter());
+            datums_local.extend(lookup_row.iter());
             let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
             let diff = diff1.clone() * diff2.clone();
             let dout = (row, time.clone());
@@ -640,11 +641,9 @@ where
                                         // updates at start-up time
                                         if source_relation == 0 || !as_of.elements().contains(&time)
                                         {
-                                            let temp_storage = RowArena::new();
-                                            let mut datums_local =
-                                                datums.borrow_with_many(&[key, val]);
-                                            permutation.permute_in_place(&mut datums_local);
                                             if let Some(initial_closure) = &initial_closure {
+                                                let temp_storage = RowArena::new();
+                                                let mut datums_local = datums.borrow_with(&val);
                                                 match initial_closure
                                                     .apply(
                                                         &mut datums_local,
@@ -667,9 +666,7 @@ where
                                                 }
                                             } else {
                                                 ok_session.give((
-                                                    Row::pack_slice(
-                                                        &datums_local[..permutation.len()],
-                                                    ),
+                                                    val.clone(),
                                                     time.clone(),
                                                     diff.clone(),
                                                 ));

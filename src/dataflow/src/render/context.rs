@@ -172,19 +172,11 @@ where
         let mut datum_vec = DatumVec::new();
         match self {
             ArrangementFlavor::Local(oks, errs) => (
-                oks.as_collection(move |k, v| {
-                    let mut borrow = datum_vec.borrow_with_many(&[k, v]);
-                    permutation.permute_in_place(&mut borrow);
-                    Row::pack(&*borrow)
-                }),
+                oks.as_collection(|_k, v| v.clone()),
                 errs.as_collection(|k, _v| k.clone()),
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.as_collection(move |k, v| {
-                    let mut borrow = datum_vec.borrow_with_many(&[k, v]);
-                    permutation.permute_in_place(&mut borrow);
-                    Row::pack(&*borrow)
-                }),
+                oks.as_collection(|_k, v| v.clone()),
                 errs.as_collection(|k, _v| k.clone()),
             ),
         }
@@ -264,8 +256,7 @@ where
                     key,
                     move |k, v, t, d| {
                         println!("k: {:?},\tv: {:?},\tpermutation: {:?}", *k, *v, permutation);
-                        let mut borrow = datum_vec.borrow_with_many(&[&*k, &*v]);
-                        permutation.permute_in_place(&mut borrow);
+                        let mut borrow = datum_vec.borrow_with(&*v);
                         row_builder.clear();
                         row_builder.extend(&*borrow);
                         logic(RefOrMut::Mut(&mut row_builder), t, d)
@@ -280,8 +271,7 @@ where
                     &oks,
                     key,
                     move |k, v, t, d| {
-                        let mut borrow = datum_vec.borrow_with_many(&[&*k, &*v]);
-                        permutation.permute_in_place(&mut borrow);
+                        let mut borrow = datum_vec.borrow_with(&*v);
                         row_builder.clear();
                         row_builder.extend(&*borrow);
                         logic(RefOrMut::Mut(&mut row_builder), t, d)
@@ -538,9 +528,7 @@ where
                     let temp_storage = RowArena::new();
                     let key_row =
                         Row::try_pack(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                    let value_row =
-                        Row::try_pack(value_expr.iter().map(|e| e.eval(&datums, &temp_storage)))?;
-                    Ok::<(Row, Row), DataflowError>((key_row, value_row))
+                    Ok::<(Row, Row), DataflowError>((key_row, row))
                 });
 
                 use differential_dataflow::operators::arrange::Arrange;

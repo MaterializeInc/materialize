@@ -116,10 +116,7 @@ where
     arrangement.reduce_abelian(name, move |key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
-                let mut borrow = datum_vec.borrow_with_many(&[key, *record]);
-                permutation.permute_in_place(&mut borrow);
-                let record = Row::pack(&*borrow);
-                t.push((record, *count));
+                t.push(((*record).clone(), *count));
             }
         }
     })
