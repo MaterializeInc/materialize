@@ -113,6 +113,7 @@ fn golden() -> Result<(), Error> {
     config.storage_available = 0;
     config.start_weight = 0;
     config.stop_weight = 0;
+    config.read_output_weight = 0;
     let g = Generator::new(seed, config);
     let reqs = g.into_iter().take(100).collect::<Vec<_>>();
 

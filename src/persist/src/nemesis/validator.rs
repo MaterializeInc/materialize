@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
@@ -204,6 +205,29 @@ impl Validator {
                 ));
             }
 
+            // To compare two sets of records, we first need to ensure they have
+            // the same since.
+            //
+            // In the writes_by_seqno map that Validator keeps internally, the
+            // original full-fidelity records are kept. This corresponds to a
+            // since of 0 (more specifically, the empty antichain).
+            //
+            // Because the records output by the PersistedSource operator
+            // includes replaying a snapshot, it may have a since >0. Once we
+            // fix #8608, we'll know exactly what it is (because #8608 is all
+            // about specifying the since/as_of at construction time) but until
+            // then we don't really know what it is.
+            //
+            // So what we do for now is forward both sets of records to a since
+            // that's guaranteed to be at in advance of both of them:
+            // specifically the the largest thing we've allowed_compaction to.
+            let as_of = Antichain::from_elem(
+                self.since_frontier
+                    .get(&req.stream)
+                    .copied()
+                    .unwrap_or_default(),
+            );
+
             // Verify that the output contains all sent writes less than the
             // latest seal it contains.
             //
@@ -213,6 +237,18 @@ impl Validator {
             let mut actual = all_received_writes
                 .into_iter()
                 .filter(|(_, ts, _)| *ts < latest_seal)
+                .map(|(kv, mut ts, diff)| {
+                    // TODO: For the same reason we only advance the "expected"
+                    // side of updates_eq (the Validator's writes_by_seqno),
+                    // once we've fixed #8608, we should only advance the
+                    // `expected` side of updates_eq to whatever we set as the
+                    // as_of when constructing the PersistedSource operator.
+                    // Correct adherence to the since/as_of is part of the
+                    // interface of Snapshot and #8608 is all about making it
+                    // part of the interface of PersistedSource as well.
+                    ts.advance_by(as_of.borrow());
+                    (kv, ts, diff)
+                })
                 .collect();
             let mut expected: Vec<((String, ()), u64, isize)> = self
                 .writes_by_seqno
@@ -221,7 +257,7 @@ impl Validator {
                 .filter(|(_, ts, _)| *ts < latest_seal)
                 .cloned()
                 .collect();
-            if !updates_eq(&mut actual, &mut expected, Antichain::new()) {
+            if !updates_eq(&mut actual, &mut expected, as_of) {
                 self.errors.push(format!(
                     "incorrect output {:?} up to {}, expected {:?} got: {:?}",
                     req_id, latest_seal, expected, actual
@@ -345,11 +381,7 @@ fn updates_eq(
     // The snapshot has been logically compacted to since, so update our
     // expected to match.
     for (_, t, _) in expected.iter_mut() {
-        for ts in since.elements().iter() {
-            if *t < *ts {
-                *t = *ts;
-            }
-        }
+        t.advance_by(since.borrow());
     }
     differential_dataflow::consolidation::consolidate_updates(actual);
     differential_dataflow::consolidation::consolidate_updates(expected);
