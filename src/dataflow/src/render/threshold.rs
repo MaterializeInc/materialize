@@ -35,6 +35,8 @@ use serde::{Deserialize, Serialize};
 use crate::arrangement::manager::RowSpine;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
+use crate::render::datum_vec::DatumVec;
+use crate::render::Permutation;
 
 /// A plan describing how to compute a threshold operation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -101,6 +103,7 @@ fn threshold_arrangement<G, T, R, L>(
     arrangement: &R,
     name: &str,
     logic: L,
+    permutation: Permutation,
 ) -> Arranged<G, TraceAgent<RowSpine<Row, Row, G::Timestamp, Diff>>>
 where
     G: Scope,
@@ -109,10 +112,14 @@ where
     R: ReduceCore<G, Row, Row, Diff>,
     L: Fn(&Diff) -> bool + 'static,
 {
-    arrangement.reduce_abelian(name, move |_k, s, t| {
+    let mut datum_vec = DatumVec::new();
+    arrangement.reduce_abelian(name, move |key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
-                t.push(((*record).clone(), *count));
+                let mut borrow = datum_vec.borrow_with_many(&[key, *record]);
+                permutation.permute_in_place(&mut borrow);
+                let record = Row::pack(&*borrow);
+                t.push((record, *count));
             }
         }
     })
@@ -137,17 +144,26 @@ where
         all_columns.push(expr::MirScalarExpr::Column(column));
     }
     let input = input.ensure_arrangements(Some(all_columns.clone()));
-    match input
+    let arrangement = input
         .arrangement(&all_columns)
-        .expect("Arrangement ensured to exist")
-        .flavor
-    {
+        .expect("Arrangement ensured to exist");
+    match arrangement.flavor {
         ArrangementFlavor::Local(oks, errs) => {
-            let oks = threshold_arrangement(&oks, "Threshold local", |count| *count > 0);
+            let oks = threshold_arrangement(
+                &oks,
+                "Threshold local",
+                |count| *count > 0,
+                arrangement.permutation,
+            );
             CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs), arity)
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
-            let oks = threshold_arrangement(&oks, "Threshold trace", |count| *count > 0);
+            let oks = threshold_arrangement(
+                &oks,
+                "Threshold trace",
+                |count| *count > 0,
+                arrangement.permutation,
+            );
             use differential_dataflow::operators::arrange::ArrangeBySelf;
             let errs = errs.as_collection(|k, _| k.clone()).arrange_by_self();
             CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs), arity)
@@ -178,13 +194,19 @@ where
     let arrangement = input
         .arrangement(&all_columns)
         .expect("Arrangement ensured to exist");
-    let negatives = match &arrangement {
-        ArrangementFlavor::Local(oks, _) => {
-            threshold_arrangement(oks, "Threshold retractions local", |count| *count < 0)
-        }
-        ArrangementFlavor::Trace(_, oks, _) => {
-            threshold_arrangement(oks, "Threshold retractions trace", |count| *count < 0)
-        }
+    let negatives = match &arrangement.flavor {
+        ArrangementFlavor::Local(oks, _) => threshold_arrangement(
+            oks,
+            "Threshold retractions local",
+            |count| *count < 0,
+            arrangement.permutation.clone(),
+        ),
+        ArrangementFlavor::Trace(_, oks, _) => threshold_arrangement(
+            oks,
+            "Threshold retractions trace",
+            |count| *count < 0,
+            arrangement.permutation.clone(),
+        ),
     };
     let (oks, errs) = arrangement.as_collection();
     let oks = negatives

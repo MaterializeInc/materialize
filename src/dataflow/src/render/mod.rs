@@ -1287,40 +1287,85 @@ pub mod plan {
     }
 }
 
-fn value_expr(key_expr: &[MirScalarExpr], arity: usize) -> (Vec<usize>, Vec<MirScalarExpr>) {
-    // Construct a mapping of columns `c` found in key at position `i`
-    // Each value column and value is unique
-    let columns_in_key = key_expr
-        .iter()
-        .enumerate()
-        .flat_map(|(i, expr)| MirScalarExpr::as_column(expr).map(|c| (c, i)))
-        .collect::<HashMap<_, _>>();
-    // Construct a mapping to undo the permutation
-    let permutation = (0..arity)
-        .map(|c| {
-            if let Some(c) = columns_in_key.get(&c) {
-                // Column is in key
-                *c
-            } else {
-                // Column remains in value
-                c + key_expr.len()
-            }
-        })
-        .collect();
-
-    let value_expr = (0..arity)
-        .filter(move |c| !columns_in_key.contains_key(&c))
-        .map(MirScalarExpr::column)
-        .collect::<Vec<_>>();
-    (permutation, value_expr)
+#[derive(Clone)]
+pub struct Permutation {
+    key_arity: usize,
+    permutation: Vec<usize>,
 }
+impl Permutation {
+    fn construct(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
+        // Construct a mapping of columns `c` found in key at position `i`
+        // Each value column and value is unique
+        let columns_in_key = key_expr
+            .iter()
+            .enumerate()
+            .flat_map(|(i, expr)| MirScalarExpr::as_column(expr).map(|c| (c, i)))
+            .collect::<HashMap<_, _>>();
+        // Construct a mapping to undo the permutation
+        let permutation = (0..arity)
+            .map(|c| {
+                if let Some(c) = columns_in_key.get(&c) {
+                    // Column is in key
+                    *c
+                } else {
+                    // Column remains in value
+                    c + key_expr.len()
+                }
+            })
+            .collect();
 
-pub fn permute_in_place<T>(data: &mut [T], permutation: &[usize]) {
-    for (i, mut p) in permutation.iter().copied().enumerate() {
-        while p < i {
-            p = permutation[p];
+        let value_expr = (0..arity)
+            .filter(move |c| !columns_in_key.contains_key(&c))
+            .map(MirScalarExpr::column)
+            .collect::<Vec<_>>();
+        let permutation = Self {
+            key_arity: key_expr.len(),
+            permutation,
+        };
+        (permutation, value_expr)
+    }
+
+    fn construct_no_op(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
+        let key_arity = key_expr.len();
+        let permutation: Vec<_> = (key_arity..key_arity + arity).collect();
+        let expr = permutation
+            .iter()
+            .copied()
+            .map(MirScalarExpr::column)
+            .collect();
+        let permutation = Self {
+            permutation,
+            key_arity,
+        };
+        (permutation, expr)
+    }
+
+    pub fn join(&self, other: &Self) -> Self {
+        assert_eq!(self.key_arity, other.key_arity);
+        let mut permutation = Vec::with_capacity(self.permutation.len() + other.permutation.len());
+        permutation.copy_from_slice(&self.permutation);
+        permutation.extend_from_slice(&other.permutation);
+        for c in &mut permutation[self.permutation.len()..] {
+            if *c >= self.key_arity {
+                *c += self.permutation.len();
+            }
         }
+        Self {
+            permutation,
+            key_arity: self.key_arity,
+        }
+    }
 
-        data.swap(i, p);
+    pub fn permute_in_place<T>(&self, data: &mut [T]) {
+        for (i, mut p) in self.permutation.iter().copied().enumerate() {
+            while p < i {
+                p = self.permutation[p];
+            }
+            data.swap(i, p);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.permutation.len()
     }
 }

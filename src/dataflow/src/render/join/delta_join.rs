@@ -307,7 +307,7 @@ where
                                     as_of,
                                     source_relation,
                                     initial_closure,
-                                    permutation.to_vec(),
+                                    permutation.clone(),
                                 );
                                 region_errs.push(err_stream);
                                 update_stream
@@ -319,7 +319,7 @@ where
                                     as_of,
                                     source_relation,
                                     initial_closure,
-                                    permutation.to_vec(),
+                                    permutation.clone(),
                                 );
                                 region_errs.push(err_stream);
                                 update_stream
@@ -490,7 +490,7 @@ where
     }
 }
 
-use crate::render::permute_in_place;
+use crate::render::Permutation;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::Cursor;
@@ -592,7 +592,7 @@ fn build_update_stream<G, Tr>(
     as_of: Antichain<G::Timestamp>,
     source_relation: usize,
     initial_closure: Option<JoinClosure>,
-    permutation: Vec<usize>,
+    permutation: Permutation,
 ) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
     G: Scope<Timestamp = repr::Timestamp>,
@@ -628,7 +628,7 @@ where
                                             let temp_storage = RowArena::new();
                                             let mut datums_local =
                                                 datums.borrow_with_many(&[_key, val]);
-                                            permute_in_place(&mut datums_local, &permutation);
+                                            permutation.permute_in_place(&mut datums_local);
                                             if let Some(initial_closure) = &initial_closure {
                                                 match initial_closure
                                                     .apply(
