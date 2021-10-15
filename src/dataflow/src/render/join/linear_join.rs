@@ -24,8 +24,8 @@ use expr::{MapFilterProject, MirScalarExpr};
 use repr::{Diff, Row, RowArena};
 
 use crate::operator::CollectionExt;
-use crate::render::context::CollectionBundle;
 use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context};
+use crate::render::context::{ArrangementWrapper, CollectionBundle};
 use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
 use crate::render::permute_in_place;
@@ -169,9 +169,9 @@ where
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(Arrangement<G, Row>),
+    Local(Arrangement<G, Row>, Vec<usize>),
     /// An imported arrangement.
-    Trace(ArrangementImport<G, Row, T>),
+    Trace(ArrangementImport<G, Row, T>, Vec<usize>),
 }
 
 impl<G, T> Context<G, Row, T>
@@ -200,13 +200,25 @@ where
             .and_then(|stage| inputs[linear_plan.source_relation].arrangement(&stage.stream_key));
         // We can use an arrangement if it exists and an initial closure does not.
         let mut joined = match (arrangement, linear_plan.initial_closure) {
-            (Some(ArrangementFlavor::Local(oks, errs)), None) => {
+            (
+                Some(ArrangementWrapper {
+                    flavor: ArrangementFlavor::Local(oks, errs),
+                    permutation,
+                }),
+                None,
+            ) => {
                 errors.push(errs.as_collection(|k, _v| k.clone()));
-                JoinedFlavor::Local(oks)
+                JoinedFlavor::Local(oks, permutation)
             }
-            (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
+            (
+                Some(ArrangementWrapper {
+                    flavor: ArrangementFlavor::Trace(_gid, oks, errs),
+                    permutation,
+                }),
+                None,
+            ) => {
                 errors.push(errs.as_collection(|k, _v| k.clone()));
-                JoinedFlavor::Trace(oks)
+                JoinedFlavor::Trace(oks, permutation)
             }
             (_, initial_closure) => {
                 // TODO: extract closure from the first stage in the join plan, should it exist.
@@ -342,33 +354,53 @@ where
             JoinedFlavor::Collection(_) => {
                 unreachable!("JoinedFlavor::Collection variant avoided at top of method");
             }
-            JoinedFlavor::Local(local) => match arrangement.flavor {
+            JoinedFlavor::Local(local, permutation) => match arrangement.flavor {
                 ArrangementFlavor::Local(oks, errs1) => {
-                    let (oks, errs2) =
-                        self.differential_join_inner(local, oks, closure, arrangement.permutation);
+                    let (oks, errs2) = self.differential_join_inner(
+                        local,
+                        oks,
+                        closure,
+                        permutation,
+                        arrangement.permutation,
+                    );
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) =
-                        self.differential_join_inner(local, oks, closure, arrangement.permutation);
+                    let (oks, errs2) = self.differential_join_inner(
+                        local,
+                        oks,
+                        closure,
+                        permutation,
+                        arrangement.permutation,
+                    );
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
                 }
             },
-            JoinedFlavor::Trace(trace) => match arrangement.flavor {
+            JoinedFlavor::Trace(trace, permutation) => match arrangement.flavor {
                 ArrangementFlavor::Local(oks, errs1) => {
-                    let (oks, errs2) =
-                        self.differential_join_inner(trace, oks, closure, arrangement.permutation);
+                    let (oks, errs2) = self.differential_join_inner(
+                        trace,
+                        oks,
+                        closure,
+                        permutation,
+                        arrangement.permutation,
+                    );
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) =
-                        self.differential_join_inner(trace, oks, closure, arrangement.permutation);
+                    let (oks, errs2) = self.differential_join_inner(
+                        trace,
+                        oks,
+                        closure,
+                        permutation,
+                        arrangement.permutation,
+                    );
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.push(errs2);
                     oks
@@ -385,7 +417,8 @@ where
         prev_keyed: J,
         next_input: Arranged<G, Tr2>,
         closure: JoinClosure,
-        permutation: Vec<usize>,
+        prev_permutation: Vec<usize>,
+        next_permutation: Vec<usize>,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
         J: JoinCore<G, Row, Row, repr::Diff>,
@@ -409,7 +442,7 @@ where
                 datums_local.extend(old.iter());
                 datums_local.extend(new.iter());
 
-                permute_in_place(&mut datums_local, &permutation);
+                permute_in_place(&mut datums_local, &next_permutation);
 
                 closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)

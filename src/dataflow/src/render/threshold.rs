@@ -140,6 +140,7 @@ where
     match input
         .arrangement(&all_columns)
         .expect("Arrangement ensured to exist")
+        .flavor
     {
         ArrangementFlavor::Local(oks, errs) => {
             let oks = threshold_arrangement(&oks, "Threshold local", |count| *count > 0);

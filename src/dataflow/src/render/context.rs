@@ -183,7 +183,7 @@ where
 }
 
 #[derive(Clone)]
-struct ArrangementWrapper<S, V, T>
+pub struct ArrangementWrapper<S, V, T>
 where
     S: Scope,
     V: Data,
