@@ -287,6 +287,8 @@ Put breaking changes before other release notes, and mark them with
   `WITH` option for Kafka sources, which allows to set `start_offset` based on
   Kafka timestamps.
 
+- Add the [`timestamp_frequency_ms`] `WITH` option to Kinesis, S3, and file sources.
+
 - **Breaking change.** The `timezone(String, Time)` function can no
   longer be used in views.
 
