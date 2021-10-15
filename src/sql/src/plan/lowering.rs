@@ -1019,9 +1019,16 @@ fn attempt_outer_join(
                 let mut result = get_join.clone();
 
                 // A collection of keys present in both left and right collections.
-                let both_keys = get_join
-                    .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
-                    .distinct();
+                let both_keys = match kind {
+                    JoinKind::LeftOuter { .. } => get_right
+                        .clone()
+                        .project((0..oa).chain(r_keys.clone()).collect::<Vec<_>>()),
+                    JoinKind::RightOuter { .. } => get_left
+                        .clone()
+                        .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>()),
+                    _ => get_join.project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>()),
+                }
+                .distinct();
 
                 // The plan is now to determine the left and right rows matched in the
                 // inner join, subtract them from left and right respectively, pad what
