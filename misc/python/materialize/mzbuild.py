@@ -237,6 +237,7 @@ class CargoBuild(CargoPreImage):
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
         self.rustflags = config.pop("rustflags", xrustflags)
+        self.rustflags += " -C debug-assertions "
         if rd.coverage:
             self.rustflags += " -Zinstrument-coverage -C link-dead-code "
             # Nix generates some unresolved symbols that -Zinstrument-coverage
