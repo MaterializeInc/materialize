@@ -76,6 +76,8 @@ pub struct DeltaStagePlan {
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
     stream_key: Vec<MirScalarExpr>,
+    /// The arity of the stream
+    stream_arity: usize,
     /// The key expressions to use for the lookup relation.
     lookup_key: Vec<MirScalarExpr>,
     /// The closure to apply to the concatenation of columns
@@ -162,6 +164,7 @@ impl DeltaJoinPlan {
                 stage_plans.push(DeltaStagePlan {
                     lookup_relation: *lookup_relation,
                     stream_key,
+                    stream_arity: input_mapper.input_arity(*lookup_relation),
                     lookup_key: lookup_key.clone(),
                     closure,
                 });
@@ -377,6 +380,7 @@ where
                         let DeltaStagePlan {
                             lookup_relation,
                             stream_key,
+                            stream_arity,
                             lookup_key,
                             closure,
                         } = stage_plan;
@@ -395,7 +399,9 @@ where
                                         build_halfjoin(
                                             update_stream,
                                             local.enter_region(region),
+                                            &permutation,
                                             stream_key,
+                                            stream_arity,
                                             |t1, t2| t1.le(t2),
                                             closure,
                                         )
@@ -403,7 +409,9 @@ where
                                         build_halfjoin(
                                             update_stream,
                                             local.enter_region(region),
+                                            &permutation,
                                             stream_key,
+                                            stream_arity,
                                             |t1, t2| t1.lt(t2),
                                             closure,
                                         )
@@ -414,7 +422,9 @@ where
                                         build_halfjoin(
                                             update_stream,
                                             trace.enter_region(region),
+                                            &permutation,
                                             stream_key,
+                                            stream_arity,
                                             |t1, t2| t1.le(t2),
                                             closure,
                                         )
@@ -422,7 +432,9 @@ where
                                         build_halfjoin(
                                             update_stream,
                                             trace.enter_region(region),
+                                            &permutation,
                                             stream_key,
+                                            stream_arity,
                                             |t1, t2| t1.lt(t2),
                                             closure,
                                         )
@@ -510,7 +522,9 @@ use differential_dataflow::Collection;
 fn build_halfjoin<G, Tr, CF>(
     updates: Collection<G, (Row, G::Timestamp)>,
     trace: Arranged<G, Tr>,
+    permutation: &Permutation,
     prev_key: Vec<MirScalarExpr>,
+    prev_arity: usize,
     comparison: CF,
     closure: JoinClosure,
 ) -> (
@@ -549,6 +563,8 @@ where
 
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
+
+    let permutation = Permutation::identity(permutation.key_arity, prev_arity).join(permutation);
     let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
         &updates,
         trace,
@@ -556,11 +572,10 @@ where
         comparison,
         |timer, _count| timer.elapsed().ge(&std::time::Duration::from_millis(10)),
         // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-        move |_key, stream_row, lookup_row, initial, time, diff1, diff2| {
+        move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
             let temp_storage = RowArena::new();
-            let mut datums_local = datums.borrow();
-            datums_local.extend(stream_row.iter());
-            datums_local.extend(lookup_row.iter());
+            let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
+            permutation.permute_in_place(&mut datums_local);
             let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
             let diff = diff1.clone() * diff2.clone();
             let dout = (row, time.clone());
@@ -618,7 +633,7 @@ where
                         for wrapper in data.iter() {
                             let batch = &wrapper;
                             let mut cursor = batch.cursor();
-                            while let Some(_key) = cursor.get_key(batch) {
+                            while let Some(key) = cursor.get_key(batch) {
                                 while let Some(val) = cursor.get_val(batch) {
                                     cursor.map_times(batch, |time, diff| {
                                         // note: only the delta path for the first relation will see
@@ -627,7 +642,7 @@ where
                                         {
                                             let temp_storage = RowArena::new();
                                             let mut datums_local =
-                                                datums.borrow_with_many(&[_key, val]);
+                                                datums.borrow_with_many(&[key, val]);
                                             permutation.permute_in_place(&mut datums_local);
                                             if let Some(initial_closure) = &initial_closure {
                                                 match initial_closure

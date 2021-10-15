@@ -289,6 +289,10 @@ where
         idx: &IndexDesc,
         arity: usize,
     ) {
+        println!(
+            "import_index id: {:?} desc: {:?} arity: {}",
+            idx_id, idx, arity
+        );
         if let Some(traces) = render_state.traces.get_mut(&idx_id) {
             let token = traces.to_drop().clone();
             let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
@@ -334,7 +338,17 @@ where
         object: BuildDesc<plan::Plan>,
     ) {
         // First, transform the relation expression into a render plan.
+        dbg!(&object);
         let bundle = self.render_plan(object.view, scope, scope.index());
+        println!(
+            "build_object arity: {}\t{:?}",
+            bundle.arity,
+            bundle
+                .arranged
+                .iter()
+                .map(|f| (f.0, &f.1.permutation))
+                .collect::<Vec<_>>()
+        );
         self.insert_id(Id::Global(object.id), bundle);
     }
 
@@ -347,6 +361,7 @@ where
         idx: &IndexDesc,
     ) {
         // put together tokens that belong to the export
+        println!("export_index id: {:?} desc: {:?}", idx_id, idx);
         let mut needed_source_tokens = Vec::new();
         let mut needed_additional_tokens = Vec::new();
         for import_id in import_ids {
@@ -365,6 +380,7 @@ where
             )
         });
         if let Some(arrangement) = bundle.arrangement(&idx.keys) {
+            println!("permutation: {:?}", arrangement.permutation);
             match arrangement.flavor {
                 ArrangementFlavor::Local(oks, errs) => {
                     render_state.traces.set(
@@ -409,6 +425,7 @@ where
         worker_index: usize,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
         use plan::Plan;
+        // dbg!(&plan);
         match plan {
             Plan::Constant { rows, arity } => {
                 // Determine what this worker will contribute.
@@ -1287,7 +1304,7 @@ pub mod plan {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Permutation {
     key_arity: usize,
     permutation: Vec<usize>,
@@ -1326,18 +1343,16 @@ impl Permutation {
     }
 
     fn construct_no_op(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
-        let key_arity = key_expr.len();
+        let expr = (0..arity).map(MirScalarExpr::column).collect();
+        (Self::identity(key_expr.len(), arity), expr)
+    }
+
+    fn identity(key_arity: usize, arity: usize) -> Self {
         let permutation: Vec<_> = (key_arity..key_arity + arity).collect();
-        let expr = permutation
-            .iter()
-            .copied()
-            .map(MirScalarExpr::column)
-            .collect();
-        let permutation = Self {
+        Self {
             permutation,
             key_arity,
-        };
-        (permutation, expr)
+        }
     }
 
     pub fn join(&self, other: &Self) -> Self {

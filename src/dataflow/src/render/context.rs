@@ -211,6 +211,11 @@ where
     T: Timestamp + Lattice,
 {
     fn new(permutation: Permutation, flavor: ArrangementFlavor<S, V, T>) -> Self {
+        println!(
+            "ArrangementWrapper::new(permutation: {:?}, ..)\n{:?}",
+            permutation,
+            backtrace::Backtrace::new()
+        );
         Self {
             permutation,
             flavor,
@@ -246,14 +251,43 @@ where
         // arrangement, as well as provides time to accumulate our produced output.
         let refuel = 1000000;
 
+        let mut datum_vec = DatumVec::new();
+        let mut row_builder = Row::default();
+
+        let permutation = self.permutation.clone();
+
+        dbg!(&permutation);
         match &self.flavor {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks = CollectionBundle::<S, Row, T>::flat_map_core(&oks, key, logic, refuel);
+                let oks = CollectionBundle::<S, Row, T>::flat_map_core(
+                    &oks,
+                    key,
+                    move |k, v, t, d| {
+                        println!("k: {:?},\tv: {:?},\tpermutation: {:?}", *k, *v, permutation);
+                        let mut borrow = datum_vec.borrow_with_many(&[&*k, &*v]);
+                        permutation.permute_in_place(&mut borrow);
+                        row_builder.clear();
+                        row_builder.extend(&*borrow);
+                        logic(RefOrMut::Mut(&mut row_builder), t, d)
+                    },
+                    refuel,
+                );
                 let errs = errs.as_collection(|k, _v| k.clone());
                 return (oks, errs);
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = CollectionBundle::<S, Row, T>::flat_map_core(&oks, key, logic, refuel);
+                let oks = CollectionBundle::<S, Row, T>::flat_map_core(
+                    &oks,
+                    key,
+                    move |k, v, t, d| {
+                        let mut borrow = datum_vec.borrow_with_many(&[&*k, &*v]);
+                        permutation.permute_in_place(&mut borrow);
+                        row_builder.clear();
+                        row_builder.extend(&*borrow);
+                        logic(RefOrMut::Mut(&mut row_builder), t, d)
+                    },
+                    refuel,
+                );
                 let errs = errs.as_collection(|k, _v| k.clone());
                 return (oks, errs);
             }
@@ -309,6 +343,7 @@ where
             flavor: arrangements,
         };
 
+        dbg!(&arity);
         arranged.insert(exprs, arrangements);
         Self {
             arity,
@@ -417,7 +452,13 @@ where
         Tr::Cursor: Cursor<Row, Tr::Val, S::Timestamp, repr::Diff> + 'static,
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(RefOrMut<'b, Row>, &'a S::Timestamp, &'a repr::Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(
+                RefOrMut<'b, Row>,
+                RefOrMut<'b, Row>,
+                &'a S::Timestamp,
+                &'a repr::Diff,
+            ) -> I
+            + 'static,
     {
         let mode = if key.is_some() { "index" } else { "scan" };
         let name = format!("ArrangementFlatMap({})", mode);
@@ -490,7 +531,9 @@ where
                 let (permutation, value_expr) = Permutation::construct_no_op(&key, self.arity);
                 assert!(key.len() <= value_expr.len());
                 assert!(value_expr.len() <= self.arity);
+                println!("key: {:?}, val: {:?}", key2, value_expr);
                 let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
+                    println!("row: {:?}, key: {:?}, val: {:?}", row, key2, value_expr);
                     let datums = row.unpack();
                     let temp_storage = RowArena::new();
                     let key_row =
@@ -601,7 +644,7 @@ impl<K: PartialEq, V, T: Timestamp, R, C: Cursor<K, V, T, R>> PendingWork<K, V, 
     ) where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(RefOrMut<'b, V>, &'a T, &'a R) -> I + 'static,
+        L: for<'a, 'b> FnMut(RefOrMut<'b, K>, RefOrMut<'b, V>, &'a T, &'a R) -> I + 'static,
     {
         // Attempt to make progress on this batch.
         let mut work: usize = 0;
@@ -613,7 +656,7 @@ impl<K: PartialEq, V, T: Timestamp, R, C: Cursor<K, V, T, R>> PendingWork<K, V, 
             if self.cursor.get_key(&self.batch) == Some(key) {
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        for datum in logic(RefOrMut::Ref(val), time, diff) {
+                        for datum in logic(RefOrMut::Ref(key), RefOrMut::Ref(val), time, diff) {
                             session.give(datum);
                             work += 1;
                         }
@@ -626,10 +669,10 @@ impl<K: PartialEq, V, T: Timestamp, R, C: Cursor<K, V, T, R>> PendingWork<K, V, 
                 }
             }
         } else {
-            while let Some(_key) = self.cursor.get_key(&self.batch) {
+            while let Some(key) = self.cursor.get_key(&self.batch) {
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        for datum in logic(RefOrMut::Ref(val), time, diff) {
+                        for datum in logic(RefOrMut::Ref(key), RefOrMut::Ref(val), time, diff) {
                             session.give(datum);
                             work += 1;
                         }
