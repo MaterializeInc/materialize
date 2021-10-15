@@ -224,6 +224,7 @@ class CargoPreImage(PreImage):
             flags += "release"
         if self.rd.coverage:
             flags += "coverage"
+        flags += "debug-assertion"
         flags.sort()
         return ",".join(flags)
 
