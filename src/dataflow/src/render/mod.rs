@@ -1358,7 +1358,7 @@ impl Permutation {
     pub fn join(&self, other: &Self) -> Self {
         assert_eq!(self.key_arity, other.key_arity);
         let mut permutation = Vec::with_capacity(self.permutation.len() + other.permutation.len());
-        permutation.copy_from_slice(&self.permutation);
+        permutation.extend_from_slice(&self.permutation);
         permutation.extend_from_slice(&other.permutation);
         for c in &mut permutation[self.permutation.len()..] {
             if *c >= self.key_arity {
