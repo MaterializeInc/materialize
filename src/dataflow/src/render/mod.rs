@@ -120,7 +120,7 @@ use expr::{GlobalId, Id, MirScalarExpr};
 use itertools::Itertools;
 use ore::collections::CollectionExt as _;
 use ore::now::NowFn;
-use repr::{Row, Timestamp};
+use repr::{Datum, Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::metrics::Metrics;
@@ -289,10 +289,6 @@ where
         idx: &IndexDesc,
         arity: usize,
     ) {
-        println!(
-            "import_index id: {:?} desc: {:?} arity: {}",
-            idx_id, idx, arity
-        );
         if let Some(traces) = render_state.traces.get_mut(&idx_id) {
             let token = traces.to_drop().clone();
             let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
@@ -338,17 +334,16 @@ where
         object: BuildDesc<plan::Plan>,
     ) {
         // First, transform the relation expression into a render plan.
-        dbg!(&object);
         let bundle = self.render_plan(object.view, scope, scope.index());
-        println!(
-            "build_object arity: {}\t{:?}",
-            bundle.arity,
-            bundle
-                .arranged
-                .iter()
-                .map(|f| (f.0, &f.1.permutation))
-                .collect::<Vec<_>>()
-        );
+        // println!(
+        //     "build_object arity: {}\t{:?}",
+        //     bundle.arity,
+        //     bundle
+        //         .arranged
+        //         .iter()
+        //         .map(|f| (f.0, &f.1.permutation))
+        //         .collect::<Vec<_>>()
+        // );
         self.insert_id(Id::Global(object.id), bundle);
     }
 
@@ -361,7 +356,6 @@ where
         idx: &IndexDesc,
     ) {
         // put together tokens that belong to the export
-        println!("export_index id: {:?} desc: {:?}", idx_id, idx);
         let mut needed_source_tokens = Vec::new();
         let mut needed_additional_tokens = Vec::new();
         for import_id in import_ids {
@@ -380,7 +374,6 @@ where
             )
         });
         if let Some(arrangement) = bundle.arrangement(&idx.keys) {
-            println!("permutation: {:?}", arrangement.permutation);
             match arrangement.flavor {
                 ArrangementFlavor::Local(oks, errs) => {
                     render_state.traces.set(
@@ -520,6 +513,7 @@ where
                     .into_iter()
                     .map(|input| self.render_plan(input, scope, worker_index))
                     .collect();
+                dbg!(&plan);
                 match plan {
                     crate::render::join::JoinPlan::Linear(linear_plan) => {
                         self.render_join(inputs, linear_plan, scope, arity)
@@ -1030,6 +1024,7 @@ pub mod plan {
                         input_keys.push(keys);
                     }
                     // Extract temporal predicates as joins cannot currently absorb them.
+                    dbg!(&implementation);
                     let plan = match implementation {
                         expr::JoinImplementation::Differential((start, _start_arr), order) => {
                             JoinPlan::Linear(LinearJoinPlan::create_from(
@@ -1144,10 +1139,12 @@ pub mod plan {
                 }
                 MirRelationExpr::Union { base, inputs } => {
                     let arity = base.arity();
+                    dbg!(&arity);
                     let mut plans = Vec::with_capacity(1 + inputs.len());
                     let (plan, _keys) = Self::from_mir(base, arrangements)?;
                     plans.push(plan);
                     for input in inputs.iter() {
+                        dbg!(input.arity());
                         let (plan, _keys) = Self::from_mir(input, arrangements)?;
                         plans.push(plan)
                     }
@@ -1308,6 +1305,7 @@ pub mod plan {
 pub struct Permutation {
     key_arity: usize,
     permutation: Vec<usize>,
+    // in_key: HashSet<usize>,
 }
 impl Permutation {
     fn construct(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
@@ -1370,6 +1368,25 @@ impl Permutation {
             key_arity: self.key_arity,
         }
     }
+
+    // pub fn filter<'a, I: IntoIterator<Item = Datum<'a>>>(
+    //     &self,
+    //     input: I,
+    // ) -> impl Iterator<Item = Datum<'a>> {
+    //     input
+    //         .into_iter()
+    //         .enumerate()
+    //         .filter(|(i, datum)| self.in_key.contains(i))
+    //         .map(|x| x.1)
+    // }
+    //
+    // pub fn permute(&self, input: &[&Datum]) -> impl Iterator<Item = &Datum> {
+    //     (0..input.len() - self.key_arity).map(|i| {
+    //         if i < self.key_arity {
+    //
+    //         }
+    //     })
+    // }
 
     pub fn permute_in_place<T>(&self, data: &mut [T]) {
         for (i, mut p) in self.permutation.iter().copied().enumerate() {

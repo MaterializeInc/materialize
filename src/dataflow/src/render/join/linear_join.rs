@@ -99,11 +99,13 @@ impl LinearJoinPlan {
         // Iterate through the join order instructions, assembling keys and
         // closures to use.
         for (lookup_relation, lookup_key) in join_order.iter() {
+            dbg!(lookup_key);
             // rebase the intended key to use global column identifiers.
             let lookup_key_rebased = lookup_key
                 .iter()
                 .map(|k| input_mapper.map_expr_to_global(k.clone(), *lookup_relation))
                 .collect::<Vec<_>>();
+            dbg!(&lookup_key_rebased);
 
             // Expressions to use as a key for the stream of incoming updates
             // are determined by locating the elements of `lookup_key` among
@@ -121,12 +123,14 @@ impl LinearJoinPlan {
                     bound_expr
                 })
                 .collect::<Vec<_>>();
+            dbg!(&stream_key);
 
             // Introduce new columns and expressions they enable. Form a new closure.
             let closure = join_build_state.add_columns(
                 input_mapper.global_columns(*lookup_relation),
                 &lookup_key_rebased,
             );
+            dbg!(&closure);
 
             bound_inputs.push(*lookup_relation);
 
@@ -207,6 +211,7 @@ where
                 Some(ArrangementWrapper {
                     flavor: ArrangementFlavor::Local(oks, errs),
                     permutation,
+                    ..
                 }),
                 None,
             ) => {
@@ -217,6 +222,7 @@ where
                 Some(ArrangementWrapper {
                     flavor: ArrangementFlavor::Trace(_gid, oks, errs),
                     permutation,
+                    ..
                 }),
                 None,
             ) => {
@@ -328,10 +334,19 @@ where
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
                 move |row| {
+                    println!(
+                        "row: {:?}\tkey: {:?}\tvalue_expr: {:?}\tstream_arity: {}",
+                        row, stream_key, value_expr, stream_arity,
+                    );
                     let temp_storage = RowArena::new();
                     let datums_local = datums.borrow_with(&row);
                     let key = Row::try_pack(
                         stream_key
+                            .iter()
+                            .map(|e| e.eval(&datums_local, &temp_storage)),
+                    )?;
+                    let value = Row::try_pack(
+                        value_expr
                             .iter()
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
@@ -340,7 +355,8 @@ where
                     // TODO(mcsherry): We could remove any columns used only for `key`.
                     // This cannot be done any earlier, for example in a prior closure,
                     // because we need the columns for key production.
-                    Ok((key, row))
+                    assert_eq!(value, row);
+                    Ok((key, value))
                 }
             });
             errors.push(errs);
@@ -447,8 +463,11 @@ where
             .join_core(&next_input, move |key, old, new| {
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow();
+                datums_local.extend(key.iter());
                 datums_local.extend(old.iter());
                 datums_local.extend(new.iter());
+
+                permutation.permute_in_place(&mut datums_local);
 
                 closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)

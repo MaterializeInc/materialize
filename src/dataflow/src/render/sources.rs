@@ -65,7 +65,7 @@ where
         now: NowFn,
         base_metrics: &SourceBaseMetrics,
     ) {
-        println!("importing {}", src.name);
+        // println!("importing {}", src.name);
         // Extract the linear operators, as we will need to manipulate them.
         // extracting them reduces the change we might accidentally communicate
         // them through `src`.
