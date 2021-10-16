@@ -946,6 +946,7 @@ dependencies = [
  "ore",
  "pdqselect",
  "persist",
+ "pin-project",
  "postgres-protocol",
  "postgres-util",
  "prometheus",

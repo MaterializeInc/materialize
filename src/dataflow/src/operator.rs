@@ -7,16 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
+use pin_project::pin_project;
 use std::ops::Mul;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{
     operator::{self, Operator},
-    InputHandle, OperatorInfo, OutputHandle,
+    InputHandle, OperatorInfo, OutputHandle, OutputWrapper,
 };
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
@@ -58,6 +64,23 @@ where
                     &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
                     &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, E>>,
                 ) + 'static,
+        >,
+        P: ParallelizationContract<G::Timestamp, D1>;
+
+    fn unary_async<D2, B, L, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
+    where
+        D2: Data,
+        B: FnOnce(Capability<G::Timestamp>, OperatorInfo) -> L,
+        L: FnMut(
+                InputHandle<G::Timestamp, D1, P::Puller>,
+                OutputWrapper<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
+            ) -> Fut
+            + 'static,
+        Fut: Future<
+            Output = (
+                InputHandle<G::Timestamp, D1, P::Puller>,
+                OutputWrapper<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
+            ),
         >,
         P: ParallelizationContract<G::Timestamp, D1>;
 
@@ -241,6 +264,91 @@ where
         });
 
         (ok_stream, err_stream)
+    }
+
+    fn unary_async<D2, B, L, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
+    where
+        D2: Data,
+        B: FnOnce(Capability<G::Timestamp>, OperatorInfo) -> L,
+        L: FnMut(
+                InputHandle<G::Timestamp, D1, P::Puller>,
+                OutputWrapper<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
+            ) -> Fut
+            + 'static,
+        Fut: Future<
+            Output = (
+                InputHandle<G::Timestamp, D1, P::Puller>,
+                OutputWrapper<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
+            ),
+        >,
+        P: ParallelizationContract<G::Timestamp, D1>,
+    {
+        #[pin_project(project = StateProj, project_replace = StateProjOwn)]
+        enum State<A, B> {
+            Waiting(bool, #[pin] A),
+            Ready(B),
+            /// Required only to safely transition from Ready -> Waiting
+            Invalid,
+        }
+
+        impl<A, B> Default for State<A, B> {
+            fn default() -> Self {
+                Self::Invalid
+            }
+        }
+
+        let mut builder = OperatorBuilder::new(name.to_owned(), self.scope());
+        let operator_info = builder.operator_info();
+
+        let input = builder.new_input(self, pact);
+        let (output, stream) = builder.new_output();
+
+        builder.build(move |mut capabilities| {
+            // `capabilities` should be a single-element vector.
+            let capability = capabilities.pop().unwrap();
+            let activator = Arc::new(self.scope().sync_activator_for(&operator_info.address[..]));
+
+            let logic = constructor(capability, operator_info);
+
+            let mut state = Box::pin(State::Ready((input, output, logic)));
+
+            move |_frontiers| loop {
+                match state.as_mut().project() {
+                    StateProj::Ready(_) => match state.as_mut().project_replace(State::Invalid) {
+                        StateProjOwn::Ready((input, output, mut logic)) => {
+                            state
+                                .as_mut()
+                                .project_replace(State::Waiting(true, async move {
+                                    let (input, output) = logic(input, output).await;
+                                    (input, output, logic)
+                                }));
+                        }
+                        _ => unreachable!(),
+                    },
+                    StateProj::Waiting(first_poll, mut fut) => {
+                        let waker = futures::task::waker_ref(&activator);
+                        let mut context = Context::from_waker(&waker);
+
+                        match Pin::new(&mut fut).poll(&mut context) {
+                            Poll::Ready(handles) => {
+                                let first_poll = *first_poll;
+                                state.as_mut().project_replace(State::Ready(handles));
+                                if first_poll {
+                                    break;
+                                }
+                            }
+                            Poll::Pending => {
+                                *first_poll = false;
+                                break;
+                            }
+                        }
+                    }
+                    StateProj::Invalid => unreachable!(),
+                }
+            }
+        });
+
+        stream
     }
 
     fn flat_map_fallible<D2, E, I, L>(

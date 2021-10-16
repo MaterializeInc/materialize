@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use futures::executor::block_on;
-
 use dataflow_types::{DataflowError, DecodeError};
 use interchange::avro::{Decoder, EnvelopeType};
 use repr::Datum;
@@ -43,14 +41,18 @@ impl AvroDecoderState {
         })
     }
 
-    pub fn decode(
+    pub async fn decode(
         &mut self,
         bytes: &mut &[u8],
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
         push_metadata: bool,
     ) -> Result<Option<Row>, DataflowError> {
-        match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
+        match self
+            .decoder
+            .decode(bytes, coord, upstream_time_millis)
+            .await
+        {
             Ok(mut row) => {
                 self.events_success += 1;
                 if push_metadata {
