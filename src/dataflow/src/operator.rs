@@ -331,11 +331,11 @@ where
 
                         match Pin::new(&mut fut).poll(&mut context) {
                             Poll::Ready(handles) => {
-                                let first_poll = *first_poll;
+                                // let first_poll = *first_poll;
                                 state.as_mut().project_replace(State::Ready(handles));
-                                if first_poll {
-                                    break;
-                                }
+                                // if first_poll {
+                                break;
+                                // }
                             }
                             Poll::Pending => {
                                 *first_poll = false;
