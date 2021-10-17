@@ -530,12 +530,11 @@ where
                 async move {
                     let mut key_decoder = key_decoder.borrow_mut();
                     let mut value_decoder = value_decoder.borrow_mut();
-                    let mut output = raw_output.activate();
 
                     let mut n_errors = 0;
                     let mut n_successes = 0;
+                    let mut results = vec![];
                     while let Some((cap, data)) = input.next() {
-                        let mut session = output.session(&cap);
                         for SourceOutput {
                             key,
                             value,
@@ -563,11 +562,11 @@ where
                             };
 
                             if value == &MessagePayload::Data(vec![]) {
-                                session.give(DecodeResult {
+                                results.push((cap.delayed(cap.time()), DecodeResult {
                                     key,
                                     value: None,
                                     position: *position,
-                                });
+                                }));
                             } else {
                                 let value = match &value {
                                     MessagePayload::Data(value) => {
@@ -606,14 +605,21 @@ where
                                 } else if matches!(&value, Some(Ok(_))) {
                                     n_successes += 1;
                                 }
-                                session.give(DecodeResult {
+                                results.push((cap.delayed(cap.time()), DecodeResult {
                                     key,
                                     value,
                                     position: *position,
-                                });
+                                }));
                             }
                         }
                     }
+
+                    let mut output = raw_output.activate();
+                    for (cap, result) in results.drain(..) {
+                        let mut session = output.session(&cap);
+                        session.give(result);
+                    }
+
                     // Matching historical practice, we only log metrics on the value decoder.
                     if n_errors > 0 {
                         value_decoder.log_errors(n_errors);
@@ -711,12 +717,11 @@ where
                 let mut key_decoder = key_decoder.borrow_mut();
                 let mut value_decoder = value_decoder.borrow_mut();
                 let mut value_buf = value_buf.borrow_mut();
-                let mut output = raw_output.activate();
 
                 let mut n_errors = 0;
                 let mut n_successes = 0;
+                let mut results = vec![];
                 while let Some((cap, data)) = input.next() {
-                    let mut session = output.session(&cap);
                     for SourceOutput {
                         key,
                         value,
@@ -770,11 +775,14 @@ where
                                         } else if matches!(&value, Ok(_)) {
                                             n_successes += 1;
                                         }
-                                        session.give(DecodeResult {
-                                            key,
-                                            value: Some(value),
-                                            position: Some(n_seen),
-                                        });
+                                        results.push((
+                                            cap.delayed(cap.time()),
+                                            DecodeResult {
+                                                key,
+                                                value: Some(value),
+                                                position: Some(n_seen),
+                                            },
+                                        ));
                                         n_seen += 1;
                                     }
                                 }
@@ -792,11 +800,14 @@ where
                         };
 
                         if value.is_empty() {
-                            session.give(DecodeResult {
-                                key,
-                                value: None,
-                                position: None,
-                            });
+                            results.push((
+                                cap.delayed(cap.time()),
+                                DecodeResult {
+                                    key,
+                                    value: None,
+                                    position: None,
+                                },
+                            ));
                         } else {
                             let value_bytes_remaining = &mut value.as_slice();
                             // The intent is that the below loop runs as long as there are more bytes to decode.
@@ -838,19 +849,25 @@ where
                                     n_successes += 1;
                                 }
                                 if value_bytes_remaining.is_empty() {
-                                    session.give(DecodeResult {
-                                        key,
-                                        value: Some(value),
-                                        position: Some(n_seen),
-                                    });
+                                    results.push((
+                                        cap.delayed(cap.time()),
+                                        DecodeResult {
+                                            key,
+                                            value: Some(value),
+                                            position: Some(n_seen),
+                                        },
+                                    ));
                                     *value_buf = vec![];
                                     break;
                                 } else {
-                                    session.give(DecodeResult {
-                                        key: key.clone(),
-                                        value: Some(value),
-                                        position: Some(n_seen),
-                                    });
+                                    results.push((
+                                        cap.delayed(cap.time()),
+                                        DecodeResult {
+                                            key: key.clone(),
+                                            value: Some(value),
+                                            position: Some(n_seen),
+                                        },
+                                    ));
                                 }
                                 if is_err {
                                     // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
@@ -860,6 +877,11 @@ where
                             }
                         }
                     }
+                }
+                let mut output = raw_output.activate();
+                for (cap, result) in results.drain(..) {
+                    let mut session = output.session(&cap);
+                    session.give(result);
                 }
                 // Matching historical practice, we only log metrics on the value decoder.
                 if n_errors > 0 {
