@@ -11,4 +11,4 @@ ore = { path = "../ore" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procfs = { version = "0.10.1", default-features = false }
+procfs = { version = "0.11.0", default-features = false }
