@@ -525,8 +525,8 @@ where
             let key_decoder = Rc::new(RefCell::new(key_decoder));
             let value_decoder = Rc::new(RefCell::new(value_decoder));
             move |mut input, mut raw_output| {
-                let key_decoder = key_decoder.clone();
-                let value_decoder = value_decoder.clone();
+                let key_decoder = Rc::clone(&key_decoder);
+                let value_decoder = Rc::clone(&value_decoder);
                 async move {
                     let mut key_decoder = key_decoder.borrow_mut();
                     let mut value_decoder = value_decoder.borrow_mut();
@@ -704,19 +704,21 @@ where
 
     // The `position` value from `SourceOutput` is meaningless here -- it's just the index of a chunk.
     // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
-    let mut n_seen = 0;
     let results = stream.unary_async(Pipeline, &op_name, move |_, _| {
         let key_decoder = Rc::new(RefCell::new(key_decoder));
         let value_decoder = Rc::new(RefCell::new(value_decoder));
         let value_buf = Rc::new(RefCell::new(vec![]));
+        let n_seen = Rc::new(RefCell::new(0));
         move |mut input, mut raw_output| {
-            let key_decoder = key_decoder.clone();
-            let value_decoder = value_decoder.clone();
-            let value_buf = value_buf.clone();
+            let key_decoder = Rc::clone(&key_decoder);
+            let value_decoder = Rc::clone(&value_decoder);
+            let value_buf = Rc::clone(&value_buf);
+            let n_seen = Rc::clone(&n_seen);
             async move {
                 let mut key_decoder = key_decoder.borrow_mut();
                 let mut value_decoder = value_decoder.borrow_mut();
                 let mut value_buf = value_buf.borrow_mut();
+                let mut n_seen = n_seen.borrow_mut();
 
                 let mut n_errors = 0;
                 let mut n_successes = 0;
@@ -755,7 +757,7 @@ where
                             MessagePayload::EOF => {
                                 let data = &mut &value_buf[..];
                                 let mut result = value_decoder
-                                    .eof(data, Some(n_seen + 1), push_metadata)
+                                    .eof(data, Some(*n_seen + 1), push_metadata)
                                     .transpose();
                                 if !data.is_empty() && !matches!(&result, Some(Err(_))) {
                                     result = Some(Err(DecodeError::Text(format!(
@@ -780,10 +782,10 @@ where
                                             DecodeResult {
                                                 key,
                                                 value: Some(value),
-                                                position: Some(n_seen),
+                                                position: Some(*n_seen),
                                             },
                                         ));
-                                        n_seen += 1;
+                                        *n_seen += 1;
                                     }
                                 }
                                 continue;
@@ -820,7 +822,7 @@ where
                                 let value = match value_decoder
                                     .next(
                                         value_bytes_remaining,
-                                        Some(n_seen + 1), // Match historical practice - files start at 1, not 0.
+                                        Some(*n_seen + 1), // Match historical practice - files start at 1, not 0.
                                         *upstream_time_millis,
                                         push_metadata,
                                     )
@@ -834,7 +836,7 @@ where
                                     }
                                     Ok(Some(value)) => Ok(value),
                                 };
-                                n_seen += 1;
+                                *n_seen += 1;
 
                                 // If the decoders decoded a message, they need to have made progress consuming the bytes.
                                 // Otherwise, we risk going into an infinite loop.
@@ -854,7 +856,7 @@ where
                                         DecodeResult {
                                             key,
                                             value: Some(value),
-                                            position: Some(n_seen),
+                                            position: Some(*n_seen),
                                         },
                                     ));
                                     *value_buf = vec![];
@@ -865,7 +867,7 @@ where
                                         DecodeResult {
                                             key: key.clone(),
                                             value: Some(value),
-                                            position: Some(n_seen),
+                                            position: Some(*n_seen),
                                         },
                                     ));
                                 }
