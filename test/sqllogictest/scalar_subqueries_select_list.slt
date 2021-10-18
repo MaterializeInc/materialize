@@ -1,0 +1,975 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# Test that multiple scalar subqueries are properly flattened by #8582 whenever possible.
+#
+# For eligible queries:
+# - a (number_of_subqueries + 1)-way join is expected at the bottom of the plan
+# - any comonality of the subqueries will be detected by the CSE transform
+# - the operators that check for more than 1 row returned from the subquery will appear only once
+#
+
+mode cockroach
+
+statement ok
+CREATE TABLE t1 (
+  f1 INTEGER
+)
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3)
+
+statement ok
+CREATE TABLE t2 (
+  f1 INTEGER
+)
+
+statement ok
+INSERT INTO t2 VALUES (1), (2), (3)
+
+statement ok
+CREATE TABLE t3 (
+  f1 INTEGER
+)
+
+statement ok
+INSERT INTO t3 VALUES (1), (2), (3)
+
+#
+# Uncorrelated
+#
+
+query T multiline
+EXPLAIN SELECT (SELECT * FROM t1), (SELECT * FROM t1) FROM t2
+----
+%0 =
+| Get materialize.public.t1 (u1)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Project ()
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Project ()
+| Map (err: more than one record produced in subquery)
+
+%2 = Let l0 =
+| Union %0 %1
+
+%3 =
+| Get materialize.public.t2 (u3)
+| Project ()
+| ArrangeBy ()
+
+%4 =
+| Get %2 (l0)
+| Project ()
+| Distinct group=()
+| Negate
+
+%5 =
+| Constant ()
+
+%6 =
+| Union %4 %5
+| Map null
+
+%7 =
+| Union %2 %6
+
+%8 =
+| Join %3 %7
+| | implementation = Differential %7 %3.()
+| Project (#0, #0)
+
+EOF
+
+#
+# Correlated, identical subqueries
+#
+
+query T multiline
+EXPLAIN SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+----
+%0 = Let l0 =
+| Get materialize.public.t2 (u3)
+| Distinct group=(#0)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%3 = Let l1 =
+| Join %1 %2 (= #0 #1)
+| | implementation = DeltaQuery
+| |   delta %1 %2.(#0)
+| |   delta %2 %1.(#0)
+| Filter !(isnull(#0))
+| Project (#0)
+
+%4 =
+| Get %3 (l1)
+| Project (#0, #0)
+
+%5 =
+| Get %3 (l1)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%6 = Let l2 =
+| Union %4 %5
+
+%7 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy (#0)
+
+%8 =
+| Get %6 (l2)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%9 =
+| Union %8 %0
+| Map null
+
+%10 =
+| Union %6 %9
+
+%11 =
+| Join %7 %10 (= #0 #1)
+| | implementation = Differential %10 %7.(#0)
+| Project (#2, #2)
+
+EOF
+
+query II rowsort
+SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+----
+1 1
+2 2
+3 3
+
+query I
+SELECT COUNT(*) FROM (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2)
+----
+3
+
+query T multiline
+EXPLAIN SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
+----
+%0 = Let l0 =
+| Get materialize.public.t2 (u3)
+| Distinct group=(#0)
+
+%1 = Let l1 =
+| Get %0 (l0)
+| Filter !(isnull(#0))
+
+%2 = Let l2 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%3 =
+| Join %1 %2 (= #1 (#0 + 1))
+| | implementation = Differential %1 %2.(#0)
+| Filter !(isnull(#1))
+
+%4 =
+| Join %1 %2 (= #1 (#0 + 2))
+| | implementation = Differential %1 %2.(#0)
+| Filter !(isnull(#1))
+
+%5 = Let l3 =
+| Union %3 %4
+
+%6 =
+| Get %5 (l3)
+| Project (#0)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%7 = Let l4 =
+| Union %5 %6
+
+%8 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy (#0)
+
+%9 =
+| Get %7 (l4)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%10 =
+| Union %9 %0
+| Map null
+
+%11 =
+| Union %7 %10
+
+%12 =
+| Join %8 %11 (= #0 #1)
+| | implementation = Differential %11 %8.(#0)
+| Project (#2, #2)
+
+EOF
+
+#
+# Correlated, with distinct WHERE clauses
+#
+
+query T multiline
+EXPLAIN SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
+----
+%0 = Let l0 =
+| Get materialize.public.t2 (u3)
+| Distinct group=(#0)
+
+%1 = Let l1 =
+| Get %0 (l0)
+| Filter !(isnull(#0))
+
+%2 = Let l2 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%3 = Let l3 =
+| Join %1 %2 (= #1 (#0 + 1))
+| | implementation = Differential %1 %2.(#0)
+| Filter !(isnull(#1))
+
+%4 =
+| Get %3 (l3)
+| Project (#0)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%5 = Let l4 =
+| Union %3 %4
+
+%6 = Let l5 =
+| Join %1 %2 (= #1 (#0 + 2))
+| | implementation = Differential %1 %2.(#0)
+| Filter !(isnull(#1))
+
+%7 =
+| Get %6 (l5)
+| Project (#0)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%8 = Let l6 =
+| Union %6 %7
+
+%9 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy (#0)
+
+%10 =
+| Get %5 (l4)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%11 =
+| Union %10 %0
+| Map null
+
+%12 =
+| Union %5 %11
+| ArrangeBy (#0)
+
+%13 =
+| Get %8 (l6)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%14 =
+| Union %13 %0
+| Map null
+
+%15 =
+| Union %8 %14
+
+%16 =
+| Join %9 %12 %15 (= #0 #1 #3)
+| | implementation = Differential %15 %9.(#0) %12.(#0)
+| Project (#2, #4)
+
+EOF
+
+query II
+SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
+----
+NULL NULL
+3 NULL
+2 3
+
+#
+# Correlated, with distinct SELECT lists
+#
+
+query T multiline
+EXPLAIN SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f1) , (SELECT f1 + 2 FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+----
+%0 = Let l0 =
+| Get materialize.public.t2 (u3)
+| Distinct group=(#0)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%3 = Let l1 =
+| Join %1 %2 (= #0 #1)
+| | implementation = DeltaQuery
+| |   delta %1 %2.(#0)
+| |   delta %2 %1.(#0)
+| Filter !(isnull(#0))
+| Project (#0)
+
+%4 = Let l2 =
+| Get %3 (l1)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%5 =
+| Get %3 (l1)
+| Map (#0 + 1)
+
+%6 = Let l3 =
+| Union %5 %4
+
+%7 =
+| Get %3 (l1)
+| Map (#0 + 2)
+
+%8 = Let l4 =
+| Union %7 %4
+
+%9 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy (#0)
+
+%10 =
+| Get %6 (l3)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%11 =
+| Union %10 %0
+| Map null
+
+%12 =
+| Union %6 %11
+| ArrangeBy (#0)
+
+%13 =
+| Get %8 (l4)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%14 =
+| Union %13 %0
+| Map null
+
+%15 =
+| Union %8 %14
+
+%16 =
+| Join %9 %12 %15 (= #0 #1 #3)
+| | implementation = Differential %15 %9.(#0) %12.(#0)
+| Project (#2, #4)
+
+EOF
+
+query II
+SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f1) , (SELECT f1 + 2 FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+----
+2 3
+3 4
+4 5
+
+query T multiline
+EXPLAIN SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.f1) , (SELECT MAX(f1) FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+----
+%0 = Let l0 =
+| Get materialize.public.t2 (u3)
+| Distinct group=(#0)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%3 = Let l1 =
+| Join %1 %2 (= #0 #1)
+| | implementation = DeltaQuery
+| |   delta %1 %2.(#0)
+| |   delta %2 %1.(#0)
+| Filter !(isnull(#0))
+| Project (#0)
+
+%4 = Let l2 =
+| Get %3 (l1)
+| Reduce group=(#0)
+| | agg min(#0)
+
+%5 =
+| Get %4 (l2)
+| Project (#0)
+| Negate
+
+%6 =
+| Union %5 %0
+| Map null
+
+%7 = Let l3 =
+| Union %4 %6
+
+%8 = Let l4 =
+| Get %3 (l1)
+| Reduce group=(#0)
+| | agg max(#0)
+
+%9 =
+| Get %8 (l4)
+| Project (#0)
+| Negate
+
+%10 =
+| Union %9 %0
+| Map null
+
+%11 = Let l5 =
+| Union %8 %10
+
+%12 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy (#0)
+
+%13 =
+| Get %7 (l3)
+| Project (#0)
+| Negate
+
+%14 =
+| Union %13 %0
+| Map null
+
+%15 =
+| Union %7 %14
+| ArrangeBy (#0)
+
+%16 =
+| Get %11 (l5)
+| Project (#0)
+| Negate
+
+%17 =
+| Union %16 %0
+| Map null
+
+%18 =
+| Union %11 %17
+
+%19 =
+| Join %12 %15 %18 (= #0 #1 #3)
+| | implementation = Differential %18 %12.(#0) %15.(#0)
+| Project (#2, #4)
+
+EOF
+
+query II
+SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.f1) , (SELECT MAX(f1) FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+----
+1 1
+2 2
+3 3
+
+#
+# Nested
+#
+
+query T multiline
+EXPLAIN SELECT (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = t3.f1) FROM t3
+----
+%0 = Let l0 =
+| Get materialize.public.t3 (u5)
+| Distinct group=(#0)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy (#0)
+
+%3 = Let l1 =
+| Join %1 %2 (= #0 #1)
+| | implementation = DeltaQuery
+| |   delta %1 %2.(#0)
+| |   delta %2 %1.(#0)
+| Filter !(isnull(#0))
+| Project (#0)
+
+%4 = Let l2 =
+| Get %3 (l1)
+| Distinct group=(#0)
+
+%5 =
+| Get %4 (l2)
+| ArrangeBy (#0)
+
+%6 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%7 = Let l3 =
+| Join %5 %6 (= #0 #1)
+| | implementation = DeltaQuery
+| |   delta %5 %6.(#0)
+| |   delta %6 %5.(#0)
+| Project (#0)
+
+%8 =
+| Get %7 (l3)
+| Project (#0, #0)
+
+%9 =
+| Get %7 (l3)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%10 = Let l4 =
+| Union %8 %9
+
+%11 =
+| Get %3 (l1)
+| ArrangeBy (#0)
+
+%12 =
+| Get %10 (l4)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%13 =
+| Union %12 %4
+| Map null
+
+%14 =
+| Union %10 %13
+
+%15 = Let l5 =
+| Join %11 %14 (= #0 #1)
+| | implementation = Differential %14 %11.(#0)
+| Project (#0, #2)
+
+%16 =
+| Get %15 (l5)
+| Project (#0)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%17 = Let l6 =
+| Union %15 %16
+
+%18 =
+| Get materialize.public.t3 (u5)
+| ArrangeBy (#0)
+
+%19 =
+| Get %17 (l6)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%20 =
+| Union %19 %0
+| Map null
+
+%21 =
+| Union %17 %20
+
+%22 =
+| Join %18 %21 (= #0 #1)
+| | implementation = Differential %21 %18.(#0)
+| Project (#2)
+
+EOF
+
+query I
+SELECT (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = t3.f1) FROM t3
+----
+1
+2
+3
+
+#
+# Inside an aggregate
+#
+
+query T multiline
+EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)) FROM t2;
+----
+%0 = Let l0 =
+| Get materialize.public.t2 (u3)
+| Distinct group=(#0)
+
+%1 = Let l1 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%2 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%3 = Let l2 =
+| Join %2 %1 (= #0 #1)
+| | implementation = DeltaQuery
+| |   delta %2 %1.(#0)
+| |   delta %1 %2.(#0)
+| Filter !(isnull(#0))
+| Project (#0)
+
+%4 =
+| Get %3 (l2)
+| Project (#0, #0)
+
+%5 =
+| Get %3 (l2)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%6 = Let l3 =
+| Union %4 %5
+
+%7 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy (#0)
+
+%8 =
+| Get %6 (l3)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%9 =
+| Union %8 %0
+| Map null
+
+%10 =
+| Union %6 %9
+
+%11 = Let l4 =
+| Join %7 %10 (= #0 #1)
+| | implementation = Differential %10 %7.(#0)
+| Project (#0, #2)
+
+%12 = Let l5 =
+| Get %11 (l4)
+| Project (#0)
+| Distinct group=(#0)
+
+%13 =
+| Get %12 (l5)
+| ArrangeBy (#0)
+
+%14 = Let l6 =
+| Join %13 %1 (= #0 #1)
+| | implementation = DeltaQuery
+| |   delta %13 %1.(#0)
+| |   delta %1 %13.(#0)
+| Filter !(isnull(#0))
+| Project (#0)
+
+%15 =
+| Get %14 (l6)
+| Project (#0, #0)
+
+%16 =
+| Get %14 (l6)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%17 = Let l7 =
+| Union %15 %16
+
+%18 =
+| Get %11 (l4)
+| ArrangeBy (#0)
+
+%19 =
+| Get %17 (l7)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%20 =
+| Union %19 %12
+| Map null
+
+%21 =
+| Union %17 %20
+
+%22 = Let l8 =
+| Join %18 %21 (= #0 #2)
+| | implementation = Differential %21 %18.(#0)
+| Project (#1, #3)
+| Reduce group=()
+| | agg min(#0)
+| | agg max(#1)
+
+%23 =
+| Get %22 (l8)
+| Project ()
+| Negate
+
+%24 =
+| Constant ()
+
+%25 =
+| Union %23 %24
+| Map null, null
+
+%26 =
+| Union %22 %25
+
+EOF
+
+
+query II
+SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)) FROM t2;
+----
+1 3
+
+#
+# Join on the inside
+#
+
+query T multiline
+EXPLAIN SELECT
+	(SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t3.f1 AND t2.f1 = t3.f1),
+	(SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t3.f1 AND t2.f1 = t3.f1)
+FROM t3
+----
+%0 = Let l0 =
+| Get materialize.public.t3 (u5)
+| Distinct group=(#0)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%3 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy (#0)
+
+%4 = Let l1 =
+| Join %1 %2 %3 (= #0 #1 #2)
+| | implementation = DeltaQuery
+| |   delta %1 %2.(#0) %3.(#0)
+| |   delta %2 %1.(#0) %3.(#0)
+| |   delta %3 %1.(#0) %2.(#0)
+| Filter !(isnull(#0))
+| Project (#0)
+
+%5 =
+| Get %4 (l1)
+| Project (#0, #0)
+
+%6 =
+| Get %4 (l1)
+| Reduce group=(#0)
+| | agg count(true)
+| Filter (#1 > 1)
+| Project (#0)
+| Map (err: more than one record produced in subquery)
+
+%7 = Let l2 =
+| Union %5 %6
+
+%8 =
+| Get materialize.public.t3 (u5)
+| ArrangeBy (#0)
+
+%9 =
+| Get %7 (l2)
+| Project (#0)
+| Distinct group=(#0)
+| Negate
+
+%10 =
+| Union %9 %0
+| Map null
+
+%11 =
+| Union %7 %10
+
+%12 =
+| Join %8 %11 (= #0 #1)
+| | implementation = Differential %11 %8.(#0)
+| Project (#2, #2)
+
+EOF
+
+query II
+SELECT
+	(SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t3.f1 AND t2.f1 = t3.f1),
+	(SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t3.f1 AND t2.f1 = t3.f1)
+FROM t3
+----
+1  1
+2  2
+3  3
+
+
+#
+# Join on the outside
+#
+
+query T multiline
+EXPLAIN SELECT
+	(SELECT * FROM t1 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1),
+	(SELECT * FROM t1 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1)
+FROM t2, t3
+----
+%0 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t3 (u5)
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+
+%3 = Let l1 =
+| Get %2 (l0)
+| Distinct group=(#0, #1)
+
+%4 =
+| Get %3 (l1)
+| Filter (#0 = #1)
+
+%5 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%6 = Let l2 =
+| Join %4 %5 (= #0 #2)
+| | implementation = Differential %4 %5.(#0)
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+%7 =
+| Get %6 (l2)
+| Project (#0, #1, #0)
+
+%8 =
+| Get %6 (l2)
+| Reduce group=(#0, #1)
+| | agg count(true)
+| Filter (#2 > 1)
+| Project (#0, #1)
+| Map (err: more than one record produced in subquery)
+
+%9 = Let l3 =
+| Union %7 %8
+
+%10 =
+| Get %2 (l0)
+| ArrangeBy (#0, #1)
+
+%11 =
+| Get %9 (l3)
+| Project (#0, #1)
+| Distinct group=(#0, #1)
+| Negate
+
+%12 =
+| Union %11 %3
+| Map null
+
+%13 =
+| Union %9 %12
+
+%14 =
+| Join %10 %13 (= #0 #2) (= #1 #3)
+| | implementation = Differential %13 %10.(#0, #1)
+| Project (#4, #4)
+
+EOF
+
+query II
+SELECT
+	(SELECT * FROM t1 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1),
+	(SELECT * FROM t1 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1)
+FROM t2, t3
+----
+NULL  NULL
+NULL  NULL
+NULL  NULL
+NULL  NULL
+NULL  NULL
+NULL  NULL
+1  1
+2  2
+3  3
