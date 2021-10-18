@@ -63,10 +63,6 @@ impl Default for GeneratorConfig {
         // NB: If we need to temporarily disable an operation in all the nemesis
         // tests, set it to 0 here. (As opposed to clearing it in the impl of
         // `all_operations`, which will break the Generator tests.)
-
-        // TODO: re-enable when we can figure out how to make this work with
-        // trace compaction.
-        ops.read_output_weight = 0;
         ops
     }
 }
