@@ -96,19 +96,16 @@ impl LinearJoinPlan {
         // Track the set of bound input relations, for equivalence resolution.
         let mut bound_inputs = vec![source_relation];
 
+        // The arity of the stream of updates, to be modified for each lookup relation
         let mut stream_arity = input_mapper.input_arity(source_relation);
-        dbg!(&stream_arity);
-
         // Iterate through the join order instructions, assembling keys and
         // closures to use.
         for (lookup_relation, lookup_key) in join_order.iter() {
-            // dbg!(lookup_key);
             // rebase the intended key to use global column identifiers.
             let lookup_key_rebased = lookup_key
                 .iter()
                 .map(|k| input_mapper.map_expr_to_global(k.clone(), *lookup_relation))
                 .collect::<Vec<_>>();
-            // dbg!(&lookup_key_rebased);
 
             // Expressions to use as a key for the stream of incoming updates
             // are determined by locating the elements of `lookup_key` among
@@ -126,17 +123,13 @@ impl LinearJoinPlan {
                     bound_expr
                 })
                 .collect::<Vec<_>>();
-            // dbg!(&stream_key);
-            //
-            // dbg!(&join_build_state);
-            // dbg!(input_mapper.global_columns(*lookup_relation));
+
             // Introduce new columns and expressions they enable. Form a new closure.
             let closure = join_build_state.add_columns(
                 input_mapper.global_columns(*lookup_relation),
                 &lookup_key_rebased,
             );
             let next_stream_arity = closure.before.projection.len();
-            // dbg!(&closure);
 
             bound_inputs.push(*lookup_relation);
 
@@ -337,15 +330,12 @@ where
     ) -> Collection<G, Row> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let (permutation, value_expr) = Permutation::construct_no_op(&stream_key, stream_arity);
+            let (permutation, _value_expr) =
+                Permutation::construct_no_op(&stream_key, stream_arity);
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
                 move |row| {
-                    println!(
-                        "1  row: {:?}\tkey: {:?}\tvalue_expr: {:?}\tstream_arity: {}",
-                        row, stream_key, value_expr, stream_arity,
-                    );
                     let temp_storage = RowArena::new();
                     let datums_local = datums.borrow_with(&row);
                     assert_eq!(datums_local.len(), stream_arity);
@@ -354,17 +344,11 @@ where
                             .iter()
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
-                    // let value = Row::try_pack(
-                    //     value_expr
-                    //         .iter()
-                    //         .map(|e| e.eval(&datums_local, &temp_storage)),
-                    // )?;
                     // Explicit drop here to allow `row` to be returned.
                     drop(datums_local);
                     // TODO(mcsherry): We could remove any columns used only for `key`.
                     // This cannot be done any earlier, for example in a prior closure,
                     // because we need the columns for key production.
-                    // assert_eq!(value, row);
                     Ok((key, row))
                 }
             });
@@ -470,22 +454,18 @@ where
 
         let (oks, err) = prev_keyed
             .join_core(&next_input, move |key, old, new| {
-                println!("2  key: {:?}, old: {:?}, new: {:?}", key, old, new);
-                println!("2  permutation: {:?}", permutation);
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow();
-                // datums_local.extend(key.iter());
+                datums_local.extend(key.iter());
                 datums_local.extend(old.iter());
                 datums_local.extend(new.iter());
 
-                // permutation.permute_in_place(&mut datums_local);
+                permutation.permute_in_place(&mut datums_local);
 
-                let output = closure
+                closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
                     .map_err(DataflowError::from)
-                    .transpose();
-                println!("2  output: {:?}", output);
-                output
+                    .transpose()
             })
             .inner
             .ok_err(|(x, t, d)| {

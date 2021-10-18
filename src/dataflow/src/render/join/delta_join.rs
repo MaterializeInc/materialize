@@ -554,10 +554,6 @@ where
         let mut datums = DatumVec::new();
         let mut row_packer = Row::default();
         move |(row, time)| {
-            println!(
-                "3  row: {:?}\tkey: {:?}\tvalue_expr: {:?}\tstream_arity: {}",
-                row, prev_key, prev_value_expr, prev_arity,
-            );
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
             row_packer.clear();

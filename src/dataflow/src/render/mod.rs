@@ -335,15 +335,6 @@ where
     ) {
         // First, transform the relation expression into a render plan.
         let bundle = self.render_plan(object.view, scope, scope.index());
-        // println!(
-        //     "build_object arity: {}\t{:?}",
-        //     bundle.arity,
-        //     bundle
-        //         .arranged
-        //         .iter()
-        //         .map(|f| (f.0, &f.1.permutation))
-        //         .collect::<Vec<_>>()
-        // );
         self.insert_id(Id::Global(object.id), bundle);
     }
 
@@ -418,7 +409,6 @@ where
         worker_index: usize,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
         use plan::Plan;
-        // dbg!(&plan);
         match plan {
             Plan::Constant { rows, arity } => {
                 // Determine what this worker will contribute.
@@ -513,7 +503,6 @@ where
                     .into_iter()
                     .map(|input| self.render_plan(input, scope, worker_index))
                     .collect();
-                // dbg!(&plan);
                 match plan {
                     crate::render::join::JoinPlan::Linear(linear_plan) => {
                         self.render_join(inputs, linear_plan, scope, arity)
@@ -1024,7 +1013,6 @@ pub mod plan {
                         input_keys.push(keys);
                     }
                     // Extract temporal predicates as joins cannot currently absorb them.
-                    // dbg!(&implementation);
                     let plan = match implementation {
                         expr::JoinImplementation::Differential((start, _start_arr), order) => {
                             JoinPlan::Linear(LinearJoinPlan::create_from(
@@ -1073,15 +1061,6 @@ pub mod plan {
                     );
                     let output_keys = reduce_plan.keys(group_key.len());
                     let arity = group_key.len() + aggregates.len();
-                    println!("::Reduce arity: {} input_arity: {} group_key: {:?} aggregates: {:?} expected_group_size: {:?}", arity, input_arity, group_key, aggregates, expected_group_size);
-                    println!(
-                        "    group_key.len: {} aggregates.len: {}",
-                        group_key.len(),
-                        aggregates.len()
-                    );
-                    dbg!(&reduce_plan);
-                    dbg!(&key_val_plan);
-
                     // Return the plan, and the keys it produces.
                     (
                         Plan::Reduce {
@@ -1309,14 +1288,14 @@ pub mod plan {
     }
 }
 
+/// Represent
 #[derive(Clone, Debug)]
 pub struct Permutation {
     key_arity: usize,
     permutation: Vec<usize>,
-    // in_key: HashSet<usize>,
 }
 impl Permutation {
-    fn construct(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
+    fn _construct(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
         // Construct a mapping of columns `c` found in key at position `i`
         // Each value column and value is unique
         let columns_in_key = key_expr

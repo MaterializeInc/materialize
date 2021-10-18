@@ -919,7 +919,6 @@ dependencies = [
  "async-compression",
  "async-trait",
  "aws-util",
- "backtrace",
  "bincode",
  "byteorder",
  "ccsr",

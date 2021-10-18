@@ -35,7 +35,6 @@ use serde::{Deserialize, Serialize};
 use crate::arrangement::manager::RowSpine;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::render::datum_vec::DatumVec;
 use crate::render::Permutation;
 
 /// A plan describing how to compute a threshold operation.
@@ -103,7 +102,7 @@ fn threshold_arrangement<G, T, R, L>(
     arrangement: &R,
     name: &str,
     logic: L,
-    permutation: Permutation,
+    _permutation: Permutation,
 ) -> Arranged<G, TraceAgent<RowSpine<Row, Row, G::Timestamp, Diff>>>
 where
     G: Scope,
@@ -112,8 +111,7 @@ where
     R: ReduceCore<G, Row, Row, Diff>,
     L: Fn(&Diff) -> bool + 'static,
 {
-    let mut datum_vec = DatumVec::new();
-    arrangement.reduce_abelian(name, move |key, s, t| {
+    arrangement.reduce_abelian(name, move |_key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
                 t.push(((*record).clone(), *count));

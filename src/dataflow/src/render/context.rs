@@ -155,13 +155,6 @@ where
     ),
 }
 
-impl<S: Scope, T: Lattice> ArrangementFlavor<S, Row, T>
-where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
-{
-}
-
 #[derive(Clone)]
 pub struct ArrangementWrapper<S, V, T>
 where
@@ -172,7 +165,6 @@ where
 {
     pub permutation: Permutation,
     pub flavor: ArrangementFlavor<S, V, T>,
-    bt: String,
 }
 
 impl<S, V, T> ArrangementWrapper<S, V, T>
@@ -182,16 +174,10 @@ where
     S::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    fn new(permutation: Permutation, flavor: ArrangementFlavor<S, V, T>, bt: String) -> Self {
-        // println!(
-        //     "ArrangementWrapper::new(permutation: {:?}, ..)\n{:?}",
-        //     permutation,
-        //     backtrace::Backtrace::new()
-        // );
+    fn new(permutation: Permutation, flavor: ArrangementFlavor<S, V, T>) -> Self {
         Self {
             permutation,
             flavor,
-            bt,
         }
     }
 }
@@ -205,14 +191,13 @@ where
     pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
         let permutation = self.permutation.clone();
         let mut datum_vec = DatumVec::new();
-        let bt = self.bt.clone();
         match &self.flavor {
             ArrangementFlavor::Local(oks, errs) => (
                 oks.as_collection(move |k, v| {
                     let mut borrow = datum_vec.borrow_with_many(&[k, v]);
                     permutation.permute_in_place(&mut borrow);
                     let row = Row::pack_slice(&borrow[..permutation.permutation.len()]);
-                    assert_eq!(&row, v, "bt: {}, permutation: {:?}", bt, permutation);
+                    assert_eq!(&row, v, "permutation: {:?}", permutation);
                     row
                 }),
                 errs.as_collection(|k, _v| k.clone()),
@@ -222,7 +207,7 @@ where
                     let mut borrow = datum_vec.borrow_with_many(&[k, v]);
                     permutation.permute_in_place(&mut borrow);
                     let row = Row::pack_slice(&borrow[..permutation.permutation.len()]);
-                    assert_eq!(&row, v, "bt: {}, permutation: {:?}", bt, permutation);
+                    assert_eq!(&row, v, "permutation: {:?}", permutation);
                     row
                 }),
                 errs.as_collection(|k, _v| k.clone()),
@@ -259,7 +244,6 @@ where
                     &oks,
                     key,
                     move |k, v, t, d| {
-                        println!("k: {:?},\tv: {:?},\tpermutation: {:?}", *k, *v, permutation);
                         let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
                         permutation.permute_in_place(&mut borrow);
                         row_builder.clear();
@@ -306,7 +290,6 @@ where
     pub collection: Option<(Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementWrapper<S, V, T>>,
     pub arity: usize,
-    bt: String,
 }
 
 impl<S: Scope, V: Data, T: Lattice> CollectionBundle<S, V, T>
@@ -324,7 +307,6 @@ where
             arity,
             collection: Some((oks, errs)),
             arranged: BTreeMap::default(),
-            bt: format!("{:?}", backtrace::Backtrace::new()),
         }
     }
 
@@ -334,19 +316,12 @@ where
         arrangements: ArrangementFlavor<S, V, T>,
         arity: usize,
     ) -> Self {
-        let bt = format!("{:?}", backtrace::Backtrace::new());
         let mut arranged = BTreeMap::new();
 
         let permutation = Permutation::construct_no_op(&exprs, arity).0;
-        println!(
-            "from_expressions exprs: {:?}\tarity: {:?}\tperm: {:?}",
-            exprs, arity, permutation
-        );
-        // println!("{}", bt);
         let arrangements = ArrangementWrapper {
             permutation,
             flavor: arrangements,
-            bt: bt.clone(),
         };
 
         arranged.insert(exprs, arrangements);
@@ -354,7 +329,6 @@ where
             arity,
             collection: None,
             arranged,
-            bt,
         }
     }
 
@@ -535,26 +509,14 @@ where
                 let (oks, errs) = self.as_collection();
                 use crate::operator::CollectionExt;
                 let (permutation, value_expr) = Permutation::construct_no_op(&key, self.arity);
-                assert!(key.len() <= value_expr.len());
-                assert!(value_expr.len() <= self.arity);
-                // println!(
-                //     "key: {:?}, val: {:?} arity: {}",
-                //     key2, value_expr, self.arity
-                // );
-                let bt = self.bt.clone();
-                let p = permutation.clone();
                 let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
-                    println!(
-                        "ensure_arrangement row: {:?}, key: {:?}, val: {:?} p: {:?}",
-                        row, key2, value_expr, p
-                    );
                     let datums = row.unpack();
                     let temp_storage = RowArena::new();
                     let key_row =
                         Row::try_pack(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
                     let value_row =
                         Row::try_pack(value_expr.iter().map(|e| e.eval(&datums, &temp_storage)))?;
-                    assert_eq!(value_row, row, "bt: {}", bt);
+                    assert_eq!(value_row, row);
                     Ok::<(Row, Row), DataflowError>((key_row, value_row))
                 });
 
@@ -565,11 +527,7 @@ where
                     .arrange_named::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged.insert(
                     key,
-                    ArrangementWrapper::new(
-                        permutation,
-                        ArrangementFlavor::Local(oks, errs),
-                        self.bt.clone(),
-                    ),
+                    ArrangementWrapper::new(permutation, ArrangementFlavor::Local(oks, errs)),
                 );
             }
         }
@@ -606,7 +564,6 @@ where
                 let mut row_builder = Row::default();
                 move |data, time, diff| {
                     let temp_storage = repr::RowArena::new();
-                    println!("as_collection_core data: {:?}", &*data);
                     let mut datums_local = datums.borrow_with(&data);
                     mfp_plan.evaluate(
                         &mut datums_local,
@@ -633,7 +590,6 @@ use crate::render::datum_vec::DatumVec;
 use crate::render::Permutation;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::Capability;
-
 struct PendingWork<K, V, T: Timestamp, R, C: Cursor<K, V, T, R>> {
     capability: Capability<T>,
     cursor: C,
