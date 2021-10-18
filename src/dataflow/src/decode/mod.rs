@@ -530,12 +530,17 @@ where
                 async move {
                     let mut key_decoder = key_decoder.borrow_mut();
                     let mut value_decoder = value_decoder.borrow_mut();
+                    let mut output = raw_output.activate();
 
                     let mut n_errors = 0;
                     let mut n_successes = 0;
-                    let mut results = vec![];
                     while let Some((cap, data)) = input.next() {
-                        let cap = cap.delayed(cap.time());
+                        // We must retain the capability in case we hit an await point. This is
+                        // because CapabilityRefs aren't enough to ensure the frontier doesn't move
+                        // past us
+                        let cap = cap.retain();
+                        let mut session = output.session(&cap);
+
                         for SourceOutput {
                             key,
                             value,
@@ -563,11 +568,11 @@ where
                             };
 
                             if value == &MessagePayload::Data(vec![]) {
-                                results.push((cap.delayed(cap.time()), DecodeResult {
+                                session.give(DecodeResult {
                                     key,
                                     value: None,
                                     position: *position,
-                                }));
+                                });
                             } else {
                                 let value = match &value {
                                     MessagePayload::Data(value) => {
@@ -606,19 +611,13 @@ where
                                 } else if matches!(&value, Some(Ok(_))) {
                                     n_successes += 1;
                                 }
-                                results.push((cap.delayed(cap.time()), DecodeResult {
+                                session.give(DecodeResult {
                                     key,
                                     value,
                                     position: *position,
-                                }));
+                                });
                             }
                         }
-                    }
-
-                    let mut output = raw_output.activate();
-                    for (cap, result) in results.drain(..) {
-                        let mut session = output.session(&cap);
-                        session.give(result);
                     }
 
                     // Matching historical practice, we only log metrics on the value decoder.
@@ -723,9 +722,12 @@ where
 
                 let mut n_errors = 0;
                 let mut n_successes = 0;
-                let mut results = vec![];
+                let mut output = raw_output.activate();
                 while let Some((cap, data)) = input.next() {
-                    let cap = cap.delayed(cap.time());
+                    // We must retain the capability in case we hit an await point. This is because
+                    // CapabilityRef aren't enough to ensure the frontier doesn't move past us
+                    let cap = cap.retain();
+                    let mut session = output.session(&cap);
                     for SourceOutput {
                         key,
                         value,
@@ -779,14 +781,11 @@ where
                                         } else if matches!(&value, Ok(_)) {
                                             n_successes += 1;
                                         }
-                                        results.push((
-                                            cap.delayed(cap.time()),
-                                            DecodeResult {
-                                                key,
-                                                value: Some(value),
-                                                position: Some(*n_seen),
-                                            },
-                                        ));
+                                        session.give(DecodeResult {
+                                            key,
+                                            value: Some(value),
+                                            position: Some(*n_seen),
+                                        });
                                         *n_seen += 1;
                                     }
                                 }
@@ -804,14 +803,11 @@ where
                         };
 
                         if value.is_empty() {
-                            results.push((
-                                cap.delayed(cap.time()),
-                                DecodeResult {
-                                    key,
-                                    value: None,
-                                    position: None,
-                                },
-                            ));
+                            session.give(DecodeResult {
+                                key,
+                                value: None,
+                                position: None,
+                            });
                         } else {
                             let value_bytes_remaining = &mut value.as_slice();
                             // The intent is that the below loop runs as long as there are more bytes to decode.
@@ -853,25 +849,19 @@ where
                                     n_successes += 1;
                                 }
                                 if value_bytes_remaining.is_empty() {
-                                    results.push((
-                                        cap.delayed(cap.time()),
-                                        DecodeResult {
-                                            key,
-                                            value: Some(value),
-                                            position: Some(*n_seen),
-                                        },
-                                    ));
+                                    session.give(DecodeResult {
+                                        key,
+                                        value: Some(value),
+                                        position: Some(*n_seen),
+                                    });
                                     *value_buf = vec![];
                                     break;
                                 } else {
-                                    results.push((
-                                        cap.delayed(cap.time()),
-                                        DecodeResult {
-                                            key: key.clone(),
-                                            value: Some(value),
-                                            position: Some(*n_seen),
-                                        },
-                                    ));
+                                    session.give(DecodeResult {
+                                        key: key.clone(),
+                                        value: Some(value),
+                                        position: Some(*n_seen),
+                                    });
                                 }
                                 if is_err {
                                     // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
@@ -881,11 +871,6 @@ where
                             }
                         }
                     }
-                }
-                let mut output = raw_output.activate();
-                for (cap, result) in results.drain(..) {
-                    let mut session = output.session(&cap);
-                    session.give(result);
                 }
                 // Matching historical practice, we only log metrics on the value decoder.
                 if n_errors > 0 {
