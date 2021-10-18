@@ -92,8 +92,13 @@ Use relative links (/path/to/doc), not absolute links
 
 Wrap your release notes at the 80 character mark.
 
+## Internal note order
+
 Put breaking changes before other release notes, and mark them with
 `**Breaking change.**` at the start.
+
+List new features before bug fixes.
+
 {{< /comment >}}
 
 {{% version-header v0.9.9 %}}
