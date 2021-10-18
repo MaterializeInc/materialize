@@ -11,7 +11,7 @@ lazy_static = "1.4.0"
 lowertest = {path = "../lowertest"}
 ore = {path = "../ore"}
 repr = {path = "../repr"}
-proc-macro2 = "1.0.29"
+proc-macro2 = "1.0.30"
 
 [dev-dependencies]
 datadriven = "0.6.0"
