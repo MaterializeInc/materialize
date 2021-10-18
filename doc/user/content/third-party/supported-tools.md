@@ -17,7 +17,7 @@ menu:
 ## Beta-level support
 
 Beta-level support means the integration with Materialize may have performance or stability issues and is not subject
-to our [backwards compatibility](/versions/#backwards-compatibility")
+to our [backwards compatibility](/versions/#backwards-compatibility)
 guarantee.
 
 | Tool                    | Purpose                                                                    | What's missing?                                                                                                            |
