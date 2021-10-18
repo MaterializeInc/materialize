@@ -7,7 +7,7 @@ menu:
 ---
 
 {{% create-source/intro %}}
-This document details how to connect Materialize to a CSV-formatted Kafka topic. You can also use these instructions to connect to [Redpanda](/third-party/redpanda/) as a Kafka broker.
+This document details how to connect Materialize to a CSV-formatted Kafka topic. You can also use these instructions to connect to Kafka-compatible [Redpanda](/third-party/redpanda/) topics.
 {{% /create-source/intro %}}
 
 ## Syntax

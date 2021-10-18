@@ -14,6 +14,53 @@ This page details changes between versions of Materialize, including:
 For information about available versions, see our [Versions page](/versions).
 
 {{< comment >}}
+# What changes require a release note?
+
+Any behavior change to a stable, user-visible API requires a release note.
+Roughly speaking, Materialize's stable APIs are:
+
+  * The syntax and semantics of all documented SQL statements.
+  * The observable behavior of any source or sink.
+  * The behavior of all documented command-line flags.
+
+For details, see the [backwards compatibility policy](/versions/#Backwards-compatibility).
+
+Notably, changes to experimental or unstable APIs should *not* have release
+notes. The point of having experimental and unstable APIs is to decrease the
+engineering burden when those features are changed. Instead, write a release
+note introducing the feature for the release in which the feature is
+de-experimentalized.
+
+Examples of changes that require release notes:
+
+  * The addition of a new, documented SQL function.
+  * The stabilization of a new source type.
+  * A bug fix that fixes a panic in any component.
+  * A bug fix that changes the output format of a particular data type in a
+    sink.
+
+Examples of changes that do not require release notes:
+
+  * **An improvement to the build system.** The build system is not user
+    visible.
+  * **The addition of a feature to testdrive.** Similarly, our test frameworks
+    are not user visible.
+  * **An upgrade of an internal Rust dependency.** Most dependency upgrades
+    do not result in user-visible changes. (If they do, document the change
+    itself, not the fact that the dependency was upgraded. Users care about
+    the visible behavior of Materialize, not its implementation!)
+
+Performance improvements are a borderline case. A small performance improvement
+does not need a release note, but a large performance improvement may warrant
+one if it results in a noticeable improvement for a large class of users or
+unlocks new use cases for Materialize. Examples of performance improvements
+that warrant a release note include:
+
+  * Improving the speed of Avro decoding by 2x
+  * Converting an O(n<sup>2</sup>) algorithm in the optimizer to an O(n)
+    algorithm so that queries with several dozen `UNION` operations can be
+    planned in a reasonable amount of time
+
 # How to write a good release note
 
 Every release note should be phrased in the imperative mood, like a Git
@@ -45,8 +92,43 @@ Use relative links (/path/to/doc), not absolute links
 
 Wrap your release notes at the 80 character mark.
 
-Put breaking changes before other release notes.
+Put breaking changes before other release notes, and mark them with
+`**Breaking change.**` at the start.
 {{< /comment >}}
+
+{{% version-header v0.9.9 %}}
+
+- **Breaking change.** Fix a bug that inadvertently let users create `char
+  list` columns and custom types. This type is not meant to be supported.
+
+- Beta support for [Redpanda sources](/third-party/redpanda/).
+
+- Let users express `JOIN`-like `DELETE`s with `DELETE...USING`.
+
+- Optimize some `(table).field1.field2` expressions to only generate the
+  columns from `table` that are accessed subsequently. This avoids performance
+  issues when extracting a single field from a table expression with several
+  columns, for example records generated from [`ROW`](/sql/types/record).
+  {{% gh 8596 %}}
+
+- Fix a bug that inadvertently let users create an [`array`] with elements of
+  type [`list`] or [`map`], which crashes Materialize. {{% gh 8672 %}}
+
+{{% version-header v0.9.8 %}}
+
+- Throw errors on floating point arithmetic overflow and underflow.
+
+{{% version-header v0.9.7 %}}
+
+- Support the `IS TRUE`, `IS FALSE`, `IS UNKNOWN` operators (and their `NOT`
+  variations). {{% gh 8455 %}}
+- Add support for retention settings on Kafka sinks.
+
+- Support explicit `DROP DATABASE ... (CASCADE | RESTRICT)` statements.  The
+  default behavior remains CASCADE.
+
+- Fix a bug that prevented some users from creating Protobuf-formatted
+  sources. {{% gh 8528 %}}
 
 {{% version-header v0.9.6 %}}
 
@@ -85,7 +167,7 @@ Put breaking changes before other release notes.
 - Ignore the trailing newline character of POSIX compliant files instead of
   decoding it as an empty byte row. {{% gh 8142 %}}
 
-- Support `ORDER BY` in aggregate functions.
+- Support `ORDER BY` in [aggregate functions](/sql/functions/#aggregate-func).
 
 - When issuing `COMMIT` or `ROLLBACK` commands outside of an explicit
   transaction, always return a warning. Previously, the warning could be suppressed.
@@ -206,6 +288,8 @@ Put breaking changes before other release notes.
 - Add the [`kafka_time_offset`](/sql/create-source/avro-kafka/#with-options)
   `WITH` option for Kafka sources, which allows to set `start_offset` based on
   Kafka timestamps.
+
+- Add the [`timestamp_frequency_ms`] `WITH` option to Kinesis, S3, and file sources.
 
 - **Breaking change.** The `timezone(String, Time)` function can no
   longer be used in views.
@@ -1321,6 +1405,7 @@ Put breaking changes before other release notes.
 * [What is Materialize?](/overview/what-is-materialize/)
 * [Architecture overview](/overview/architecture/)
 
+[`array`]: /sql/types/array/
 [`bytea`]: /sql/types/bytea
 [`ALTER INDEX`]: /sql/alter-index
 [`CREATE INDEX`]: /sql/create-index
@@ -1330,9 +1415,10 @@ Put breaking changes before other release notes.
 [`date`]: /sql/types/date
 [`double precision`]: /sql/types/float8
 [`interval`]: /sql/types/interval
+[`list`]: /sql/types/list/
+[`map`]: /sql/types/map/
 [`real`]: /sql/types/float4
 [`pgcrypto`]: https://www.postgresql.org/docs/current/pgcrypto.html
-[`real`]: /sql/types/real
 [`SHOW CREATE SOURCE`]: /sql/show-create-source
 [`SHOW CREATE VIEW`]: /sql/show-create-view
 [`text`]: /sql/types/text

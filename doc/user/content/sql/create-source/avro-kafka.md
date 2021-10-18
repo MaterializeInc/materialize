@@ -11,7 +11,7 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-This document details how to connect Materialize to an Avro-formatted Kafka topic. You can also use these instructions to connect to [Redpanda](/third-party/redpanda/) as a Kafka broker.
+This document details how to connect Materialize to an Avro-formatted Kafka topic. You can also use these instructions to connect to Kafka-compatible [Redpanda](/third-party/redpanda/) topics.
 {{% /create-source/intro %}}
 
 ## Syntax
@@ -50,25 +50,6 @@ This creates a source that...
 - Decodes using an Avro schema.
 - Is eligible to use the Debezium envelope because it's Avro-encoded and
   published by Kafka; however, this still depends on whether or not the upstream
-  database publishes its data from a Debezium-enabled database.
-
-### Connecting to Redpanda
-
-```
-CREATE SOURCE events
-FROM KAFKA BROKER 'localhost:9092' TOPIC 'events'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
-ENVELOPE DEBEZIUM;
-```
-
-This creates a source that...
-
-- Automatically determines its schema from the Confluent Schema Registry.
-- Decodes data received from the `events` topic published by Redpanda running on
-  `localhost:9092`.
-- Decodes using an Avro schema.
-- Is eligible to use the Debezium envelope because it's Avro-encoded and
-  published by Redpanda; however, this still depends on whether or not the upstream
   database publishes its data from a Debezium-enabled database.
 
 ### Inlining the Avro schema
