@@ -104,6 +104,7 @@ case "$cmd" in
             --env CI
             --env GPG_KEY
             --env PYPI_TOKEN
+            --env MZ_SCRATCH_NO_DEFAULT_ENV
         )
         if [[ -t 1 ]]; then
             args+=(--tty)

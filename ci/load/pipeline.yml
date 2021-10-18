@@ -14,11 +14,13 @@ steps:
     timeout_in_minutes: 10
     env:
       AWS_DEFAULT_REGION: us-east-2
+      MZ_SCRATCH_NO_DEFAULT_ENV: yep
     plugins:
        - ./ci/plugins/scratch-aws-access
   - command: bin/ci-builder run stable bin/pyactivate --dev -m materialize.cli.cloudbench start --profile confluent --trials 3 --revs HEAD  --append_metadata --s3_root mz-periodic-cloudbench/avro_ingest_periodic materialize.benches.avro_ingest -r 1000000 -n 10 -d big-records
     timeout_in_minutes: 20
     env:
       AWS_DEFAULT_REGION: us-east-2
+      MZ_SCRATCH_NO_DEFAULT_ENV: yep
     plugins:
        - ./ci/plugins/scratch-aws-access
