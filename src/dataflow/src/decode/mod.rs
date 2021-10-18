@@ -535,6 +535,7 @@ where
                     let mut n_successes = 0;
                     let mut results = vec![];
                     while let Some((cap, data)) = input.next() {
+                        let cap = cap.delayed(cap.time());
                         for SourceOutput {
                             key,
                             value,
@@ -546,8 +547,8 @@ where
                             let key = if let (Some(key_decoder), false) =
                                 (key_decoder.as_mut(), key.is_empty())
                             {
-                                let mut key = block_on(key_decoder
-                                    .next(key_cursor, None, *upstream_time_millis, false))
+                                let mut key = key_decoder
+                                    .next(key_cursor, None, *upstream_time_millis, false).await
                                     .transpose();
                                 if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
                                     key = Some(Err(DecodeError::Text(format!(
@@ -571,13 +572,13 @@ where
                                 let value = match &value {
                                     MessagePayload::Data(value) => {
                                         let value_bytes_remaining = &mut value.as_slice();
-                                        let mut value = block_on(value_decoder
+                                        let mut value = value_decoder
                                             .next(
                                                 value_bytes_remaining,
                                                 *position,
                                                 *upstream_time_millis,
                                                 push_metadata,
-                                            ))
+                                            ).await
                                             .transpose();
                                         if let (Some(Ok(_)), false) =
                                             (&value, value_bytes_remaining.is_empty())
@@ -724,6 +725,7 @@ where
                 let mut n_successes = 0;
                 let mut results = vec![];
                 while let Some((cap, data)) = input.next() {
+                    let cap = cap.delayed(cap.time());
                     for SourceOutput {
                         key,
                         value,
@@ -735,13 +737,10 @@ where
                         let key = if let (Some(key_decoder), false) =
                             (key_decoder.as_mut(), key.is_empty())
                         {
-                            let mut key = block_on(key_decoder.next(
-                                key_cursor,
-                                None,
-                                *upstream_time_millis,
-                                false,
-                            ))
-                            .transpose();
+                            let mut key = key_decoder
+                                .next(key_cursor, None, *upstream_time_millis, false)
+                                .await
+                                .transpose();
                             if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
                                 // Perhaps someday we'll assign semantics to multiple keys in one message, but for now it doesn't make sense.
                                 key = Some(Err(DecodeError::Text(format!(
@@ -822,12 +821,15 @@ where
                             // and break manually.
                             loop {
                                 let old_value_cursor = *value_bytes_remaining;
-                                let value = match block_on(value_decoder.next(
-                                    value_bytes_remaining,
-                                    Some(*n_seen + 1), // Match historical practice - files start at 1, not 0.
-                                    *upstream_time_millis,
-                                    push_metadata,
-                                )) {
+                                let value = match value_decoder
+                                    .next(
+                                        value_bytes_remaining,
+                                        Some(*n_seen + 1), // Match historical practice - files start at 1, not 0.
+                                        *upstream_time_millis,
+                                        push_metadata,
+                                    )
+                                    .await
+                                {
                                     Err(e) => Err(e),
                                     Ok(None) => {
                                         let leftover = value_bytes_remaining.to_vec();
