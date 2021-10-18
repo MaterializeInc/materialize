@@ -260,9 +260,11 @@ where
                     key,
                     move |k, v, t, d| {
                         println!("k: {:?},\tv: {:?},\tpermutation: {:?}", *k, *v, permutation);
-                        let mut borrow = datum_vec.borrow_with(&*v);
+                        let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
+                        permutation.permute_in_place(&mut borrow);
                         row_builder.clear();
-                        row_builder.extend(&*borrow);
+                        row_builder.extend(&borrow[..permutation.len()]);
+                        assert_eq!(&row_builder, &*v);
                         logic(RefOrMut::Mut(&mut row_builder), t, d)
                     },
                     refuel,
@@ -275,9 +277,11 @@ where
                     &oks,
                     key,
                     move |k, v, t, d| {
-                        let mut borrow = datum_vec.borrow_with(&*v);
+                        let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
+                        permutation.permute_in_place(&mut borrow);
                         row_builder.clear();
-                        row_builder.extend(&*borrow);
+                        row_builder.extend(&borrow[..permutation.len()]);
+                        assert_eq!(&row_builder, &*v);
                         logic(RefOrMut::Mut(&mut row_builder), t, d)
                     },
                     refuel,
@@ -334,6 +338,11 @@ where
         let mut arranged = BTreeMap::new();
 
         let permutation = Permutation::construct_no_op(&exprs, arity).0;
+        println!(
+            "from_expressions exprs: {:?}\tarity: {:?}\tperm: {:?}",
+            exprs, arity, permutation
+        );
+        // println!("{}", bt);
         let arrangements = ArrangementWrapper {
             permutation,
             flavor: arrangements,
@@ -533,8 +542,12 @@ where
                 //     key2, value_expr, self.arity
                 // );
                 let bt = self.bt.clone();
+                let p = permutation.clone();
                 let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
-                    // println!("row: {:?}, key: {:?}, val: {:?}", row, key2, value_expr);
+                    println!(
+                        "ensure_arrangement row: {:?}, key: {:?}, val: {:?} p: {:?}",
+                        row, key2, value_expr, p
+                    );
                     let datums = row.unpack();
                     let temp_storage = RowArena::new();
                     let key_row =
@@ -593,6 +606,7 @@ where
                 let mut row_builder = Row::default();
                 move |data, time, diff| {
                     let temp_storage = repr::RowArena::new();
+                    println!("as_collection_core data: {:?}", &*data);
                     let mut datums_local = datums.borrow_with(&data);
                     mfp_plan.evaluate(
                         &mut datums_local,

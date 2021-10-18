@@ -1072,6 +1072,16 @@ pub mod plan {
                         *expected_group_size,
                     );
                     let output_keys = reduce_plan.keys(group_key.len());
+                    let arity = group_key.len() + aggregates.len();
+                    println!("::Reduce arity: {} input_arity: {} group_key: {:?} aggregates: {:?} expected_group_size: {:?}", arity, input_arity, group_key, aggregates, expected_group_size);
+                    println!(
+                        "    group_key.len: {} aggregates.len: {}",
+                        group_key.len(),
+                        aggregates.len()
+                    );
+                    dbg!(&reduce_plan);
+                    dbg!(&key_val_plan);
+
                     // Return the plan, and the keys it produces.
                     (
                         Plan::Reduce {
@@ -1366,25 +1376,6 @@ impl Permutation {
             key_arity: self.key_arity,
         }
     }
-
-    // pub fn filter<'a, I: IntoIterator<Item = Datum<'a>>>(
-    //     &self,
-    //     input: I,
-    // ) -> impl Iterator<Item = Datum<'a>> {
-    //     input
-    //         .into_iter()
-    //         .enumerate()
-    //         .filter(|(i, datum)| self.in_key.contains(i))
-    //         .map(|x| x.1)
-    // }
-    //
-    // pub fn permute(&self, input: &[&Datum]) -> impl Iterator<Item = &Datum> {
-    //     (0..input.len() - self.key_arity).map(|i| {
-    //         if i < self.key_arity {
-    //
-    //         }
-    //     })
-    // }
 
     pub fn permute_in_place<T>(&self, data: &mut [T]) {
         for (i, mut p) in self.permutation.iter().copied().enumerate() {
