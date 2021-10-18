@@ -208,7 +208,7 @@ By default, Materialize creates new, distinct topics for sinks after each restar
 * Reconstruct the history of the sinked object and all the objects on which it depends, based on the replayable timestamps of their source events.
 * Ensure that no other processes write to the output topic.
 
-On startup Materialize reads the source event timestamps from the [system catalog](../system-catalog) and determines the last processed event from the consistency topic. 
+On startup Materialize reads the source event timestamps from the [system catalog](../system-catalog) and determines the last processed event from the consistency topic.
 This allows for exactly-once stream processing, meaning that each incoming event affects the final results only once, even if the stream is disrupted or Materialize is restarted.
 
 Exactly-once stream processing is currently available only for Kafka sources and the views based on them.
