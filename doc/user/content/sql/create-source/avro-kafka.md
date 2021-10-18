@@ -11,8 +11,7 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-This document details how to connect Materialize to an Avro-formatted Kafka
-topic.
+This document details how to connect Materialize to an Avro-formatted Kafka topic. You can also use these instructions to connect to Kafka-compatible [Redpanda](/third-party/redpanda/) topics.
 {{% /create-source/intro %}}
 
 ## Syntax
@@ -190,4 +189,4 @@ It is possible to set `start_offset` based on Kafka timestamps using the `kafka_
 - [`CREATE VIEW`](../../create-view)
 - [`SELECT`](../../select)
 
-[Debezium]: http://debezium.io
+[Debezium]: https://debezium.io

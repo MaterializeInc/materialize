@@ -8,7 +8,7 @@ menu:
 
 {{% create-source/intro %}}
 This document details how to connect Materialize to JSON-formatted Kafka
-topics.
+topics. You can also use these instructions to connect to Kafka-compatible [Redpanda](/third-party/redpanda/) topics.
 
 {{% /create-source/intro %}}
 

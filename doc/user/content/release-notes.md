@@ -100,14 +100,15 @@ Put breaking changes before other release notes, and mark them with
 
 - **Breaking change.** Fix a bug that inadvertently let users create `char
   list` columns and custom types. This type is not meant to be supported.
+- Beta support for [Redpanda sources](/third-party/redpanda/).
+
+- Let users express `JOIN`-like `DELETE`s with `DELETE...USING`.
 
 - Optimize some `(table).field1.field2` expressions to only generate the
   columns from `table` that are accessed subsequently. This avoids performance
   issues when extracting a single field from a table expression with several
   columns, for example records generated from [`ROW`](/sql/types/record).
   {{% gh 8596 %}}
-
-- Let users express `JOIN`-like `DELETE`s with `DELETE...USING`.
 
 - Fix a bug that inadvertently let users create an [`array`] with elements of
   type [`list`] or [`map`], which crashes Materialize. {{% gh 8672 %}}
