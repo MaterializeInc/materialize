@@ -966,6 +966,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
  "tokio-util",
  "url",
  "uuid",
