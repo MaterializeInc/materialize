@@ -10,12 +10,40 @@
 use std::fmt::Display;
 
 use expr::EvalError;
+use persist_types::Codec;
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum DecodeError {
     Text(String),
+}
+
+// We only want to support persisting DecodeError for now, and not the full DataflowError, which is
+// a bit more complex.
+impl Codec for DecodeError {
+    fn codec_name() -> &'static str {
+        "DecodeError"
+    }
+
+    fn size_hint(&self) -> usize {
+        match self {
+            DecodeError::Text(text) => text.size_hint(),
+        }
+    }
+
+    fn encode<B: for<'a> Extend<&'a u8>>(&self, buf: &mut B) {
+        let encoded = match serde_json::to_vec(self) {
+            Ok(ok) => ok,
+            Err(e) => panic!("Encoding error, trying to encode {}: {}", self, e),
+        };
+        buf.extend(encoded.iter());
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        let decoded = serde_json::from_slice(buf).map_err(|e| format!("Decoding error: {}", e))?;
+        Ok(decoded)
+    }
 }
 
 impl Display for DecodeError {
@@ -99,5 +127,24 @@ impl From<EvalError> for DataflowError {
 impl From<SourceError> for DataflowError {
     fn from(e: SourceError) -> Self {
         Self::SourceError(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use persist_types::Codec;
+
+    use super::DecodeError;
+
+    #[test]
+    fn test_decode_error_codec_roundtrip() -> Result<(), String> {
+        let original = DecodeError::Text("ciao".to_string());
+        let mut encoded = Vec::new();
+        original.encode(&mut encoded);
+        let decoded = DecodeError::decode(&encoded)?;
+
+        assert_eq!(decoded, original);
+
+        Ok(())
     }
 }
