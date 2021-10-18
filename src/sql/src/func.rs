@@ -1367,6 +1367,12 @@ lazy_static! {
                     })
                 }), 1403;
             },
+            "current_database" => Scalar {
+                params!() => Operation::nullary(|ecx| {
+                    let datum = Datum::String(ecx.qcx.scx.catalog.default_database());
+                    Ok(HirScalarExpr::literal(datum, ScalarType::String))
+                }), 861;
+            },
             "current_user" => Scalar {
                 params!() => Operation::nullary(|ecx| {
                     let datum = Datum::String(ecx.qcx.scx.catalog.user());

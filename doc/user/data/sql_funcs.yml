@@ -534,6 +534,9 @@
     description: Returns the number of workers in use by the server.
   - signature: 'format_type(oid: int, typemod: int) -> text'
     description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
+  - signature: 'current_database() -> text'
+    description: >-
+      Returns the name of the current database.
   - signature: 'current_role() -> text'
     description: >-
       Alias for `current_user`.
