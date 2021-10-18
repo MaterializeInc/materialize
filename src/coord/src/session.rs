@@ -11,15 +11,17 @@
 
 #![warn(missing_docs)]
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use futures::Stream;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::OwnedMutexGuard;
 
 use expr::GlobalId;
+use pgrepr::Format;
 use repr::{Datum, Diff, Row, ScalarType, Timestamp};
 use sql::ast::{Raw, Statement};
 use sql::plan::{Params, PlanContext, StatementDesc};
@@ -226,14 +228,38 @@ impl Session {
 
     /// Removes the prepared statement associated with `name`.
     ///
-    /// If there is no such prepared statement, this method does nothing.
-    pub fn remove_prepared_statement(&mut self, name: &str) {
-        let _ = self.prepared_statements.remove(name);
+    /// Returns whether a statement previously existed.
+    pub fn remove_prepared_statement(&mut self, name: &str) -> bool {
+        self.prepared_statements.remove(name).is_some()
+    }
+
+    /// Removes all prepared statements.
+    pub fn remove_all_prepared_statements(&mut self) {
+        self.prepared_statements.clear();
     }
 
     /// Retrieves the prepared statement associated with `name`.
-    pub fn get_prepared_statement(&self, name: &str) -> Option<&PreparedStatement> {
+    ///
+    /// This is unverified and could be incorrect if the underlying catalog has
+    /// changed.
+    pub fn get_prepared_statement_unverified(&self, name: &str) -> Option<&PreparedStatement> {
         self.prepared_statements.get(name)
+    }
+
+    /// Retrieves the prepared statement associated with `name`.
+    ///
+    /// This is unverified and could be incorrect if the underlying catalog has
+    /// changed.
+    pub fn get_prepared_statement_mut_unverified(
+        &mut self,
+        name: &str,
+    ) -> Option<&mut PreparedStatement> {
+        self.prepared_statements.get_mut(name)
+    }
+
+    /// Returns the prepared statements for the session.
+    pub fn prepared_statements(&self) -> &HashMap<String, PreparedStatement> {
+        &self.prepared_statements
     }
 
     /// Binds the specified portal to the specified prepared statement.
@@ -294,6 +320,36 @@ impl Session {
         self.portals.get_mut(portal_name)
     }
 
+    /// Creates and installs a new portal.
+    pub fn create_new_portal(
+        &mut self,
+        stmt: Option<Statement<Raw>>,
+        desc: StatementDesc,
+        parameters: Params,
+        result_formats: Vec<Format>,
+    ) -> Result<String, CoordError> {
+        // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
+
+        for i in 0usize.. {
+            let name = format!("<unnamed portal {}>", i);
+            match self.portals.entry(name.clone()) {
+                Entry::Occupied(_) => continue,
+                Entry::Vacant(entry) => {
+                    entry.insert(Portal {
+                        stmt,
+                        desc,
+                        parameters,
+                        result_formats,
+                        state: PortalState::NotStarted,
+                    });
+                    return Ok(name);
+                }
+            }
+        }
+
+        coord_bail!("unable to create a new portal");
+    }
+
     /// Resets the session to its initial state. Returns sinks that need to be
     /// dropped.
     pub fn reset(&mut self) -> Vec<GlobalId> {
@@ -342,12 +398,22 @@ impl Session {
 pub struct PreparedStatement {
     sql: Option<Statement<Raw>>,
     desc: StatementDesc,
+    /// The most recent catalog revision that has verified this statement.
+    pub catalog_revision: u64,
 }
 
 impl PreparedStatement {
     /// Constructs a new prepared statement.
-    pub fn new(sql: Option<Statement<Raw>>, desc: StatementDesc) -> PreparedStatement {
-        PreparedStatement { sql, desc }
+    pub fn new(
+        sql: Option<Statement<Raw>>,
+        desc: StatementDesc,
+        catalog_revision: u64,
+    ) -> PreparedStatement {
+        PreparedStatement {
+            sql,
+            desc,
+            catalog_revision,
+        }
     }
 
     /// Returns the raw SQL string associated with this prepared statement,
@@ -385,15 +451,42 @@ pub enum PortalState {
     NotStarted,
     /// Portal is a rows-returning statement in progress with 0 or more rows
     /// remaining.
-    InProgress(Option<RowBatchStream>),
+    InProgress(Option<InProgressRows>),
     /// Portal has completed and should not be re-executed. If the optional string
     /// is present, it is returned as a CommandComplete tag, otherwise an error
     /// is sent.
     Completed(Option<String>),
 }
 
-/// A stream of batched rows.
-pub type RowBatchStream = Box<dyn Stream<Item = Vec<Row>> + Send + Unpin>;
+/// State of an in-progress, rows-returning portal.
+pub struct InProgressRows {
+    /// The current batch of rows.
+    pub current: Option<Vec<Row>>,
+    /// A stream from which to fetch more row batches.
+    pub remaining: RowBatchStream,
+}
+
+impl InProgressRows {
+    /// Creates a new InProgressRows from a batch stream.
+    pub fn new(remaining: RowBatchStream) -> Self {
+        Self {
+            current: None,
+            remaining,
+        }
+    }
+
+    /// Creates a new InProgressRows from a single batch of rows.
+    pub fn single_batch(rows: Vec<Row>) -> Self {
+        let (_tx, rx) = unbounded_channel();
+        Self {
+            current: Some(rows),
+            remaining: rx,
+        }
+    }
+}
+
+/// A channel of batched rows.
+pub type RowBatchStream = UnboundedReceiver<Vec<Row>>;
 
 /// The transaction status of a session.
 ///

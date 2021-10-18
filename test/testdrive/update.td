@@ -63,7 +63,11 @@ invalid input syntax for type double precision
 > SELECT * FROM t
 4 6 xy
 
-> CREATE VIEW v AS SELECT 1 a;
+# Update subqueries can only reference other tables
+> CREATE MATERIALIZED VIEW v (a) AS SELECT 4;
+
+! UPDATE t SET i = i + 1 WHERE i IN (SELECT a FROM v);
+invalid selection
 
 ! UPDATE v SET a = 1
 cannot mutate view
@@ -164,3 +168,86 @@ DELETE FROM c WHERE a < 3;
 
 > SELECT a FROM c;
 3
+
+# DELETE USING
+
+> CREATE TABLE t1 (a int, b int);
+> CREATE TABLE t2 (a int, b int);
+> CREATE TABLE t3 (x int, y int);
+
+# This test should exercise at least one case where a cross-join of t1, t3
+# produce more rows than t3 wants to DELETE.
+
+> INSERT INTO t1 VALUES
+    (5, 10), (5, 15), (15, 20), (100, 100), (200, 1000);
+> INSERT INTO t2 VALUES
+    (200, 2000), (200, 2000);
+> INSERT INTO t3 VALUES
+    (5, 20), (6, 7), (7, 8), (500, 100);
+
+> DELETE FROM t3 USING t1 table1 WHERE t3.x = table1.a;
+> SELECT * FROM t3 ORDER BY x;
+6   7
+7   8
+500 100
+
+> DELETE FROM t3 USING t1 JOIN t2 USING (a) WHERE t3.x > t1.a;
+> SELECT * FROM t3 ORDER BY x;
+6 7
+7 8
+
+> DELETE FROM t3 USING t3 t3_other WHERE t3.x = t3_other.y;
+> SELECT * FROM t3 ORDER BY x;
+6 7
+
+# Ensure that `USING` empty tables does not delete any rows
+> DELETE FROM t1;
+> SELECT * FROM t1;
+
+> DELETE FROM t3 USING t1;
+> SELECT * FROM t3 ORDER BY x;
+6 7
+
+> DELETE FROM t3 USING t1, t2;
+> SELECT * FROM t3 ORDER BY x;
+6 7
+
+> DELETE FROM t3 USING t2;
+> SELECT * FROM t3 ORDER BY x;
+
+# Lateral subqueries cannot access `FROM` table
+! DELETE FROM t3 USING lateral (SELECT t3.x FROM t1) t4 WHERE true;
+column "t3.x" does not exist
+
+# ...unless it's explicitly brought into scope
+> DELETE FROM t3 USING lateral (SELECT t3.x FROM t3) t4 WHERE true;
+
+# Test different arities
+> CREATE TABLE t4 (a int, b int, c int);
+> CREATE TABLE t5 (a int);
+> CREATE TABLE t6 (a int, b int);
+
+> INSERT INTO t4 VALUES
+    (6, 0, 0), (7, 0, 0), (10, 0, 0), (11, 0, 0);
+> INSERT INTO t5 VALUES
+    (8), (9), (10), (12);
+> INSERT INTO t6 VALUES
+    (0, 6), (0, 7), (0, 8), (0, 9);
+
+> DELETE FROM t6 USING t4 WHERE t4.a + t4.b + t4.c = t6.a + t6.b;
+> DELETE FROM t4 USING t6 WHERE t4.a + t4.b + t4.c = t6.a + t6.b;
+> DELETE FROM t6 USING t5 WHERE t5.a = t6.a + t6.b;
+> DELETE FROM t5 USING t6 WHERE t5.a = t6.a + t6.b;
+> DELETE FROM t4 USING t5 WHERE t4.a + t4.b + t4.c = t5.a;
+> DELETE FROM t5 USING t4 WHERE t4.a + t4.b + t4.c + 1 = t5.a;
+
+> SELECT * FROM t4 ORDER BY a;
+6  0 0
+7  0 0
+11 0 0
+
+> SELECT * FROM t5 ORDER BY a;
+9
+10
+
+> SELECT * FROM t6 ORDER BY a;

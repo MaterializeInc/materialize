@@ -42,6 +42,7 @@ wrappers = [
     "serde-protobuf",
     "sysctl",
     "tiberius",
+    "zip",
 ]
 
 # The `uncased` crate serves the same purpose as `unicase` and is more

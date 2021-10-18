@@ -73,10 +73,12 @@ name
 
 > CREATE SINK snk4 FROM v2
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk4'
+  WITH (retention_ms=1000000)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK snk5 FROM v3
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk5'
+  WITH (retention_bytes=1000000000000)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > SHOW SINKS

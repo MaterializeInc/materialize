@@ -4,7 +4,6 @@ description: "Find out how a single Materialize instance can create an entire mi
 menu:
   main:
     parent: 'demos'
-    weight: 4
 ---
 
 **tl;dr** Using Materialize, you can easily create transformation-oriented
@@ -119,7 +118,7 @@ message Record {
   google.protobuf.Timestamp interval_end = 3;   // Interval's end
 
   string meter = 4; // What's being measured
-  uint32 value = 5; // Quantity measured
+  int32 value = 5; // Quantity measured
 
   ResourceInfo info = 6; // Resource for this Record.
 }
@@ -191,27 +190,25 @@ FORMAT PROTOBUF MESSAGE 'billing.Batch'
 ### Normalizing data
 
 The data we receive from the new `billing_source` needs to be normalized from its original structure.
-
-Because we're using `Batch` as our top-level message, we can convert its
-`records` fields into `jsonb` using `jsonb_array_elements`. In Materialize, we
-accomplish this with a materialized view that parses the `jsonb` into a table
-with the columns we know we'll need:
+In Materialize, we can accomplish this with a materialized view:
 
 ```sql
 CREATE MATERIALIZED VIEW billing_records AS
     SELECT
-        r.value->>'id' id,
-        billing_source.id batch_id,
-        r.value->>'interval_start' interval_start,
-        r.value->>'interval_end' interval_end,
-        r.value->>'meter' meter,
-        (r.value->'value')::int value,
-        (r.value->'info'->'client_id')::int client_id,
-        (r.value->'info'->'vm_id')::int vm_id,
-        (r.value->'info'->'cpu_num')::int cpu_num,
-        (r.value->'info'->'memory_gb')::int memory_gb,
-        (r.value->'info'->'disk_gb')::int disk_gb
-    FROM billing_source, jsonb_array_elements(records) AS r;
+        (r).id,
+        id batch_id,
+        to_timestamp(((r).interval_start)."seconds")::text interval_start,
+        to_timestamp(((r).interval_end)."seconds")::text interval_end,
+        (r).meter,
+        ((r)."value")::int,
+        ((r).info).client_id::int,
+        ((r).info).vm_id::int,
+        ((r).info).cpu_num::int,
+        ((r).info).memory_gb::int,
+        ((r).info).disk_gb::int
+    FROM
+        billing_source,
+        unnest(records) as r;
 ```
 
 This makes `billing_records` a normalized view of our data that we can begin
@@ -222,18 +219,19 @@ SHOW COLUMNS FROM billing_records;
 ```
 ```nofmt
      name       | nullable |    type
-----------------+----------+-------------
- id             | true     | text
- batch_id       | true     | text
- interval_start | true     | timestamptz
- interval_end   | true     | timestamptz
- meter          | true     | text
- value          | true     | int4
- client_id      | true     | int4
- vm_id          | true     | int4
- cpu_num        | true     | int4
- memory_gb      | true     | int4
- disk_gb        | true     | int4
+----------------+----------+--------------------------
+ id             | t        | text
+ batch_id       | t        | text
+ interval_start | t        | timestamp with time zone
+ interval_end   | t        | timestamp with time zone
+ meter          | t        | text
+ value          | t        | integer
+ client_id      | t        | integer
+ vm_id          | t        | integer
+ cpu_num        | t        | integer
+ memory_gb      | t        | integer
+ disk_gb        | t        | integer
+(11 rows)
 ```
 
 ### Other source types
@@ -302,7 +300,7 @@ these columns have a relation, even though they do.
 ```sql
 CREATE MATERIALIZED VIEW billing_agg_by_month AS
     SELECT
-        substr AS month,
+        substr(interval_start, 0, 8) as month,
         client_id,
         meter,
         cpu_num,
@@ -311,7 +309,7 @@ CREATE MATERIALIZED VIEW billing_agg_by_month AS
         sum(value)
     FROM billing_records
     GROUP BY
-        substr(interval_start, 0, 8),
+        month,
         client_id,
         meter,
         cpu_num,
@@ -459,27 +457,12 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
     We can query this view to see what our denormalized data looks like:
 
     ```sql
-    SELECT jsonb_pretty(records::jsonb) AS records FROM billing_raw_data LIMIT 1;
+    SELECT records FROM billing_raw_data LIMIT 1;
     ```
     ```nofmt
-                               records
-    --------------------------------------------------------------
-     [                                                           +
-       {                                                         +
-         "id": "IYLwLRskSjSC71wk8B_yoA",                         +
-         "info": {                                               +
-           "client_id": 1.0,                                     +
-           "cpu_num": 2.0,                                       +
-           "disk_gb": 128.0,                                     +
-           "memory_gb": 8.0,                                     +
-           "vm_id": 1293.0                                       +
-         },                                                      +
-         "interval_end": "2020-01-28T21:12:51.331566645+00:00",  +
-         "interval_start": "2020-01-28T21:02:21.331566645+00:00",+
-         "meter": "execution_time_ms",                           +
-         "value": 56.0                                           +
-       }                                                         +
-     ]
+                                                               records
+    -----------------------------------------------------------------------------------------------------------------------------
+     {"(43e0b30b-0022-4a90-9594-1977e8dce33a,\"(1632335022,0)\",\"(1632335121,0)\",execution_time_ms,44,\"(2,8,128,22,1375)\")"}
     ```
 
 1. Now, we can see what our normalization looks like (the `billing_records` view
@@ -509,13 +492,13 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
     SELECT * FROM billing_agg_by_month ORDER BY sum DESC LIMIT 5;
     ```
     ```nofmt
-            month        | client_id |       meter       | cpu_num | memory_gb | disk_gb | sum
-    ---------------------+-----------+-------------------+---------+-----------+---------+------
-     2020-02-01 00:00:00 |        51 | execution_time_ms |       1 |         8 |     128 | 2871
-     2020-02-01 00:00:00 |         9 | execution_time_ms |       1 |         8 |     128 | 2808
-     2020-02-01 00:00:00 |        89 | execution_time_ms |       2 |        16 |     128 | 2711
-     2020-02-01 00:00:00 |        25 | execution_time_ms |       2 |        16 |     128 | 2650
-     2020-02-01 00:00:00 |        29 | execution_time_ms |       2 |        16 |     128 | 2614
+    month  | client_id |       meter       | cpu_num | memory_gb | disk_gb |  sum
+    ---------+-----------+-------------------+---------+-----------+---------+-------
+    2021-09 |        16 | execution_time_ms |       1 |        16 |     128 | 25330
+    2021-09 |        86 | execution_time_ms |       1 |        16 |     128 | 24587
+    2021-09 |        38 | execution_time_ms |       2 |         8 |     128 | 24575
+    2021-09 |        97 | execution_time_ms |       1 |        16 |     128 | 24488
+    2021-09 |        50 | execution_time_ms |       2 |        16 |     128 | 24319
     ```
 
 1. Now, we can look at our customers' monthly bills by selecting from
@@ -525,13 +508,13 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
     SELECT * FROM billing_monthly_statement ORDER BY monthly_bill DESC LIMIT 5;
     ```
     ```nofmt
-            month        | client_id | execution_time_ms | cpu_num | memory_gb | monthly_bill
-   ---------------------+-----------+-------------------+---------+-----------+--------------
-   2020-02-01 00:00:00 |        29 |              2614 |       2 |        16 |          418
-   2020-02-01 00:00:00 |        55 |              2580 |       1 |        16 |          381
-   2020-02-01 00:00:00 |        14 |              2470 |       1 |        16 |          363
-   2020-02-01 00:00:00 |        78 |              2184 |       2 |        16 |          349
-   2020-02-01 00:00:00 |        51 |              2321 |       1 |        16 |          336
+    month  | client_id | execution_time_ms | cpu_num | memory_gb | monthly_bill
+    ---------+-----------+-------------------+---------+-----------+--------------
+    2021-09 |        51 |             22709 |       2 |        16 |         3542
+    2021-09 |        93 |             22134 |       2 |        16 |         3541
+    2021-09 |        58 |             23555 |       2 |        16 |         3533
+    2021-09 |        89 |             21936 |       2 |        16 |         3509
+    2021-09 |        55 |             22352 |       2 |        16 |         3486
     ```
 
 1. We an also perform arbitrary `SELECT`s on our views to explore new aggregations we might want to materialize with their own views. For example, we can view each user's total monthly bill:

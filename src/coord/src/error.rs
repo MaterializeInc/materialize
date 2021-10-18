@@ -29,6 +29,8 @@ pub enum CoordError {
     },
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
+    /// The cached plan or descriptor changed.
+    ChangedPlan,
     /// The specified session parameter is constrained to its current value.
     ConstrainedParameter(&'static (dyn Var + Send + Sync)),
     /// The cursor already exists.
@@ -43,12 +45,16 @@ pub enum CoordError {
     InvalidAlterOnDisabledIndex(String),
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
+    /// The selection value for a table mutation operation refers to an invalid object.
+    InvalidTableMutationSelection,
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
     /// The named operation cannot be run in a transaction.
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
     OperationRequiresTransaction(String),
+    /// The named prepared statement already exists.
+    PreparedStatementExists(String),
     /// The transaction is in read-only mode.
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
@@ -56,7 +62,7 @@ pub enum CoordError {
     /// A query in a transaction referenced a relation outside the first query's
     /// time domain.
     RelationOutsideTimeDomain {
-        relation: String,
+        relations: Vec<String>,
         names: Vec<String>,
     },
     /// The specified feature is not permitted in safe mode.
@@ -73,6 +79,7 @@ pub enum CoordError {
     UnknownLoginRole(String),
     /// The named parameter is unknown to the system.
     UnknownParameter(String),
+    UnknownPreparedStatement(String),
     /// A generic error occurred.
     //
     // TODO(benesch): convert all those errors to structured errors.
@@ -124,6 +131,25 @@ impl CoordError {
             }
             CoordError::Catalog(c) => c.detail(),
             CoordError::Eval(e) => e.detail(),
+            CoordError::RelationOutsideTimeDomain { relations, names } => Some(format!(
+                "The following relations in the query are outside the transaction's time domain:\n{}\n{}",
+                relations
+                    .iter()
+                    .map(|r| r.quoted().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                match names.is_empty() {
+                    true => "No relations are available.".to_string(),
+                    false => format!(
+                        "Only the following relations are available:\n{}",
+                        names
+                            .iter()
+                            .map(|name| name.quoted().to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                }
+            )),
             CoordError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -191,6 +217,7 @@ impl fmt::Display for CoordError {
             CoordError::AutomaticTimestampFailure { .. } => {
                 f.write_str("unable to automatically determine a query timestamp")
             }
+            CoordError::ChangedPlan => f.write_str("cached plan must not change result type"),
             CoordError::Catalog(e) => e.fmt(f),
             CoordError::ConstrainedParameter(p) => write!(
                 f,
@@ -217,6 +244,9 @@ impl fmt::Display for CoordError {
                 p.name().quoted(),
                 p.type_name().quoted()
             ),
+            CoordError::InvalidTableMutationSelection => {
+                f.write_str("invalid selection: operation may only refer to user-defined tables")
+            }
             CoordError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
             }
@@ -226,26 +256,18 @@ impl fmt::Display for CoordError {
             CoordError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
+            CoordError::PreparedStatementExists(name) => {
+                write!(f, "prepared statement {} already exists", name.quoted())
+            }
             CoordError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
             }
-            CoordError::RelationOutsideTimeDomain { relation, names } => {
+            CoordError::RelationOutsideTimeDomain { .. } => {
                 write!(
                     f,
-                    "transactions can only reference nearby relations; {} referenced here, but {}",
-                    relation.quoted(),
-                    match names.is_empty() {
-                        true => "none available".to_string(),
-                        false => format!(
-                            "only the following are available: {}",
-                            names
-                                .iter()
-                                .map(|name| name.quoted().to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                    }
+                    "Transactions can only reference objects in the same timedomain. See {}",
+                    "https://materialize.com/docs/sql/begin/#same-timedomain-error",
                 )
             }
             CoordError::SafeModeViolation(feature) => {
@@ -268,6 +290,9 @@ impl fmt::Display for CoordError {
             CoordError::Unsupported(features) => write!(f, "{} are not supported", features),
             CoordError::Unstructured(e) => write!(f, "{:#}", e),
             CoordError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
+            CoordError::UnknownPreparedStatement(name) => {
+                write!(f, "prepared statement {} does not exist", name.quoted())
+            }
         }
     }
 }

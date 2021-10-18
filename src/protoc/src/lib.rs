@@ -36,7 +36,7 @@ use std::process;
 use anyhow::{anyhow, bail, Context};
 use protobuf::descriptor::FileDescriptorSet;
 use protobuf::Message;
-use protobuf_codegen_pure::Customize;
+use protobuf_codegen_pure::{Customize, ParsedAndTypechecked};
 
 /// A builder for a protobuf compilation.
 #[derive(Default, Debug)]
@@ -76,6 +76,40 @@ impl Protoc {
         self
     }
 
+    fn parse_internal(&self) -> Result<ParsedAndTypechecked, anyhow::Error> {
+        for input in &self.inputs {
+            if !input.exists() {
+                bail!("input protobuf file does not exist: {}", input.display());
+            }
+        }
+
+        let includes: Vec<_> = self.includes.iter().map(|p| p.as_path()).collect();
+        let inputs: Vec<_> = self.inputs.iter().map(|p| p.as_path()).collect();
+        protobuf_codegen_pure::parse_and_typecheck(&includes, &inputs).map_err(|e| {
+            // The `fmt::Display` implementation for `e` is hopelessly broken
+            // and displays no useful information. Use the debug implementation
+            // instead.
+            anyhow!("{:#?}", e)
+        })
+    }
+
+    /// Parses the inputs into a file descriptor set.
+    ///
+    /// A [`FileDescriptorSet`] is protobuf's internal representation of a
+    /// collection .proto file. It is similar in spirit to an AST, and is useful
+    /// for callers who will analyze the protobuf messages to provide bespoke
+    /// deserialization and serialization behavior, rather than relying on the
+    /// stock code generation.
+    ///
+    /// Most users will want to call [`Protoc::compile_into`] or
+    /// [`Protoc::build_script_exec`] instead.
+    pub fn parse(&self) -> Result<FileDescriptorSet, anyhow::Error> {
+        let parsed = self.parse_internal()?;
+        let mut fds = FileDescriptorSet::new();
+        fds.file = parsed.file_descriptors.into_iter().collect();
+        Ok(fds)
+    }
+
     /// Executes the compilation.
     ///
     /// The generated files are placed into `out_dir` according to the
@@ -92,21 +126,7 @@ impl Protoc {
             );
         }
 
-        for input in &self.inputs {
-            if !input.exists() {
-                bail!("input protobuf file does not exist: {}", input.display());
-            }
-        }
-
-        let includes: Vec<_> = self.includes.iter().map(|p| p.as_path()).collect();
-        let inputs: Vec<_> = self.inputs.iter().map(|p| p.as_path()).collect();
-        let parsed =
-            protobuf_codegen_pure::parse_and_typecheck(&includes, &inputs).map_err(|e| {
-                // The `fmt::Display` implementation for `e` is hopelessly broken
-                // and displays no useful information. Use the debug implementation
-                // instead.
-                anyhow!("{:#?}", e)
-            })?;
+        let parsed = self.parse_internal()?;
 
         protobuf_codegen::gen_and_write(
             &parsed.file_descriptors,

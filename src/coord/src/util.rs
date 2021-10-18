@@ -32,6 +32,10 @@ impl<T> ClientTransmitter<T> {
         // interested in the response.
         let _ = self.tx.take().unwrap().send(Response { result, session });
     }
+
+    pub fn take(mut self) -> oneshot::Sender<Response<T>> {
+        self.tx.take().unwrap()
+    }
 }
 
 impl<T> Drop for ClientTransmitter<T> {

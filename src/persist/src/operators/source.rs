@@ -12,7 +12,6 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
-use log::debug;
 use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, ToStream};
@@ -22,8 +21,7 @@ use timely::Data as TimelyData;
 
 use crate::indexed::runtime::StreamReadHandle;
 use crate::indexed::ListenEvent;
-use crate::operators;
-use crate::operators::flatten_decoded_update;
+use crate::operators::replay::Replay;
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
 pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
@@ -58,22 +56,7 @@ where
             let _ = listen_tx.send(e);
         });
 
-        // We intentionally register the listener before we take the snapshot so
-        // that we know there will be no missing data between the data returned
-        // by the listener and the data contained in the snapshot. However, this
-        // means that either the records received by the listener or the seal
-        // notifications received by the listener could be duplicates of the data
-        // contained in the snapshot and so we have to check every notification to
-        // ensure it is in advance of the snapshot's frontier.
-        //
-        // TODO: if we had some way to communicate the ts/seqno a listener started
-        // listening at, we could pass it along as the upper bound to snapshot.
-        let err_new_register = match read.listen(listen_fn) {
-            Ok(_) => operator::empty(self),
-            Err(err) => vec![(err.to_string(), 0, 1)].to_stream(self),
-        };
-
-        let snapshot = read.snapshot();
+        let snapshot = read.listen(listen_fn);
 
         // TODO: Plumb the name of the stream down through the handles and use
         // it for the operator.
@@ -93,7 +76,7 @@ where
                 let err_new_decode = err_new.flat_map(std::convert::identity);
 
                 // Replay the previously persisted data, if any.
-                let (ok_previous, err_previous) = operators::replay(self, snapshot);
+                let (ok_previous, err_previous) = self.replay(snapshot);
 
                 let ok_all = ok_previous.concat(&ok_new);
                 let err_all = err_previous.concat(&err_new_decode);
@@ -101,18 +84,15 @@ where
             }
         };
 
-        let err_all = err_all.concat(&err_new_register);
-
         (ok_all, err_all)
     }
 }
 
-/// Creates a source that listens on the given `listen_rx` and gates (filters out)
-/// updates by the given `gate_frontier`.
+/// Creates a source that listens on the given `listen_rx`.
 fn listen_source<S, K, V>(
     scope: &S,
     lower_filter: Antichain<u64>,
-    listen_rx: Receiver<ListenEvent<Result<K, String>, Result<V, String>>>,
+    listen_rx: Receiver<ListenEvent<Vec<u8>, Vec<u8>>>,
 ) -> (
     Stream<S, ((K, V), u64, isize)>,
     Stream<S, Vec<(String, u64, isize)>>,
@@ -149,26 +129,17 @@ where
                             // shard up the responsibility between all the workers.
                             if worker_index == 0 {
                                 for record in records.drain(..) {
-                                    if lower_filter.less_equal(&record.1) {
-                                        session.give(record);
-                                    } else {
-                                        debug!("Got record that was not beyond the lower snapshot filter. lower_filter: {:?}, record time: {:?}", lower_filter, record.1);
-                                    }
+                                    let ((k, v), ts, diff) = record;
+                                    let k = K::decode(&k);
+                                    let v = V::decode(&v);
+                                    session.give(((k, v), ts, diff));
                                 }
                             }
                             activator.activate();
                         }
                         ListenEvent::Sealed(ts) => {
-                            // We only need to check that the incoming notifications
-                            // are in advance of the snapshot's lower bound because the
-                            // snapshot might have some overlap with the notifications.
-                            // The seals are required to be in order and so we don't
-                            // need to check that each seal is in advance of its
-                            // predecessor.
-                            if lower_filter.less_equal(&ts) {
-                                cap.downgrade(&ts);
-                                activator.activate();
-                            }
+                            cap.downgrade(&ts);
+                            activator.activate();
                         }
                     },
                     Err(TryRecvError::Empty) => {
@@ -299,9 +270,7 @@ mod tests {
         Ok(())
     }
 
-    // TODO: At the moment, there's a race between registering the listener and
-    // getting the snapshot. Fix it by get a seqno back from listener
-    // registration and use it as the upper bound of the snapshot.
+    // TODO: At the moment, this test hangs indefinitely. Currently unclear why.
     #[test]
     #[ignore]
     fn multiple_workers() -> Result<(), Error> {
@@ -399,11 +368,7 @@ mod tests {
             .flat_map(|(_, xs)| xs.into_iter())
             .collect::<Vec<_>>();
 
-        let expected = vec![(
-            "failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
-            0,
-            1,
-        ),
+        let expected = vec![
         (
             "replaying persisted data: failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
             0,
@@ -413,5 +378,17 @@ mod tests {
         assert_eq!(actual, expected);
 
         Ok(())
+    }
+}
+
+fn flatten_decoded_update<K, V>(
+    update: ((Result<K, String>, Result<V, String>), u64, isize),
+) -> Result<((K, V), u64, isize), Vec<(String, u64, isize)>> {
+    let ((k, v), ts, diff) = update;
+    match (k, v) {
+        (Ok(k), Ok(v)) => Ok(((k, v), ts, diff)),
+        (Err(k_err), Ok(_)) => Err(vec![(k_err, ts, diff)]),
+        (Ok(_), Err(v_err)) => Err(vec![(v_err, ts, diff)]),
+        (Err(k_err), Err(v_err)) => Err(vec![(k_err, ts, diff), (v_err, ts, diff)]),
     }
 }

@@ -15,21 +15,24 @@ use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use differential_dataflow::lattice::Lattice;
 use log;
 use ore::metrics::MetricsRegistry;
 use persist_types::Codec;
 use timely::progress::Antichain;
+use tokio::runtime::Runtime;
 
 use crate::error::Error;
 use crate::future::{Future, FutureHandle};
+use crate::indexed::background::Maintainer;
+use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
-use crate::indexed::{Indexed, IndexedSnapshot, ListenEvent, ListenFn, Snapshot};
+use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Snapshot};
 use crate::storage::{Blob, Log, SeqNo};
 
 enum Cmd {
@@ -42,7 +45,11 @@ enum Cmd {
     Seal(Vec<Id>, u64, FutureHandle<()>),
     AllowCompaction(Vec<(Id, Antichain<u64>)>, FutureHandle<()>),
     Snapshot(Id, FutureHandle<IndexedSnapshot>),
-    Listen(Id, ListenFn<Vec<u8>, Vec<u8>>, FutureHandle<()>),
+    Listen(
+        Id,
+        ListenFn<Vec<u8>, Vec<u8>>,
+        FutureHandle<IndexedSnapshot>,
+    ),
     Stop(FutureHandle<()>),
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
@@ -54,34 +61,61 @@ enum Cmd {
 /// This returns a clone-able client handle. The runtime is stopped when any
 /// client calls [RuntimeClient::stop] or when all clients have been dropped.
 ///
-// TODO: At the moment, this runs IO and heavy cpu work in a single thread.
-// Move this work out into whatever async runtime the user likes, via something
-// like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
+/// If Some, the given [tokio::runtime::Runtime] is used for IO and cpu heavy
+/// operations. If None, a new Runtime is constructed for this. The latter
+/// requires that we are not in the context of an existing Runtime, so if this
+/// is the case, the caller must use the Some form.
+//
+// TODO: The rust doc above is still a bit of a lie. Actually use this runtime
+// for all IO and cpu heavy operations.
+//
+// TODO: The whole story around Runtime usage in persist is pretty awkward and
+// still pretty unprincipled. I think when we do the TODO to make the Log and
+// Blob storage traits async, this will clear up a bit.
 pub fn start<L, B>(
     config: RuntimeConfig,
     log: L,
     blob: B,
     reg: &MetricsRegistry,
+    pool: Option<Arc<Runtime>>,
 ) -> Result<RuntimeClient, Error>
 where
     L: Log + Send + 'static,
     B: Blob + Send + 'static,
 {
-    let metrics = Metrics::register_with(reg);
-    let indexed = Indexed::new(log, blob, metrics.clone())?;
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
-    let runtime_impl_config = config.clone();
-    let runtime_impl_metrics = metrics.clone();
-    let runtime_f = move || {
-        // TODO: Set up the tokio or other async runtime context here.
-        let mut l = RuntimeImpl::new(runtime_impl_config, indexed, rx, runtime_impl_metrics);
-        while l.work() {}
+    let metrics = Metrics::register_with(reg);
+
+    // Any usage of S3Blob requires a runtime context to be set. `Indexed::new`
+    // use the blob impl to start the recovery process, so make sure this stays
+    // early.
+    let pool = match pool {
+        Some(pool) => pool,
+        None => Arc::new(Runtime::new()?),
     };
+    let pool_guard = pool.enter();
+
+    // Start up the runtime.
+    let blob = BlobCache::new(metrics.clone(), blob);
+    let maintainer = Maintainer::new(blob.clone(), pool.clone());
+    let indexed = Indexed::new(log, blob, maintainer, metrics.clone())?;
+    let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
     let id = RuntimeId::new();
+    let runtime_pool = pool.clone();
     let impl_handle = thread::Builder::new()
         .name(format!("persist-runtime-{}", id.0))
-        .spawn(runtime_f)?;
+        .spawn(move || {
+            let pool_guard = runtime_pool.enter();
+            while runtime.work() {}
+            // Explictly drop the pool guard so the lifetime is obvious.
+            drop(pool_guard);
+        })?;
+
+    // Start up the ticker thread.
+    //
+    // TODO: Now that we have a runtime threaded here, we could use async stuff
+    // to do this.
     let ticker_tx = tx.clone();
     let ticker_handle = thread::Builder::new()
         .name(format!("persist-ticker"))
@@ -102,6 +136,8 @@ where
                 }
             }
         })?;
+
+    // Construct the client.
     let handles = Mutex::new(Some(RuntimeHandles {
         impl_handle,
         ticker_handle,
@@ -111,10 +147,15 @@ where
         tx,
         metrics,
     };
-    Ok(RuntimeClient {
+    let client = RuntimeClient {
         id,
         core: Arc::new(core),
-    })
+    };
+
+    // Explictly drop the pool guard so the lifetime is obvious.
+    drop(pool_guard);
+
+    Ok(client)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -303,7 +344,12 @@ impl RuntimeClient {
 
     /// Asynchronously registers a callback to be invoked on successful writes
     /// and seals.
-    fn listen(&self, id: Id, listen_fn: ListenFn<Vec<u8>, Vec<u8>>, res: FutureHandle<()>) {
+    fn listen(
+        &self,
+        id: Id,
+        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+        res: FutureHandle<IndexedSnapshot>,
+    ) {
         self.core.send(Cmd::Listen(id, listen_fn, res))
     }
 
@@ -532,7 +578,6 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
 #[derive(Debug)]
 pub struct DecodedSnapshot<K, V> {
     snap: IndexedSnapshot,
-    buf: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
     _phantom: PhantomData<(K, V)>,
 }
 
@@ -540,7 +585,6 @@ impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
     pub(crate) fn new(snap: IndexedSnapshot) -> Self {
         DecodedSnapshot {
             snap,
-            buf: Vec::new(),
             _phantom: PhantomData,
         }
     }
@@ -559,59 +603,45 @@ impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
     pub fn since(&self) -> Antichain<u64> {
         self.snap.since()
     }
-}
 
-/// Extension methods on `DecodedSnapshot<K, V>` for use in tests and benchmarks.
-impl<K: Codec + Ord, V: Codec + Ord> DecodedSnapshot<K, V> {
-    /// A full read of the data in the snapshot.
-    pub fn read_to_end_flattened(&mut self) -> Result<Vec<((K, V), u64, isize)>, Error> {
-        let mut res = Vec::new();
-        let mut buf = Vec::new();
-
-        // Read in all of the potentially decoded data.
-        while self.read(&mut buf)? {}
-
-        for ((k, v), ts, diff) in buf.drain(..) {
-            res.push(((k?, v?), ts, diff));
-        }
-        res.sort();
-        Ok(res)
-    }
-}
-
-impl<K: Codec, V: Codec> Snapshot<Result<K, String>, Result<V, String>> for DecodedSnapshot<K, V> {
-    fn read<E: Extend<((Result<K, String>, Result<V, String>), u64, isize)>>(
-        &mut self,
-        buf: &mut E,
-    ) -> Result<bool, Error> {
-        let since = self.since();
-        let ret = self.snap.read(&mut self.buf)?;
-        buf.extend(self.buf.drain(..).map(|((k, v), mut ts, diff)| {
-            let k = K::decode(&k);
-            let v = V::decode(&v);
-            // When reading a snapshot, the contract of since is that all update
-            // timestamps will be advanced to it. We do this physically during
-            // compaction, but don't have hard guarantees about how long that
-            // takes, so we have to account for un-advanced batches on reads.
-            //
-            // TODO: This adjustment should logically live in IndexedSnapshot
-            // (where it could be lazy about only doing this on the relevant
-            // batches) but in the short-term it's much easier to do here. I'm
-            // hoping to clean up how snapshots work soon and make them more
-            // like iterators, at which point it will be much simpler to push
-            // this logic where it belongs.
-            ts.advance_by(since.borrow());
-            ((k, v), ts, diff)
-        }));
-        Ok(ret)
-    }
-}
-
-impl<K, V> DecodedSnapshot<K, V> {
     /// A logical upper bound on the times that had been added to the collection
     /// when this snapshot was taken
     pub fn get_seal(&self) -> Antichain<u64> {
         self.snap.get_seal()
+    }
+}
+
+impl<K: Codec, V: Codec> Snapshot<K, V> for DecodedSnapshot<K, V> {
+    type Iter = DecodedSnapshotIter<K, V>;
+
+    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
+        self.snap
+            .into_iters(num_iters)
+            .into_iter()
+            .map(|iter| DecodedSnapshotIter {
+                iter,
+                _phantom: PhantomData,
+            })
+            .collect()
+    }
+}
+
+/// An [Iterator] representing one part of the data in a [DecodedSnapshot].
+pub struct DecodedSnapshotIter<K, V> {
+    iter: IndexedSnapshotIter,
+    _phantom: PhantomData<(K, V)>,
+}
+
+impl<K: Codec, V: Codec> Iterator for DecodedSnapshotIter<K, V> {
+    type Item = Result<((K, V), u64, isize), Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|x| {
+            let ((k, v), ts, diff) = x?;
+            let k = K::decode(&k)?;
+            let v = V::decode(&v)?;
+            Ok(((k, v), ts, diff))
+        })
     }
 }
 
@@ -654,27 +684,19 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     }
 
     /// Registers a callback to be invoked on successful writes and seals.
+    ///
+    /// Also returns a snapshot so that users can, if they choose, perform their
+    /// logic on everything that was previously persisted before registering the
+    /// listener, and all writes and seals that happen after registration without
+    /// duplicating or dropping data.
     pub fn listen(
         &self,
-        listen_fn: ListenFn<Result<K, String>, Result<V, String>>,
-    ) -> Result<(), Error> {
-        let listen_fn = Box::new(move |e: ListenEvent<Vec<u8>, Vec<u8>>| match e {
-            ListenEvent::Records(records) => {
-                let records = records
-                    .into_iter()
-                    .map(|((k, v), ts, diff)| {
-                        let k = K::decode(&k);
-                        let v = V::decode(&v);
-                        ((k, v), ts, diff)
-                    })
-                    .collect();
-                listen_fn(ListenEvent::Records(records))
-            }
-            ListenEvent::Sealed(ts) => listen_fn(ListenEvent::Sealed(ts)),
-        });
+        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+    ) -> Result<DecodedSnapshot<K, V>, Error> {
         let (tx, rx) = Future::new();
         self.runtime.listen(self.id, listen_fn, tx);
-        rx.recv()
+        let snap = rx.recv()?;
+        Ok(DecodedSnapshot::new(snap))
     }
 }
 
@@ -689,6 +711,7 @@ struct RuntimeImpl<L: Log, B: Blob> {
 /// Configuration for [start]ing a [RuntimeClient].
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
+    /// Minimum step interval to use
     min_step_interval: Duration,
 }
 
@@ -709,6 +732,11 @@ impl RuntimeConfig {
         RuntimeConfig {
             min_step_interval: Duration::from_millis(1),
         }
+    }
+
+    /// A configuration with a configurable min_step_interval
+    pub fn with_min_step_interval(min_step_interval: Duration) -> Self {
+        RuntimeConfig { min_step_interval }
     }
 }
 
@@ -852,7 +880,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         // mz_metrics). Otherwise, it has no effect.
         //
         // TODO: Make step smarter and remove this hack.
-        let need_step = need_step && !self.indexed.pending_responses.is_empty();
+        let need_step = need_step && self.indexed.pending.has_responses();
 
         if need_step {
             self.prev_step = step_start;
@@ -875,7 +903,13 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 
 #[cfg(test)]
 mod tests {
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::{Capture, Probe};
+    use timely::dataflow::ProbeHandle;
+
+    use crate::indexed::SnapshotExt;
     use crate::mem::{MemMultiRegistry, MemRegistry};
+    use crate::operators::source::PersistedSource;
 
     use super::*;
 
@@ -890,7 +924,7 @@ mod tests {
 
         let (write, meta) = runtime.create_or_load("0")?;
         write.write(&data).recv()?;
-        assert_eq!(meta.snapshot()?.read_to_end_flattened()?, data);
+        assert_eq!(meta.snapshot()?.read_to_end()?, data);
 
         // Commands sent after stop return an error, but calling stop again is
         // fine.
@@ -916,7 +950,7 @@ mod tests {
         drop(client1);
         let (write, meta) = client2.create_or_load("0")?;
         write.write(&data).recv()?;
-        assert_eq!(meta.snapshot()?.read_to_end_flattened()?, data);
+        assert_eq!(meta.snapshot()?.read_to_end()?, data);
         client2.stop()?;
 
         Ok(())
@@ -950,7 +984,7 @@ mod tests {
         {
             let persister = registry.runtime_no_reentrance()?;
             let (_, meta) = persister.create_or_load("0")?;
-            assert_eq!(meta.snapshot()?.read_to_end_flattened()?, data);
+            assert_eq!(meta.snapshot()?.read_to_end()?, data);
         }
 
         Ok(())
@@ -984,14 +1018,8 @@ mod tests {
             (c1s2.stream_id(), data[1..].to_vec()),
         ];
         multi.write_atomic(updates).recv()?;
-        assert_eq!(
-            c1s1_read.snapshot()?.read_to_end_flattened()?,
-            data[..1].to_vec()
-        );
-        assert_eq!(
-            c1s2_read.snapshot()?.read_to_end_flattened()?,
-            data[1..].to_vec()
-        );
+        assert_eq!(c1s1_read.snapshot()?.read_to_end()?, data[..1].to_vec());
+        assert_eq!(c1s2_read.snapshot()?.read_to_end()?, data[1..].to_vec());
 
         // Normal seal
         let ids = &[c1s1.stream_id(), c1s2.stream_id()];
@@ -1039,6 +1067,81 @@ mod tests {
                 "invalid registration: val codec mismatch Vec<u8> vs previous String"
             ))
         );
+
+        Ok(())
+    }
+
+    /// Previously, the persisted source would first register a listener, and
+    /// then read a snapshot in two separate commands. This approach had the
+    /// problem that there could be some data duplication between the snapshot
+    /// and the listener. We attempted to solve that problem by filtering out all
+    /// records <= the snapshot's sealed frontier from the listener, and allowed the
+    /// listener to send us records > the snapshot's sealed frontier.
+    ///
+    /// Unfortunately, we also allowed the snapshot to send us records > the
+    /// snapshot's sealed frontier so this didn't fix the data duplication issue.
+    /// #8606 manifested as an issue with the persistent system tables test where
+    /// some records had negative multiplicity. Basically, something like the
+    /// following sequence of events happened:
+    ///
+    /// 1. Register a listener
+    /// 2. Insert (foo, t1, +1)
+    /// 3. Insert (foo, t100, -1)
+    /// 4. Seal t2
+    /// 5. Take a snapshot - which has sealed frontier t2
+    /// 6. Start reading from the listener and snapshot.
+    ///
+    /// Now when we did step 6 - we received from the snapshot:
+    ///
+    /// (foo, t1, +1)
+    /// (foo, t100, -1)
+    ///
+    /// because we didn't filter anything from the snapshot.
+    ///
+    /// From the listener, we received:
+    ///
+    /// (foo, t100, -1) because we filtered out all records at times < t2
+    ///
+    /// at t100, we now have a negative multiplicity.
+    ///
+    /// This test attempts to replicate that scenario by interleaving writes
+    /// and seals with persisted source creation to catch any regressions where
+    /// taking a snapshot and registering a listener are not properly atomic.
+    #[test]
+    fn regression_8606_snapshot_listener_atomicity() -> Result<(), Error> {
+        let data = vec![(("foo".into(), ()), 1, 1), (("foo".into(), ()), 1000, -1)];
+
+        let mut p = MemRegistry::new().runtime_no_reentrance()?;
+        let (write, read) = p.create_or_load::<String, ()>("1").unwrap();
+
+        let ok = timely::execute_directly(move |worker| {
+            let writes = std::thread::spawn(move || {
+                write.write(&data).recv().expect("write was successful");
+                write.seal(2).recv().expect("seal was successful");
+            });
+
+            let mut probe = ProbeHandle::new();
+            let ok_stream = worker.dataflow(|scope| {
+                let (ok_stream, _err_stream) = scope.persisted_source(&read);
+                ok_stream.probe_with(&mut probe).capture()
+            });
+
+            writes.join().expect("write thread succeeds");
+
+            while probe.less_than(&2) {
+                worker.step();
+            }
+            p.stop().expect("stop was successful");
+
+            ok_stream
+        });
+
+        let diff_sum: isize = ok
+            .extract()
+            .into_iter()
+            .flat_map(|(_, xs)| xs.into_iter().map(|(_, _, diff)| diff))
+            .sum();
+        assert_eq!(diff_sum, 0);
 
         Ok(())
     }

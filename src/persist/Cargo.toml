@@ -22,6 +22,7 @@ harness = false
 [dependencies]
 abomonation = "0.7"
 abomonation_derive = "0.5"
+aws-util = { path = "../aws-util" }
 crossbeam-channel = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures-util = "0.3.16"
@@ -29,8 +30,11 @@ futures-executor = "0.3.16"
 log = "0.4.13"
 ore = { path = "../ore", default-features = false, features = ["metrics"] }
 persist-types = { path = "../persist-types" }
+rusoto_core = "0.47.0"
+rusoto_s3 = "0.47.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.11.0", default-features = false, features = ["macros", "sync"] }
+tokio = { version = "1.12.0", default-features = false, features = ["macros", "sync", "rt"] }
+uuid = { version = "0.8.2", features = ["v4"] }
 
 [dev-dependencies]
 criterion = "0.3.5"

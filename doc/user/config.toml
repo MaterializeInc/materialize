@@ -7,6 +7,9 @@ pygmentsUseClasses = true
 # Keep the releases in reverse order of their release date. The first release
 # in the list is assumed to be the most recent.
 versions = [
+  { name = "v0.9.8", date = "12 October 2021" },
+  { name = "v0.9.7", date = "06 October 2021" },
+  { name = "v0.9.6", date = "29 September 2021" },
   { name = "v0.9.5", date = "23 September 2021" },
   { name = "v0.9.4", date = "17 September 2021" },
   { name = "v0.9.3", date = "08 September 2021" },
@@ -81,6 +84,12 @@ name = "SQL"
 weight = 70
 
 [[menu.main]]
+name = "SQL Overview"
+parent = "sql"
+url = "/sql/"
+weight = 1
+
+[[menu.main]]
 identifier = "guides"
 name = "Guides"
 weight = 75
@@ -96,10 +105,38 @@ name = "Demos"
 weight = 100
 
 [[menu.main]]
+name = "Try Materialize"
+parent = "demos"
+url = "/demos/"
+weight = 1
+
+[[menu.main]]
 identifier = "third-party"
 name = "Third-Party Tools"
 weight = 120
 
+[[menu.main]]
+name = "Using Debezium"
+parent = "third-party"
+url = "/guides/cdc-postgres"
+weight= 3
+
+[[menu.main]]
+identifier = "security"
+name = "Security"
+weight = 140
+
+[[menu.main]]
+name = "Security Overview"
+parent = "security"
+url = "https://materialize.com/security-overview"
+weight= 1
+
+[[menu.main]]
+name = "Responsible Disclosure Policy"
+parent = "security"
+url = "https://materialize.com/securitydisclosure"
+weight= 2
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works

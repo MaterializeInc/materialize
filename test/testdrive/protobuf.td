@@ -123,46 +123,52 @@ id   mz_offset
 a    1
 b    2
 
+$ http-request method=POST url=${testdrive.schema-registry-url}subjects/testdrive-no-messages-${testdrive.seed}-value/versions content-type=application/json
+{
+    "schema": "syntax = \"proto3\"; enum Choices { ZERO = 0; ONE = 1; }",
+    "schemaType": "PROTOBUF",
+    "references": []
+}
+
+$ http-request method=POST url=${testdrive.schema-registry-url}subjects/testdrive-imported-${testdrive.seed}-value/versions content-type=application/json
+{
+    "schema": "syntax = \"proto3\"; import 'no_messages.proto'; message Imported { Choices choice = 1; }",
+    "schemaType": "PROTOBUF",
+    "references": [{
+        "name": "no_messages.proto",
+        "subject": "testdrive-no-messages-${testdrive.seed}-value",
+        "version": 1
+    }]
+}
+
 $ kafka-create-topic topic=imported
 
 $ set schema
 syntax = "proto3";
 
-import 'simple.proto';
+import 'no_messages.proto';
 
 message Imported {
-    SimpleId id = 1;
-}
-
-$ http-request method=POST url=${testdrive.schema-registry-url}subjects/testdrive-imported-${testdrive.seed}-value/versions content-type=application/json
-{
-    "schema": "syntax = \"proto3\"; import 'simple.proto'; message Imported { SimpleId id = 1; }",
-    "schemaType": "PROTOBUF",
-    "references": [{
-        "name": "simple.proto",
-        "subject": "testdrive-simple-${testdrive.seed}-value",
-        "version": 1
-    }]
+    Choices choice = 1;
 }
 
 $ kafka-ingest topic=imported format=protobuf schema=${schema} message=imported
-{"id": {"id": "a"}}
-{"id": {"id": "b"}}
+{"choice": "ONE"}
+{"choice": "ONE"}
 
 ! CREATE MATERIALIZED SOURCE imported_csr
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-imported-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-unsupported protobuf schema reference simple.proto
+unsupported protobuf schema reference no_messages.proto
 
-> CREATE MATERIALIZED SOURCE meep
+# Tests that we do not error when the first available file descriptor does not contain a Message.
+> CREATE MATERIALIZED SOURCE imported_csr
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-imported-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Imported' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
 
-> SELECT * FROM meep
-id                  mz_offset
---------------------------
-"{\"id\":\"a\"}"   1
-"{\"id\":\"b\"}"   2
+# Can't SELECT record types.
+> SELECT COUNT(*) FROM imported_csr
+2
 
 $ kafka-create-topic topic=nested-proto
 
@@ -208,16 +214,19 @@ message NestedInner {
 }
 
 $ kafka-ingest topic=nested-proto format=protobuf schema=${schema} message=nested publish=true
-{"double": 1.1, "float": 2.2, "int32": -100, "int64": 200, "sint32": 987234, "sint64": 129387981723, "sfixed32": 123, "sfixed64": 567, "bool": true, "string": "hey", "bytes": [102, 111, 111], "binary": "ZERO", "nested": []}
+{"double": 1.1, "float": 2.2, "int32": -100, "int64": 200, "sint32": 987234, "sint64": 129387981723, "sfixed32": 123, "sfixed64": 567, "bool": true, "string": "hey", "bytes": [102, 111, 111], "binary": "ZERO", "nested": [{"double": 1.1, "float": 2.2, "int32": -100, "int64": 200, "sint32": 987234, "sint64": 129387981723, "sfixed32": 123, "sfixed64": 567, "bool": true, "string": "hey", "bytes": [102, 111, 111], "binary": "ZERO"}]}
 
 > CREATE MATERIALIZED SOURCE nested_proto_inline FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nested-proto-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.NestedOuter' USING SCHEMA '${testdrive.protobuf-descriptors}'
 
-> SELECT * FROM nested_proto_inline
-double  float   int32   int64   sint32   sint64         sfixed32   sfixed64   bool   string   bytes   binary   nested   mz_offset
+> SELECT COUNT(*) FROM nested_proto_inline
+1
+
+> SELECT double, float, int32, int64, sint32, sint64, sfixed32, sfixed64, bool, string, bytes, binary, mz_offset FROM nested_proto_inline
+double  float   int32   int64   sint32   sint64         sfixed32   sfixed64   bool   string   bytes   binary  mz_offset
 ---------------------------------------------------------------------------------------------------------------------------
-1.1     2.2     -100    200     987234   129387981723   123        567        true   "hey"    "foo"   "ZERO"   []       1
+1.1     2.2     -100    200     987234   129387981723   123        567        true   "hey"    "foo"   "ZERO"  1
 
 > CREATE MATERIALIZED SOURCE nested_proto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nested-proto-${testdrive.seed}'
@@ -236,10 +245,61 @@ bool      true boolean
 string    true text
 bytes     true bytea
 binary    true text
-nested    true jsonb
+nested    true list
 mz_offset false  bigint
 
-> SELECT * FROM nested_proto
-double  float   int32   int64   sint32   sint64         sfixed32   sfixed64   bool   string   bytes   binary   nested   mz_offset
+> SELECT COUNT(*) FROM nested_proto
+1
+
+> SELECT double, float, int32, int64, sint32, sint64, sfixed32, sfixed64, bool, string, bytes, binary, mz_offset FROM nested_proto
+double  float   int32   int64   sint32   sint64         sfixed32   sfixed64   bool   string   bytes   binary   mz_offset
 --------------------------------------------------------------------------------------------------------------------------
-1.1     2.2     -100    200     987234   129387981723   123        567        true   "hey"    "foo"   "ZERO"  []       1
+1.1     2.2     -100    200     987234   129387981723   123        567        true   "hey"    "foo"   "ZERO"   1
+
+# Test records
+$ kafka-create-topic topic=simple_nested_proto
+
+> CREATE MATERIALIZED SOURCE simple_nested_proto
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-simple_nested_proto-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.SimpleNestedOuter' USING SCHEMA '${testdrive.protobuf-descriptors}'
+
+$ kafka-ingest format=protobuf topic=simple_nested_proto message=simple-nested
+{"inner": {"message": "hello"}}
+{"inner": {"message": "world"}}
+
+> SHOW COLUMNS FROM simple_nested_proto
+name            nullable  type
+-------------------------------
+inner           true      record
+mz_offset       false     bigint
+
+> SELECT COUNT(*) FROM simple_nested_proto
+2
+
+$ kafka-create-topic topic=batch_proto
+
+> CREATE MATERIALIZED SOURCE batch_proto
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-batch_proto-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Batch' USING SCHEMA '${testdrive.protobuf-descriptors}'
+
+> SHOW COLUMNS FROM batch_proto
+name            nullable  type
+-------------------------------
+id              true      text
+interval_end    true      text
+interval_start  true      text
+mz_offset       false     bigint
+records         true      list
+
+$ kafka-ingest format=protobuf topic=batch_proto message=batch timestamp=1
+{"id": "1", "interval_start": "2020-01-01_00:00:00", "interval_end": "2020-01-01_00:00:09", "records": []}
+{"id": "2", "interval_start": "2020-01-01_00:00:10", "interval_end": "2020-01-01_00:00:19", "records": []}
+
+> SELECT COUNT(*) FROM batch_proto
+2
+
+> SELECT id, interval_start, interval_end, mz_offset FROM batch_proto
+ id  interval_start       interval_end         mz_offset
+------------------------------------------------------------------
+ 1   2020-01-01_00:00:00  2020-01-01_00:00:09  1
+ 2   2020-01-01_00:00:10  2020-01-01_00:00:19  2

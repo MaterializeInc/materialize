@@ -4,6 +4,7 @@ description: "Get details about third-party tool support with Materialize"
 menu:
   main:
     parent: 'third-party'
+weight: 1
 ---
 
 ## Production-level support
@@ -11,7 +12,7 @@ menu:
 | Tool | Purpose |
 |------|---------|
 | [Docker](/third-party/docker) | Easily deploy Materialize and other required infrastructure.
-| [Debezium](/third-party/debezium) | Propagate change data capture (CDC) data from an upstream database to Materialize.
+| [Debezium](/guides/cdc-postgres) | Propagate change data capture (CDC) data from an upstream database to Materialize.
 
 
 ## Beta-level support

@@ -1,9 +1,11 @@
 ---
 title: "Timelines"
 description: "Timelines describe sources' meaning of time."
+weight: 20
 menu:
   main:
     parent: sql
+    weight: 60
 ---
 
 All data in Materialize has a timestamp.

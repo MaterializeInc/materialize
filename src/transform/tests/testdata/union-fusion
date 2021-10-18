@@ -1,0 +1,57 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [int64 int64])
+----
+ok
+
+build apply=UnionFusion
+(union [(get x) (union [(get x) (union [(get x) (get x)])])])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Get x (u0)
+
+%3 =
+| Get x (u0)
+
+%4 =
+| Union %0 %1 %2 %3
+----
+----
+
+build apply=UnionFusion
+(union [(get x) (union [(get x) (negate (union [(get x) (get x)]))])])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Get x (u0)
+| Negate
+
+%3 =
+| Get x (u0)
+| Negate
+
+%4 =
+| Union %0 %1 %2 %3
+----
+----

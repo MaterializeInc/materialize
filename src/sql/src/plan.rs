@@ -104,6 +104,9 @@ pub enum Plan {
     Fetch(FetchPlan),
     Close(ClosePlan),
     ReadThenWrite(ReadThenWritePlan),
+    Prepare(PreparePlan),
+    Execute(ExecutePlan),
+    Deallocate(DeallocatePlan),
 }
 
 #[derive(Debug)]
@@ -245,7 +248,6 @@ pub struct CopyFromPlan {
 #[derive(Debug)]
 pub struct ExplainPlan {
     pub raw_plan: HirRelationExpr,
-    pub decorrelated_plan: ::expr::MirRelationExpr,
     pub row_set_finishing: Option<RowSetFinishing>,
     pub stage: ExplainStage,
     pub options: ExplainOptions,
@@ -269,7 +271,7 @@ pub struct ReadThenWritePlan {
     pub id: GlobalId,
     pub selection: ::expr::MirRelationExpr,
     pub finishing: RowSetFinishing,
-    pub assignments: Option<HashMap<usize, ::expr::MirScalarExpr>>,
+    pub assignments: HashMap<usize, ::expr::MirScalarExpr>,
     pub kind: MutationKind,
 }
 
@@ -319,6 +321,24 @@ pub struct FetchPlan {
 #[derive(Debug)]
 pub struct ClosePlan {
     pub name: String,
+}
+
+#[derive(Debug)]
+pub struct PreparePlan {
+    pub name: String,
+    pub stmt: Statement<Raw>,
+    pub desc: StatementDesc,
+}
+
+#[derive(Debug)]
+pub struct ExecutePlan {
+    pub name: String,
+    pub params: Params,
+}
+
+#[derive(Debug)]
+pub struct DeallocatePlan {
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug)]

@@ -178,6 +178,8 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
                 }
             }
             HirRelationExpr::CallTable { exprs, .. } => {
+                let mut outers = outers.to_vec();
+                outers.push(RelationType::empty());
                 for scalar in exprs {
                     walk_scalar(scalar, &outers, false);
                 }

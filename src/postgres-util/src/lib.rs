@@ -18,6 +18,7 @@ use tokio_postgres::config::{ReplicationMode, SslMode};
 use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{Client, Config};
 
+use repr::adt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::Ident;
 use sql_parser::impl_display;
@@ -231,31 +232,46 @@ pub async fn publication_info(
                 let pg_type =
                     PgType::from_oid(oid).ok_or_else(|| anyhow!("unknown type OID: {}", oid))?;
                 let scalar_type = match pg_type {
-                    typ @ PgType::NUMERIC | typ @ PgType::NUMERIC_ARRAY => {
+                    PgType::NUMERIC | PgType::NUMERIC_ARRAY => {
                         let modifier: i32 = row.get("modifier");
                         // https://github.com/postgres/postgres/blob/REL_13_3/src/backend/utils/adt/numeric.c#L978-L983
                         let tmp_mod = modifier - 4;
                         let scale = (tmp_mod & 0xffff) as u16;
                         let precision = ((tmp_mod >> 16) & 0xffff) as u16;
 
-                        if typ == PgType::NUMERIC {
-                            PgScalarType::Numeric { scale, precision }
-                        } else {
-                            PgScalarType::NumericArray { scale, precision }
+                        match pg_type {
+                            PgType::NUMERIC => PgScalarType::Numeric { scale, precision },
+                            PgType::NUMERIC_ARRAY => {
+                                PgScalarType::NumericArray { scale, precision }
+                            }
+                            _ => unreachable!(),
                         }
                     }
-                    typ @ PgType::BPCHAR
-                    | typ @ PgType::BPCHAR_ARRAY
-                    | typ @ PgType::VARCHAR
-                    | typ @ PgType::VARCHAR_ARRAY => {
+                    PgType::BPCHAR | PgType::BPCHAR_ARRAY => {
                         let modifier: i32 = row.get("modifier");
-                        // BPCHAR: https://github.com/postgres/postgres/blob/272d82ec6febb97ab25fd7c67e9c84f4660b16ac/src/backend/utils/adt/varchar.c#L282-L286
-                        // VARCHAR https://github.com/postgres/postgres/blob/272d82ec6febb97ab25fd7c67e9c84f4660b16ac/src/backend/utils/adt/varchar.c#L617
-                        let length = if modifier < 4 { i32::MAX } else { modifier - 4 };
+                        // https://github.com/postgres/postgres/blob/REL_14_0/src/backend/utils/adt/varchar.c#L282-L286
+                        let length = if modifier < 4 {
+                            adt::char::MAX_LENGTH
+                        } else {
+                            modifier - 4
+                        };
 
-                        match typ {
+                        match pg_type {
                             PgType::BPCHAR => PgScalarType::BPChar { length },
                             PgType::BPCHAR_ARRAY => PgScalarType::BPCharArray { length },
+                            _ => unreachable!(),
+                        }
+                    }
+                    PgType::VARCHAR | PgType::VARCHAR_ARRAY => {
+                        let modifier: i32 = row.get("modifier");
+                        // https://github.com/postgres/postgres/blob/REL_14_0/src/backend/utils/adt/varchar.c#L617
+                        let length = if modifier < 4 {
+                            adt::varchar::MAX_LENGTH
+                        } else {
+                            modifier - 4
+                        };
+
+                        match pg_type {
                             PgType::VARCHAR => PgScalarType::VarChar { length },
                             PgType::VARCHAR_ARRAY => PgScalarType::VarCharArray { length },
                             _ => unreachable!(),

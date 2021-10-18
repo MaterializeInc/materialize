@@ -10,7 +10,7 @@
 //! File backed implementations for testing and benchmarking.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write as StdWrite};
+use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write as StdWrite};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -353,7 +353,12 @@ impl Blob for FileBlob {
         let file_path = self.blob_path(key)?;
         // TODO: strict correctness requires that we fsync the parent directory
         // as well after file removal.
-        fs::remove_file(&file_path)?;
+        if let Err(err) = fs::remove_file(&file_path) {
+            // delete is documented to succeed if the key doesn't exist.
+            if err.kind() != ErrorKind::NotFound {
+                return Err(err.into());
+            }
+        };
 
         Ok(())
     }

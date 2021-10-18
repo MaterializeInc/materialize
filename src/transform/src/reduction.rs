@@ -9,11 +9,11 @@
 
 //! Replace operators on constants collections with constant collections.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::iter;
 
 use expr::{AggregateExpr, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
-use repr::{Datum, Diff, Row, RowArena};
+use repr::{Datum, Diff, RelationType, Row, RowArena};
 
 use crate::{TransformArgs, TransformError};
 
@@ -34,7 +34,16 @@ impl crate::Transform for FoldConstants {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
-        relation.try_visit_mut(&mut |e| self.action(e))
+        let mut type_stack = Vec::new();
+        relation.try_visit_mut(&mut |e| -> Result<(), TransformError> {
+            let num_inputs = e.num_inputs();
+            let input_types = &type_stack[type_stack.len() - num_inputs..];
+            let mut relation_type = e.typ_with_input_types(input_types);
+            self.action(e, &mut relation_type, input_types)?;
+            type_stack.truncate(type_stack.len() - num_inputs);
+            type_stack.push(relation_type);
+            Ok(())
+        })
     }
 }
 
@@ -44,8 +53,12 @@ impl FoldConstants {
     /// This transform will cease optimization if it encounters constant collections
     /// that are larger than `self.limit`, if that is set. It is not guaranteed that
     /// a constant input within the limit will be reduced to a `Constant` variant.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
-        let relation_type = relation.typ();
+    pub fn action(
+        &self,
+        relation: &mut MirRelationExpr,
+        relation_type: &mut RelationType,
+        input_types: &[RelationType],
+    ) -> Result<(), TransformError> {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
@@ -57,13 +70,13 @@ impl FoldConstants {
                 monotonic: _,
                 expected_group_size: _,
             } => {
-                let input_typ = input.typ();
+                let input_typ = input_types.first().unwrap();
                 // Reduce expressions to their simplest form.
                 for key in group_key.iter_mut() {
-                    key.reduce(&input_typ);
+                    key.reduce(input_typ);
                 }
                 for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.reduce(&input_typ);
+                    aggregate.expr.reduce(input_typ);
                 }
 
                 // Guard against evaluating expression that may contain temporal expressions.
@@ -80,7 +93,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation_type,
+                        typ: relation_type.clone(),
                     };
                 }
             }
@@ -114,7 +127,7 @@ impl FoldConstants {
                 // relation type; although we could in principle use `relation_type` here,
                 // we shouldn't rely on `reduce` not looking at its cardinality to assess
                 // the number of columns.
-                let input_arity = input.arity();
+                let input_arity = input_types.first().unwrap().arity();
                 for (index, scalar) in scalars.iter_mut().enumerate() {
                     let mut current_type = repr::RelationType::new(
                         relation_type.column_types[..(input_arity + index)].to_vec(),
@@ -150,7 +163,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation_type,
+                        typ: relation_type.clone(),
                     };
                 }
             }
@@ -160,9 +173,9 @@ impl FoldConstants {
                 exprs,
                 demand: _,
             } => {
-                let input_typ = input.typ();
+                let input_typ = input_types.first().unwrap();
                 for expr in exprs.iter_mut() {
-                    expr.reduce(&input_typ);
+                    expr.reduce(input_typ);
                 }
 
                 // Guard against evaluating expression that may contain temporal expressions.
@@ -180,22 +193,22 @@ impl FoldConstants {
                         Ok(Some(rows)) => {
                             *relation = MirRelationExpr::Constant {
                                 rows: Ok(rows),
-                                typ: relation_type,
+                                typ: relation_type.clone(),
                             };
                         }
                         Err(err) => {
                             *relation = MirRelationExpr::Constant {
                                 rows: Err(err),
-                                typ: relation_type,
+                                typ: relation_type.clone(),
                             };
                         }
                     };
                 }
             }
             MirRelationExpr::Filter { input, predicates } => {
-                let input_typ = input.typ();
+                let input_typ = input_types.first().unwrap();
                 for predicate in predicates.iter_mut() {
-                    predicate.reduce(&input_typ);
+                    predicate.reduce(input_typ);
                 }
                 predicates.retain(|p| !p.is_literal_true());
 
@@ -219,7 +232,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation_type,
+                        typ: relation_type.clone(),
                     };
                 }
             }
@@ -239,7 +252,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation_type,
+                        typ: relation_type.clone(),
                     };
                 }
             }
@@ -256,7 +269,7 @@ impl FoldConstants {
                 }) {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),
-                        typ: relation_type,
+                        typ: relation_type.clone(),
                     };
                 } else if inputs
                     .iter()
@@ -315,7 +328,7 @@ impl FoldConstants {
 
                     *relation = MirRelationExpr::Constant {
                         rows: Ok(old_rows),
-                        typ: relation_type,
+                        typ: relation_type.clone(),
                     };
                 }
                 // TODO: General constant folding for all constant inputs.
@@ -330,7 +343,7 @@ impl FoldConstants {
                 {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),
-                        typ: relation_type,
+                        typ: relation_type.clone(),
                     };
                 } else {
                     let mut rows = vec![];
@@ -352,7 +365,7 @@ impl FoldConstants {
                         });
                     }
 
-                    *relation = MirRelationExpr::union_many(new_inputs, relation_type);
+                    *relation = MirRelationExpr::union_many(new_inputs, relation_type.clone());
                 }
             }
             MirRelationExpr::ArrangeBy { input, .. } => {
@@ -372,14 +385,7 @@ impl FoldConstants {
         } = relation
         {
             // Reduce down to canonical representation.
-            let mut accum = HashMap::new();
-            for (row, cnt) in rows.drain(..) {
-                *accum.entry(row).or_insert(0) += cnt;
-            }
-            accum.retain(|_k, v| v != &0);
-            // `rows` cleared by drain.
-            rows.extend(accum.into_iter());
-            rows.sort();
+            differential_dataflow::consolidation::consolidate(rows);
 
             // Re-establish nullability of each column.
             for col_type in typ.column_types.iter_mut() {
@@ -392,6 +398,7 @@ impl FoldConstants {
                     }
                 }
             }
+            *relation_type = typ.clone();
         }
 
         Ok(())
@@ -485,15 +492,11 @@ impl FoldConstants {
         for (input_row, diff) in rows {
             let datums = input_row.unpack();
             let temp_storage = RowArena::new();
-            let mut output_rows = func
-                .eval(
-                    exprs
-                        .iter()
-                        .map(|expr| expr.eval(&datums, &temp_storage))
-                        .collect::<Result<Vec<_>, _>>()?,
-                    &temp_storage,
-                )?
-                .fuse();
+            let datums = exprs
+                .iter()
+                .map(|expr| expr.eval(&datums, &temp_storage))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut output_rows = func.eval(&datums, &temp_storage)?.fuse();
             for (output_row, diff2) in (&mut output_rows).take(limit - new_rows.len()) {
                 row_packer.extend(input_row.clone().into_iter().chain(output_row.into_iter()));
                 new_rows.push((row_packer.finish_and_reuse(), diff2 * *diff))

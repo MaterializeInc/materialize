@@ -47,5 +47,7 @@ pub use crate::client::{Client, ConnClient, Handle, SessionClient};
 pub use crate::command::{Cancelled, ExecuteResponse, StartupMessage, StartupResponse};
 pub use crate::coord::{serve, serve_debug, Config, LoggingConfig};
 pub use crate::error::CoordError;
-pub use crate::persistcfg::{PersistConfig, PersisterWithConfig};
+pub use crate::persistcfg::{
+    PersistConfig, PersistFileStorage, PersistS3Storage, PersistStorage, PersisterWithConfig,
+};
 pub use crate::timestamp::Timestamper;

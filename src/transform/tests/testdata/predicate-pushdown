@@ -220,3 +220,51 @@ build apply=PredicatePushdown
 | | implementation = Unimplemented
 ----
 ----
+
+# Push down filter predicates through FlatMap operators
+
+build apply=PredicatePushdown
+(filter
+  (flat_map
+    (get x)
+    generate_series_int32
+    [#0]
+  )
+  [(call_binary eq #0 #1)]
+)
+----
+%0 =
+| Get x (u0)
+| Filter (#0 = #1)
+| FlatMap generate_series(#0)
+
+build apply=PredicatePushdown
+(filter
+  (flat_map
+    (get x)
+    generate_series_int32
+    [#0]
+  )
+  [(call_binary eq #0 #2)]
+)
+----
+%0 =
+| Get x (u0)
+| FlatMap generate_series(#0)
+| Filter (#0 = #2)
+
+build apply=PredicatePushdown
+(filter
+  (flat_map
+    (get x)
+    generate_series_int32
+    [#0]
+  )
+  [(call_binary gt #0 #1) (call_binary lt #1 #2)]
+)
+----
+%0 =
+| Get x (u0)
+| Filter (#0 > #1)
+| FlatMap generate_series(#0)
+| Filter (#1 < #2)

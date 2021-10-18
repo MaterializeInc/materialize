@@ -15,6 +15,7 @@ use ore::metrics::MetricsRegistry;
 use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamReadHandle};
+use persist::indexed::Snapshot;
 use persist::mem::MemRegistry;
 use persist::storage::LockInfo;
 use persist_types::Codec;
@@ -26,7 +27,8 @@ fn read_full_snapshot<K: Codec + Ord, V: Codec + Ord>(
     let buf = read
         .snapshot()
         .expect("reading snapshot cannot fail")
-        .read_to_end_flattened()
+        .into_iter()
+        .collect::<Result<Vec<_>, Error>>()
         .expect("fully reading snapshot cannot fail");
 
     assert_eq!(buf.len(), expected_len);
@@ -93,6 +95,7 @@ pub fn bench_file_snapshots(c: &mut Criterion) {
             FileLog::new(log_dir, lock_info.clone())?,
             FileBlob::new(blob_dir, lock_info)?,
             &MetricsRegistry::new(),
+            None,
         )
     });
 }

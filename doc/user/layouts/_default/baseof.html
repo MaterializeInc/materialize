@@ -52,6 +52,14 @@ by the Apache License, Version 2.0.  */}}
 
         /* Make external links open in new tabs */
         $('a[href*="//"]:not([href*="materialize.com"])').attr({target:"_blank", title:"External Link"});
+
+        /* s to search */
+        document.addEventListener("keyup", e => {
+          if (e.key !== "s" || e.ctrlKey || e.metaKey) return;
+          if (/^(?:input|textarea|select|button)$/i.test(e.target.tagName)) return;
+          e.preventDefault();
+          document.getElementById("search-input").focus();
+        });
     </script>
 </body>
 

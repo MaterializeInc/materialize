@@ -66,6 +66,12 @@ Field                | Value type | Description
 `consistency_topic`  | `text`     | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. If `reuse_topic` is `true`, a default `consistency_topic` will be used when not explicitly set. The default consistency topic name is formed by appending `-consistency` to the output topic name.
 `security_protocol`  | `text`     | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberos-with-options), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
+`retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default.
+`retention_bytes`    | `long`     | Sets the maximum size a Kafka partion can grow before removing old logs.  Accepts values [-1, ...]. `-1` specifics no size limit.  If not set, uses the broker default.
+
+{{< version-changed v0.9.7 >}}
+The `retention_ms` and `retention_bytes` options were added.
+{{< /version-changed >}}
 
 #### SSL `WITH` options
 

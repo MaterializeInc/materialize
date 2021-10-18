@@ -9,8 +9,8 @@
 
 syntax = "proto3";
 
-import 'simple.proto';
+import 'no_messages.proto';
 
 message Imported {
-    SimpleId id = 1;
+    Choices choice = 1;
 }

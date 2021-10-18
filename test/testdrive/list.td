@@ -61,3 +61,9 @@ cannot drop materialize.public.bool: still depended upon by catalog item 'materi
 > DROP TYPE another_custom
 
 > DROP TYPE public.bool
+
+! CREATE TABLE f1 (a char list);
+char list not yet supported
+
+! CREATE TYPE test_schema.bool AS LIST (element_type=char)
+char list not yet supported

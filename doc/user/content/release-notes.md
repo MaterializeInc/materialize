@@ -100,7 +100,6 @@ Put breaking changes before other release notes, and mark them with
 
 - **Breaking change.** Fix a bug that inadvertently let users create `char
   list` columns and custom types. This type is not meant to be supported.
-
 - Beta support for [Redpanda sources](/third-party/redpanda/).
 
 - Let users express `JOIN`-like `DELETE`s with `DELETE...USING`.
@@ -113,6 +112,8 @@ Put breaking changes before other release notes, and mark them with
 
 - Fix a bug that inadvertently let users create an [`array`] with elements of
   type [`list`] or [`map`], which crashes Materialize. {{% gh 8672 %}}
+
+- Format dates before AD 1 with the BC notation instead of using negative dates.
 
 {{% version-header v0.9.8 %}}
 

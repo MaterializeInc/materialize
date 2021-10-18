@@ -10,10 +10,13 @@
 //! A persistent, compacting data structure of `(Key, Value, Time, Diff)`
 //! updates, indexed by time.
 
+use std::collections::VecDeque;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use timely::progress::Antichain;
 use timely::PartialOrder;
+use uuid::Uuid;
 
 use crate::error::Error;
 use crate::future::Future;
@@ -62,12 +65,14 @@ use crate::storage::{Blob, SeqNo};
 /// - TODO: Space usage.
 pub struct Unsealed {
     id: Id,
-    /// The next id used to assign a Blob key for this unsealed.
-    pub next_blob_id: u64,
     // NB: This is a closed lower bound. When Indexed seals a time, only data
     // strictly before that time gets moved into the trace.
     ts_lower: Antichain<u64>,
     batches: Vec<UnsealedBatchMeta>,
+
+    // TODO: next_blob_id is deprecated, remove this once we can safely bump
+    // BlobMeta::CURRENT_VERSION.
+    deprecated_next_blob_id: u64,
 }
 
 impl Unsealed {
@@ -76,18 +81,15 @@ impl Unsealed {
     pub fn new(meta: UnsealedMeta) -> Self {
         Unsealed {
             id: meta.id,
-            next_blob_id: meta.next_blob_id,
             ts_lower: meta.ts_lower,
             batches: meta.batches,
+            deprecated_next_blob_id: meta.next_blob_id,
         }
     }
 
     // Get a new key to write to the Blob store for this unsealed.
-    fn new_blob_key(&mut self) -> String {
-        let key = format!("{:?}-unsealed-{:?}", self.id, self.next_blob_id);
-        self.next_blob_id += 1;
-
-        key
+    fn new_blob_key() -> String {
+        Uuid::new_v4().to_string()
     }
 
     /// Serializes the state of this Unsealed for later re-instantiation.
@@ -96,7 +98,7 @@ impl Unsealed {
             id: self.id,
             ts_lower: self.ts_lower.clone(),
             batches: self.batches.clone(),
-            next_blob_id: self.next_blob_id,
+            next_blob_id: self.deprecated_next_blob_id,
         }
     }
 
@@ -117,7 +119,7 @@ impl Unsealed {
         batch: BlobUnsealedBatch,
         blob: &mut BlobCache<L>,
     ) -> Result<UnsealedBatchMeta, Error> {
-        let key = self.new_blob_key();
+        let key = Unsealed::new_blob_key();
         let desc = batch.desc.clone();
         let ts_upper = match batch.updates.last() {
             Some(upper) => upper.1,
@@ -314,20 +316,78 @@ pub struct UnsealedSnapshot {
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
-    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(
-        &mut self,
-        buf: &mut E,
-    ) -> Result<bool, Error> {
-        if let Some(batch) = self.batches.pop() {
-            let batch = batch.recv()?;
-            let updates = batch
-                .updates
-                .iter()
-                .filter(|(_, ts, _)| self.ts_lower.less_equal(ts) && !self.ts_upper.less_equal(ts))
-                .map(|((key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff));
-            buf.extend(updates);
+    type Iter = UnsealedSnapshotIter;
+
+    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
+        let mut iters = Vec::with_capacity(num_iters.get());
+        iters.resize_with(num_iters.get(), || UnsealedSnapshotIter {
+            ts_lower: self.ts_lower.clone(),
+            ts_upper: self.ts_upper.clone(),
+            current_batch: Vec::new(),
+            batches: VecDeque::new(),
+        });
+        // TODO: This should probably distribute batches based on size, but for
+        // now it's simpler to round-robin them.
+        for (i, batch) in self.batches.into_iter().enumerate() {
+            let iter_idx = i % num_iters;
+            iters[iter_idx].batches.push_back(batch);
         }
-        Ok(!self.batches.is_empty())
+        iters
+    }
+}
+
+/// An [Iterator] representing one part of the data in a [UnsealedSnapshot].
+//
+// This intentionally stores the batches as a VecDeque so we can return the data
+// in roughly increasing timestamp order, but it's unclear if this is in any way
+// important.
+#[derive(Debug)]
+pub struct UnsealedSnapshotIter {
+    /// A closed lower bound on the times of contained updates.
+    ts_lower: Antichain<u64>,
+    /// An open upper bound on the times of the contained updates.
+    ts_upper: Antichain<u64>,
+
+    current_batch: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    batches: VecDeque<Future<Arc<BlobUnsealedBatch>>>,
+}
+
+impl Iterator for UnsealedSnapshotIter {
+    type Item = Result<((Vec<u8>, Vec<u8>), u64, isize), Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if !self.current_batch.is_empty() {
+                let update = self.current_batch.pop().unwrap();
+                return Some(Ok(update));
+            } else {
+                // current_batch is empty, find a new one.
+                let b = match self.batches.pop_front() {
+                    None => return None,
+                    Some(b) => b,
+                };
+                match b.recv() {
+                    Ok(b) => {
+                        // Reverse the updates so we can pop them off the back
+                        // in roughly increasing time order. At the same time,
+                        // enforce our filter before we clone them.
+                        let ts_lower = self.ts_lower.borrow();
+                        let ts_upper = self.ts_upper.borrow();
+                        self.current_batch.extend(
+                            b.updates
+                                .iter()
+                                .rev()
+                                .filter(|(_, ts, _)| {
+                                    ts_lower.less_equal(&ts) && !ts_upper.less_equal(&ts)
+                                })
+                                .cloned(),
+                        );
+                        continue;
+                    }
+                    Err(err) => return Some(Err(err)),
+                }
+            }
+        }
     }
 }
 
@@ -340,6 +400,14 @@ mod tests {
     use crate::mem::MemBlob;
 
     use super::*;
+
+    fn desc_from(lower: u64, upper: u64, since: u64) -> Description<SeqNo> {
+        Description::new(
+            Antichain::from_elem(SeqNo(lower)),
+            Antichain::from_elem(SeqNo(upper)),
+            Antichain::from_elem(SeqNo(since)),
+        )
+    }
 
     // Generate a list of ((k, v), t, 1) updates at all of the specified times.
     fn unsealed_updates(update_times: Vec<u64>) -> Vec<((Vec<u8>, Vec<u8>), u64, isize)> {
@@ -395,6 +463,18 @@ mod tests {
         let snapshot = unsealed.snapshot(Antichain::from_elem(lo), hi, &blob)?;
         let updates = snapshot.read_to_end()?;
         Ok(updates)
+    }
+
+    // Keys are randomly generated, so clear them before we do any comparisons.
+    fn cleared_keys(batches: &[UnsealedBatchMeta]) -> Vec<UnsealedBatchMeta> {
+        batches
+            .iter()
+            .cloned()
+            .map(|mut b| {
+                b.key = "KEY".to_string();
+                b
+            })
+            .collect()
     }
 
     #[test]
@@ -475,11 +555,11 @@ mod tests {
         let snapshot_updates = slurp_from(&f, &blob, 0, None)?;
         assert_eq!(snapshot_updates, unsealed_updates(vec![0, 0, 1, 1]));
         assert_eq!(
-            f.batches,
+            cleared_keys(&f.batches),
             vec![
-                unsealed_batch_meta("Id(0)-unsealed-0", 0, 1, 0, 0, 0, 186),
-                unsealed_batch_meta("Id(0)-unsealed-1", 1, 2, 0, 1, 1, 186),
-                unsealed_batch_meta("Id(0)-unsealed-2", 2, 3, 0, 0, 1, 252),
+                unsealed_batch_meta("KEY", 0, 1, 0, 0, 0, 186),
+                unsealed_batch_meta("KEY", 1, 2, 0, 1, 1, 186),
+                unsealed_batch_meta("KEY", 2, 3, 0, 0, 1, 252),
             ],
         );
 
@@ -491,9 +571,9 @@ mod tests {
         assert_eq!(
             f.truncate(Antichain::from_elem(1))?
                 .into_iter()
-                .map(|b| b.key)
+                .map(|b| b.desc)
                 .collect::<Vec<_>>(),
-            vec!["Id(0)-unsealed-0".to_string()]
+            vec![desc_from(0, 1, 0)]
         );
 
         // Check that repeatedly truncating the same time bound does not modify the unsealed.
@@ -502,10 +582,10 @@ mod tests {
         let snapshot_updates = slurp_from(&f, &blob, 0, None)?;
         assert_eq!(snapshot_updates, unsealed_updates(vec![0, 1, 1]));
         assert_eq!(
-            f.batches,
+            cleared_keys(&f.batches),
             vec![
-                unsealed_batch_meta("Id(0)-unsealed-1", 1, 2, 0, 1, 1, 186),
-                unsealed_batch_meta("Id(0)-unsealed-2", 2, 3, 0, 0, 1, 252),
+                unsealed_batch_meta("KEY", 1, 2, 0, 1, 1, 186),
+                unsealed_batch_meta("KEY", 2, 3, 0, 0, 1, 252),
             ],
         );
 
@@ -513,12 +593,9 @@ mod tests {
         assert_eq!(
             f.truncate(Antichain::from_elem(2))?
                 .into_iter()
-                .map(|b| b.key)
+                .map(|b| b.desc)
                 .collect::<Vec<_>>(),
-            vec![
-                "Id(0)-unsealed-1".to_string(),
-                "Id(0)-unsealed-2".to_string()
-            ]
+            vec![desc_from(1, 2, 0), desc_from(2, 3, 0)]
         );
 
         // Check that truncate correctly handles the case where there are no more batches.
@@ -627,8 +704,8 @@ mod tests {
         assert_eq!(snapshot_updates, updates[1..]);
 
         assert_eq!(
-            f.batches,
-            vec![unsealed_batch_meta("Id(0)-unsealed-1", 0, 2, 0, 1, 2, 252)],
+            cleared_keys(&f.batches),
+            vec![unsealed_batch_meta("KEY", 0, 2, 0, 1, 2, 252)],
         );
 
         Ok(())

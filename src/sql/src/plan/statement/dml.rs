@@ -22,10 +22,9 @@ use ore::collections::CollectionExt;
 use repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
-    Assignment, CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement,
-    DeleteStatement, ExplainStage, ExplainStatement, Explainee, Expr, Ident, InsertStatement,
-    Query, Raw, SelectStatement, Statement, TailStatement, UnresolvedObjectName, UpdateStatement,
-    ViewDefinition,
+    CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
+    ExplainStage, ExplainStatement, Explainee, Ident, InsertStatement, Query, Raw, SelectStatement,
+    Statement, TailStatement, UnresolvedObjectName, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::plan::query;
@@ -73,96 +72,62 @@ pub fn plan_insert(
 
 pub fn describe_delete(
     scx: &StatementContext,
-    DeleteStatement {
-        table_name,
-        selection,
-    }: DeleteStatement<Raw>,
+    stmt: DeleteStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    query::plan_mutation_query(scx, table_name, selection, None)?;
+    query::plan_delete_query(scx, stmt)?;
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_delete(
     scx: &StatementContext,
-    DeleteStatement {
-        table_name,
-        selection,
-    }: DeleteStatement<Raw>,
+    stmt: DeleteStatement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    plan_read_then_write(
-        scx,
-        MutationKind::Delete,
-        params,
-        table_name,
-        selection,
-        None,
-    )
+    let rtw_plan = query::plan_delete_query(scx, stmt)?;
+    plan_read_then_write(MutationKind::Delete, params, rtw_plan)
 }
 
 pub fn describe_update(
     scx: &StatementContext,
-    UpdateStatement {
-        table_name,
-        assignments,
-        selection,
-    }: UpdateStatement<Raw>,
+    stmt: UpdateStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    query::plan_mutation_query(scx, table_name, selection, Some(assignments))?;
+    query::plan_update_query(scx, stmt)?;
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_update(
     scx: &StatementContext,
-    UpdateStatement {
-        table_name,
-        selection,
-        assignments,
-    }: UpdateStatement<Raw>,
+    stmt: UpdateStatement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    plan_read_then_write(
-        scx,
-        MutationKind::Update,
-        params,
-        table_name,
-        selection,
-        Some(assignments),
-    )
+    let rtw_plan = query::plan_update_query(scx, stmt)?;
+    plan_read_then_write(MutationKind::Update, params, rtw_plan)
 }
 
 pub fn plan_read_then_write(
-    scx: &StatementContext,
     kind: MutationKind,
     params: &Params,
-    table_name: UnresolvedObjectName,
-    selection: Option<Expr<Raw>>,
-    assignments: Option<Vec<Assignment<Raw>>>,
-) -> Result<Plan, anyhow::Error> {
-    let query::ReadThenWritePlan {
+    query::ReadThenWritePlan {
         id,
         mut selection,
         finishing,
         assignments,
-    } = query::plan_mutation_query(scx, table_name, selection, assignments)?;
+    }: query::ReadThenWritePlan,
+) -> Result<Plan, anyhow::Error> {
     selection.bind_parameters(&params)?;
     let selection = selection.lower();
-    let assignments = if let Some(sets) = assignments {
-        let mut assignments = HashMap::new();
-        for (idx, mut set) in sets {
-            set.bind_parameters(&params)?;
-            let set = set.lower_uncorrelated()?;
-            assignments.insert(idx, set);
-        }
-        Some(assignments)
-    } else {
-        None
-    };
+    let mut assignments_outer = HashMap::new();
+    for (idx, mut set) in assignments {
+        set.bind_parameters(&params)?;
+        let set = set.lower_uncorrelated()?;
+        assignments_outer.insert(idx, set);
+    }
+
     Ok(Plan::ReadThenWrite(ReadThenWritePlan {
         id,
         selection,
         finishing,
-        assignments,
+        assignments: assignments_outer,
         kind,
     }))
 }
@@ -277,10 +242,8 @@ pub fn plan_explain(
         Some(finishing)
     };
     expr.bind_parameters(&params)?;
-    let decorrelated_expr = expr.clone().lower();
     Ok(Plan::Explain(ExplainPlan {
         raw_plan: expr,
-        decorrelated_plan: decorrelated_expr,
         row_set_finishing: finishing,
         stage,
         options,

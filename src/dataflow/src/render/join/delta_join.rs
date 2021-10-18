@@ -543,18 +543,22 @@ where
 
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
-    let (oks, errs2) = dogsdogsdogs::operators::half_join(
+    let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
         &updates,
         trace,
         |time| time.saturating_sub(1),
         comparison,
+        |timer, _count| timer.elapsed().ge(&std::time::Duration::from_millis(10)),
         // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-        move |_key, stream_row, lookup_row| {
+        move |_key, stream_row, lookup_row, initial, time, diff1, diff2| {
             let temp_storage = RowArena::new();
             let mut datums_local = datums.borrow();
             datums_local.extend(stream_row.iter());
             datums_local.extend(lookup_row.iter());
-            closure.apply(&mut datums_local, &temp_storage, &mut row_builder)
+            let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
+            let diff = diff1.clone() * diff2.clone();
+            let dout = (row, time.clone());
+            Some((dout, initial.clone(), diff))
         },
     )
     .inner

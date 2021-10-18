@@ -7,12 +7,66 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
 
-RUN apt-get update && apt-get install -qy \
-    ca-certificates \
-    postgresql-client
+> SELECT * FROM multi_row_insert
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
 
-COPY smith-fuzz /usr/local/bin
+> SELECT * FROM multi_insert_transaction;
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
 
-ENTRYPOINT ["smith-fuzz"]
+> SELECT COUNT(*) = 0 FROM insert_rollback;
+true
+
+> SELECT * FROM insert_select;
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+
+> SELECT * FROM delete_table;
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+
+> SELECT * FROM update_table;
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20

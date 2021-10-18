@@ -15,8 +15,8 @@
 //! in which the views will be executed.
 
 use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
-use std::collections::{HashMap, HashSet};
+use expr::{GlobalId, Id, IdGen, LocalId, MirRelationExpr, MirScalarExpr};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::Optimizer;
 
@@ -169,12 +169,15 @@ fn optimize_dataflow_relations(
     }
 }
 
-/// Pushes demand information from published outputs to dataflow inputs.
+/// Pushes demand information from published outputs to dataflow inputs,
+/// projecting away unnecessary columns.
 ///
 /// Dataflows that exist for the sake of generating plan explanations do not
 /// have published outputs. In this case, we push demand information from views
 /// not depended on by other views to dataflow inputs.
 fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
+    // Maps id -> union of known columns demanded from the source/view with the
+    // corresponding id.
     let mut demand = HashMap::new();
 
     // Demand all columns of inputs to sinks.
@@ -182,7 +185,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
         let input_id = sink.from;
         demand
             .entry(Id::Global(input_id))
-            .or_insert_with(HashSet::new)
+            .or_insert_with(BTreeSet::new)
             .extend(0..dataflow.arity_of(&input_id));
     }
 
@@ -191,27 +194,18 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
         let input_id = desc.on_id;
         demand
             .entry(Id::Global(input_id))
-            .or_insert_with(HashSet::new)
+            .or_insert_with(BTreeSet::new)
             .extend(0..dataflow.arity_of(&input_id));
     }
 
-    for build_desc in dataflow.objects_to_build.iter_mut().rev() {
-        let transform = crate::demand::Demand;
-        if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
-            // Propagate demand information from outputs to inputs.
-            transform.action(build_desc.view.as_inner_mut(), columns.clone(), &mut demand);
-        } else if build_desc.id == GlobalId::Explain {
-            // If there are no outputs (which happens if we just want to build
-            // a plan explanation), then demand all columns from views that are
-            // not depended on by another view.
-            let arity = build_desc.view.arity();
-            transform.action(
-                build_desc.view.as_inner_mut(),
-                (0..arity).collect(),
-                &mut demand,
-            );
-        }
-    }
+    optimize_dataflow_demand_inner(
+        dataflow
+            .objects_to_build
+            .iter_mut()
+            .rev()
+            .map(|build_desc| (Id::Global(build_desc.id), build_desc.view.as_inner_mut())),
+        &mut demand,
+    );
 
     // Push demand information into the SourceDesc.
     for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
@@ -231,6 +225,51 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
     }
 }
 
+/// Pushes demand through views in `view_sequence` in order, removing
+/// columns not demanded.
+///
+/// This method is made public for the sake of testing.
+/// TODO: make this private once we allow multiple exports per dataflow.
+pub fn optimize_dataflow_demand_inner<'a, I>(
+    view_sequence: I,
+    demand: &mut HashMap<Id, BTreeSet<usize>>,
+) where
+    I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
+{
+    // Maps id -> The projection that was pushed down on the view with the
+    // corresponding id.
+    let mut applied_projection = HashMap::new();
+    // Collect the mutable references to views after pushing projection down
+    // in order to run cleanup actions on them in a second loop.
+    let mut view_refs = Vec::new();
+    let projection_pushdown = crate::projection_pushdown::ProjectionPushdown;
+    for (id, view) in view_sequence {
+        if let Some(columns) = demand.get(&id) {
+            let projection_pushed_down = columns.iter().map(|c| *c).collect();
+            // Push down the projection consisting of the entries of `columns`
+            // in increasing order.
+            projection_pushdown.action(view, &projection_pushed_down, demand);
+            applied_projection.insert(id, projection_pushed_down);
+        } else if id == Id::Global(GlobalId::Explain) {
+            // If we just want to explain the plan for a given view, then there
+            // will be no upstream demand. Just demand all columns from views
+            // that are not depended on by another view.
+            let arity = view.arity();
+            projection_pushdown.action(view, &(0..arity).collect(), demand);
+        }
+        view_refs.push(view);
+    }
+
+    let typ_update = crate::update_let::UpdateLet;
+    for view in view_refs {
+        // Update column references to views where projections were pushed down.
+        projection_pushdown.update_projection_around_get(view, &applied_projection);
+        // Types need to be updated after ProjectionPushdown
+        // because the width of each view may have changed.
+        typ_update.action(view, &mut HashMap::new(), &mut IdGen::default());
+    }
+}
+
 /// Pushes predicate to dataflow inputs.
 fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
     // Contains id -> predicates map, describing those predicates that
@@ -238,19 +277,14 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
     let mut predicates = HashMap::<Id, HashSet<expr::MirScalarExpr>>::new();
 
     // Propagate predicate information from outputs to inputs.
-    for build_desc in dataflow.objects_to_build.iter_mut().rev() {
-        let transform = crate::predicate_pushdown::PredicatePushdown;
-        if let Some(list) = predicates.get(&Id::Global(build_desc.id)).clone() {
-            if !list.is_empty() {
-                *build_desc.view.as_inner_mut() = build_desc
-                    .view
-                    .as_inner_mut()
-                    .take_dangerous()
-                    .filter(list.iter().cloned());
-            }
-        }
-        transform.action(build_desc.view.as_inner_mut(), &mut predicates);
-    }
+    optimize_dataflow_filters_inner(
+        dataflow
+            .objects_to_build
+            .iter_mut()
+            .rev()
+            .map(|build_desc| (Id::Global(build_desc.id), build_desc.view.as_inner_mut())),
+        &mut predicates,
+    );
 
     // Push predicate information into the SourceDesc.
     for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
@@ -265,8 +299,30 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
             // Add any predicates that can be pushed to the source.
             if let Some(operator) = &mut source_desc.operators {
                 operator.predicates.extend(list.iter().cloned());
+                operator.predicates.sort();
             }
         }
+    }
+}
+
+/// Pushes filters down through views in `view_sequence` in order.
+///
+/// This method is made public for the sake of testing.
+/// TODO: make this private once we allow multiple exports per dataflow.
+pub fn optimize_dataflow_filters_inner<'a, I>(
+    view_iter: I,
+    predicates: &mut HashMap<Id, HashSet<expr::MirScalarExpr>>,
+) where
+    I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
+{
+    let transform = crate::predicate_pushdown::PredicatePushdown;
+    for (id, view) in view_iter {
+        if let Some(list) = predicates.get(&id).clone() {
+            if !list.is_empty() {
+                *view = view.take_dangerous().filter(list.iter().cloned());
+            }
+        }
+        transform.action(view, predicates);
     }
 }
 

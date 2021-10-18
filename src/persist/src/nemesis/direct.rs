@@ -23,7 +23,7 @@ use crate::error::Error;
 use crate::indexed::runtime::{
     self, DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
-use crate::indexed::ListenEvent;
+use crate::indexed::{ListenEvent, SnapshotExt};
 use crate::nemesis::{
     AllowCompactionReq, Input, ReadOutputReq, ReadOutputRes, ReadSnapshotReq, ReadSnapshotRes, Req,
     Res, Runtime, SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteReqMulti,
@@ -231,14 +231,15 @@ impl Direct {
     }
 
     fn read_snapshot(&mut self, req: ReadSnapshotReq) -> Result<ReadSnapshotRes, Error> {
-        let mut snap = match self.snapshots.remove(&req.snap) {
+        let snap = match self.snapshots.remove(&req.snap) {
             Some(snap) => snap,
             None => return Err(format!("unknown snap: {:?}", req.snap).into()),
         };
-        let contents = snap.read_to_end_flattened()?;
+        let (seqno, since) = (snap.seqno().0, snap.since());
+        let contents = snap.read_to_end()?;
         Ok(ReadSnapshotRes {
-            seqno: snap.seqno().0,
-            since: snap.since(),
+            seqno,
+            since,
             contents,
         })
     }
@@ -302,6 +303,7 @@ mod tests {
                 log,
                 blob,
                 &MetricsRegistry::new(),
+                None,
             )
         })
         .expect("initial start failed");

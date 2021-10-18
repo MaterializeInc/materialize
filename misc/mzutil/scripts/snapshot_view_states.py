@@ -21,8 +21,8 @@ import os
 import sys
 import typing
 
-import psycopg2  # type: ignore
-import psycopg2.extensions  # type: ignore
+import psycopg2
+import psycopg2.extensions
 
 
 def view_names(

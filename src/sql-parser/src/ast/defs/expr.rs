@@ -58,8 +58,12 @@ pub enum Expr<T: AstInfo> {
         left: Box<Expr<T>>,
         right: Box<Expr<T>>,
     },
-    /// `IS NULL` expression
-    IsNull { expr: Box<Expr<T>>, negated: bool },
+    /// `IS {NULL, TRUE, FALSE, UNKNOWN}` expression
+    IsExpr {
+        expr: Box<Expr<T>>,
+        construct: IsExprConstruct,
+        negated: bool,
+    },
     /// `[ NOT ] IN (val1, val2, ...)`
     InList {
         expr: Box<Expr<T>>,
@@ -205,13 +209,17 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(" OR ");
                 f.write_node(right);
             }
-            Expr::IsNull { expr, negated } => {
+            Expr::IsExpr {
+                expr,
+                negated,
+                construct,
+            } => {
                 f.write_node(&expr);
-                f.write_str(" IS");
+                f.write_str(" IS ");
                 if *negated {
-                    f.write_str(" NOT");
+                    f.write_str("NOT ");
                 }
-                f.write_str(" NULL");
+                f.write_node(construct);
             }
             Expr::InList {
                 expr,
@@ -735,3 +743,32 @@ impl<T: AstInfo> AstDisplay for FunctionArgs<T> {
     }
 }
 impl_display_t!(FunctionArgs);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IsExprConstruct {
+    Null,
+    True,
+    False,
+    Unknown,
+}
+
+impl IsExprConstruct {
+    pub fn requires_boolean_expr(&self) -> bool {
+        match self {
+            IsExprConstruct::Null => false,
+            IsExprConstruct::True | IsExprConstruct::False | IsExprConstruct::Unknown => true,
+        }
+    }
+}
+
+impl AstDisplay for IsExprConstruct {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            IsExprConstruct::Null => f.write_str("NULL"),
+            IsExprConstruct::True => f.write_str("TRUE"),
+            IsExprConstruct::False => f.write_str("FALSE"),
+            IsExprConstruct::Unknown => f.write_str("UNKNOWN"),
+        }
+    }
+}
+impl_display!(IsExprConstruct);

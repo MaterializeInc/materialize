@@ -203,15 +203,17 @@ All further columns after `mz_progressed` will be `NULL` in the `true` case.
 Not all timestamps that appear will have a corresponding `mz_progressed` row.
 For example, the following is a valid sequence of updates:
 
-`mz_timestamp` | `mz_progressed` | `mz_diff` | `column1`
----------------|-----------------|-----------|----------------
-1              | `false`         | 1         | data
-1              | `false`         | 1         | more data
-2              | `false`         | 1         | even more data
-4              | `true`          | `NULL`    | `NULL`
+```nofmt
+mz_timestamp | mz_progressed | mz_diff | column1
+-------------|---------------|---------|--------------
+1            | false         | 1       | data
+2            | false         | 1       | more data
+3            | false         | 1       | even more data
+4            | true          | NULL    | NULL
+```
 
 Notice how Materialize did not emit explicit progress messages for timestamps
-`1`, `2`, or `3`. The receipt of the update at timestamp `2` implies that there
+`1` or `2`. The receipt of the update at timestamp `2` implies that there
 are no more updates for timestamp `1`, because timestamps are always presented
 in non-decreasing order. The receipt of the explicit progress message at
 timestamp `4` implies that there are no more updates for either timestamp
@@ -234,7 +236,7 @@ BEGIN;
 DECLARE c CURSOR FOR TAIL t;
 ````
 
-Now use [`FETCH`](/sql/fetch) in a loop to retrieve some number of rows within a time window:
+Now use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it is ready:
 
 ```sql
 FETCH ALL c;

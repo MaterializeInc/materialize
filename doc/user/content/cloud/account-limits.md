@@ -25,7 +25,7 @@ Deployment Size | CPUs | RAM
 **L**  | 32vCPUs   |  256GB
 **XL**  | 64vCPUs   |  512GB
 
-If you need a larger deployment size for your specific use case, [get in touch with us](../support).
+You can find pricing information [here](https://materialize.com/pricing). If you need a larger deployment size for your specific use case, [get in touch with us](../support).
 
 ### Cloud vs. self-managed
 
@@ -53,3 +53,4 @@ We reserve the right to terminate a session in your Cloud deployment. This may h
 * [What Is Materialize?](/overview/what-is-materialize)
 * [Connect to Materialize Cloud](../connect-to-cloud)
 * [Materialize Cloud Support](../support)
+* [Materialize Cloud Pricing](https://materialize.com/pricing)

@@ -73,6 +73,7 @@ Database
 Databases
 Day
 Days
+Deallocate
 Debezium
 Dec
 Decimal
@@ -93,6 +94,7 @@ End
 Enforced
 Envelope
 Except
+Execute
 Exists
 Explain
 Extended
@@ -189,6 +191,7 @@ Position
 Postgres
 Preceding
 Precision
+Prepare
 Primary
 Protobuf
 Publication
@@ -250,6 +253,7 @@ Then
 Ties
 Time
 Timestamp
+Timing
 To
 Topic
 Trailing
@@ -263,6 +267,7 @@ Unbounded
 Uncommitted
 Union
 Unique
+Unknown
 Update
 Upsert
 User

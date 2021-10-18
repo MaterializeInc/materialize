@@ -104,7 +104,7 @@ Query:
 
 ? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
-| Filter (#3 = 4), (#0 = 1)
+| Filter (#0 = 1), (#3 = 4)
 | Project (#0, #3)
 
 Query:

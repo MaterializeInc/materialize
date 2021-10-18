@@ -8,6 +8,13 @@ menu:
 
 `EXPLAIN` displays the plan used for a `SELECT` statement or a view.
 
+{{< warning >}}
+`EXPLAIN` is not part of Materialize's stable interface and is not subject to
+our [backwards compatibility](/versions/#backwards-compatibility) guarantee.
+The syntax and output of `EXPLAIN` may change arbitrarily in future versions of
+Materialize.
+{{< /warning >}}
+
 ## Conceptual framework
 
 To execute `SELECT` statements, Materialize generates a plan consisting of

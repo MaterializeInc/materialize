@@ -32,3 +32,13 @@ steps:
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/pypi
+
+  - label: ":bulb: Full SQL Logic Tests"
+    trigger: sql-logic-tests
+    async: true
+    branches: "v*.*rc*"
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"

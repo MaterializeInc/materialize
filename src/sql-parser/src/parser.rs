@@ -237,6 +237,9 @@ impl<'a> Parser<'a> {
                 Token::Keyword(DECLARE) => Ok(self.parse_declare()?),
                 Token::Keyword(FETCH) => Ok(self.parse_fetch()?),
                 Token::Keyword(CLOSE) => Ok(self.parse_close()?),
+                Token::Keyword(PREPARE) => Ok(self.parse_prepare()?),
+                Token::Keyword(EXECUTE) => Ok(self.parse_execute()?),
+                Token::Keyword(DEALLOCATE) => Ok(self.parse_deallocate()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -526,15 +529,10 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self, name: UnresolvedObjectName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let all = self.parse_keyword(ALL);
-        let distinct = self.parse_keyword(DISTINCT);
-        if all && distinct {
-            return parser_err!(
-                self,
-                self.peek_prev_pos(),
-                format!("Cannot specify both ALL and DISTINCT in function: {}", name)
-            );
-        }
+        let distinct = matches!(
+            self.parse_at_most_one_keyword(&[ALL, DISTINCT], &format!("function: {}", name))?,
+            Some(DISTINCT),
+        );
         let args = self.parse_optional_args(true)?;
         let filter = if self.parse_keyword(FILTER) {
             self.expect_token(&Token::LParen)?;
@@ -947,27 +945,33 @@ impl<'a> Parser<'a> {
         } else if let Token::Keyword(kw) = tok {
             match kw {
                 IS => {
-                    if self.parse_keyword(NULL) {
-                        Ok(Expr::IsNull {
+                    let negated = self.parse_keyword(NOT);
+                    if let Some(construct) =
+                        self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN])
+                    {
+                        Ok(Expr::IsExpr {
                             expr: Box::new(expr),
-                            negated: false,
-                        })
-                    } else if self.parse_keywords(&[NOT, NULL]) {
-                        Ok(Expr::IsNull {
-                            expr: Box::new(expr),
-                            negated: true,
+                            negated,
+                            construct: match construct {
+                                NULL => IsExprConstruct::Null,
+                                TRUE => IsExprConstruct::True,
+                                FALSE => IsExprConstruct::False,
+                                UNKNOWN => IsExprConstruct::Unknown,
+                                _ => unreachable!(),
+                            },
                         })
                     } else {
                         self.expected(
                             self.peek_pos(),
-                            "NULL or NOT NULL after IS",
+                            "NULL, NOT NULL, TRUE, NOT TRUE, FALSE, NOT FALSE, UNKNOWN, NOT UNKNOWN after IS",
                             self.peek_token(),
                         )
                     }
                 }
-                ISNULL => Ok(Expr::IsNull {
+                ISNULL => Ok(Expr::IsExpr {
                     expr: Box::new(expr),
                     negated: false,
+                    construct: IsExprConstruct::Null,
                 }),
                 NOT | IN | BETWEEN => {
                     self.prev_token();
@@ -1293,6 +1297,36 @@ impl<'a> Parser<'a> {
             true
         } else {
             false
+        }
+    }
+
+    fn parse_at_most_one_keyword(
+        &mut self,
+        keywords: &[Keyword],
+        location: &str,
+    ) -> Result<Option<Keyword>, ParserError> {
+        match self.parse_one_of_keywords(keywords) {
+            Some(first) => {
+                let remaining_keywords = keywords
+                    .iter()
+                    .cloned()
+                    .filter(|k| *k != first)
+                    .collect::<Vec<_>>();
+                if let Some(second) = self.parse_one_of_keywords(remaining_keywords.as_slice()) {
+                    let second_pos = self.peek_prev_pos();
+                    parser_err!(
+                        self,
+                        second_pos,
+                        "Cannot specify both {} and {} in {}",
+                        first,
+                        second,
+                        location,
+                    )
+                } else {
+                    Ok(Some(first))
+                }
+            }
+            None => Ok(None),
         }
     }
 
@@ -2209,9 +2243,16 @@ impl<'a> Parser<'a> {
             DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
         ]) {
             Some(DATABASE) => {
+                let if_exists = self.parse_if_exists()?;
+                let name = self.parse_identifier()?;
+                let restrict = matches!(
+                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+                    Some(RESTRICT),
+                );
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
-                    if_exists: self.parse_if_exists()?,
-                    name: self.parse_identifier()?,
+                    if_exists,
+                    name,
+                    restrict: restrict,
                 }));
             }
             Some(INDEX) => ObjectType::Index,
@@ -2234,16 +2275,10 @@ impl<'a> Parser<'a> {
 
         let if_exists = self.parse_if_exists()?;
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
-        let cascade = self.parse_keyword(CASCADE);
-        let restrict = self.parse_keyword(RESTRICT);
-        let restrict_pos = self.peek_prev_pos();
-        if cascade && restrict {
-            return parser_err!(
-                self,
-                restrict_pos,
-                "Cannot specify both CASCADE and RESTRICT in DROP"
-            );
-        }
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
+        );
         Ok(Statement::DropObjects(DropObjectsStatement {
             materialized,
             object_type,
@@ -2657,6 +2692,17 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_boolean_value(&mut self) -> Result<bool, ParserError> {
+        match self.next_token() {
+            Some(t) => match t {
+                Token::Keyword(TRUE) => Ok(true),
+                Token::Keyword(FALSE) => Ok(false),
+                _ => self.expected(self.peek_prev_pos(), "boolean value", Some(t)),
+            },
+            None => self.expected(self.peek_prev_pos(), "boolean value", None),
+        }
+    }
+
     fn parse_value_array(&mut self) -> Result<Value, ParserError> {
         let mut values = vec![];
         loop {
@@ -3053,7 +3099,13 @@ impl<'a> Parser<'a> {
 
     fn parse_delete(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(FROM)?;
-        let table_name = self.parse_object_name()?;
+        let table_name = RawName::Name(self.parse_object_name()?);
+        let alias = self.parse_optional_table_alias()?;
+        let using = if self.parse_keyword(USING) {
+            self.parse_comma_separated(Parser::parse_table_and_joins)?
+        } else {
+            vec![]
+        };
         let selection = if self.parse_keyword(WHERE) {
             Some(self.parse_expr()?)
         } else {
@@ -3062,6 +3114,8 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::Delete(DeleteStatement {
             table_name,
+            alias,
+            using,
             selection,
         }))
     }
@@ -3795,7 +3849,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let table_name = self.parse_object_name()?;
+        let table_name = RawName::Name(self.parse_object_name()?);
+
         self.expect_keyword(SET)?;
         let assignments = self.parse_comma_separated(Parser::parse_assignment)?;
         let selection = if self.parse_keyword(WHERE) {
@@ -3803,6 +3858,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+
         Ok(Statement::Update(UpdateStatement {
             table_name,
             assignments,
@@ -3980,9 +4036,28 @@ impl<'a> Parser<'a> {
     /// has already been consumed.
     fn parse_explain(&mut self) -> Result<Statement<Raw>, ParserError> {
         // (TYPED)?
-        let options = ExplainOptions {
-            typed: self.parse_keyword(TYPED),
-        };
+        let typed = self.parse_keyword(TYPED);
+        let mut timing = false;
+
+        // options: ( '(' TIMING (true|false) ')' )?
+        if let Some(Token::LParen) = self.peek_token() {
+            // Check whether a valid option is after the parentheses, since the
+            // parentheses may belong to the actual query to be explained.
+            match self.peek_nth_token(1) {
+                Some(Token::Keyword(TIMING)) => {
+                    self.next_token(); // Consume the LParen
+                    self.parse_comma_separated(|s| match s.expect_one_of_keywords(&[TIMING])? {
+                        TIMING => {
+                            timing = s.parse_boolean_value()?;
+                            Ok(())
+                        }
+                        _ => unreachable!(),
+                    })?;
+                    self.expect_token(&Token::RParen)?;
+                }
+                _ => {}
+            }
+        }
 
         // (RAW | DECORRELATED | OPTIMIZED)? PLAN
         let stage = match self.parse_one_of_keywords(&[RAW, DECORRELATED, OPTIMIZED, PLAN]) {
@@ -4013,6 +4088,7 @@ impl<'a> Parser<'a> {
             Explainee::Query(self.parse_query()?)
         };
 
+        let options = ExplainOptions { typed, timing };
         Ok(Statement::Explain(ExplainStatement {
             stage,
             explainee,
@@ -4040,6 +4116,52 @@ impl<'a> Parser<'a> {
     fn parse_close(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
         Ok(Statement::Close(CloseStatement { name }))
+    }
+
+    /// Parse a `PREPARE` statement, assuming that the `PREPARE` token
+    /// has already been consumed.
+    fn parse_prepare(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_keyword(AS)?;
+        let pos = self.peek_pos();
+        //
+        let stmt = match self.parse_statement()? {
+            stmt @ Statement::Select(_)
+            | stmt @ Statement::Insert(_)
+            | stmt @ Statement::Delete(_)
+            | stmt @ Statement::Update(_) => stmt,
+            _ => return parser_err!(self, pos, "unpreparable statement"),
+        };
+        Ok(Statement::Prepare(PrepareStatement {
+            name,
+            stmt: Box::new(stmt),
+        }))
+    }
+
+    /// Parse a `EXECUTE` statement, assuming that the `EXECUTE` token
+    /// has already been consumed.
+    fn parse_execute(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        let params = if self.consume_token(&Token::LParen) {
+            let params = self.parse_comma_separated(Parser::parse_expr)?;
+            self.expect_token(&Token::RParen)?;
+            params
+        } else {
+            Vec::new()
+        };
+        Ok(Statement::Execute(ExecuteStatement { name, params }))
+    }
+
+    /// Parse a `DEALLOCATE` statement, assuming that the `DEALLOCATE` token
+    /// has already been consumed.
+    fn parse_deallocate(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let _ = self.parse_keyword(PREPARE);
+        let name = if self.parse_keyword(ALL) {
+            None
+        } else {
+            Some(self.parse_identifier()?)
+        };
+        Ok(Statement::Deallocate(DeallocateStatement { name }))
     }
 
     /// Parse a `FETCH` statement, assuming that the `FETCH` token

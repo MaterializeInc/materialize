@@ -142,8 +142,7 @@ a      b
 2      "b"
 <null> "c"
 
-! INSERT INTO t SELECT * FROM t;
-INSERT statements referencing other relations are not supported
+> INSERT INTO t SELECT * FROM t WHERE a IS NULL;
 
 ! INSERT INTO t VALUES (1);
 null value in column "b" violates not-null constraint
@@ -184,6 +183,7 @@ a       b
 ------------
 1       "a"
 2       "b"
+<null>  "c"
 <null>  "c"
 3       "d"
 4       "e"

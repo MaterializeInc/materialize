@@ -13,8 +13,17 @@ information in your bug report.
 
 ### What version of Materialize are you using?
 
+From the shell:
+
 ```
 $ materialized -v
+
+```
+
+Or from the SQL console:
+
+```
+materialize=> select mz_version();
 
 ```
 

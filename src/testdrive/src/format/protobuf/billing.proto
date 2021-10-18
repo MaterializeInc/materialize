@@ -33,7 +33,7 @@ message Record {
   string interval_end = 2;
 
   string meter = 3; // What's being measured
-  uint32 value = 4;
+  int32 value = 4;
 
   repeated Measurement measurements = 7;
 }

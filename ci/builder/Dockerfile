@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:focal-20210827 AS crosstool
+FROM ubuntu:focal-20210921 AS crosstool
 
 WORKDIR /scratch
 
@@ -37,8 +37,6 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     unzip \
     xz-utils
 
-COPY crosstool.defconfig ./
-
 # TODO(benesch): switch back to an official crosstool-NG release when the
 # official releases support GCC 9.0.
 
@@ -47,15 +45,21 @@ RUN mkdir crosstool \
     && tar -xf crosstool.tar.gz -C crosstool --strip-components=1 \
     && rm crosstool.tar.gz \
     && (cd crosstool && ./bootstrap && ./configure && make install) \
-    && rm -rf crosstool \
-    && DEFCONFIG=crosstool.defconfig ct-ng defconfig \
+    && rm -rf crosstool
+
+COPY crosstool.defconfig ./
+
+# The sed command below works around
+# https://github.com/crosstool-ng/crosstool-ng/issues/1609.
+RUN DEFCONFIG=crosstool.defconfig ct-ng defconfig \
     && rm crosstool.defconfig \
+    && sed -i 's,http://isl.gforge.inria.fr,https://mirror.sobukus.de/files/src/isl/,' .config \
     && ct-ng build
 
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:focal-20210827
+FROM ubuntu:focal-20210921
 
 WORKDIR /workdir
 
@@ -95,7 +99,7 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.2.0/au
     && echo '39c501aaca6aae3f3c7fc125b3c3af779ddbe4e67e4ebdc44c2ae5cba76c847f  shellcheck.tar.xz' | sha256sum --check \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.7.0/shellcheck \
     && rm shellcheck.tar.xz \
-    && curl -fsSL "https://github.com/docker/compose/releases/download/1.25.4/docker-compose-Linux-x86_64" > /usr/local/bin/docker-compose \
+    && curl -fsSL "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-Linux-x86_64" > /usr/local/bin/docker-compose \
     && chmod +x /usr/local/bin/docker-compose
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]

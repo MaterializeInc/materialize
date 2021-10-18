@@ -18,6 +18,7 @@
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
 use std::cmp;
+use std::convert::TryFrom;
 use std::env;
 use std::ffi::CStr;
 use std::fmt;
@@ -38,7 +39,7 @@ use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use chrono::Utc;
 use clap::AppSettings;
-use coord::PersistConfig;
+use coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::info;
@@ -126,6 +127,18 @@ struct Args {
     /// test is always safe.
     #[structopt(long)]
     disable_persistent_system_tables_test: bool,
+
+    /// An S3 location used to persist data, specified as s3://<bucket>/<path>.
+    ///
+    /// The `<path>` is a prefix prepended to all S3 object keys used for
+    /// persistence and allowed to be empty.
+    ///
+    /// Ignored if persistence is disabled. If unset, files stored under
+    /// `--data-directory/-D` are used instead. If set, S3 credentials and
+    /// region must be available in the process or environment: for details see
+    /// https://github.com/rusoto/rusoto/blob/rusoto-v0.47.0/AWS-CREDENTIALS.md.
+    #[structopt(long, hidden = true, default_value)]
+    persist_storage: String,
 
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
@@ -629,6 +642,15 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
             false
         };
         let system_table_enabled = !args.disable_persistent_system_tables_test;
+        let storage = if args.persist_storage.is_empty() {
+            PersistStorage::File(PersistFileStorage {
+                blob_path: data_directory.join("persist").join("blob"),
+            })
+        } else if !args.experimental {
+            bail!("cannot specify --persist-storage without --experimental");
+        } else {
+            PersistStorage::try_from(args.persist_storage)?
+        };
         let lock_info = format!(
             "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
             mz_version = materialized::BUILD_INFO.human_version(),
@@ -636,13 +658,21 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
             start_time = Utc::now(),
             num_workers = args.workers.0,
         );
+
+        // The min_step_interval knob allows tuning a tradeoff between latency and storage usage.
+        // As persist gets more sophisticated over time, we'll no longer need this knob,
+        // but in the meantime we need it to make tests reasonably performant.
+        // The --timestamp-frequency flag similarly gives testing a control over
+        // latency vs resource usage, so for simplicity we reuse it here."
+        let min_step_interval = args.timestamp_frequency;
+
         PersistConfig {
-            // TODO: These paths are hardcoded for now, but we'll want to make
-            // them configurable once we add additional Log and Blob impls.
-            blob_path: data_directory.join("persist").join("blob"),
+            runtime: Some(runtime.clone()),
+            storage,
             user_table_enabled,
             system_table_enabled,
             lock_info,
+            min_step_interval,
         }
     };
 
@@ -677,7 +707,7 @@ to improve both our software and your queries! Please reach out at:
 
     Web: https://materialize.com
     GitHub issues: https://github.com/MaterializeInc/materialize/issues
-    Email: support@materialize.io
+    Email: support@materialize.com
     Twitter: @MaterializeInc
 =======================================================================
 "
