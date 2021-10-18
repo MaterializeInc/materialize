@@ -86,7 +86,9 @@ Postgres sources in Materialize require that upstream Postgres instances be [ver
 
 Before you create a Postgres source in Materialize, you must complete the following prerequisite steps in Postgres.
 
-1. Ensure the database configuration allows logical replication. For most configurations, it should suffice to set `wal_level = logical` in `postgresql.conf`, but additional steps may be required for Amazon RDS. See the [Amazon Relational Database Service Documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication) for details.
+1. Ensure the database configuration allows logical replication. For most configurations, it should suffice to set `wal_level = logical` in `postgresql.conf`.
+
+    **Note:** If you're using Postgres on a Cloud service like Amazon RDS, AWS Aurora, or Cloud SQL, you'll need to take some additional steps. For more information, see [Postgres in the Cloud](/guides/postgres-cloud/).
 
 2. Assign the user `REPLICATION` privileges:
     ```sql
