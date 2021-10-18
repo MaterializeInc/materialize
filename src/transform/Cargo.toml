@@ -19,5 +19,5 @@ expr_test_util = {path = "../expr-test-util"}
 lazy_static = "1.4.0"
 lowertest = {path = "../lowertest"}
 ore = { path = "../ore"}
-proc-macro2 = "1.0.29"
+proc-macro2 = "1.0.30"
 serde_json = "1.0.68"
