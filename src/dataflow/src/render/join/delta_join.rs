@@ -129,6 +129,12 @@ impl DeltaJoinPlan {
             // We use the order specified by the implementation.
             let order = &join_orders[source_relation];
 
+            let mut stream_arity = if let Some(initial_closure) = &initial_closure {
+                initial_closure.before.projection.len()
+            } else {
+                input_mapper.input_arity(source_relation)
+            };
+
             for (lookup_relation, lookup_key) in order.iter() {
                 // rebase the intended key to use global column identifiers.
                 let lookup_key_rebased = lookup_key
@@ -158,16 +164,19 @@ impl DeltaJoinPlan {
                     input_mapper.global_columns(*lookup_relation),
                     &lookup_key_rebased,
                 );
+                let next_stream_arity = closure.before.projection.len();
 
                 bound_inputs.push(*lookup_relation);
                 // record the stage plan as next in the path.
                 stage_plans.push(DeltaStagePlan {
                     lookup_relation: *lookup_relation,
                     stream_key,
-                    stream_arity: input_mapper.input_arity(*lookup_relation),
+                    stream_arity,
                     lookup_key: lookup_key.clone(),
                     closure,
                 });
+
+                stream_arity = next_stream_arity;
             }
             // determine a final closure, and complete the path plan.
             let final_closure = join_build_state.complete();
@@ -538,11 +547,17 @@ where
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
+    let (updates_permutation, prev_value_expr) =
+        Permutation::construct_no_op(&prev_key, prev_arity);
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
         let mut row_packer = Row::default();
         move |(row, time)| {
+            println!(
+                "3  row: {:?}\tkey: {:?}\tvalue_expr: {:?}\tstream_arity: {}",
+                row, prev_key, prev_value_expr, prev_arity,
+            );
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
             row_packer.clear();
@@ -552,9 +567,16 @@ where
                     .map(|e| e.eval(&datums_local, &temp_storage)),
             )?;
             let row_key = row_packer.finish_and_reuse();
+            row_packer.try_extend(
+                prev_value_expr
+                    .iter()
+                    .map(|e| e.eval(&datums_local, &temp_storage)),
+            )?;
+            let row_value = row_packer.finish_and_reuse();
+            assert_eq!(row, row_value);
             // Explicit drop to release borrow on `row` so that it can be returned.
             drop(datums_local);
-            Ok((row_key, row, time))
+            Ok((row_key, row_value, time))
         }
     });
 
@@ -564,7 +586,7 @@ where
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
 
-    let permutation = Permutation::identity(permutation.key_arity, prev_arity).join(permutation);
+    let permutation = updates_permutation.join(permutation);
     let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
         &updates,
         trace,

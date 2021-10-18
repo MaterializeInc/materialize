@@ -120,7 +120,7 @@ use expr::{GlobalId, Id, MirScalarExpr};
 use itertools::Itertools;
 use ore::collections::CollectionExt as _;
 use ore::now::NowFn;
-use repr::{Datum, Row, Timestamp};
+use repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::metrics::Metrics;
@@ -513,7 +513,7 @@ where
                     .into_iter()
                     .map(|input| self.render_plan(input, scope, worker_index))
                     .collect();
-                dbg!(&plan);
+                // dbg!(&plan);
                 match plan {
                     crate::render::join::JoinPlan::Linear(linear_plan) => {
                         self.render_join(inputs, linear_plan, scope, arity)
@@ -1024,7 +1024,7 @@ pub mod plan {
                         input_keys.push(keys);
                     }
                     // Extract temporal predicates as joins cannot currently absorb them.
-                    dbg!(&implementation);
+                    // dbg!(&implementation);
                     let plan = match implementation {
                         expr::JoinImplementation::Differential((start, _start_arr), order) => {
                             JoinPlan::Linear(LinearJoinPlan::create_from(
@@ -1139,12 +1139,10 @@ pub mod plan {
                 }
                 MirRelationExpr::Union { base, inputs } => {
                     let arity = base.arity();
-                    dbg!(&arity);
                     let mut plans = Vec::with_capacity(1 + inputs.len());
                     let (plan, _keys) = Self::from_mir(base, arrangements)?;
                     plans.push(plan);
                     for input in inputs.iter() {
-                        dbg!(input.arity());
                         let (plan, _keys) = Self::from_mir(input, arrangements)?;
                         plans.push(plan)
                     }
