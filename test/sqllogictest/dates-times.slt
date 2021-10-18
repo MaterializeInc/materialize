@@ -1100,3 +1100,35 @@ select '9::59.999999999'::time
 # TODO: Postgres supports this as 09:01:00.1.
 statement error invalid input syntax for type time: NANOSECOND
 select '9::60.1'::time
+
+# BC years are properly formatted
+# Using INTERVAL to work around the parser not supporting BC identifiers yet
+query T
+select '0001-02-24'::date - interval '1 YEAR'
+----
+0001-02-24 00:00:00 BC
+
+query T
+select ('0001-02-24'::date - interval '1 YEAR')::date
+----
+0001-02-24 BC
+
+query T
+select ('0001-01-01'::date - interval '1 DAY')::date
+----
+0001-12-31 BC
+
+query T
+select '0001-02-24 03:04:05'::timestamp - interval '1 YEAR'
+----
+0001-02-24 03:04:05 BC
+
+query T
+select '0001-02-24 03:04:05.6789'::timestamp - interval '1 YEAR'
+----
+0001-02-24 03:04:05.6789 BC
+
+query T
+select '0001-02-24 03:04:05.6789 +00:00'::timestamptz - interval '1 YEAR'
+----
+0001-02-24 03:04:05.6789+00 BC
