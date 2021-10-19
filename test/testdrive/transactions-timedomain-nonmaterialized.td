@@ -101,3 +101,11 @@ Transactions can only reference objects in the same timedomain
 3
 
 > COMMIT
+
+# Regression for #8657
+# Ensure that views referencing other schemas are transitively included. Here,
+# pg_catalog is generally a view over mz_catalog.
+> BEGIN
+> SELECT c.oid FROM pg_catalog.pg_class c LIMIT 0;
+> SELECT pg_catalog.format_type(a.atttypid, a.atttypmod) FROM pg_catalog.pg_attribute a LIMIT 0;
+> COMMIT
