@@ -49,7 +49,7 @@ use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::metrics::Metrics;
 use crate::operator::CollectionExt;
-use crate::render::{self, plan::Plan as RenderPlan, Permutation, RenderState};
+use crate::render::{self, plan::Plan as RenderPlan, RenderState};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
@@ -599,55 +599,35 @@ where
         }
 
         // Install traces as maintained indexes
-        for (log, (_, trace)) in t_traces {
+        for (log, (_, trace, permutation)) in t_traces {
             let id = logging.active_logs[&log];
-            self.render_state.traces.set(
-                id,
-                TraceBundle::new(
-                    trace,
-                    errs.clone(),
-                    Permutation::identity(log.index_by().len(), log.desc().arity()),
-                ),
-            );
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace)) in r_traces {
+        for (log, (_, trace, permutation)) in r_traces {
             let id = logging.active_logs[&log];
-            self.render_state.traces.set(
-                id,
-                TraceBundle::new(
-                    trace,
-                    errs.clone(),
-                    Permutation::identity(log.index_by().len(), log.desc().arity()),
-                ),
-            );
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace)) in d_traces {
+        for (log, (_, trace, permutation)) in d_traces {
             let id = logging.active_logs[&log];
-            self.render_state.traces.set(
-                id,
-                TraceBundle::new(
-                    trace,
-                    errs.clone(),
-                    Permutation::identity(log.index_by().len(), log.desc().arity()),
-                ),
-            );
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace)) in m_traces {
+        for (log, (_, trace, permutation)) in m_traces {
             let id = logging.active_logs[&log];
-            self.render_state.traces.set(
-                id,
-                TraceBundle::new(
-                    trace,
-                    errs.clone(),
-                    Permutation::identity(log.index_by().len(), log.desc().arity()),
-                ),
-            );
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }

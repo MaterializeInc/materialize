@@ -1460,7 +1460,6 @@ impl Permutation {
     ///
     /// This constructs a permutation that removes redundant columns from the value if they are
     /// part of the key.
-    #[allow(dead_code)]
     pub(crate) fn construct_from_columns(key_cols: &[usize], arity: usize) -> (Self, Vec<usize>) {
         // Construct a mapping of columns `c` found in key at position `i`
         // Each value column and value is unique
