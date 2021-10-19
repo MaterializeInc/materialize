@@ -1,7 +1,7 @@
 [package]
 name = "materialized"
 description = "Streaming SQL materialized views."
-version = "0.9.9-dev"
+version = "0.9.9-rc1"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2018"
