@@ -115,6 +115,8 @@ Put breaking changes before other release notes, and mark them with
 
 - Format dates before AD 1 with the BC notation instead of using negative dates.
 
+- Fix some sources of crashes and incorrect results from optimizing queries involving constants ({{% gh 8713 %}} and {{% gh 8717 %}}).
+
 {{% version-header v0.9.8 %}}
 
 - Throw errors on floating point arithmetic overflow and underflow.
