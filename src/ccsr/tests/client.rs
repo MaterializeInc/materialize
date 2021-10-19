@@ -110,6 +110,24 @@ async fn test_client() -> Result<(), anyhow::Error> {
         .await?;
     assert_eq!(count_schemas(&client, "ccsr-test-").await?, 2);
 
+    {
+        let subject_with_slashes = "ccsr/test/schema";
+        let schema_test_id = client
+            .publish_schema(subject_with_slashes, schema_v1, SchemaType::Avro, &[])
+            .await?;
+        assert!(schema_test_id > 0);
+
+        let res = client.get_schema_by_subject(subject_with_slashes).await?;
+        assert_eq!(schema_test_id, res.id);
+        assert_raw_schemas_eq(schema_v1, &res.raw);
+
+        let res = client.get_subject(subject_with_slashes).await?;
+        assert_eq!(1, res.version);
+        assert_eq!(subject_with_slashes, res.name);
+        assert_eq!(schema_test_id, res.schema.id);
+        assert_raw_schemas_eq(schema_v1, &res.schema.raw);
+    }
+
     Ok(())
 }
 

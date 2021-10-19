@@ -30,9 +30,13 @@ impl Client {
         Client { inner, url, auth }
     }
 
-    fn make_request(&self, method: Method, path: impl AsRef<str>) -> reqwest::RequestBuilder {
+    fn make_request<'a>(
+        &self,
+        method: Method,
+        path: impl IntoIterator<Item = &'a str>,
+    ) -> reqwest::RequestBuilder {
         let mut url = self.url.clone();
-        url.set_path(path.as_ref());
+        url.path_segments_mut().unwrap().clear().extend(path);
 
         let mut request = self.inner.request(method, url);
         if let Some(auth) = &self.auth {
@@ -43,7 +47,7 @@ impl Client {
 
     /// Gets the schema with the associated ID.
     pub async fn get_schema_by_id(&self, id: i32) -> Result<Schema, GetByIdError> {
-        let req = self.make_request(Method::GET, format!("/schemas/ids/{}", id));
+        let req = self.make_request(Method::GET, vec!["schemas", "ids", &id.to_string()]);
         let res: GetByIdResponse = send_request(req).await?;
         Ok(Schema {
             id,
@@ -53,14 +57,20 @@ impl Client {
 
     /// Gets the latest schema for the specified subject.
     pub async fn get_schema_by_subject(&self, subject: &str) -> Result<Schema, GetBySubjectError> {
-        let req = self.make_request(
-            Method::GET,
-            format!("/subjects/{}/versions/latest", subject),
-        );
+        self.get_subject(subject).await.map(|s| s.schema)
+    }
+
+    /// Gets the latest schema for the specified subject.
+    pub async fn get_subject(&self, subject: &str) -> Result<Subject, GetBySubjectError> {
+        let req = self.make_request(Method::GET, vec!["subjects", subject, "versions", "latest"]);
         let res: GetBySubjectResponse = send_request(req).await?;
-        Ok(Schema {
-            id: res.id,
-            raw: res.schema,
+        Ok(Subject {
+            schema: Schema {
+                id: res.id,
+                raw: res.schema,
+            },
+            version: res.version,
+            name: res.subject,
         })
     }
 
@@ -77,7 +87,7 @@ impl Client {
         schema_type: SchemaType,
         references: &[SchemaReference],
     ) -> Result<i32, PublishError> {
-        let req = self.make_request(Method::POST, format!("/subjects/{}/versions", subject));
+        let req = self.make_request(Method::POST, vec!["subjects", subject, "versions"]);
         let req = req.json(&self.build_publish_schema_body(schema, schema_type, references));
         let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
@@ -109,7 +119,7 @@ impl Client {
 
     /// Lists the names of all subjects that the schema registry is aware of.
     pub async fn list_subjects(&self) -> Result<Vec<String>, ListError> {
-        let req = self.make_request(Method::GET, "/subjects");
+        let req = self.make_request(Method::GET, vec!["subjects"]);
         Ok(send_request(req).await?)
     }
 
@@ -120,7 +130,7 @@ impl Client {
     /// be registered under the same subject. It does not allow the schema ID
     /// to be reused.
     pub async fn delete_subject(&self, subject: &str) -> Result<(), DeleteError> {
-        let req = self.make_request(Method::DELETE, format!("/subjects/{}", subject));
+        let req = self.make_request(Method::DELETE, vec!["subjects", subject]);
         let _res: Vec<i32> = send_request(req).await?;
         Ok(())
     }
@@ -163,6 +173,17 @@ pub struct Schema {
     pub id: i32,
     /// The raw text representing the schema.
     pub raw: String,
+}
+
+/// A subject stored by a schema registry.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Subject {
+    /// The version of the schema.
+    pub version: i32,
+    /// The name of the schema.
+    pub name: String,
+    /// The schema of the `version` of the `Subject`.
+    pub schema: Schema,
 }
 
 /// Required for publishing schemas that contain references.
@@ -229,6 +250,8 @@ impl fmt::Display for GetByIdError {
 struct GetBySubjectResponse {
     id: i32,
     schema: String,
+    version: i32,
+    subject: String,
 }
 
 /// Errors for schema lookups by subject.
