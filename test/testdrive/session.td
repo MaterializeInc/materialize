@@ -12,6 +12,7 @@ application_name            ""                                         "Sets the
 client_encoding             UTF8                                       "Sets the client's character set encoding (PostgreSQL)."
 database                    materialize                                "Sets the current database (CockroachDB)."
 extra_float_digits          3                                          "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
+failpoints                  ""                                         "Allows failpoints to be dynamically activated."
 integer_datetimes           on                                         "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL)."
 DateStyle                   "ISO, MDY"                                 "Sets the display format for date and time values (PostgreSQL)."
 search_path                 "mz_catalog, pg_catalog, public, mz_temp"  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."

@@ -327,13 +327,13 @@ steps:
           composition: kafka-exactly-once
           run: kafka-exactly-once
 
-  - id: persistent-tables
-    label: "Test for --persistent-tables"
+  - id: persistence
+    label: "Tests for persistence"
     depends_on: build
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
-          run: persistent-tables
+          run: persistence
 
   - id: mzcompose-self
     label: "mzcompose self test"

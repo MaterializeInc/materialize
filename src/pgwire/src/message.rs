@@ -349,6 +349,7 @@ impl ErrorResponse {
             CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             CoordError::IncompleteTimestamp(_) => SqlState::SQL_STATEMENT_NOT_YET_COMPLETE,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
+            CoordError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,

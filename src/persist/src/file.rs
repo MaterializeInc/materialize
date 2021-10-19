@@ -15,6 +15,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use fail::fail_point;
+
 use ore::cast::CastFrom;
 
 use crate::error::Error;
@@ -333,6 +335,14 @@ impl Blob for FileBlob {
             // (which is safe).
             let mut file = File::create(&tmp_name)?;
             file.write_all(&value[..])?;
+
+            fail_point!("fileblob_set_sync", |_| {
+                Err(Error::from(format!(
+                    "FileBlob::set sync allow_overwrite fail point reached for file {:?}",
+                    file_path
+                )))
+            });
+
             file.sync_all()?;
             fs::rename(tmp_name, &file_path)?;
             // TODO: We also need to fsync the directory to be truly confidant
@@ -344,6 +354,14 @@ impl Blob for FileBlob {
                 .create_new(true)
                 .open(&file_path)?;
             file.write_all(&value[..])?;
+
+            fail_point!("fileblob_set_sync", |_| {
+                Err(Error::from(format!(
+                    "FileBlob::set sync fail point reached for file {:?}",
+                    file_path
+                )))
+            });
+
             file.sync_all()?;
         }
         Ok(())

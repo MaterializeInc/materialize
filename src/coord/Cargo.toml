@@ -21,6 +21,7 @@ derivative = "2.2.0"
 dec = "0.4.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
+fail = { version = "0.4", features = ["failpoints"] }
 futures = "0.3.17"
 interchange = { path = "../interchange" }
 itertools = "0.10.1"
