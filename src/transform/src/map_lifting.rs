@@ -157,7 +157,7 @@ impl LiteralLifting {
                         for key in typ.keys.iter_mut() {
                             *key = key
                                 .iter()
-                                .filter(|x| !the_same[**x])
+                                .filter(|x| !the_same.get(**x).unwrap_or(&true))
                                 .map(|x| projection[*x])
                                 .collect::<Vec<usize>>();
                         }
