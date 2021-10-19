@@ -17,9 +17,7 @@ weight: 1
 
 ## Beta-level support
 
-Beta-level support means the integration with Materialize may have performance or stability issues and is not subject
-to our [backwards compatibility](/versions/#backwards-compatibility)
-guarantee.
+Beta-level support means that the Materialize team is actively improving the integration, but there may be missing features or performance or stability issues.
 
 | Tool                    | Purpose                                                                    | What's missing?                                                                                                            |
 | ----------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -28,7 +26,7 @@ guarantee.
 
 ## Alpha-level support
 
-Alpha-level support means that some of our community members have made this integration work, but that we haven't tested it ourselves and can't guarantee its stability.
+Alpha-level support means that some of our community members have made this integration work, but we haven't tested it ourselves and can't guarantee its stability.
 
 | Tool | Purpose | What's missing? |
 |------|---------|---------|
