@@ -88,10 +88,13 @@ production readiness.
   $ gh pr create --web
   ```
 
-- [ ] An issue should be automatically created with unreviewed PRs linked inside
-  of it. Review (or get review on) all unreviewed PRs, and link to that issue
-  here. Once all PRs have been reviewed, close the issue.
+- [ ] Required reviews:
 
+  An issue should be automatically created with unreviewed PRs linked inside of it. [This
+  search should reveal it][required-reviews]. Review (or get review on) all unreviewed
+  PRs, and link to that issue here. Once all PRs have been reviewed, close the issue.
+
+[required-reviews]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aissue+is%3Aopen+%22required+reviews%22
 [gh]: https://cli.github.com/
 
 ### Review Release Notes
