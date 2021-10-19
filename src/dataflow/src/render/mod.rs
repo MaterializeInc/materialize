@@ -868,7 +868,6 @@ pub mod plan {
             expr: &MirRelationExpr,
             arrangements: &mut BTreeMap<Id, Vec<Vec<MirScalarExpr>>>,
         ) -> Result<(Self, Vec<Vec<MirScalarExpr>>), ()> {
-            let arity = expr.arity();
             // Extract a maximally large MapFilterProject from `expr`.
             // We will then try and push this in to the resulting expression.
             //
@@ -890,7 +889,7 @@ pub mod plan {
                     panic!("This operator should have been extracted");
                 }
                 // These operators may not have been extracted, and need to result in a `Plan`.
-                MirRelationExpr::Constant { rows, typ: _ } => {
+                MirRelationExpr::Constant { rows, typ } => {
                     use timely::progress::Timestamp;
                     let plan = Plan::Constant {
                         rows: rows.clone().map(|rows| {
@@ -898,7 +897,7 @@ pub mod plan {
                                 .map(|(row, diff)| (row, repr::Timestamp::minimum(), diff))
                                 .collect()
                         }),
-                        arity,
+                        arity: typ.arity(),
                     };
                     // The plan, not arranged in any way.
                     (plan, Vec::new())
@@ -1039,7 +1038,7 @@ pub mod plan {
                         Plan::Join {
                             inputs: plans,
                             plan,
-                            arity,
+                            arity: mfp.projection.len(),
                         },
                         Vec::new(),
                     )
@@ -1095,7 +1094,7 @@ pub mod plan {
                         Plan::TopK {
                             input: Box::new(input),
                             top_k_plan,
-                            arity,
+                            arity: input_arity,
                         },
                         Vec::new(),
                     )
