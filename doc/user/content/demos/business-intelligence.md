@@ -311,23 +311,17 @@ Materialize to maintain for us.
     If you receive an error stating `One or more sources has no closed timestamps`, wait a few seconds, press enter in the query editor, and then
     repeat this process.
 
-1. Once you see the results similar to those below, click **Save**, enter
-   **query01** as the query's name, and then click **Save**.
+1. Enter **quer01** as the **Name** and select **My Personal Collection** for **Which collection should this go in?**, then click **Save**.
 
 1. When asked if you want to save this to a dashboard, click **Yes please!**.
 
-1. Click **My personal collection**, and then click **Create a new dashboard**.
+1. Enter **tccph** as the dashboard name and select **My personal collection** if it isn't selected already, and then click **Create**.
 
-1. Enter **tpcch** as the **Name**, and then click **Create**.
-
-1. Modify the size of the **query01** card, and then click **Save**.
+1. Modify the size of the **tpcch** card, and then click **Save**.
 
 1. Click **Auto-refresh**, and then select **1 minute.**
 
-   60 seconds is the fastest refresh rate selectable in the UI, but if you
-   copy the URL, open a new tab and edit the end of the url to change the
-   `refresh=60` anchor to `refresh=1` you can force metabase to update
-   every second.
+   60 seconds is the fastest refresh rate Metabase offers, but Materialize can support much more frequent refreshes.
 
 {{< figure
     src="https://user-images.githubusercontent.com/11527560/107248709-8f339a00-6a00-11eb-81b5-beb01a95156c.gif"
