@@ -1,11 +1,64 @@
-use futures::future;
-use futures::stream::StreamExt;
-use serde::Deserialize;
 use std::{collections::HashMap, time::{Duration, UNIX_EPOCH, SystemTime}};
+
+use async_trait::async_trait;
+use futures::future;
+use futures::stream::{self, StreamExt};
+use serde::Deserialize;
 use tokio_stream::wrappers::IntervalStream;
 
-pub struct LokiSourceReader {
+use crate::source::{SimpleSource, SourceError, Timestamper};
 
+pub struct LokiSourceReader {
+    user: String,
+    pw: String,
+    endpoint: String,
+    batch_window: Duration,
+}
+
+impl LokiSourceReader {
+    pub fn new(user: String, pw: String, endpoint: String) -> LokiSourceReader {
+        Self {
+            user,
+            pw,
+            endpoint,
+            batch_window: Duration::from_secs(60),
+        }
+    }
+
+    async fn query(self, start: u128, end: u128) -> Result<reqwest::Response, reqwest::Error> {
+        let client = reqwest::Client::new();
+            client.get(format!("{}/loki/api/v1/query_range", self.endpoint))
+                .basic_auth(self.user, Some(self.pw))
+                .query(&[("query", "{job=\"systemd-journal\"}")])
+                .query(&[("start", format!("{}", start))])
+                .query(&[("end", format!("{}", end))])
+                .query(&[("direction", "forward")])
+                .send()
+                .await
+    }
+
+    fn new_stream(self) -> impl stream::Stream<Item = Result<QueryResult, reqwest::Error>> {
+        let polls = IntervalStream::new(tokio::time::interval(self.batch_window));
+
+        polls.then(|_tick| async {
+            let start = SystemTime::now() - self.batch_window;
+            let end = SystemTime::now();
+
+            let resp = self.query(
+                start.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+                end.duration_since(UNIX_EPOCH).unwrap().as_nanos()).await?;
+
+            resp.json::<QueryResult>()
+        })
+    }
+}
+
+#[async_trait]
+impl SimpleSource for LokiSourceReader {
+
+    async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
