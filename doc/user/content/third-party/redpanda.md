@@ -6,11 +6,9 @@ menu:
     parent: 'third-party'
 ---
 
-{{< beta >}}
-v0.9.9
-{{< /beta >}}
-
 Because [Redpanda] is Kafka API-compatible, Materialize can process data from it in the same way it processes data from Kafka sources.
+
+The Redpanda integration has [beta-level](../supported-tools#beta-level-support) support, meaning Materialize is actively working on improving it, but there may be missing features or performance or reliability issues.
 
 ## What's missing?
 
