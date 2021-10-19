@@ -309,6 +309,7 @@ where
                     idx.keys.clone(),
                     ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
                     arity,
+                    traces.permutation().clone(),
                 ),
             );
             tokens
@@ -1296,19 +1297,14 @@ pub struct Permutation {
 }
 
 impl Permutation {
-    /// Construct a permutation and thinning expression from a key description and the relation's
-    /// arity.
+    /// Construct a [Permutation] from a precomputed `columns_in_key` map.
     ///
-    /// This constructs a permutation that removes redundant columns from the value if they are
-    /// part of the key.
-    fn construct(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
-        // Construct a mapping of columns `c` found in key at position `i`
-        // Each value column and value is unique
-        let columns_in_key = key_expr
-            .iter()
-            .enumerate()
-            .flat_map(|(i, expr)| MirScalarExpr::as_column(expr).map(|c| (c, i)))
-            .collect::<HashMap<_, _>>();
+    /// This serves as an internal helper to serve different `construct_*` functions.
+    fn construct_internal<'a>(
+        key_arity: usize,
+        arity: usize,
+        columns_in_key: &'a HashMap<usize, usize>,
+    ) -> (Self, impl Iterator<Item = usize> + 'a) {
         // Construct a mapping to undo the permutation
         let mut skipped = 0;
         let permutation = (0..arity)
@@ -1319,20 +1315,56 @@ impl Permutation {
                     *c
                 } else {
                     // Column remains in value
-                    c + key_expr.len() - skipped
+                    c + key_arity - skipped
                 }
             })
             .collect();
 
-        let value_expr = (0..arity)
-            .filter(move |c| !columns_in_key.contains_key(&c))
-            .map(MirScalarExpr::column)
-            .collect::<Vec<_>>();
+        let value_expr = (0..arity).filter(move |c| !columns_in_key.contains_key(&c));
         let permutation = Self {
-            key_arity: key_expr.len(),
+            key_arity,
             permutation,
         };
         (permutation, value_expr)
+    }
+
+    /// Construct a permutation and thinning expression from a key description and the relation's
+    /// arity.
+    ///
+    /// This constructs a permutation that removes redundant columns from the value if they are
+    /// part of the key.
+    #[allow(dead_code)]
+    pub(crate) fn construct_from_columns(key_cols: &[usize], arity: usize) -> (Self, Vec<usize>) {
+        // Construct a mapping of columns `c` found in key at position `i`
+        // Each value column and value is unique
+        let columns_in_key = key_cols
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (*c, i))
+            .collect::<HashMap<_, _>>();
+        let (permutation, expr) = Self::construct_internal(key_cols.len(), arity, &columns_in_key);
+        (permutation, expr.collect())
+    }
+
+    /// Construct a permutation and thinning expression from a key description and the relation's
+    /// arity.
+    ///
+    /// This constructs a permutation that removes redundant columns from the value if they are
+    /// part of the key.
+    pub(crate) fn construct_from_expr(
+        key_expr: &[MirScalarExpr],
+        arity: usize,
+    ) -> (Self, Vec<MirScalarExpr>) {
+        // Construct a mapping of columns `c` found in key at position `i`
+        // Each value column and value is unique
+        let columns_in_key = key_expr
+            .iter()
+            .enumerate()
+            .flat_map(|(i, expr)| MirScalarExpr::as_column(expr).map(|c| (c, i)))
+            .collect::<HashMap<_, _>>();
+        let (permutation, expr) = Self::construct_internal(key_expr.len(), arity, &columns_in_key);
+        let expr = expr.map(MirScalarExpr::column).collect();
+        (permutation, expr)
     }
 
     /// Construct an identity [Permutation] that expects all data in the value.

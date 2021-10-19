@@ -314,10 +314,10 @@ where
         exprs: Vec<MirScalarExpr>,
         arrangements: ArrangementFlavor<S, V, T>,
         arity: usize,
+        permutation: Permutation,
     ) -> Self {
         let mut arranged = BTreeMap::new();
 
-        let permutation = Permutation::identity(exprs.len(), arity);
         let arrangements = ArrangementWrapper {
             permutation,
             flavor: arrangements,
@@ -341,7 +341,8 @@ where
         for column in columns {
             keys.push(MirScalarExpr::Column(column));
         }
-        Self::from_expressions(keys, arrangements, arity)
+        let permutation = Permutation::identity(keys.len(), arity);
+        Self::from_expressions(keys, arrangements, arity, permutation)
     }
 }
 

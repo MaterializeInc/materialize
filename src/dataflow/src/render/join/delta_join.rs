@@ -547,7 +547,8 @@ where
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    let (updates_permutation, prev_value_expr) = Permutation::construct(&prev_key, prev_arity);
+    let (updates_permutation, prev_value_expr) =
+        Permutation::construct_from_expr(&prev_key, prev_arity);
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();

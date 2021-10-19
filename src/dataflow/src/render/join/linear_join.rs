@@ -330,7 +330,8 @@ where
     ) -> Collection<G, Row> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let (permutation, value_expr) = Permutation::construct(&stream_key, stream_arity);
+            let (permutation, value_expr) =
+                Permutation::construct_from_expr(&stream_key, stream_arity);
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
