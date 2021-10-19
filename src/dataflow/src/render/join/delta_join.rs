@@ -547,8 +547,7 @@ where
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    let (updates_permutation, prev_value_expr) =
-        Permutation::construct_no_op(&prev_key, prev_arity);
+    let (updates_permutation, prev_value_expr) = Permutation::construct(&prev_key, prev_arity);
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -569,7 +568,6 @@ where
                     .map(|e| e.eval(&datums_local, &temp_storage)),
             )?;
             let row_value = row_packer.finish_and_reuse();
-            assert_eq!(row, row_value);
             // Explicit drop to release borrow on `row` so that it can be returned.
             drop(datums_local);
             Ok((row_key, row_value, time))

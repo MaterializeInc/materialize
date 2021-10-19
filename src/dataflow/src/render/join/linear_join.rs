@@ -330,8 +330,7 @@ where
     ) -> Collection<G, Row> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let (permutation, _value_expr) =
-                Permutation::construct_no_op(&stream_key, stream_arity);
+            let (permutation, value_expr) = Permutation::construct(&stream_key, stream_arity);
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
@@ -344,12 +343,17 @@ where
                             .iter()
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
+                    let value = Row::try_pack(
+                        value_expr
+                            .iter()
+                            .map(|e| e.eval(&datums_local, &temp_storage)),
+                    )?;
                     // Explicit drop here to allow `row` to be returned.
                     drop(datums_local);
                     // TODO(mcsherry): We could remove any columns used only for `key`.
                     // This cannot be done any earlier, for example in a prior closure,
                     // because we need the columns for key production.
-                    Ok((key, row))
+                    Ok((key, value))
                 }
             });
             errors.push(errs);

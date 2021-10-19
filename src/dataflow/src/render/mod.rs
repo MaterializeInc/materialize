@@ -369,7 +369,8 @@ where
                 ArrangementFlavor::Local(oks, errs) => {
                     render_state.traces.set(
                         idx_id,
-                        TraceBundle::new(oks.trace, errs.trace).with_drop(tokens),
+                        TraceBundle::new(oks.trace, errs.trace, arrangement.permutation)
+                            .with_drop(tokens),
                     );
                 }
                 ArrangementFlavor::Trace(gid, _, _) => {
@@ -1300,7 +1301,7 @@ impl Permutation {
     ///
     /// This constructs a permutation that removes redundant columns from the value if they are
     /// part of the key.
-    fn _construct(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
+    fn construct(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
         // Construct a mapping of columns `c` found in key at position `i`
         // Each value column and value is unique
         let columns_in_key = key_expr
@@ -1309,14 +1310,16 @@ impl Permutation {
             .flat_map(|(i, expr)| MirScalarExpr::as_column(expr).map(|c| (c, i)))
             .collect::<HashMap<_, _>>();
         // Construct a mapping to undo the permutation
+        let mut skipped = 0;
         let permutation = (0..arity)
             .map(|c| {
                 if let Some(c) = columns_in_key.get(&c) {
                     // Column is in key
+                    skipped += 1;
                     *c
                 } else {
                     // Column remains in value
-                    c + key_expr.len()
+                    c + key_expr.len() - skipped
                 }
             })
             .collect();
@@ -1341,7 +1344,8 @@ impl Permutation {
         (Self::identity(key_expr.len(), arity), expr)
     }
 
-    fn identity(key_arity: usize, arity: usize) -> Self {
+    /// Construct an identity [Permutation] that expects all data in the value.
+    pub fn identity(key_arity: usize, arity: usize) -> Self {
         let permutation: Vec<_> = (key_arity..key_arity + arity).collect();
         Self {
             permutation,
@@ -1358,9 +1362,14 @@ impl Permutation {
         let mut permutation = Vec::with_capacity(self.permutation.len() + other.permutation.len());
         permutation.extend_from_slice(&self.permutation);
         permutation.extend_from_slice(&other.permutation);
+        let offset = self
+            .permutation
+            .iter()
+            .filter(|p| **p >= self.key_arity)
+            .count();
         for c in &mut permutation[self.permutation.len()..] {
             if *c >= self.key_arity {
-                *c += self.permutation.len();
+                *c += offset;
             }
         }
         Self {
@@ -1372,14 +1381,15 @@ impl Permutation {
     /// Permute a `[key, value]` row to reconstruct a non-permuted variant.
     ///
     /// It returns a view into `data` that represents the whole row.
-    pub fn permute_in_place<'a, T>(&self, data: &'a mut [T]) -> &'a mut [T] {
+    pub fn permute_in_place<'a, T>(&self, data: &'a mut Vec<T>) -> &'a mut [T] {
         for (i, mut p) in self.permutation.iter().copied().enumerate() {
             while p < i {
                 p = self.permutation[p];
             }
             data.swap(i, p);
         }
-        &mut data[..self.permutation.len()]
+        data.truncate(self.len());
+        &mut data[..]
     }
 
     /// The arity of the non-permuted output row.

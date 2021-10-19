@@ -191,24 +191,23 @@ where
     pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
         let permutation = self.permutation.clone();
         let mut datum_vec = DatumVec::new();
+        let mut row_builder = Row::default();
         match &self.flavor {
             ArrangementFlavor::Local(oks, errs) => (
                 oks.as_collection(move |k, v| {
                     let mut borrow = datum_vec.borrow_with_many(&[k, v]);
-                    permutation.permute_in_place(&mut borrow);
-                    let row = Row::pack_slice(&borrow[..permutation.permutation.len()]);
-                    assert_eq!(&row, v, "permutation: {:?}", permutation);
-                    row
+                    row_builder.extend(permutation.permute_in_place(&mut borrow));
+                    assert_eq!(&row_builder, v, "permutation: {:?}", permutation);
+                    row_builder.finish_and_reuse()
                 }),
                 errs.as_collection(|k, _v| k.clone()),
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
                 oks.as_collection(move |k, v| {
                     let mut borrow = datum_vec.borrow_with_many(&[k, v]);
-                    permutation.permute_in_place(&mut borrow);
-                    let row = Row::pack_slice(&borrow[..permutation.permutation.len()]);
-                    assert_eq!(&row, v, "permutation: {:?}", permutation);
-                    row
+                    row_builder.extend(permutation.permute_in_place(&mut borrow));
+                    assert_eq!(&row_builder, v, "permutation: {:?}", permutation);
+                    row_builder.finish_and_reuse()
                 }),
                 errs.as_collection(|k, _v| k.clone()),
             ),
@@ -245,10 +244,9 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
-                        permutation.permute_in_place(&mut borrow);
                         row_builder.clear();
-                        row_builder.extend(&borrow[..permutation.len()]);
-                        assert_eq!(&row_builder, &*v);
+                        row_builder.extend(permutation.permute_in_place(&mut borrow));
+                        // assert_eq!(&row_builder, &*v);
                         logic(RefOrMut::Mut(&mut row_builder), t, d)
                     },
                     refuel,
@@ -262,10 +260,9 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
-                        permutation.permute_in_place(&mut borrow);
                         row_builder.clear();
-                        row_builder.extend(&borrow[..permutation.len()]);
-                        assert_eq!(&row_builder, &*v);
+                        row_builder.extend(permutation.permute_in_place(&mut borrow));
+                        // assert_eq!(&row_builder, &*v);
                         logic(RefOrMut::Mut(&mut row_builder), t, d)
                     },
                     refuel,
@@ -516,7 +513,6 @@ where
                         Row::try_pack(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
                     let value_row =
                         Row::try_pack(value_expr.iter().map(|e| e.eval(&datums, &temp_storage)))?;
-                    assert_eq!(value_row, row);
                     Ok::<(Row, Row), DataflowError>((key_row, value_row))
                 });
 

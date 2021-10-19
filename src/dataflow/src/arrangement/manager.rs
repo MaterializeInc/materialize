@@ -35,6 +35,7 @@ pub type TraceErrHandle<K, T, R> = TraceAgent<ErrSpine<K, T, R>>;
 pub type KeysValsHandle = TraceRowHandle<Row, Row, Timestamp, Diff>;
 pub type ErrsHandle = TraceErrHandle<DataflowError, Timestamp, Diff>;
 
+use crate::render::Permutation;
 use prometheus::core::{AtomicF64, AtomicU64};
 use std::time::Instant;
 
@@ -204,15 +205,17 @@ pub struct TraceBundle {
     oks: KeysValsHandle,
     errs: ErrsHandle,
     to_drop: Option<Rc<dyn Any>>,
+    permutation: Permutation,
 }
 
 impl TraceBundle {
     /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
-    pub fn new(oks: KeysValsHandle, errs: ErrsHandle) -> TraceBundle {
+    pub fn new(oks: KeysValsHandle, errs: ErrsHandle, permutation: Permutation) -> TraceBundle {
         TraceBundle {
             oks,
             errs,
             to_drop: None,
+            permutation,
         }
     }
 
@@ -222,9 +225,8 @@ impl TraceBundle {
         T: 'static,
     {
         TraceBundle {
-            oks: self.oks,
-            errs: self.errs,
             to_drop: Some(Rc::new(Box::new(to_drop))),
+            ..self
         }
     }
 
@@ -241,5 +243,9 @@ impl TraceBundle {
     /// Returns a reference to the `to_drop` tokens.
     pub fn to_drop(&self) -> &Option<Rc<dyn Any>> {
         &self.to_drop
+    }
+
+    pub fn permutation(&self) -> &Permutation {
+        &self.permutation
     }
 }
