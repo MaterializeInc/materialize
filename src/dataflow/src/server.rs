@@ -573,16 +573,11 @@ where
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace)) in d_traces {
+        for (log, (_, trace, permutation)) in d_traces {
             let id = logging.active_logs[&log];
-            self.render_state.traces.set(
-                id,
-                TraceBundle::new(
-                    trace,
-                    errs.clone(),
-                    Permutation::identity(log.index_by().len(), log.desc().arity()),
-                ),
-            );
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }

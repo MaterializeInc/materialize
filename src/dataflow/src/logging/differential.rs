@@ -27,6 +27,7 @@ use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::render::datum_vec::DatumVec;
+use crate::render::Permutation;
 use crate::replay::MzReplay;
 use repr::{Datum, Row, Timestamp};
 
@@ -36,7 +37,7 @@ pub fn construct<A: Allocate>(
     config: &dataflow_types::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
     activator: RcActivator,
-) -> HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
+) -> HashMap<LogVariant, (Vec<usize>, KeysValsHandle, Permutation)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow_named("Dataflow: differential logging", move |scope| {
@@ -147,6 +148,8 @@ pub fn construct<A: Allocate>(
         for (variant, collection) in logs {
             if config.active_logs.contains_key(&variant) {
                 let key = variant.index_by();
+                let (permutation, value) =
+                    Permutation::construct_from_columns(&key, variant.desc().arity());
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
@@ -155,13 +158,14 @@ pub fn construct<A: Allocate>(
                         move |row| {
                             let datums = datums.borrow_with(&row);
                             row_packer.extend(key.iter().map(|k| datums[*k]));
-                            ::std::mem::drop(datums);
-                            (row_packer.finish_and_reuse(), row)
+                            let row_key = row_packer.finish_and_reuse();
+                            row_packer.extend(value.iter().map(|k| datums[*k]));
+                            (row_key, row_packer.finish_and_reuse())
                         }
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                result.insert(variant, (key_clone, trace));
+                result.insert(variant, (key_clone, trace, permutation));
             }
         }
         result
