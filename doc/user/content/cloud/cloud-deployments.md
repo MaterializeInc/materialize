@@ -10,7 +10,7 @@ menu:
 
 {{< cloud-notice >}}
 
-The [Deployments page](http://cloud.materialize.com/memorys) is your Materialize Cloud dashboard. All users can use it to view a deployment's details by clicking on the deployment card.
+The [Deployments page](http://cloud.materialize.com/deployments) is your Materialize Cloud dashboard. All users can use it to view a deployment's details by clicking on the deployment card.
 
 Administrators can also:
 

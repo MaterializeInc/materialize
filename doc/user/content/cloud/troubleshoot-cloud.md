@@ -16,7 +16,7 @@ We're working on other monitoring tools, but for now there are a few tools you c
 
 ## Logs
 
-Materialize periodically emits messages to its [log file](/cli/#log-filter). You can view these logs in the [Deployments](https://cloud.materialize.com/memorys) page, click on the deployment card and select **View logs** in the bottom right corner.
+Materialize periodically emits messages to its [log file](/cli/#log-filter). You can view these logs in the [Deployments](https://cloud.materialize.com/deployments) page, click on the deployment card and select **View logs** in the bottom right corner.
 
 These log messages serve several purposes:
 
