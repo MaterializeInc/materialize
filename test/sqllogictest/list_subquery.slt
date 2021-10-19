@@ -90,3 +90,37 @@ query T
 SELECT LIST(SELECT DISTINCT y FROM xs JOIN ys ON 2*xs.x >= ys.y)::text
 ----
 {2,4}
+
+statement ok
+CREATE TABLE users (id int not null, other_field int not null)
+
+statement ok
+CREATE TABLE customer (id int not null, first_name string not null, last_name string not null, zip string not null)
+
+statement ok
+INSERT INTO users VALUES (1, 10), (2, 5), (3, 8);
+
+statement ok
+INSERT INTO customer VALUES (1, 'alice', 'lasta', '10003'::text), (2, 'bob', 'lastb', '10013'::text), (3, 'charlie', 'lastc', '11217'::text);
+
+query T
+SELECT LIST(SELECT id FROM customer)::text
+----
+{1,2,3}
+
+query error Expected subselect to return 1 column, got 2 columns
+SELECT LIST(SELECT first_name, last_name FROM customer)::text
+
+query error LIST expression cannot be cast to uniform type: text list vs integer list
+SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
+
+query T
+SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id::text]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
+----
+{{alice,lasta},{10003},{1}}
+{{charlie,lastc},{11217},{3}}
+
+query T
+SELECT LIST(WITH usps AS (SELECT 42) SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id::text]] FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2)::text
+----
+{{{alice,lasta},{10003},{1}},{{charlie,lastc},{11217},{3}}}
