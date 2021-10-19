@@ -1330,6 +1330,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     -1::pg_catalog.int4 as atttypmod,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
+    ''::pg_catalog.char as attidentity,
     FALSE as attisdropped
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
