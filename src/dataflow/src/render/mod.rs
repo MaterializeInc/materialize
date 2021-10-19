@@ -1337,7 +1337,7 @@ impl Permutation {
 
     /// Construct a no-op permutation and thinning from a key expression and arity.
     ///
-    /// In contrast to [_construct], this does not remove any columns from the value. It primarily
+    /// In contrast to [construct], this does not remove any columns from the value. It primarily
     /// serves as a means to test the permutation infrastructure.
     fn construct_no_op(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
         let expr = (0..arity).map(MirScalarExpr::column).collect();
