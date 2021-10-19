@@ -60,6 +60,8 @@ services:
       - --differential-idle-merge-effort=1000
       - --timely-progress-mode=${MZ_TIMELY_PROGRESS_MODE:-demand}
       - --disable-telemetry
+      - --experimental
+      - --persistent-kafka-upsert-source
     environment:
       # You can, for example, add `pgwire=trace` or change `info` to `debug` to
       # get more verbose logs.
