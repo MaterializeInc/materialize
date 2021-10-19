@@ -324,7 +324,7 @@ reduce
 )
 [int32 int32]
 ----
-record_get[0](coalesce(record_create(#0, #1), [null, null]))
+#0
 
 ## undistribute_and/or works despite multiple copies of the same expression in
 ## the intersection
