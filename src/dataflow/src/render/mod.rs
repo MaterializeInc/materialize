@@ -1287,13 +1287,19 @@ pub mod plan {
     }
 }
 
-/// Represent
+/// A description of how `[key, value]`-pairs need to be permuted to produce the original row.
 #[derive(Clone, Debug)]
 pub struct Permutation {
     key_arity: usize,
     permutation: Vec<usize>,
 }
+
 impl Permutation {
+    /// Construct a permutation and thinning expression from a key description and the relation's
+    /// arity.
+    ///
+    /// This constructs a permutation that removes redundant columns from the value if they are
+    /// part of the key.
     fn _construct(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
         // Construct a mapping of columns `c` found in key at position `i`
         // Each value column and value is unique
@@ -1326,6 +1332,10 @@ impl Permutation {
         (permutation, value_expr)
     }
 
+    /// Construct a no-op permutation and thinning from a key expression and arity.
+    ///
+    /// In contrast to [_construct], this does not remove any columns from the value. It primarily
+    /// serves as a means to test the permutation infrastructure.
     fn construct_no_op(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
         let expr = (0..arity).map(MirScalarExpr::column).collect();
         (Self::identity(key_expr.len(), arity), expr)
@@ -1339,6 +1349,10 @@ impl Permutation {
         }
     }
 
+    /// Compute the join of two permutations.
+    ///
+    /// This assumes two relations `[key, value_1]` and `[key, value_2]` are joined into
+    /// `[key, value_1, value_2]` and constructs a permutation accordingly.
     pub fn join(&self, other: &Self) -> Self {
         assert_eq!(self.key_arity, other.key_arity);
         let mut permutation = Vec::with_capacity(self.permutation.len() + other.permutation.len());
@@ -1355,15 +1369,20 @@ impl Permutation {
         }
     }
 
-    pub fn permute_in_place<T>(&self, data: &mut [T]) {
+    /// Permute a `[key, value]` row to reconstruct a non-permuted variant.
+    ///
+    /// It returns a view into `data` that represents the whole row.
+    pub fn permute_in_place<'a, T>(&self, data: &'a mut [T]) -> &'a mut [T] {
         for (i, mut p) in self.permutation.iter().copied().enumerate() {
             while p < i {
                 p = self.permutation[p];
             }
             data.swap(i, p);
         }
+        &mut data[..self.permutation.len()]
     }
 
+    /// The arity of the non-permuted output row.
     pub fn len(&self) -> usize {
         self.permutation.len()
     }
