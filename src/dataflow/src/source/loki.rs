@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::{Duration, UNIX_EPOCH, SystemTime}};
 
 use async_trait::async_trait;
-use futures::future;
+use futures::future::{TryFutureExt};
 use futures::stream::{self, StreamExt};
 use serde::Deserialize;
 use tokio_stream::wrappers::IntervalStream;
@@ -9,26 +9,29 @@ use tokio_stream::wrappers::IntervalStream;
 use crate::source::{SimpleSource, SourceError, Timestamper};
 
 pub struct LokiSourceReader {
+    conn_info: ConnectionInfo,
+    batch_window: Duration,
+}
+
+#[derive(Clone)]
+struct ConnectionInfo {
     user: String,
     pw: String,
     endpoint: String,
-    batch_window: Duration,
 }
 
 impl LokiSourceReader {
     pub fn new(user: String, pw: String, endpoint: String) -> LokiSourceReader {
         Self {
-            user,
-            pw,
-            endpoint,
+            conn_info: ConnectionInfo { user, pw, endpoint },
             batch_window: Duration::from_secs(60),
         }
     }
 
-    async fn query(self, start: u128, end: u128) -> Result<reqwest::Response, reqwest::Error> {
+    async fn query(conn_info: ConnectionInfo, start: u128, end: u128) -> Result<reqwest::Response, reqwest::Error> {
         let client = reqwest::Client::new();
-            client.get(format!("{}/loki/api/v1/query_range", self.endpoint))
-                .basic_auth(self.user, Some(self.pw))
+            client.get(format!("{}/loki/api/v1/query_range", conn_info.endpoint))
+                .basic_auth(conn_info.user, Some(conn_info.pw))
                 .query(&[("query", "{job=\"systemd-journal\"}")])
                 .query(&[("start", format!("{}", start))])
                 .query(&[("end", format!("{}", end))])
@@ -40,15 +43,17 @@ impl LokiSourceReader {
     fn new_stream(self) -> impl stream::Stream<Item = Result<QueryResult, reqwest::Error>> {
         let polls = IntervalStream::new(tokio::time::interval(self.batch_window));
 
-        polls.then(|_tick| async {
-            let start = SystemTime::now() - self.batch_window;
+        let batch_window = self.batch_window;
+        let conn_info = self.conn_info.clone();
+        polls.then(move |_tick| {
+            let start = SystemTime::now() - batch_window;
             let end = SystemTime::now();
 
-            let resp = self.query(
+            Self::query(
+                conn_info.clone(),
                 start.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-                end.duration_since(UNIX_EPOCH).unwrap().as_nanos()).await?;
-
-            resp.json::<QueryResult>()
+                end.duration_since(UNIX_EPOCH).unwrap().as_nanos())
+                .and_then(|resp| { resp.json::<QueryResult>() })
         })
     }
 }
@@ -57,6 +62,7 @@ impl LokiSourceReader {
 impl SimpleSource for LokiSourceReader {
 
     async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
+        let stream = self.new_stream();
         Ok(())
     }
 }
@@ -94,47 +100,9 @@ mod test {
 
     #[tokio::test]
     async fn connect() {
+        let loki = LokiSourceReader::new(user.to_string(), pw.to_string(), endpoint.to_string());
 
-        let start = SystemTime::now() - Duration::from_secs(60 * 60);
-
-        async fn query(user: &str, pw: &str, endpoint: &str, start: u128, end: u128) -> reqwest::Response {
-            let client = reqwest::Client::new();
-            client.get(format!("{}/loki/api/v1/query_range", endpoint))
-                .basic_auth(user, Some(pw))
-                .query(&[("query", "{job=\"systemd-journal\"}")])
-                .query(&[("start", format!("{}", start))])
-                .query(&[("end", format!("{}", end))])
-                .query(&[("direction", "forward")])
-                .send()
-                .await.unwrap()
-        }
-
-        let resp = query(
-            user, pw, endpoint,
-            start.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-            (start.duration_since(UNIX_EPOCH).unwrap() + Duration::from_secs(60 * 5)).as_nanos()).await;
-        println!("Status: {}", resp.status());
-        //println!("Body: {}", resp.text().await.unwrap());
-
-        //let parsed = resp.json::<QueryResult>().await.unwrap();
-        //let Data::Streams(s) = parsed.data;
-        //println!("{}: {}", s[0].values[0].ts, s[0].values[0].line);
-
-        let window = Duration::from_secs(60);
-        let polls = IntervalStream::new(tokio::time::interval(window));
-        let fut = polls.take(5).then(|_tick| async move {
-            let start = SystemTime::now() - window;
-            let end = SystemTime::now();
-
-            let resp = query(
-                user, pw, endpoint,
-                start.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-                end.duration_since(UNIX_EPOCH).unwrap().as_nanos()).await;
-
-            let parsed = resp.json::<QueryResult>().await.unwrap();
-            parsed.data
-        });
-
+        let fut = loki.new_stream().take(5);
         fut.for_each(|data| async move {
             println!("{:?}", data);
         }).await;
