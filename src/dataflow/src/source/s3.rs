@@ -72,12 +72,16 @@ mod metrics;
 mod notifications;
 
 type Out = MessagePayload;
-struct InternalMessage {
-    /// This is the sha256(bucket_name + "/" + object_path) truncated to 128bit. It is used so that
-    /// downstream consumers can distinguish the multiple object streams and potentially decode in
-    /// parallel.
-    object_id: u128,
-    record: Out,
+enum InternalMessage {
+    ObjectStart(u128),
+    ObjectData {
+        /// This is the sha256(bucket_name + "/" + object_path) truncated to 128bit. It is used so that
+        /// downstream consumers can distinguish the multiple object streams and potentially decode in
+        /// parallel.
+        object_id: u128,
+        record: Out,
+    },
+    ObjectEnd(u128),
 }
 /// Size of data chunks we send to dataflow
 const CHUNK_SIZE: usize = 4096;
@@ -783,6 +787,13 @@ async fn download_object(
         }
     };
 
+    if tx
+        .send(Ok(InternalMessage::ObjectStart(object_id)))
+        .await
+        .is_err()
+    {
+        return (DownloadStatus::SendFailed, None);
+    }
     let (mut download_status, metric_update) = match compression {
         Compression::None => read_object_chunked(source_id, object_id, reader, tx).await,
         Compression::Gzip => {
@@ -790,6 +801,13 @@ async fn download_object(
             read_object_chunked(source_id, object_id, decoder, tx).await
         }
     };
+    if tx
+        .send(Ok(InternalMessage::ObjectEnd(object_id)))
+        .await
+        .is_err()
+    {
+        return (DownloadStatus::SendFailed, None);
+    }
 
     log::debug!(
         "source_id={} {}/{} download_status={:?}",
@@ -800,7 +818,7 @@ async fn download_object(
     );
 
     if matches!(download_status, DownloadStatus::Ok) {
-        let sent = tx.send(Ok(InternalMessage {
+        let sent = tx.send(Ok(InternalMessage::ObjectData {
             object_id,
             record: MessagePayload::EOF,
         }));
@@ -831,7 +849,7 @@ where
                 bytes_read += chunk.len();
                 chunks += 1;
                 if tx
-                    .send(Ok(InternalMessage {
+                    .send(Ok(InternalMessage::ObjectData {
                         object_id,
                         record: MessagePayload::Data(chunk.to_vec()),
                     }))
@@ -961,7 +979,10 @@ impl SourceReader for S3SourceReader {
 
     fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
         match self.receiver_stream.recv().now_or_never() {
-            Some(Some(Ok(InternalMessage { object_id, record }))) => {
+            Some(Some(Ok(InternalMessage::ObjectStart(object_id)))) => {
+                Ok(NextMessage::AddPartition(PartitionId::S3(object_id)))
+            }
+            Some(Some(Ok(InternalMessage::ObjectData { object_id, record }))) => {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
                     partition: PartitionId::S3(object_id),
@@ -970,6 +991,9 @@ impl SourceReader for S3SourceReader {
                     key: None,
                     payload: Some(record),
                 }))
+            }
+            Some(Some(Ok(InternalMessage::ObjectEnd(object_id)))) => {
+                Ok(NextMessage::RemovePartition(PartitionId::S3(object_id)))
             }
             Some(Some(Err(e))) => {
                 log::warn!(

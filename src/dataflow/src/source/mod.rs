@@ -325,6 +325,8 @@ pub(crate) trait SourceReader {
 #[derive(Debug)]
 pub(crate) enum NextMessage {
     Ready(SourceMessage),
+    AddPartition(PartitionId),
+    RemovePartition(PartitionId),
     Pending,
     TransientDelay,
     Finished,
@@ -598,6 +600,21 @@ impl ConsistencyInfo {
         self.source_metrics.add_partition(pid);
     }
 
+    /// Stop tracking consistency information and metrics for `pid`.
+    fn remove_partition(&mut self, pid: &PartitionId) {
+        if !self.partition_metadata.contains_key(pid) {
+            error!("Incorrectly attempting to remove a non existent partition for source: {} partition: {}. Ignoring",
+                   self.source_id,
+                   pid
+            );
+
+            return;
+        }
+
+        self.partition_metadata.remove(pid);
+        self.source_metrics.remove_partition(pid);
+    }
+
     /// Refreshes the source instance's knowledge of timestamp bindings.
     ///
     /// This function needs to be called at the start of every source operator
@@ -807,6 +824,19 @@ impl SourceMetrics {
             partition_id,
         );
         self.partition_metrics.insert(partition_id.clone(), metric);
+    }
+
+    /// Remove metrics for `partition_id`
+    pub fn remove_partition(&mut self, partition_id: &PartitionId) {
+        if !self.partition_metrics.contains_key(partition_id) {
+            error!(
+                "incorrectly removing a non-existent partition metric in source: {} partition: {}",
+                self.source_id, partition_id
+            );
+            return;
+        }
+
+        self.partition_metrics.remove(partition_id);
     }
 
     /// Log updates to which offsets / timestamps read up to.
@@ -1322,6 +1352,14 @@ where
                             &mut buffer,
                             &timestamp_histories,
                         ),
+                        Ok(NextMessage::AddPartition(pid)) => {
+                            consistency_info.add_partition(&pid);
+                            (SourceStatus::Alive, MessageProcessing::Active)
+                        }
+                        Ok(NextMessage::RemovePartition(pid)) => {
+                            consistency_info.remove_partition(&pid);
+                            (SourceStatus::Alive, MessageProcessing::Active)
+                        }
                         Ok(NextMessage::TransientDelay) => {
                             // There was a temporary hiccup in getting messages, check again asap.
                             (SourceStatus::Alive, MessageProcessing::Yielded)
