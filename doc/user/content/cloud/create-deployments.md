@@ -8,7 +8,7 @@ hidden: true
 
 This functionality is only available to [administrators](../administer-workspace).
 
-1. On the [Deployments](https://cloud.materialize.com/deployments) page, click **Create deployment**.
+1. On the [Deployments](https://cloud.materialize.com/memorys) page, click **Create deployment**.
 
     The default deployment size is **Extra small** (XS). In the trial period, you can go up to **Small** (S) deployment sizes. If you know in advance the resources your use case requires, [reach out to us](../support) to discuss the details.
 

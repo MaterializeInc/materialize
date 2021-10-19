@@ -125,7 +125,7 @@ corresponds to an unboundedly large duration.
 The logical compaction window ends at the current time and extends backwards in
 time for the configured duration. The default window is 1 millisecond.
 
-See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
+See the [Deployment section](/ops/memory#compaction) for guidance on tuning
 the compaction window.
 
 ### Logging

@@ -1,16 +1,18 @@
 ---
-title: "Diagnosing Using SQL"
-description: "Use the SQL Interface to troubleshoot performance issues."
+title: "Troubleshooting"
+description: "Troubleshoot performance issues."
 menu:
   main:
     parent: operations
+aliases:
+  -troubleshooting
 ---
 
 You can use the queries below for spot debugging, but it may also be
 helpful to make them more permanent tools by creating them as views for `TAIL`ing or materialized views to read more efficiently. Note that the
 existence of these additional views may itself affect performance.
 
-### Are my sources loading data in a reasonable fashion?
+### How fast are my sources loading data?
 
 You can count the number of records accepted in a materialized source or view.
 Note that this makes less sense for a non-materialized source or view,
@@ -233,4 +235,21 @@ WHERE
     AND mdoa.address[1] = dataflows.dataflow_address
     AND mdo.id = dataflows.dataflow_operator
     AND mdo.worker = 0;
+```
+
+### How much disk space is Materialize using?
+
+To see how much disk space a Materialize installation is using, open a terminal and enter:
+
+```nofmt
+$ du -h -d 1 /path/to/mz/datadir
+```
+
+The default path for the data directory is `materialize/mzdata`.
+
+The response lists the disk space for the data directory and any subdirectories:
+
+```nofmt
+2.8M	mzdata/persist
+2.9M	mzdata
 ```
