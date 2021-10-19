@@ -96,6 +96,9 @@ Put breaking changes before other release notes, and mark them with
 `**Breaking change.**` at the start.
 {{< /comment >}}
 
+{{% version-header v0.9.10 %}}
+
+
 {{% version-header v0.9.9 %}}
 
 - **Breaking change.** Fix a bug that inadvertently let users create `char
