@@ -196,7 +196,8 @@ where
             ArrangementFlavor::Local(oks, errs) => (
                 oks.as_collection(move |k, v| {
                     let mut borrow = datum_vec.borrow_with_many(&[k, v]);
-                    row_builder.extend(permutation.permute_in_place(&mut borrow));
+                    permutation.permute_in_place(&mut borrow);
+                    row_builder.extend(&*borrow);
                     assert_eq!(&row_builder, v, "permutation: {:?}", permutation);
                     row_builder.finish_and_reuse()
                 }),
@@ -205,7 +206,8 @@ where
             ArrangementFlavor::Trace(_, oks, errs) => (
                 oks.as_collection(move |k, v| {
                     let mut borrow = datum_vec.borrow_with_many(&[k, v]);
-                    row_builder.extend(permutation.permute_in_place(&mut borrow));
+                    permutation.permute_in_place(&mut borrow);
+                    row_builder.extend(&*borrow);
                     assert_eq!(&row_builder, v, "permutation: {:?}", permutation);
                     row_builder.finish_and_reuse()
                 }),
@@ -244,9 +246,9 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
+                        permutation.permute_in_place(&mut borrow);
                         row_builder.clear();
-                        row_builder.extend(permutation.permute_in_place(&mut borrow));
-                        // assert_eq!(&row_builder, &*v);
+                        row_builder.extend(&*borrow);
                         logic(RefOrMut::Mut(&mut row_builder), t, d)
                     },
                     refuel,
@@ -260,9 +262,9 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
+                        permutation.permute_in_place(&mut borrow);
                         row_builder.clear();
-                        row_builder.extend(permutation.permute_in_place(&mut borrow));
-                        // assert_eq!(&row_builder, &*v);
+                        row_builder.extend(&*borrow);
                         logic(RefOrMut::Mut(&mut row_builder), t, d)
                     },
                     refuel,
@@ -315,7 +317,7 @@ where
     ) -> Self {
         let mut arranged = BTreeMap::new();
 
-        let permutation = Permutation::construct_no_op(&exprs, arity).0;
+        let permutation = Permutation::identity(exprs.len(), arity);
         let arrangements = ArrangementWrapper {
             permutation,
             flavor: arrangements,
@@ -505,15 +507,13 @@ where
                 }
                 let (oks, errs) = self.as_collection();
                 use crate::operator::CollectionExt;
-                let (permutation, value_expr) = Permutation::construct_no_op(&key, self.arity);
+                let permutation = Permutation::identity(key.len(), self.arity);
                 let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
                     let datums = row.unpack();
                     let temp_storage = RowArena::new();
                     let key_row =
                         Row::try_pack(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                    let value_row =
-                        Row::try_pack(value_expr.iter().map(|e| e.eval(&datums, &temp_storage)))?;
-                    Ok::<(Row, Row), DataflowError>((key_row, value_row))
+                    Ok::<(Row, Row), DataflowError>((key_row, row))
                 });
 
                 use differential_dataflow::operators::arrange::Arrange;

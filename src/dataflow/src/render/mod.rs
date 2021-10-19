@@ -1335,15 +1335,6 @@ impl Permutation {
         (permutation, value_expr)
     }
 
-    /// Construct a no-op permutation and thinning from a key expression and arity.
-    ///
-    /// In contrast to [construct], this does not remove any columns from the value. It primarily
-    /// serves as a means to test the permutation infrastructure.
-    fn construct_no_op(key_expr: &[MirScalarExpr], arity: usize) -> (Self, Vec<MirScalarExpr>) {
-        let expr = (0..arity).map(MirScalarExpr::column).collect();
-        (Self::identity(key_expr.len(), arity), expr)
-    }
-
     /// Construct an identity [Permutation] that expects all data in the value.
     pub fn identity(key_arity: usize, arity: usize) -> Self {
         let permutation: Vec<_> = (key_arity..key_arity + arity).collect();
@@ -1362,6 +1353,7 @@ impl Permutation {
         let mut permutation = Vec::with_capacity(self.permutation.len() + other.permutation.len());
         permutation.extend_from_slice(&self.permutation);
         permutation.extend_from_slice(&other.permutation);
+        // Determine the arity of the value part of the left side of the join
         let offset = self
             .permutation
             .iter()
@@ -1380,20 +1372,16 @@ impl Permutation {
 
     /// Permute a `[key, value]` row to reconstruct a non-permuted variant.
     ///
-    /// It returns a view into `data` that represents the whole row.
-    pub fn permute_in_place<'a, T>(&self, data: &'a mut Vec<T>) -> &'a mut [T] {
+    /// The function truncates the data to the length of the permutation, which should match
+    /// the expectation of any subsequent map/filter/project or opertator.
+    pub fn permute_in_place<T>(&self, data: &mut Vec<T>) {
         for (i, mut p) in self.permutation.iter().copied().enumerate() {
             while p < i {
                 p = self.permutation[p];
             }
             data.swap(i, p);
         }
-        data.truncate(self.len());
-        &mut data[..]
-    }
-
-    /// The arity of the non-permuted output row.
-    pub fn len(&self) -> usize {
-        self.permutation.len()
+        // Truncate to not leave unused key values in the data
+        data.truncate(self.permutation.len());
     }
 }

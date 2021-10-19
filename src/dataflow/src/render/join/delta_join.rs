@@ -683,9 +683,7 @@ where
                                                 }
                                             } else {
                                                 ok_session.give((
-                                                    Row::pack_slice(
-                                                        &datums_local[..permutation.len()],
-                                                    ),
+                                                    Row::pack_slice(&datums_local),
                                                     time.clone(),
                                                     diff.clone(),
                                                 ));
