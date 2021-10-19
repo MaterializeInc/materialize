@@ -68,8 +68,8 @@ production readiness.
     the highest unreleased version will be incorrect. It will be a patch version (i.e. the `Y` in
     `W.X.Y`) instead of a major or minor version change (`W` or `X`), update the release notes to
     reflect the version that is actually being released:
-    - [ ] The [release notes][]
-    - [ ] Some recent migration versions in `src/coord/src/catalog/migrate.rs`
+    - The [release notes][]
+    - Any recent migrations in [`src/coord/src/catalog/migrate.rs`][migrations]
 
 - [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
 
@@ -94,6 +94,8 @@ production readiness.
   search should reveal it][required-reviews]. Review (or get review on) all unreviewed
   PRs, and link to that issue here. Once all PRs have been reviewed, close the issue.
 
+
+[migrations]: https://github.com/MaterializeInc/materialize/commits/main/src/coord/src/catalog/migrate.rs
 [required-reviews]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aissue+is%3Aopen+%22required+reviews%22
 [gh]: https://cli.github.com/
 
