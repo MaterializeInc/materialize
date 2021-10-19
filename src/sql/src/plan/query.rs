@@ -2885,25 +2885,33 @@ pub fn plan_expr<'a>(
                     offset: finishing.offset,
                 };
             }
-            let expr = expr.project(finishing.project);
 
-            let column_types = qcx.relation_type(&expr).column_types;
-            if column_types.len() != 1 {
+            if finishing.project.len() != 1 {
                 bail!(
                     "Expected subselect to return 1 column, got {} columns",
-                    column_types.len()
+                    finishing.project.len()
                 );
             }
 
-            let typ = column_types.get(0).cloned().unwrap().scalar_type();
-            let nested_exprs = iter::once(HirScalarExpr::CallVariadic {
-                func: VariadicFunc::ListCreate { elem_type: typ },
+            let project_column = *finishing.project.get(0).unwrap();
+            let elem_type = qcx
+                .relation_type(&expr)
+                .column_types
+                .get(project_column)
+                .cloned()
+                .unwrap()
+                .scalar_type();
+
+            // `ColumnRef`s in `aggregation_exprs` refers to the columns produced by planning the
+            // subquery above.
+            let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::CallVariadic {
+                func: VariadicFunc::ListCreate { elem_type },
                 exprs: vec![HirScalarExpr::Column(ColumnRef {
-                    column: 0,
+                    column: project_column,
                     level: 0,
                 })],
             })
-            .chain(finishing.order_by.clone().into_iter().map(|co| {
+            .chain(finishing.order_by.iter().map(|co| {
                 HirScalarExpr::Column(ColumnRef {
                     column: co.column,
                     level: 0,
@@ -2911,25 +2919,37 @@ pub fn plan_expr<'a>(
             }))
             .collect();
 
-            let order_by_len = finishing.order_by.len();
-            let reduced_expr = expr.reduce(
-                vec![],
-                vec![AggregateExpr {
-                    func: AggregateFunc::ListConcat {
-                        order_by: finishing.order_by,
-                    },
-                    expr: Box::new(HirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
-                            field_names: iter::repeat(ColumnName::from(""))
-                                .take(1 + order_by_len)
-                                .collect(),
+            // However, column references for `aggregation_projection` and `aggregation_order_by`
+            // are with reference to the `exprs` of the aggregation expression.  Here that is
+            // `aggregation_exprs`.
+            let aggregation_projection = vec![0];
+            let aggregation_order_by = finishing
+                .order_by
+                .into_iter()
+                .enumerate()
+                .map(|(i, ColumnOrder { column: _, desc })| ColumnOrder { column: i, desc })
+                .collect();
+
+            let reduced_expr = expr
+                .reduce(
+                    vec![],
+                    vec![AggregateExpr {
+                        func: AggregateFunc::ListConcat {
+                            order_by: aggregation_order_by,
                         },
-                        exprs: nested_exprs,
-                    }),
-                    distinct: false,
-                }],
-                None,
-            );
+                        expr: Box::new(HirScalarExpr::CallVariadic {
+                            func: VariadicFunc::RecordCreate {
+                                field_names: iter::repeat(ColumnName::from(""))
+                                    .take(aggregation_exprs.len())
+                                    .collect(),
+                            },
+                            exprs: aggregation_exprs,
+                        }),
+                        distinct: false,
+                    }],
+                    None,
+                )
+                .project(aggregation_projection);
             HirScalarExpr::Select(Box::new(reduced_expr)).into()
         }
 
