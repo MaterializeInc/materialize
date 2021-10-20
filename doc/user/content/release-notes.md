@@ -106,6 +106,9 @@ List new features before bug fixes.
 - Add the [`date_bin`](/sql/functions/date-bin) function, which is similar to
   `date_trunc` but supports "truncating" to arbitrary intervals.
 
+- Fix incorrect results for a certain class of degenerate join queries.
+  {{% gh 8747 %}}
+
 {{% version-header v0.9.11 %}}
 
 - Disallow `UPDATE` and `DELETE` operations on tables when boot in
