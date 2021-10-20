@@ -13,11 +13,12 @@
 use crate::{func, BinaryFunc, MirScalarExpr, UnaryFunc};
 use repr::{Datum, RelationType, ScalarType};
 
-/// Canonicalize equivalence classes of a join.
+/// Canonicalize equivalence classes of a join and expressions contained in them.
+///
+/// `input_types` can be the `RelationType` of the join or the `RelationType` of
+/// the individual inputs of the join in order.
 ///
 /// This function:
-/// * ensures the same expression appears in only one equivalence class.
-/// * ensures the equivalence classes are sorted and dedupped.
 /// * simplifies expressions to involve the least number of non-literal nodes.
 ///   This ensures that we only replace expressions by "even simpler"
 ///   expressions and that repeated substitutions reduce the complexity of
@@ -25,27 +26,22 @@ use repr::{Datum, RelationType, ScalarType};
 ///   rule, we might repeatedly replace a simple expression with an equivalent
 ///   complex expression containing that (or another replaceable) simple
 ///   expression, and repeat indefinitely.
-///
-/// ```rust
-/// use expr::MirScalarExpr;
-/// use expr::canonicalize::canonicalize_equivalences;
-///
-/// let mut equivalences = vec![
-///     vec![MirScalarExpr::Column(1), MirScalarExpr::Column(4)],
-///     vec![MirScalarExpr::Column(3), MirScalarExpr::Column(5)],
-///     vec![MirScalarExpr::Column(0), MirScalarExpr::Column(3)],
-///     vec![MirScalarExpr::Column(2), MirScalarExpr::Column(2)],
-/// ];
-/// let expected = vec![
-///     vec![MirScalarExpr::Column(0),
-///         MirScalarExpr::Column(3),
-///         MirScalarExpr::Column(5)],
-///     vec![MirScalarExpr::Column(1), MirScalarExpr::Column(4)],
-/// ];
-/// canonicalize_equivalences(&mut equivalences);
-/// assert_eq!(expected, equivalences)
-/// ````
-pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
+/// * reduces all expressions contained in `equivalences`.
+/// * Does everything that [canonicalize_equivalence_classes] does.
+pub fn canonicalize_equivalences(
+    equivalences: &mut Vec<Vec<MirScalarExpr>>,
+    input_types: &[RelationType],
+) {
+    // This only aggregates the column types of each input, not the
+    // keys of the inputs. It is unnecessary to aggregate the keys
+    // of the inputs since input keys are unnecessary for reducing
+    // `MirScalarExpr`s.
+    let input_typ = input_types
+        .iter()
+        .fold(RelationType::empty(), |mut typ, i| {
+            typ.column_types.extend_from_slice(&i.column_types[..]);
+            typ
+        });
     // Calculate the number of non-leaves for each expression.
     let mut to_reduce = equivalences
         .drain(..)
@@ -89,6 +85,7 @@ pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
                         expressions_rewritten = true;
                     }
                 });
+                popped_expr.reduce(&input_typ);
                 new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
             }
             new_equivalence.sort();
@@ -103,6 +100,34 @@ pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
         .map(|mut cls| cls.drain(..).map(|(_, expr)| expr).collect::<Vec<_>>())
         .collect::<Vec<_>>();
 
+    canonicalize_equivalence_classes(equivalences);
+}
+
+/// Canonicalize only the equivalence classes of a join.
+///
+/// This function:
+/// * ensures the same expression appears in only one equivalence class.
+/// * ensures the equivalence classes are sorted and dedupped.
+/// ```rust
+/// use expr::MirScalarExpr;
+/// use expr::canonicalize::canonicalize_equivalence_classes;
+///
+/// let mut equivalences = vec![
+///     vec![MirScalarExpr::Column(1), MirScalarExpr::Column(4)],
+///     vec![MirScalarExpr::Column(3), MirScalarExpr::Column(5)],
+///     vec![MirScalarExpr::Column(0), MirScalarExpr::Column(3)],
+///     vec![MirScalarExpr::Column(2), MirScalarExpr::Column(2)],
+/// ];
+/// let expected = vec![
+///     vec![MirScalarExpr::Column(0),
+///         MirScalarExpr::Column(3),
+///         MirScalarExpr::Column(5)],
+///     vec![MirScalarExpr::Column(1), MirScalarExpr::Column(4)],
+/// ];
+/// canonicalize_equivalence_classes(&mut equivalences);
+/// assert_eq!(expected, equivalences)
+/// ````
+pub fn canonicalize_equivalence_classes(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
     // Fuse equivalence classes containing the same exprssion.
     for index in 1..equivalences.len() {
         for inner in 0..index {

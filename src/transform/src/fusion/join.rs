@@ -172,7 +172,7 @@ impl JoinBuilder {
     }
 
     fn build(mut self) -> MirRelationExpr {
-        expr::canonicalize::canonicalize_equivalences(&mut self.equivalences);
+        expr::canonicalize::canonicalize_equivalence_classes(&mut self.equivalences);
 
         // If `inputs` is now empty or a singleton (without constraints),
         // we can remove the join.
