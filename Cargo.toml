@@ -78,7 +78,7 @@ rustc-demangle = { opt-level = 3 }
 # production installations, but we still want useful crash reports.
 debug = 1
 
-# TODO - remove this once a release of headers without a dependency on `time`
+# TODO - remove this once a release of `headers` without a dependency on `time`
 # goes out.
 #
 # We don't want to depend on `time` because it triggers
