@@ -12,9 +12,8 @@
 use persist_types::Codec;
 use timely::dataflow::channels::pushers::buffer::AutoflushSession;
 use timely::dataflow::channels::pushers::{Counter, Tee};
-use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
-use timely::dataflow::operators::{ActivateCapability, Concat, Map, ToStream, UnorderedInput};
+use timely::dataflow::operators::{ActivateCapability, Concat, Map, UnorderedInput};
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::ActivateOnDrop;
 use timely::Data as TimelyData;
@@ -60,14 +59,8 @@ where
         let (write, read) = token;
 
         // Replay the previously persisted data, if any.
-        let (ok_previous, err_previous) = match read.snapshot() {
-            Err(err) => (
-                operator::empty(self),
-                // TODO: Figure out how to make these retractable.
-                vec![(format!("replaying persisted data: {}", err), 0, 1)].to_stream(self),
-            ),
-            Ok(snapshot) => self.replay(snapshot),
-        };
+        let snapshot = read.snapshot();
+        let (ok_previous, err_previous) = self.replay(snapshot);
 
         let ok_previous = ok_previous.map(|((k, _), ts, diff)| (k, ts, diff));
 

@@ -114,10 +114,7 @@ where
         let operator_name = format!("persistent_upsert({})", name);
 
         let (restored_upsert_oks, _state_errs) = {
-            let snapshot = persist_config
-                .read_handle
-                .snapshot()
-                .expect("cannot take snapshot");
+            let snapshot = persist_config.read_handle.snapshot();
             let (restored_oks, restored_errs) = self.scope().replay(snapshot);
             let restored_upsert_oks = restored_oks.filter_and_retract_future_updates(
                 name,

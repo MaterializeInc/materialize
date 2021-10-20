@@ -24,7 +24,7 @@ pub trait Replay<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// Emits each record in a snapshot.
     fn replay(
         &self,
-        snapshot: DecodedSnapshot<K, V>,
+        snapshot: Result<DecodedSnapshot<K, V>, Error>,
     ) -> (
         Stream<G, ((K, V), u64, isize)>,
         Stream<G, (String, u64, isize)>,
@@ -39,43 +39,56 @@ where
 {
     fn replay(
         &self,
-        snapshot: DecodedSnapshot<K, V>,
+        snapshot: Result<DecodedSnapshot<K, V>, Error>,
     ) -> (
         Stream<G, ((K, V), u64, isize)>,
         Stream<G, (String, u64, isize)>,
     ) {
-        let worker_idx = self.index();
+        // TODO: This currently works by only emitting the persisted
+        // data on worker 0 because that was the simplest thing to do
+        // initially. Instead, we should shard up the responsibility
+        // between all the workers.
+        let active_worker = self.index() == 0;
+
         let result_stream: Stream<G, Result<((K, V), u64, isize), Error>> =
-            operator::source(self, "Replay", |cap, _info| {
-                let snapshot_since = snapshot.since();
-                // TODO: This currently works by only emitting the persisted
-                // data on worker 0 because that was the simplest thing to do
-                // initially. Instead, we should shard up the responsibility
-                // between all the workers.
-                let mut iter_cap = if worker_idx == 0 {
-                    let iter = snapshot.into_iter();
-                    Some((iter, cap))
+            operator::source(self, "Replay", move |cap, _info| {
+                let mut snapshot_cap = if active_worker {
+                    Some((snapshot, cap))
                 } else {
                     None
                 };
+
                 move |output| {
-                    let (iter, cap) = match iter_cap.take() {
+                    let (snapshot, cap) = match snapshot_cap.take() {
                         Some(x) => x,
-                        None => return,
+                        None => return, // We were already invoked and consumed our snapshot.
                     };
+
                     let mut session = output.session(&cap);
-                    // TODO: Periodically yield to let the rest of the dataflow
-                    // reduce this down.
-                    for x in iter {
-                        if let Ok((_, ts, _)) = &x {
-                            // The raw update data held internally in the
-                            // snapshot may not be physically compacted up to
-                            // the logical compaction frontier of since.
-                            // Snapshot handles advancing any necessary data but
-                            // we double check that invariant here.
-                            debug_assert!(snapshot_since.less_equal(ts));
+
+                    match snapshot {
+                        Ok(snapshot) => {
+                            let snapshot_since = snapshot.since();
+                            // TODO: Periodically yield to let the rest of the dataflow
+                            // reduce this down.
+                            for x in snapshot.into_iter() {
+                                if let Ok((_, ts, _)) = &x {
+                                    // The raw update data held internally in the
+                                    // snapshot may not be physically compacted up to
+                                    // the logical compaction frontier of since.
+                                    // Snapshot handles advancing any necessary data but
+                                    // we double check that invariant here.
+                                    debug_assert!(snapshot_since.less_equal(ts));
+                                }
+                                session.give(x);
+                            }
                         }
-                        session.give(x);
+                        Err(e) => {
+                            session.give(Err(Error::String(format!(
+                                "replaying persisted data: {}",
+                                e
+                            ))));
+                        }
                     }
                 }
             });
