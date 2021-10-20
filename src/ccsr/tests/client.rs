@@ -133,6 +133,15 @@ async fn test_client() -> Result<(), anyhow::Error> {
 
 #[tokio::test]
 async fn test_client_errors() -> Result<(), anyhow::Error> {
+    let invalid_schema_registry_url: reqwest::Url = "data::text/plain,Info".parse().unwrap();
+    match ccsr::ClientConfig::new(invalid_schema_registry_url).build() {
+        Err(e) => assert_eq!(
+            "cannot construct a CCSR client with a cannot-be-a-base URL",
+            e.to_string(),
+        ),
+        res => panic!("Expected error, got {:?}", res),
+    }
+
     let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     // Get-by-id-specific errors.

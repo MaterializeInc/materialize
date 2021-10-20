@@ -10,6 +10,7 @@
 use std::error::Error;
 use std::fmt;
 
+use anyhow::bail;
 use reqwest::{Method, Url};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -26,17 +27,27 @@ pub struct Client {
 }
 
 impl Client {
-    pub(crate) fn new(inner: reqwest::Client, url: Url, auth: Option<Auth>) -> Self {
-        Client { inner, url, auth }
+    pub(crate) fn new(
+        inner: reqwest::Client,
+        url: Url,
+        auth: Option<Auth>,
+    ) -> Result<Self, anyhow::Error> {
+        if url.cannot_be_a_base() {
+            bail!("cannot construct a CCSR client with a cannot-be-a-base URL");
+        }
+        Ok(Client { inner, url, auth })
     }
 
-    fn make_request<'a>(
-        &self,
-        method: Method,
-        path: impl IntoIterator<Item = &'a str>,
-    ) -> reqwest::RequestBuilder {
+    fn make_request<'a, P>(&self, method: Method, path: P) -> reqwest::RequestBuilder
+    where
+        P: IntoIterator,
+        P::Item: AsRef<str>,
+    {
         let mut url = self.url.clone();
-        url.path_segments_mut().unwrap().clear().extend(path);
+        url.path_segments_mut()
+            .expect("constructor validated URL can be a base")
+            .clear()
+            .extend(path);
 
         let mut request = self.inner.request(method, url);
         if let Some(auth) = &self.auth {
@@ -47,7 +58,7 @@ impl Client {
 
     /// Gets the schema with the associated ID.
     pub async fn get_schema_by_id(&self, id: i32) -> Result<Schema, GetByIdError> {
-        let req = self.make_request(Method::GET, vec!["schemas", "ids", &id.to_string()]);
+        let req = self.make_request(Method::GET, &["schemas", "ids", &id.to_string()]);
         let res: GetByIdResponse = send_request(req).await?;
         Ok(Schema {
             id,
@@ -62,7 +73,7 @@ impl Client {
 
     /// Gets the latest schema for the specified subject.
     pub async fn get_subject(&self, subject: &str) -> Result<Subject, GetBySubjectError> {
-        let req = self.make_request(Method::GET, vec!["subjects", subject, "versions", "latest"]);
+        let req = self.make_request(Method::GET, &["subjects", subject, "versions", "latest"]);
         let res: GetBySubjectResponse = send_request(req).await?;
         Ok(Subject {
             schema: Schema {
@@ -87,7 +98,7 @@ impl Client {
         schema_type: SchemaType,
         references: &[SchemaReference],
     ) -> Result<i32, PublishError> {
-        let req = self.make_request(Method::POST, vec!["subjects", subject, "versions"]);
+        let req = self.make_request(Method::POST, &["subjects", subject, "versions"]);
         let req = req.json(&self.build_publish_schema_body(schema, schema_type, references));
         let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
@@ -119,7 +130,7 @@ impl Client {
 
     /// Lists the names of all subjects that the schema registry is aware of.
     pub async fn list_subjects(&self) -> Result<Vec<String>, ListError> {
-        let req = self.make_request(Method::GET, vec!["subjects"]);
+        let req = self.make_request(Method::GET, &["subjects"]);
         Ok(send_request(req).await?)
     }
 
@@ -130,7 +141,7 @@ impl Client {
     /// be registered under the same subject. It does not allow the schema ID
     /// to be reused.
     pub async fn delete_subject(&self, subject: &str) -> Result<(), DeleteError> {
-        let req = self.make_request(Method::DELETE, vec!["subjects", subject]);
+        let req = self.make_request(Method::DELETE, &["subjects", subject]);
         let _res: Vec<i32> = send_request(req).await?;
         Ok(())
     }
