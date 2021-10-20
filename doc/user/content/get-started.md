@@ -231,7 +231,7 @@ Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) u
 
     If you re-run the `SELECT` statement at different points in time, you can see the updated results based on the latest data.
 
-### Temporal Filters
+### Temporal filters
 
 In Materialize, [temporal filters](/guides/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This is useful to model business processes or simply to limit resource usage, for example.
 
@@ -246,7 +246,7 @@ In Materialize, [temporal filters](/guides/temporal-filters/) allow you to defin
     GROUP BY symbol;
     ```
 
-    The `mz_logical_timestamp()` function is used to keep track of the logical time for your query (similar to `now()` in other systems, as explained more in-depth in ["now and mz_logical_timestamp functions"](/sql/functions/now_and_mz_logical_timestamp/)).
+    The `mz_logical_timestamp()` function is used to keep track of the logical time that your query executes (similar to `now()` in other systems, as explained more in-depth in ["now and mz_logical_timestamp functions"](/sql/functions/now_and_mz_logical_timestamp/)).
 
 1. To see the results:
 
