@@ -347,7 +347,7 @@ impl TimestampBindingBox {
     }
 
     fn remove_partition(&mut self, partition: &PartitionId) {
-        if self.partitions.contains_key(partition) {
+        if !self.partitions.contains_key(partition) {
             debug!("already removed partition {:?}, ignoring", partition);
             return;
         }

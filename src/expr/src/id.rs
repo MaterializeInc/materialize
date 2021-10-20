@@ -142,7 +142,7 @@ pub enum PartitionId {
 impl fmt::Display for PartitionId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            PartitionId::Kafka(id) => write!(f, "kafka:{}", id.to_string()),
+            PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
             PartitionId::S3(id) => write!(f, "s3:{}", id.to_string()),
             PartitionId::None => write!(f, "none"),
         }
@@ -162,19 +162,14 @@ impl FromStr for PartitionId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "none" => Ok(PartitionId::None),
-            s => {
-                if let Some(val) = s.strip_prefix("kafka:") {
-                    let id: i32 = val.parse()?;
-                    Ok(PartitionId::Kafka(id))
-                } else if let Some(val) = s.strip_prefix("s3:") {
-                    let id: u128 = val.parse()?;
-                    Ok(PartitionId::S3(id))
-                } else {
-                    Err(anyhow!("Unknown partition id type: {}", s))
-                }
-            }
+        if s == "none" {
+            Ok(PartitionId::None)
+        } else if let Some(val) = s.strip_prefix("s3:") {
+            let id: u128 = val.parse()?;
+            Ok(PartitionId::S3(id))
+        } else {
+            let val: i32 = s.parse()?;
+            Ok(PartitionId::Kafka(val))
         }
     }
 }
