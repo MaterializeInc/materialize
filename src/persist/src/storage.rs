@@ -83,8 +83,6 @@ pub trait Blob: Send + 'static {
     fn delete(&mut self, key: &str) -> Result<(), Error>;
 
     /// List all of the keys in the map.
-    ///
-    /// Keys are returned in sorted order.
     fn list_keys(&self) -> Result<Vec<String>, Error>;
 
     /// Synchronously closes the blob, releasing exclusive-writer locks and
@@ -374,17 +372,22 @@ pub mod tests {
         assert_eq!(blob0.get("k0")?, None);
 
         // Blob might create one or more keys on startup (e.g. lock files)
-        let empty_keys: Vec<String> = blob0.list_keys()?;
+        let mut empty_keys: Vec<String> = blob0.list_keys()?;
+        empty_keys.sort();
 
-        // List keys is idempotent.
-        assert_eq!(blob0.list_keys()?, empty_keys);
+        // List keys is idempotent
+        let mut blob_keys = blob0.list_keys()?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, empty_keys);
 
         // Set a key and get it back.
         blob0.set("k0", values[0].clone(), false)?;
         assert_eq!(blob0.get("k0")?, Some(values[0].clone()));
 
         // Blob contains the key we just inserted.
-        assert_eq!(blob0.list_keys()?, keys(&empty_keys, "k0"));
+        let mut blob_keys = blob0.list_keys()?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, keys(&empty_keys, "k0"));
 
         // Can only overwrite a key without allow_overwrite.
         assert!(blob0.set("k0", values[1].clone(), false).is_err());
@@ -402,7 +405,9 @@ pub mod tests {
         assert_eq!(blob0.delete("nope"), Ok(()));
 
         // Empty blob contains no keys.
-        assert_eq!(blob0.list_keys()?, empty_keys);
+        let mut blob_keys = blob0.list_keys()?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
         blob0.set("k0", values[1].clone(), false)?;
         assert_eq!(blob0.get("k0")?, Some(values[1].clone()));

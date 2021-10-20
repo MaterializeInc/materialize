@@ -365,25 +365,31 @@ impl Blob for FileBlob {
 
     fn list_keys(&self) -> Result<Vec<String>, Error> {
         let mut ret = vec![];
-        if let Some(base_dir) = self.base_dir.as_ref() {
-            for entry in fs::read_dir(base_dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                // The file name is guaranteed to be non-None iff the path is a
-                // normal file or directory.
-                let file_name = path.file_name();
-                if let Some(name) = file_name {
-                    let name = name.to_str();
-                    if let Some(name) = name {
-                        ret.push(name.to_owned());
-                    }
+        if self.base_dir.is_none() {
+            return Err(Error::from("FileBlob unexpectedly closed"));
+        }
+
+        let base_dir = self.base_dir.as_ref().expect("base dir known to exist");
+        for entry in fs::read_dir(base_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            // TODO: we should be able to error on directories, however we can't error
+            // on _all_ the directories we see because we may encounter '.' and '..'
+            // while traversing this directory.
+            if !path.is_file() {
+                continue;
+            }
+            // The file name is guaranteed to be non-None iff the path is a
+            // normal file.
+            let file_name = path.file_name();
+            if let Some(name) = file_name {
+                let name = name.to_str();
+                if let Some(name) = name {
+                    ret.push(name.to_owned());
                 }
             }
-        } else {
-            return Err(Error::from("FileBlob unexpectedly closed"));
-        };
-
-        ret.sort();
+        }
         Ok(ret)
     }
 

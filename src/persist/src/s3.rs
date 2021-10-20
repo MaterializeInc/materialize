@@ -300,29 +300,40 @@ impl S3BlobAsync {
             max_keys: Some(1_000),
             ..Default::default()
         };
+        let prefix = self.get_path("");
 
         loop {
-            match client.list_objects_v2(list_objects_req.clone()).await {
-                Ok(resp) => {
-                    resp.contents.map(|contents| {
-                        for object in contents.iter() {
-                            if let Some(key) = object.key.as_ref() {
-                                ret.push(key.clone());
-                            }
+            let resp = client
+                .list_objects_v2(list_objects_req.clone())
+                .await
+                .map_err(|err| Error::from(err.to_string()))?;
+            if let Some(contents) = resp.contents {
+                for object in contents.iter() {
+                    if let Some(key) = object.key.as_ref() {
+                        if let Some(key) = key.strip_prefix(&prefix) {
+                            ret.push(key.to_string());
+                        } else {
+                            return Err(Error::from(format!(
+                                "found key with invalid prefix: {}",
+                                key
+                            )));
                         }
-                    });
-
-                    if resp.next_continuation_token.is_some() {
-                        list_objects_req.continuation_token = resp.next_continuation_token;
-                    } else {
-                        break;
                     }
                 }
-                Err(err) => return Err(Error::from(err.to_string())),
+            } else {
+                return Err(Error::from(format!(
+                    "s3 response contents empty: {:?}",
+                    resp
+                )));
+            }
+
+            if resp.next_continuation_token.is_some() {
+                list_objects_req.continuation_token = resp.next_continuation_token;
+            } else {
+                break;
             }
         }
 
-        ret.sort();
         Ok(ret)
     }
 

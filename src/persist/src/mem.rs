@@ -223,9 +223,7 @@ impl MemBlobCore {
 
     fn list_keys(&self) -> Result<Vec<String>, Error> {
         self.ensure_open()?;
-        let mut ret: Vec<_> = self.dataz.keys().cloned().collect();
-        ret.sort();
-        Ok(ret)
+        Ok(self.dataz.keys().cloned().collect())
     }
 
     fn delete(&mut self, key: &str) -> Result<(), Error> {
