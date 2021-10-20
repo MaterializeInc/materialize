@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
-use abomonation::abomonated::Abomonated;
 use futures_executor::block_on;
 use ore::cast::CastFrom;
 use persist_types::Codec;
@@ -92,14 +91,13 @@ impl<B: Blob> BlobCache<B> {
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
-        let batch: Abomonated<BlobUnsealedBatch, Vec<u8>> = unsafe { Abomonated::new(bytes) }
-            .ok_or_else(|| Error::from(format!("invalid unsealed batch at key: {}", key)))?;
+        let batch: BlobUnsealedBatch = bincode::deserialize(&bytes).map_err(|err| {
+            Error::from(format!("invalid unsealed batch at key {}: {}", key, err))
+        })?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
         let mut cache = self.unsealed.lock()?;
-        // TODO: Well this is ugly.
-        let batch = (*batch).clone();
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
         cache.insert(key.to_owned(), Arc::new(batch));
         Ok(cache.get(key).unwrap().clone())
@@ -156,8 +154,9 @@ impl<B: Blob> BlobCache<B> {
         }
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
-        let mut val = Vec::new();
-        unsafe { abomonation::encode(&batch, &mut val) }.expect("write to Vec is infallible");
+        // See https://github.com/bincode-org/bincode/issues/293 for why this is
+        // infallible.
+        let val = bincode::serialize(&batch).expect("infallible for BlobUnsealedBatch");
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
@@ -199,14 +198,12 @@ impl<B: Blob> BlobCache<B> {
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
-        let batch: Abomonated<BlobTraceBatch, Vec<u8>> = unsafe { Abomonated::new(bytes) }
-            .ok_or_else(|| Error::from(format!("invalid trace batch at key: {}", key)))?;
+        let batch: BlobTraceBatch = bincode::deserialize(&bytes)
+            .map_err(|err| Error::from(format!("invalid trace batch at key {}: {}", key, err)))?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
         let mut cache = self.trace.lock()?;
-        // TODO: Well this is ugly.
-        let batch = (*batch).clone();
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
         cache.insert(key.to_owned(), Arc::new(batch));
         Ok(cache.get(key).unwrap().clone())
@@ -255,8 +252,9 @@ impl<B: Blob> BlobCache<B> {
         }
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
-        let mut val = Vec::new();
-        unsafe { abomonation::encode(&batch, &mut val) }.expect("write to Vec is infallible");
+        // See https://github.com/bincode-org/bincode/issues/293 for why this is
+        // infallible.
+        let val = bincode::serialize(&batch).expect("infallible for BlobTraceBatch");
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();

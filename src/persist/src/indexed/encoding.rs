@@ -17,11 +17,10 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::{fmt, io};
 
-use abomonation::abomonated::Abomonated;
-use abomonation_derive::Abomonation;
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use persist_types::Codec;
+use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
@@ -30,7 +29,7 @@ use crate::storage::SeqNo;
 
 /// An internally unique id for a persisted stream. External users identify
 /// streams with a string, which is then mapped internally to this.
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Abomonation)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Id(pub u64);
 
 /// The structure serialized and stored as an entry in a
@@ -38,7 +37,7 @@ pub struct Id(pub u64);
 ///
 /// Invariants:
 /// - The updates field is non-empty.
-#[derive(Debug, Abomonation)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LogEntry {
     /// Pairs of stream id and the updates themselves.
     //
@@ -65,7 +64,7 @@ pub struct LogEntry {
 ///   because truncating the unnecessary elements out of unsealed is fallible, and
 ///   is allowed to lag behind the migration of new data into trace)
 /// - id_mapping.len() + graveyard.len() is == next_stream_id.
-#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BlobMeta {
     /// The next internal stream id to assign.
     pub next_stream_id: Id,
@@ -83,20 +82,16 @@ pub struct BlobMeta {
     pub graveyard: Vec<StreamRegistration>,
     /// Unsealeds indexed by stream id.
     ///
-    /// Invariant: Each stream id is in here at most once. This would be more
-    /// naturally be modeled as a map from Id to UnsealedMeta, but that
-    /// doesn't work with Abomonation.
+    /// Invariant: Each stream id is in here at most once.
     pub unsealeds: Vec<UnsealedMeta>,
     /// Traces indexed by stream id.
     ///
-    /// Invariant: Each stream id is in here at most once. This would be more
-    /// naturally be modeled as a map from Id to TraceMeta, but that doesn't
-    /// work with Abomonation.
+    /// Invariant: Each stream id is in here at most once.
     pub traces: Vec<TraceMeta>,
 }
 
 /// Registration information for a single stream.
-#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StreamRegistration {
     /// The external stream name.
     pub name: String,
@@ -112,7 +107,7 @@ pub struct StreamRegistration {
 ///
 /// Invariants:
 /// - The batch SeqNo ranges are sorted and non-overlapping.
-#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UnsealedMeta {
     /// The stream this unsealed belongs to.
     pub id: Id,
@@ -132,7 +127,7 @@ pub struct UnsealedMeta {
 ///
 /// Invariants:
 /// - The [lower, upper) interval of sequence numbers in desc is non-empty.
-#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UnsealedBatchMeta {
     /// The key to retrieve the [BlobUnsealedBatch] from blob storage.
     pub key: String,
@@ -157,7 +152,7 @@ pub struct UnsealedBatchMeta {
 ///   to most recent time intervals.
 /// - Every batch's upper is <= the overall trace's seal frontier.
 /// - TODO: key uniqueness invariants?
-#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TraceMeta {
     /// The stream this trace belongs to.
     pub id: Id,
@@ -182,7 +177,7 @@ pub struct TraceMeta {
 /// Invariants:
 /// - The Description's time interval is non-empty.
 /// - TODO: key invariants?
-#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TraceBatchMeta {
     /// The key to retrieve the batch's data from the blob store.
     pub key: String,
@@ -205,7 +200,7 @@ pub struct TraceBatchMeta {
 ///   unique.
 /// - All entries have a non-zero diff.
 /// - The updates field is non-empty.
-#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BlobUnsealedBatch {
     /// Which updates are included in this batch.
     pub desc: Description<SeqNo>,
@@ -241,7 +236,7 @@ pub struct BlobUnsealedBatch {
 /// put multiple small batches in a single blob but also break a very large
 /// batch over multiple blobs. We also may want to break the latter into chunks
 /// for checksum and encryption?
-#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BlobTraceBatch {
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
@@ -292,7 +287,7 @@ impl<'e, E: for<'a> Extend<&'a u8>> io::Write for ExtendWriteAdapter<'e, E> {
 // ```
 // buf[0]          = <BlobMeta::CURRENT_VERSION>
 // buf[1..3]       = <BlobMeta::MAGIC>
-// buf[3..3+N]     = <the N-byte Abomonation serialization of BlobMeta>
+// buf[3..3+N]     = <the N-byte bincode serialization of BlobMeta>
 // buf[3+N..3+N+2] = <BlobMeta::MAGIC>
 // ```
 //
@@ -313,8 +308,11 @@ impl Codec for BlobMeta {
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
         buf.extend(&[BlobMeta::CURRENT_VERSION]);
         buf.extend(BlobMeta::MAGIC);
-        unsafe { abomonation::encode(self, &mut ExtendWriteAdapter(buf)) }
-            .expect("write to ExtendWriteAdapter is infallible");
+
+        // See https://github.com/bincode-org/bincode/issues/293 for why the
+        // bincode part of this is infallible.
+        bincode::serialize_into(&mut ExtendWriteAdapter(buf), &self)
+            .expect("infallible for BlobMeta and ExtendWriteAdapter");
         buf.extend(BlobMeta::MAGIC);
     }
 
@@ -342,15 +340,15 @@ impl Codec for BlobMeta {
             _ => return Err("bad magic".into()),
         }
         let buf = &buf[begin_magic_pos.end..end_magic_pos.start];
-        let meta: Abomonated<BlobMeta, Vec<u8>> =
-            unsafe { Abomonated::new(buf.to_owned()) }.ok_or_else(|| "invalid meta")?;
-        Ok((*meta).clone())
+        let meta: BlobMeta =
+            bincode::deserialize(buf).map_err(|err| format!("invalid meta: {}", err))?;
+        Ok(meta)
     }
 }
 
 impl BlobMeta {
     const MAGIC: &'static [u8] = b"mz";
-    const CURRENT_VERSION: u8 = 1;
+    const CURRENT_VERSION: u8 = 2;
 
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
@@ -1536,7 +1534,7 @@ mod tests {
         let original = BlobMeta {
             next_stream_id: Id(1),
             unsealeds_seqno_upper: SeqNo(2),
-            // This is not a test of abomonation's roundtrip-ability, so don't
+            // This is not a test of bincode's roundtrip-ability, so don't
             // bother too much with the test data.
             id_mapping: vec![],
             graveyard: vec![],

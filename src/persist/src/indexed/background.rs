@@ -235,7 +235,7 @@ mod tests {
                 key: "MERGED_KEY".into(),
                 desc: desc_from(0, 3, 2),
                 level: 1,
-                size_bytes: 322,
+                size_bytes: 162,
             },
         };
         let mut res = maintainer.compact_trace(req).recv()?;
