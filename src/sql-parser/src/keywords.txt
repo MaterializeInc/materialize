@@ -242,6 +242,7 @@ Stdin
 Stdout
 String
 Subscribe
+Substring
 Superuser
 Table
 Tables

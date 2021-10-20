@@ -350,6 +350,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
                 self.parse_position_expr()
             }
+            Token::Keyword(SUBSTRING) => self.parse_substring_expr(),
             Token::Keyword(kw) if kw.is_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
@@ -1092,6 +1093,48 @@ impl<'a> Parser<'a> {
                 subscript: Box::new(positions.remove(0).start.unwrap()),
             }
         })
+    }
+
+    // Parse calls to substring(), which can take the form:
+    // - substring('string', 'int')
+    // - substring('string', 'int', 'int')
+    // - substring('string' FROM 'int')
+    // - substring('string' FROM 'int' FOR 'int')
+    // - substring('string' FOR 'int')
+
+    fn parse_substring_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let mut exprs = Vec::new();
+        exprs.push(self.parse_expr()?);
+        if self.parse_keyword(FROM) {
+            // 'string' FROM 'int'
+            exprs.push(self.parse_expr()?);
+            if self.parse_keyword(FOR) {
+                // 'string' FROM 'int' FOR 'int'
+                exprs.push(self.parse_expr()?);
+            }
+        } else {
+            if self.parse_keyword(FOR) {
+                // 'string' FOR 'int'
+                exprs.push(Expr::Value(Value::Number(String::from("0"))));
+                exprs.push(self.parse_expr()?);
+            } else {
+                // 'string', 'int'
+                // or
+                // 'string', 'int', 'int'
+                self.expect_token(&Token::Comma)?;
+                exprs.extend(self.parse_comma_separated(Parser::parse_expr)?);
+            }
+        }
+
+        self.expect_token(&Token::RParen)?;
+        Ok(Expr::Function(Function {
+            name: UnresolvedObjectName::unqualified("substr"),
+            args: FunctionArgs::args(exprs),
+            filter: None,
+            over: None,
+            distinct: false,
+        }))
     }
 
     /// Parses the parens following the `[ NOT ] IN` operator

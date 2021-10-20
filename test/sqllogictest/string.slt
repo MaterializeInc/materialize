@@ -369,7 +369,41 @@ SELECT substr('abcdef', 2147483648, 2147483648);
 ----
 (empty)
 
-# TODO: materialize#606 Add tests for the alternate syntax if it is enabled
+# substring alternate syntax
+query T
+SELECT substring('abcdef' from 2)
+----
+bcdef
+
+query T
+SELECT substring('abcdef', 0, 3)
+----
+ab
+
+query T
+SELECT substring('abcdef' for 3)
+----
+ab
+
+query T
+SELECT substring('abcdef', 3, 3);
+----
+cde
+
+query T
+SELECT substring('abcdef' from 3 for 3);
+----
+cde
+
+# alternate syntax does not apply to substr
+statement error
+SELECT substr('abcdef' from 2)
+
+statement error
+SELECT substr('abcdef' for 3)
+
+statement error
+SELECT substr('abcdef' from 3 for 3)
 
 ### length ###
 statement ok
