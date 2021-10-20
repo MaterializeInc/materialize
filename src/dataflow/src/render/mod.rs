@@ -1533,14 +1533,11 @@ impl Permutation {
     ///
     /// The function truncates the data to the length of the permutation, which should match
     /// the expectation of any subsequent map/filter/project or opertator.
-    pub fn permute_in_place<T>(&self, data: &mut Vec<T>) {
-        for (i, mut p) in self.permutation.iter().copied().enumerate() {
-            while p < i {
-                p = self.permutation[p];
-            }
-            data.swap(i, p);
+    pub fn permute_in_place<T: Copy>(&self, data: &mut Vec<T>) {
+        let original_len = data.len();
+        for p in &self.permutation {
+            data.push(data[*p]);
         }
-        // Truncate to not leave unused key values in the data
-        data.truncate(self.permutation.len());
+        data.drain(..original_len);
     }
 }
