@@ -91,6 +91,24 @@ SELECT LIST(SELECT DISTINCT y FROM xs JOIN ys ON 2*xs.x >= ys.y)::text
 ----
 {2,4}
 
+query T
+SELECT LIST(SELECT 1 WHERE FALSE)::text
+----
+{}
+
+statement ok
+CREATE TABLE zs (z int not null)
+
+query T
+SELECT LIST(SELECT z FROM zs)::text;
+----
+{}
+
+query T
+SELECT LIST(SELECT AVG(0) FROM zs)::text;
+----
+{NULL}
+
 statement ok
 CREATE TABLE users (id int not null, other_field int not null)
 
@@ -107,6 +125,11 @@ query T
 SELECT LIST(SELECT id FROM customer)::text
 ----
 {1,2,3}
+
+query T
+SELECT LIST(SELECT other_field FROM users ORDER BY id ASC)::text
+----
+{10,5,8}
 
 query error Expected subselect to return 1 column, got 2 columns
 SELECT LIST(SELECT first_name, last_name FROM customer)::text

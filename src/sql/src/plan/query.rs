@@ -2905,7 +2905,9 @@ pub fn plan_expr<'a>(
             // `ColumnRef`s in `aggregation_exprs` refers to the columns produced by planning the
             // subquery above.
             let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::CallVariadic {
-                func: VariadicFunc::ListCreate { elem_type },
+                func: VariadicFunc::ListCreate {
+                    elem_type: elem_type.clone(),
+                },
                 exprs: vec![HirScalarExpr::Column(ColumnRef {
                     column: project_column,
                     level: 0,
@@ -2950,7 +2952,20 @@ pub fn plan_expr<'a>(
                     None,
                 )
                 .project(aggregation_projection);
-            HirScalarExpr::Select(Box::new(reduced_expr)).into()
+
+            // If `expr` has no rows, return an empty list rather than NULL.
+            HirScalarExpr::CallBinary {
+                func: BinaryFunc::ListListConcat,
+                expr1: Box::new(HirScalarExpr::Select(Box::new(reduced_expr))),
+                expr2: Box::new(HirScalarExpr::literal(
+                    Datum::empty_list(),
+                    ScalarType::List {
+                        element_type: Box::new(elem_type),
+                        custom_oid: None,
+                    },
+                )),
+            }
+            .into()
         }
 
         Expr::Collate { .. } => bail_unsupported!("COLLATE"),
