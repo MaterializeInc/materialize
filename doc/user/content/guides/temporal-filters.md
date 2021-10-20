@@ -113,7 +113,8 @@ Here we specify a sliding windows that has the duration `INTERVAL_MS`:
 CREATE MATERIALIZED VIEW sliding AS
 SELECT content, insert_ms
 FROM events
--- The event should appear inside the interval that begins at `insert_ms` and ends at  `insert_ms + INTERVAL_MS`.
+-- The event should appear inside the interval that begins at
+-- `insert_ms` and ends at  `insert_ms + INTERVAL_MS`.
 -- The interval begins here ..
 WHERE mz_logical_timestamp() >= insert_ms
 -- ... and ends here.
