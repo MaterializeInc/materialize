@@ -9,10 +9,16 @@ menu:
 
 {{< cloud-notice >}}
 
+
 We're working on other monitoring tools, but for now there are a few tools you can use for troubleshooting issues with Materialize Cloud:
 
+* Status check
 * Logs
 * Monitoring integrations
+
+## Status check
+
+You can check on the status of Materialize systems at [https://status.materialize.com](https://status.materialize.com). You can also sign up at the page to be notified of any incidents through email, text, Slack, or Atom or RSS feed.
 
 ## Logs
 
