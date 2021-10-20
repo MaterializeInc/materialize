@@ -1101,7 +1101,6 @@ impl<'a> Parser<'a> {
     // - substring('string' FROM 'int')
     // - substring('string' FROM 'int' FOR 'int')
     // - substring('string' FOR 'int')
-
     fn parse_substring_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let mut exprs = Vec::new();
