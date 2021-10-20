@@ -52,4 +52,4 @@ Delete this section if no tips.
 
 - [ ] This PR has adequate test coverage / QA involvement has been duly considered.
 - [ ] This PR adds a release note for any
-  [user-facing behavior changes](/doc/user/content/release-notes.md#What-changes-require-a-release-note).
+  [user-facing behavior changes](https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md#what-changes-require-a-release-note).
