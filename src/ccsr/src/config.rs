@@ -78,6 +78,6 @@ impl ClientConfig {
             .build()
             .unwrap();
 
-        Ok(Client::new(inner, self.url, self.auth))
+        Client::new(inner, self.url, self.auth)
     }
 }
