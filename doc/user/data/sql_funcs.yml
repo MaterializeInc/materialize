@@ -309,6 +309,10 @@
     description: Substring starting at `start_pos` of length `l`
     url: substring
 
+  - signature: "substring('s' [FROM 'start_pos']? [FOR 'l']?) -> str"
+    description: Substring starting at `start_pos` of length `l`
+    url: substring
+
   - signature: "trim([BOTH | LEADING | TRAILING]? 'c'? FROM 's') -> str"
     description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
       &bull; Side: `BOTH`<br/>

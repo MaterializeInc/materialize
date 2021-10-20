@@ -1114,7 +1114,7 @@ impl<'a> Parser<'a> {
         } else {
             if self.parse_keyword(FOR) {
                 // 'string' FOR 'int'
-                exprs.push(Expr::Value(Value::Number(String::from("0"))));
+                exprs.push(Expr::Value(Value::Number(String::from("1"))));
                 exprs.push(self.parse_expr()?);
             } else {
                 // 'string', 'int'

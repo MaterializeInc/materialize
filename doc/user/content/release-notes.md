@@ -114,6 +114,8 @@ Put breaking changes before other release notes, and mark them with
 
 - Format dates before AD 1 with the BC notation instead of using negative dates.
 
+- Support alternative `SUBSTRING(<string> [FROM <int>]? [FOR <int>]?)` syntax.
+
 {{% version-header v0.9.8 %}}
 
 - Throw errors on floating point arithmetic overflow and underflow.
