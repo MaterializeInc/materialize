@@ -419,11 +419,14 @@ impl FoldConstants {
             // We currently maintain the invariant that any negative
             // multiplicities will be consolidated away before they
             // arrive at a reduce.
-            assert!(
-                *diff > 0,
-                "constant folding encountered reduce on collection \
-                             with non-positive multiplicities"
-            );
+
+            if *diff <= 0 {
+                return Err(EvalError::InvalidParameterValue(String::from(
+                    "constant folding encountered reduce on collection \
+                                               with non-positive multiplicities",
+                )));
+            }
+
             let datums = row.unpack();
             let temp_storage = RowArena::new();
             let key = group_key
