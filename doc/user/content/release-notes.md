@@ -110,6 +110,8 @@ List new features before bug fixes.
 - Add the [`date_bin`](/sql/functions/date-bin) function, which is similar to
   `date_trunc` but supports "truncating" to arbitrary intervals.
 
+- Add support for the CSV format in [`COPY FROM`].
+
 - Fix incorrect results for a certain class of degenerate join queries.
 
 - Fix a bug in `pg_catalog.pg_attribute` that would incorrectly omit

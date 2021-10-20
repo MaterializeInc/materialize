@@ -3028,6 +3028,7 @@ dependencies = [
  "bytes",
  "chrono",
  "coord",
+ "csv",
  "dataflow-types",
  "expr",
  "futures",
