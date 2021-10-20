@@ -17,7 +17,7 @@ weight: 1
 
 ## Beta-level support
 
-Beta-level support means that the Materialize team is actively improving the integration, but there may be missing features or performance or stability issues.
+Beta-level support means that there may be small performance issues and minor missing features, but Materialize supports the major use cases for this tool. You can file bug reports or feature requests for Materialize integration with these tools [here](https://github.com/MaterializeInc/materialize).
 
 | Tool                    | Purpose                                                                    | What's missing?                                                                                                            |
 | ----------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
