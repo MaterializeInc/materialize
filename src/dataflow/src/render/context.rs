@@ -480,13 +480,15 @@ where
                 }
                 let (oks, errs) = self.as_collection();
                 use crate::operator::CollectionExt;
-                let permutation = Permutation::identity(key.len(), self.arity);
+                let (permutation, val) = Permutation::construct_from_expr(&key, self.arity);
                 let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
                     let datums = row.unpack();
                     let temp_storage = RowArena::new();
                     let key_row =
                         Row::try_pack(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                    Ok::<(Row, Row), DataflowError>((key_row, row))
+                    let val_row =
+                        Row::try_pack(val.iter().map(|k| k.eval(&datums, &temp_storage)))?;
+                    Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });
 
                 use differential_dataflow::operators::arrange::Arrange;
