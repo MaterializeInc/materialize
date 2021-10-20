@@ -565,11 +565,10 @@ impl ConsistencyInfo {
                 let hash = (self.source_id.source_id.hashed() >> 32) + *p as u64;
                 (hash % self.worker_count as u64) == self.worker_id as u64
             }
-            PartitionId::S3(p) => {
-                // Same as above
-                let hash = (self.source_id.source_id.hashed() >> 32) + *p as u64;
-                (hash % self.worker_count as u64) == self.worker_id as u64
-            }
+            // The S3 source discovers partitions on its own and the same worker that discovers
+            // them also reads them. When the S3 source becomes parallel this should be a
+            // randomized selection like above
+            PartitionId::S3(_) => self.active,
         }
     }
 
@@ -643,6 +642,14 @@ impl ConsistencyInfo {
                 timestamp_bindings.get_binding(&pid, cons_info.offset() + 1)
             {
                 cons_info.update_timestamp(timestamp, max);
+            }
+        }
+
+        // Remove any old partitions that we don't care about anymore
+        let partition_ids: Vec<_> = self.partition_metadata.keys().cloned().collect();
+        for pid in partition_ids {
+            if !timestamp_bindings.knows_of(&pid) {
+                self.remove_partition(&pid);
             }
         }
     }
@@ -1353,11 +1360,13 @@ where
                             &timestamp_histories,
                         ),
                         Ok(NextMessage::AddPartition(pid)) => {
-                            consistency_info.add_partition(&pid);
+                            timestamp_histories.add_partition(pid, None);
+                            consistency_info.refresh(source_reader, &mut timestamp_histories);
                             (SourceStatus::Alive, MessageProcessing::Active)
                         }
                         Ok(NextMessage::RemovePartition(pid)) => {
-                            consistency_info.remove_partition(&pid);
+                            timestamp_histories.remove_partition(&pid);
+                            consistency_info.refresh(source_reader, &mut timestamp_histories);
                             (SourceStatus::Alive, MessageProcessing::Active)
                         }
                         Ok(NextMessage::TransientDelay) => {

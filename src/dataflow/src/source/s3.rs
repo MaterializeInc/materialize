@@ -35,6 +35,7 @@ use std::ops::AddAssign;
 
 use anyhow::anyhow;
 use async_compression::tokio::bufread::GzipDecoder;
+use byteorder::{LittleEndian, ReadBytesExt};
 use futures::{FutureExt, StreamExt};
 use globset::GlobMatcher;
 use rusoto_core::RusotoError;
@@ -210,8 +211,8 @@ async fn download_objects_task(
                 hasher.update(&msg_ref.bucket);
                 hasher.update("/");
                 hasher.update(&msg_ref.key);
-                let hash: [u8; 16] = hasher.finalize_reset().as_slice().try_into().unwrap();
-                let object_id = u128::from_le_bytes(hash);
+                let hash = hasher.finalize_reset();
+                let object_id = hash.as_slice().read_u128::<LittleEndian>().unwrap();
 
                 let (status, update) = download_object(
                     tx,
@@ -801,13 +802,6 @@ async fn download_object(
             read_object_chunked(source_id, object_id, decoder, tx).await
         }
     };
-    if tx
-        .send(Ok(InternalMessage::ObjectEnd(object_id)))
-        .await
-        .is_err()
-    {
-        return (DownloadStatus::SendFailed, None);
-    }
 
     log::debug!(
         "source_id={} {}/{} download_status={:?}",
@@ -818,11 +812,21 @@ async fn download_object(
     );
 
     if matches!(download_status, DownloadStatus::Ok) {
-        let sent = tx.send(Ok(InternalMessage::ObjectData {
-            object_id,
-            record: MessagePayload::EOF,
-        }));
-        if sent.await.is_err() {
+        if tx
+            .send(Ok(InternalMessage::ObjectData {
+                object_id,
+                record: MessagePayload::EOF,
+            }))
+            .await
+            .is_err()
+        {
+            download_status = DownloadStatus::SendFailed;
+        }
+        if tx
+            .send(Ok(InternalMessage::ObjectEnd(object_id)))
+            .await
+            .is_err()
+        {
             download_status = DownloadStatus::SendFailed;
         }
     };
@@ -976,6 +980,8 @@ impl SourceReader for S3SourceReader {
             Some(PartitionId::None),
         ))
     }
+
+    fn add_partition(&mut self, _pid: PartitionId, _restored_offset: Option<MzOffset>) {}
 
     fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
         match self.receiver_stream.recv().now_or_never() {
