@@ -5,7 +5,7 @@ menu:
   main:
     parent: operations
 aliases:
-  -troubleshooting
+  - diagnosing-using-sql
 ---
 
 You can use the queries below for spot debugging, but it may also be
@@ -242,10 +242,9 @@ WHERE
 To see how much disk space a Materialize installation is using, open a terminal and enter:
 
 ```nofmt
-$ du -h -d 1 /path/to/mz/datadir
+$ du -h -d 1 /path/to/materialize/mzdata
 ```
-
-The default path for the data directory is `materialize/mzdata`.
+`materialize` is the directory for the Materialize installation, and  `materialize/mzdata` is the directory where Materialize stores its [log file](../monitoring/#logging) and the [system catalog](/sql/system-catalog).
 
 The response lists the disk space for the data directory and any subdirectories:
 
@@ -253,3 +252,5 @@ The response lists the disk space for the data directory and any subdirectories:
 2.8M	mzdata/persist
 2.9M	mzdata
 ```
+
+The `mzdata` directory is typically less than 10MB in size.
