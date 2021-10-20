@@ -561,11 +561,7 @@ where
                     .map(|e| e.eval(&datums_local, &temp_storage)),
             )?;
             let row_key = row_packer.finish_and_reuse();
-            row_packer.try_extend(
-                prev_value_expr
-                    .iter()
-                    .map(|e| e.eval(&datums_local, &temp_storage)),
-            )?;
+            row_packer.extend(prev_value_expr.iter().map(|e| datums_local[*e]));
             let row_value = row_packer.finish_and_reuse();
             // Explicit drop to release borrow on `row` so that it can be returned.
             drop(datums_local);

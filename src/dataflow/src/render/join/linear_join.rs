@@ -330,11 +330,7 @@ where
                             .iter()
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
-                    let value = Row::try_pack(
-                        value_expr
-                            .iter()
-                            .map(|e| e.eval(&datums_local, &temp_storage)),
-                    )?;
+                    let value = Row::pack(value_expr.iter().map(|e| datums_local[*e]));
                     // Explicit drop here to allow `row` to be returned.
                     drop(datums_local);
                     // TODO(mcsherry): We could remove any columns used only for `key`.

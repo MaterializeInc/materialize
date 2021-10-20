@@ -486,8 +486,7 @@ where
                     let temp_storage = RowArena::new();
                     let key_row =
                         Row::try_pack(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                    let val_row =
-                        Row::try_pack(val.iter().map(|k| k.eval(&datums, &temp_storage)))?;
+                    let val_row = Row::pack(val.iter().map(|k| datums[*k]));
                     Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });
 

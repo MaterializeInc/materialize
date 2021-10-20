@@ -1431,7 +1431,7 @@ impl Permutation {
         key_arity: usize,
         arity: usize,
         columns_in_key: &'a HashMap<usize, usize>,
-    ) -> (Self, impl Iterator<Item = usize> + 'a) {
+    ) -> (Self, Vec<usize>) {
         // Construct a mapping to undo the permutation
         let mut skipped = 0;
         let permutation = (0..arity)
@@ -1452,7 +1452,7 @@ impl Permutation {
             key_arity,
             permutation,
         };
-        (permutation, value_expr)
+        (permutation, value_expr.collect())
     }
 
     /// Construct a permutation and thinning expression from a key description and the relation's
@@ -1468,8 +1468,7 @@ impl Permutation {
             .enumerate()
             .map(|(i, c)| (*c, i))
             .collect::<HashMap<_, _>>();
-        let (permutation, expr) = Self::construct_internal(key_cols.len(), arity, &columns_in_key);
-        (permutation, expr.collect())
+        Self::construct_internal(key_cols.len(), arity, &columns_in_key)
     }
 
     /// Construct a permutation and thinning expression from a key description and the relation's
@@ -1480,7 +1479,7 @@ impl Permutation {
     pub(crate) fn construct_from_expr(
         key_expr: &[MirScalarExpr],
         arity: usize,
-    ) -> (Self, Vec<MirScalarExpr>) {
+    ) -> (Self, Vec<usize>) {
         // Construct a mapping of columns `c` found in key at position `i`
         // Each value column and value is unique
         let columns_in_key = key_expr
@@ -1488,9 +1487,7 @@ impl Permutation {
             .enumerate()
             .flat_map(|(i, expr)| MirScalarExpr::as_column(expr).map(|c| (c, i)))
             .collect::<HashMap<_, _>>();
-        let (permutation, expr) = Self::construct_internal(key_expr.len(), arity, &columns_in_key);
-        let expr = expr.map(MirScalarExpr::column).collect();
-        (permutation, expr)
+        Self::construct_internal(key_expr.len(), arity, &columns_in_key)
     }
 
     /// Construct an identity [Permutation] that expects all data in the value.
