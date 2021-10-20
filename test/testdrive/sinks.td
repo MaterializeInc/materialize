@@ -47,9 +47,16 @@ name
 # `example.com:8080` and `materialize.com:8080` which can blackhole the request
 # for minutes rather than surfacing an error in a timely manner.
 
+# Invalid in that the address is not well formed
 ! CREATE SINK bad_schema_registry FROM src
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.kafka-addr}'
+cannot construct a CCSR client with a cannot-be-a-base URL
+
+# Invalid in that the address is not for a schema registry
+! CREATE SINK bad_schema_registry FROM src
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://${testdrive.kafka-addr}'
 unable to publish value schema to registry in kafka sink
 
 > SHOW SINKS
