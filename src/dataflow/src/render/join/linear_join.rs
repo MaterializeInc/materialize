@@ -318,24 +318,21 @@ where
         if let JoinedFlavor::Collection(stream) = joined {
             let (permutation, value_expr) =
                 Permutation::construct_from_expr(&stream_key, stream_arity);
+            let mut row_packer = Row::default();
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
                 move |row| {
                     let temp_storage = RowArena::new();
                     let datums_local = datums.borrow_with(&row);
-                    assert_eq!(datums_local.len(), stream_arity);
-                    let key = Row::try_pack(
+                    row_packer.try_extend(
                         stream_key
                             .iter()
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
-                    let value = Row::pack(value_expr.iter().map(|e| datums_local[*e]));
-                    // Explicit drop here to allow `row` to be returned.
-                    drop(datums_local);
-                    // TODO(mcsherry): We could remove any columns used only for `key`.
-                    // This cannot be done any earlier, for example in a prior closure,
-                    // because we need the columns for key production.
+                    let key = row_packer.finish_and_reuse();
+                    row_packer.extend(value_expr.iter().map(|e| datums_local[*e]));
+                    let value = row_packer.finish_and_reuse();
                     Ok((key, value))
                 }
             });

@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
@@ -27,6 +28,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
+use crate::operator::CollectionExt;
 use crate::render::datum_vec::DatumVec;
 use crate::render::Permutation;
 use dataflow_types::{DataflowDescription, DataflowError};
@@ -479,18 +481,19 @@ where
                     self.collection = Some(self.as_collection());
                 }
                 let (oks, errs) = self.as_collection();
-                use crate::operator::CollectionExt;
                 let (permutation, val) = Permutation::construct_from_expr(&key, self.arity);
+                let mut row_packer = Row::default();
+
                 let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
                     let datums = row.unpack();
                     let temp_storage = RowArena::new();
-                    let key_row =
-                        Row::try_pack(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                    let val_row = Row::pack(val.iter().map(|k| datums[*k]));
+                    row_packer.try_extend(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
+                    let key_row = row_packer.finish_and_reuse();
+                    row_packer.extend(val.iter().map(|k| datums[*k]));
+                    let val_row = row_packer.finish_and_reuse();
                     Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });
 
-                use differential_dataflow::operators::arrange::Arrange;
                 let oks = oks_keyed.arrange_named::<RowSpine<Row, Row, _, _>>(&name);
                 let errs = errs
                     .concat(&errs_keyed)
