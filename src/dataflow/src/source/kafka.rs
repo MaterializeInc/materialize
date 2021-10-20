@@ -23,7 +23,7 @@ use repr::MessagePayload;
 use timely::scheduling::activate::SyncActivator;
 
 use dataflow_types::{
-    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, SourceDataEncoding,
+    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
@@ -264,16 +264,51 @@ impl SourceReader for KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid
-    fn add_partition(&mut self, pid: PartitionId) {
+    fn add_partition(&mut self, pid: PartitionId, restored_offset: Option<MzOffset>) {
         let pid = match pid {
             PartitionId::Kafka(p) => p,
             _ => unreachable!(),
         };
 
         self.create_partition_queue(pid);
-        // Indicate a last offset of -1 if we have not been instructed to
-        // have a specific start offset for this topic.
-        let start_offset = *self.start_offsets.get(&pid).unwrap_or(&-1);
+
+        // Passed-in initial offsets take precedence over potential user-configured start offsets.
+        // The reason is that an initial offset most likely comes from source state that we
+        // restored from persistence while start offsets are something that a user configured
+        // during the initial creation of the source. When restarting, we don't want to go all the
+        // way back to those starting offsets.
+        let start_offset = if let Some(restored_offset) = restored_offset {
+            // We can either start after the first message, which would be `MzOffset{1}` or not
+            // have a start offset. Other places use `MzOffset{0}` to denote a missing offset but
+            // we chose to use the more idiomatic `Option<MzOffset>` here.
+            assert!(
+                restored_offset.offset >= 1,
+                "Invalid initial offset {}",
+                restored_offset
+            );
+
+            // We subtract 1 here to convert from MzOffset (which is 1-based) to Kafka offset
+            // (which are 0-based).
+            let restored_offset = restored_offset.offset - 1;
+
+            // Also verify that we didn't regress from any user-configured start offsets.
+            if let Some(start_offset) = self.start_offsets.get(&pid) {
+                assert!(restored_offset >= *start_offset);
+            }
+
+            // We subtract 1 again because this will be put into `last_offsets`, which record the
+            // last offset that we read. A start offset of 5 means that the last read offset would
+            // have to be 4.
+            //
+            // Because of the assert above, this cannot go below -1, which would indicate that we
+            // start reading at 0.
+            restored_offset - 1
+        } else {
+            // Indicate a last offset of -1 if we have not been instructed to have a specific start
+            // offset for this topic.
+            *self.start_offsets.get(&pid).unwrap_or(&-1)
+        };
+
         let prev = self.last_offsets.insert(pid, start_offset);
 
         assert!(prev.is_none());

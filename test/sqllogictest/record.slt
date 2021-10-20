@@ -38,7 +38,7 @@ EXPLAIN SELECT (COALESCE(record, ROW(NULL, NULL))).f2 FROM (SELECT ROW(a, a) AS 
 ----
 %0 =
 | Get materialize.public.t1 (u1)
-| Map record_get[1](coalesce(record_create(#0, #0), [null, null]))
+| Map #0
 | Project (#2)
 
 EOF

@@ -5692,7 +5692,7 @@ impl VariadicFunc {
                 custom_oid: None,
                 custom_name: None,
             }
-            .nullable(true),
+            .nullable(false),
             SplitPart => ScalarType::String.nullable(true),
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
             HmacString | HmacBytes => ScalarType::Bytes.nullable(true),

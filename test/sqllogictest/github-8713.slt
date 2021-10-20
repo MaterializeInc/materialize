@@ -1,0 +1,26 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/8713
+mode cockroach
+
+statement ok
+CREATE VIEW t2 (f1, f2) AS VALUES (NULL, 0), (NULL, 0), (1, 1), (2, 2), (2, 2), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8);
+
+query TII
+SELECT true, a1.f1, a2.f1 FROM t2 AS a1 LEFT JOIN (SELECT 8 AS f1, f1 AS f2 FROM t2) AS a2 ON a2.f2 + a2.f1 < 9 GROUP BY 2, 3;
+----
+true NULL NULL
+true 1 NULL
+true 2 NULL
+true 4 NULL
+true 5 NULL
+true 6 NULL
+true 7 NULL
+true 8 NULL

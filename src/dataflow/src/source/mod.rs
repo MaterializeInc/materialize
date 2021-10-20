@@ -308,7 +308,10 @@ pub(crate) trait SourceReader {
     /// Many (most?) sources do not actually have partitions and for those kinds
     /// of sources the default implementation is a panic (to make sure we don't
     /// inadvertently call this at runtime).
-    fn add_partition(&mut self, _pid: PartitionId) {
+    ///
+    /// The optional `restored_offset` can be used to give an explicit offset that should be used when
+    /// starting to read from the given partition.
+    fn add_partition(&mut self, _pid: PartitionId, _restored_offset: Option<MzOffset>) {
         panic!("add partiton not supported for source!");
     }
 
@@ -397,11 +400,13 @@ struct ConsInfo {
 }
 
 impl ConsInfo {
-    fn new(timestamp: Timestamp) -> Self {
+    fn new(timestamp: Timestamp, offset: Option<MzOffset>) -> Self {
+        let offset = offset.unwrap_or_else(|| MzOffset { offset: 0 });
+
         Self {
             current_ts: timestamp,
             current_upper_bound: TimestampUpperBound::Fixed(MzOffset { offset: 0 }),
-            offset: MzOffset { offset: 0 },
+            offset,
         }
     }
 
@@ -567,11 +572,13 @@ impl ConsistencyInfo {
         self.partition_metadata.contains_key(pid)
     }
 
-    /// Start tracking consistency information and metrics for `pid`.
+    /// Start tracking consistency information and metrics for `pid`. The optional `offset` will be
+    /// used to correctly set the internal read offset, though sources are responsible for correctly
+    /// starting to read only from that offset.
     ///
     /// Need to call this together with `SourceReader::add_partition` before we
     /// ingest from `pid`.
-    fn add_partition(&mut self, pid: &PartitionId) {
+    fn add_partition(&mut self, pid: &PartitionId, offset: Option<MzOffset>) {
         if self.partition_metadata.contains_key(pid) {
             error!("Incorrectly attempting to add a partition twice for source: {} partition: {}. Ignoring",
                    self.source_id,
@@ -582,7 +589,7 @@ impl ConsistencyInfo {
         }
 
         self.partition_metadata
-            .insert(pid.clone(), ConsInfo::new(self.last_closed_ts));
+            .insert(pid.clone(), ConsInfo::new(self.last_closed_ts, offset));
         self.source_metrics.add_partition(pid);
     }
 
@@ -596,10 +603,10 @@ impl ConsistencyInfo {
         timestamp_bindings: &mut TimestampBindingRc,
     ) {
         // Pick up any new partitions that we don't know about but should.
-        for pid in timestamp_bindings.partitions() {
+        for (pid, offset) in timestamp_bindings.partitions() {
             if !self.knows_of(&pid) && self.responsible_for(&pid) {
-                source.add_partition(pid.clone());
-                self.add_partition(&pid);
+                source.add_partition(pid.clone(), offset.clone());
+                self.add_partition(&pid, offset);
             }
 
             if !self.responsible_for(&pid) {
@@ -1228,7 +1235,7 @@ where
             ) {
                 Ok((source_reader, partition)) => {
                     if let Some(pid) = partition {
-                        consistency_info.add_partition(&pid);
+                        consistency_info.add_partition(&pid, None);
                     }
 
                     Some(source_reader)

@@ -92,14 +92,25 @@ Use relative links (/path/to/doc), not absolute links
 
 Wrap your release notes at the 80 character mark.
 
+## Internal note order
+
 Put breaking changes before other release notes, and mark them with
 `**Breaking change.**` at the start.
+
+List new features before bug fixes.
+
 {{< /comment >}}
+
+{{% version-header v0.9.10 %}}
+
 
 {{% version-header v0.9.9 %}}
 
 - **Breaking change.** Fix a bug that inadvertently let users create `char
   list` columns and custom types. This type is not meant to be supported.
+- Beta support for [Redpanda sources](/third-party/redpanda/).
+
+- Let users express `JOIN`-like `DELETE`s with `DELETE...USING`.
 
 - Optimize some `(table).field1.field2` expressions to only generate the
   columns from `table` that are accessed subsequently. This avoids performance
@@ -107,12 +118,12 @@ Put breaking changes before other release notes, and mark them with
   columns, for example records generated from [`ROW`](/sql/types/record).
   {{% gh 8596 %}}
 
-- Let users express `JOIN`-like `DELETE`s with `DELETE...USING`.
-
 - Fix a bug that inadvertently let users create an [`array`] with elements of
   type [`list`] or [`map`], which crashes Materialize. {{% gh 8672 %}}
 
 - Format dates before AD 1 with the BC notation instead of using negative dates.
+
+- Fix some sources of crashes and incorrect results from optimizing queries involving constants ({{% gh 8713 %}} and {{% gh 8717 %}}).
 
 - Support alternative `SUBSTRING(<string> [FROM <int>]? [FOR <int>]?)` syntax.
 

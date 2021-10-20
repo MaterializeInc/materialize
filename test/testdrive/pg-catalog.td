@@ -41,7 +41,7 @@ name         nullable  type
 indexrelid   false     oid
 indrelid     false     oid
 indisprimary false     boolean
-indkey       true      bigint[]
+indkey       false     bigint[]
 
 > SHOW COLUMNS FROM pg_description
 name         nullable  type

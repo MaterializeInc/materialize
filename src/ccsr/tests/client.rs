@@ -110,11 +110,38 @@ async fn test_client() -> Result<(), anyhow::Error> {
         .await?;
     assert_eq!(count_schemas(&client, "ccsr-test-").await?, 2);
 
+    {
+        let subject_with_slashes = "ccsr/test/schema";
+        let schema_test_id = client
+            .publish_schema(subject_with_slashes, schema_v1, SchemaType::Avro, &[])
+            .await?;
+        assert!(schema_test_id > 0);
+
+        let res = client.get_schema_by_subject(subject_with_slashes).await?;
+        assert_eq!(schema_test_id, res.id);
+        assert_raw_schemas_eq(schema_v1, &res.raw);
+
+        let res = client.get_subject(subject_with_slashes).await?;
+        assert_eq!(1, res.version);
+        assert_eq!(subject_with_slashes, res.name);
+        assert_eq!(schema_test_id, res.schema.id);
+        assert_raw_schemas_eq(schema_v1, &res.schema.raw);
+    }
+
     Ok(())
 }
 
 #[tokio::test]
 async fn test_client_errors() -> Result<(), anyhow::Error> {
+    let invalid_schema_registry_url: reqwest::Url = "data::text/plain,Info".parse().unwrap();
+    match ccsr::ClientConfig::new(invalid_schema_registry_url).build() {
+        Err(e) => assert_eq!(
+            "cannot construct a CCSR client with a cannot-be-a-base URL",
+            e.to_string(),
+        ),
+        res => panic!("Expected error, got {:?}", res),
+    }
+
     let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     // Get-by-id-specific errors.
