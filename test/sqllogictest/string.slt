@@ -405,6 +405,32 @@ SELECT substr('abcdef' for 3)
 statement error
 SELECT substr('abcdef' from 3 for 3)
 
+# alternate syntax edge cases
+query T
+SELECT substring('abcdef' from -1);
+----
+abcdef
+
+query T
+SELECT substring('abcdef' from 2 for 2147483648);
+----
+bcdef
+
+query T
+SELECT substring('abcdef' from 2147483648 for 2);
+----
+(empty)
+
+query T
+SELECT substring('abcdef' from 2147483648 for 2147483648);
+----
+(empty)
+
+query T
+SELECT substring('abcdef' for 2147483648);
+----
+abcdef
+
 ### length ###
 statement ok
 CREATE TABLE lengthtest(strcol char(15), vccol varchar(15))

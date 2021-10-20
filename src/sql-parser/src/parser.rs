@@ -1127,7 +1127,7 @@ impl<'a> Parser<'a> {
 
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedObjectName::unqualified("substr"),
+            name: UnresolvedObjectName::unqualified("substring"),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
