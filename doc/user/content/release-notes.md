@@ -125,6 +125,8 @@ List new features before bug fixes.
 
 - Fix some sources of crashes and incorrect results from optimizing queries involving constants ({{% gh 8713 %}} and {{% gh 8717 %}}).
 
+- Support alternative `SUBSTRING(<string> [FROM <int>]? [FOR <int>]?)` syntax.
+
 {{% version-header v0.9.8 %}}
 
 - Throw errors on floating point arithmetic overflow and underflow.
