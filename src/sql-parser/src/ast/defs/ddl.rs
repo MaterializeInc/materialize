@@ -241,28 +241,41 @@ impl AstDisplay for CsvColumns {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateSourceKeyEnvelope {
-    /// `INCLUDE KEY` is absent
-    None,
-    /// bare `INCLUDE KEY`
-    Included,
-    /// `INCLUDE KEY AS name`
-    Named(Ident),
+pub enum SourceIncludeMetadataType {
+    Key,
+    Timestamp,
+    Partition,
+    Topic,
 }
 
-impl AstDisplay for CreateSourceKeyEnvelope {
+impl AstDisplay for SourceIncludeMetadataType {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceKeyEnvelope::None => {}
-            CreateSourceKeyEnvelope::Included => f.write_str(" INCLUDE KEY"),
-            CreateSourceKeyEnvelope::Named(name) => {
-                f.write_str(" INCLUDE KEY AS ");
-                f.write_str(name)
-            }
+            SourceIncludeMetadataType::Key => f.write_str("KEY"),
+            SourceIncludeMetadataType::Timestamp => f.write_str("TIMESTAMP"),
+            SourceIncludeMetadataType::Partition => f.write_str("PARTITION"),
+            SourceIncludeMetadataType::Topic => f.write_str("TOPIC"),
         }
     }
 }
-impl_display!(CreateSourceKeyEnvelope);
+impl_display!(SourceIncludeMetadataType);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SourceIncludeMetadata {
+    pub ty: SourceIncludeMetadataType,
+    pub alias: Option<Ident>,
+}
+
+impl AstDisplay for SourceIncludeMetadata {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.ty);
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
+    }
+}
+impl_display!(SourceIncludeMetadata);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Envelope {

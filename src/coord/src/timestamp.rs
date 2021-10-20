@@ -561,7 +561,6 @@ impl Timestamper {
                         encoding,
                         envelope,
                         consistency,
-                        key_envelope: _,
                         ts_frequency: _,
                         timeline: _,
                     } = sc

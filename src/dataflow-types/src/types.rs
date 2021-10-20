@@ -341,15 +341,17 @@ impl SourceDataEncoding {
     pub fn desc(
         &self,
         envelope: &SourceEnvelope,
-        key_envelope: &KeyEnvelope,
+        key_envelope: Option<&KeyEnvelope>,
     ) -> Result<RelationDesc, anyhow::Error> {
         match self {
             SourceDataEncoding::Single(enc) => enc.desc(envelope, RelationDesc::empty(), None),
             SourceDataEncoding::KeyValue { key, value } => match key_envelope {
-                KeyEnvelope::None => value.desc(envelope, RelationDesc::empty(), None),
-                KeyEnvelope::Flattened => insert_flattened_key(key, value, envelope, false),
-                KeyEnvelope::LegacyUpsert => insert_flattened_key(key, value, envelope, true),
-                KeyEnvelope::Named(key_name) => insert_named_key(key_name, key, value, envelope),
+                None => value.desc(envelope, RelationDesc::empty(), None),
+                Some(KeyEnvelope::Flattened) => insert_flattened_key(key, value, envelope, false),
+                Some(KeyEnvelope::LegacyUpsert) => insert_flattened_key(key, value, envelope, true),
+                Some(KeyEnvelope::Named(key_name)) => {
+                    insert_named_key(key_name, key, value, envelope)
+                }
             },
         }
     }
@@ -746,7 +748,6 @@ pub enum SourceConnector {
         connector: ExternalSourceConnector,
         encoding: SourceDataEncoding,
         envelope: SourceEnvelope,
-        key_envelope: KeyEnvelope,
         consistency: Consistency,
         ts_frequency: Duration,
         timeline: Timeline,
@@ -884,6 +885,14 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::PubNub(_) => true,
         }
     }
+
+    pub fn key_envelope(&self) -> Option<&KeyEnvelope> {
+        if let ExternalSourceConnector::Kafka(KafkaSourceConnector { include_key, .. }) = &self {
+            include_key.as_ref()
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -965,8 +974,15 @@ pub struct KafkaSourceConnector {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
-    pub key_envelope: KeyEnvelope,
     pub cluster_id: Uuid,
+    /// If present, include the key columns as an output column of the source with the given properties.
+    pub include_key: Option<KeyEnvelope>,
+    /// If present, include the timestamp as an output column of the source with the given name
+    pub include_timestamp: Option<String>,
+    /// If present, include the partition as an output column of the source with the given name.
+    pub include_partition: Option<String>,
+    /// If present, include the topic as an output column of the source with the given name.
+    pub include_topic: Option<String>,
 }
 
 /// Whether and how to include the key portion of a stream in dataflows
@@ -975,8 +991,6 @@ pub struct KafkaSourceConnector {
 /// systems which we do not yet integrate with that have a similar concept.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KeyEnvelope {
-    /// Do not include the key in dataflows.
-    None,
     /// For composite key encodings, pull the fields from the encoding into columns.
     Flattened,
     /// Upsert is identical to Flattened but differs for non-avro sources, for which key names are overwritten.

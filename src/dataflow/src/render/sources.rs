@@ -153,7 +153,6 @@ where
                 connector,
                 encoding,
                 envelope,
-                key_envelope,
                 consistency,
                 ts_frequency,
                 timeline: _,
@@ -339,7 +338,8 @@ where
                         // syntax is implemented
                         let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_));
 
-                        // CDCv2 can't quite be slotted in to the below code, since it determines its own diffs/timestamps as part of decoding.
+                        // CDCv2 can't quite be slotted in to the below code, since it determines
+                        // its own diffs/timestamps as part of decoding.
                         if let SourceEnvelope::CdcV2 = &envelope {
                             let AvroEncoding {
                                 schema,
@@ -542,8 +542,11 @@ where
                                     (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                                 }
                                 _ => {
-                                    let (stream, errors) =
-                                        flatten_results(key_envelope, push_metadata, results);
+                                    let (stream, errors) = flatten_results(
+                                        connector.key_envelope().cloned(),
+                                        push_metadata,
+                                        results,
+                                    );
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
                                         errors.pass_through("decode-errors").as_collection();
@@ -730,7 +733,7 @@ fn get_persist_config(
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results<G>(
-    key_envelope: KeyEnvelope,
+    key_envelope: Option<KeyEnvelope>,
     push_metadata: bool,
     results: timely::dataflow::Stream<G, DecodeResult>,
 ) -> (
@@ -741,7 +744,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     match key_envelope {
-        KeyEnvelope::None => results
+        None => results
             .flat_map(move |res| {
                 if push_metadata {
                     res.value.map(|result| {
@@ -754,7 +757,7 @@ where
                 }
             })
             .ok_err(std::convert::identity),
-        KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
+        Some(KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert) => results
             .flat_map(flatten_key_value)
             .map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value, position)| {
@@ -766,7 +769,7 @@ where
                 })
             })
             .ok_err(std::convert::identity),
-        KeyEnvelope::Named(_) => results
+        Some(KeyEnvelope::Named(_)) => results
             .flat_map(flatten_key_value)
             .map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value, position)| {

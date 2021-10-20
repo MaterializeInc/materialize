@@ -1729,7 +1729,8 @@ impl<'a> Parser<'a> {
             Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
             None => CreateSourceFormat::None,
         };
-        let key_envelope = self.parse_include_key()?;
+        let include_metadata = self.parse_source_include_metadata()?;
+
         let envelope = if self.parse_keyword(ENVELOPE) {
             let envelope = self.parse_envelope()?;
             if matches!(envelope, Envelope::Upsert) {
@@ -1758,7 +1759,7 @@ impl<'a> Parser<'a> {
             connector,
             with_options,
             format,
-            key_envelope,
+            include_metadata,
             envelope,
             if_not_exists,
             materialized,
@@ -2254,16 +2255,25 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_include_key(&mut self) -> Result<CreateSourceKeyEnvelope, ParserError> {
-        Ok(if self.parse_keywords(&[INCLUDE, KEY]) {
-            if self.parse_keyword(AS) {
-                CreateSourceKeyEnvelope::Named(self.parse_identifier()?)
-            } else {
-                CreateSourceKeyEnvelope::Included
-            }
+    fn parse_source_include_metadata(&mut self) -> Result<Vec<SourceIncludeMetadata>, ParserError> {
+        if self.parse_keyword(INCLUDE) {
+            self.parse_comma_separated(|parser| {
+                let ty = match parser.expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, TOPIC])? {
+                    KEY => SourceIncludeMetadataType::Key,
+                    TIMESTAMP => SourceIncludeMetadataType::Timestamp,
+                    PARTITION => SourceIncludeMetadataType::Partition,
+                    TOPIC => SourceIncludeMetadataType::Topic,
+                    _ => unreachable!("only explicitly allowed items can be parsed"),
+                };
+                let alias = parser
+                    .parse_keyword(AS)
+                    .then(|| parser.parse_identifier())
+                    .transpose()?;
+                Ok(SourceIncludeMetadata { ty, alias })
+            })
         } else {
-            CreateSourceKeyEnvelope::None
-        })
+            Ok(vec![])
+        }
     }
 
     fn parse_discard(&mut self) -> Result<Statement<Raw>, ParserError> {

@@ -22,9 +22,9 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat,
-    CreateSourceKeyEnvelope, DataType, Envelope, Expr, Format, Ident, KeyConstraint, Query,
-    TableAlias, TableConstraint, TableWithJoins, UnresolvedObjectName, Value,
+    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat, DataType,
+    Envelope, Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata, TableAlias,
+    TableConstraint, TableWithJoins, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -375,8 +375,8 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub col_names: Vec<Ident>,
     pub connector: CreateSourceConnector,
     pub with_options: Vec<SqlOption<T>>,
+    pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
-    pub key_envelope: CreateSourceKeyEnvelope,
     pub envelope: Envelope,
     pub if_not_exists: bool,
     pub materialized: bool,
@@ -416,7 +416,11 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_str(")");
         }
         f.write_node(&self.format);
-        f.write_node(&self.key_envelope);
+        if !self.include_metadata.is_empty() {
+            f.write_str(" INCLUDE ");
+            f.write_node(&display::comma_separated(&self.include_metadata));
+        }
+
         match self.envelope {
             Envelope::None => (),
             _ => {

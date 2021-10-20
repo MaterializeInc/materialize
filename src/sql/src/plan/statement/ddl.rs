@@ -44,19 +44,18 @@ use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use protoc::Protoc;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
-use sql_parser::ast::{CreateSourceFormat, CsvColumns, KeyConstraint};
+use sql_parser::ast::{CreateSourceFormat, CsvColumns, KeyConstraint, SourceIncludeMetadataType};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AvroSchema, ColumnOption,
     Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
     CreateRoleStatement, CreateSchemaStatement, CreateSinkConnector, CreateSinkStatement,
-    CreateSourceConnector, CreateSourceKeyEnvelope, CreateSourceStatement, CreateTableStatement,
-    CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
-    CreateViewsStatement, CsrConnector, CsrSeed, DataType, DbzMode, DropDatabaseStatement,
-    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
-    ObjectType, ProtobufSchema, Raw, SqlOption, Statement, UnresolvedObjectName, Value,
-    ViewDefinition, WithOption,
+    CreateSourceConnector, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions, CreateViewsStatement,
+    CsrConnector, CsrSeed, DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement,
+    Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency, ObjectType, ProtobufSchema,
+    Raw, SqlOption, Statement, UnresolvedObjectName, Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -397,7 +396,7 @@ pub fn plan_create_source(
         materialized,
         format,
         key_constraint,
-        key_envelope,
+        include_metadata,
     } = &stmt;
 
     let with_options_original = with_options;
@@ -415,13 +414,11 @@ pub fn plan_create_source(
         },
         None => scx.catalog.config().timestamp_frequency,
     };
-    if *key_envelope != CreateSourceKeyEnvelope::None
-        && !matches!(connector, CreateSourceConnector::Kafka { .. })
-    {
-        bail_unsupported!("INCLUDE KEY with non-Kafka sources");
+    if !matches!(connector, CreateSourceConnector::Kafka { .. }) && !include_metadata.is_empty() {
+        bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connector, encoding, key_envelope) = match connector {
+    let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
@@ -470,17 +467,43 @@ pub fn plan_create_source(
             }
 
             let encoding = get_encoding(format, envelope, with_options_original)?;
-            let key_envelope = get_key_envelope(key_envelope, envelope, &encoding)?;
 
-            let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
+            let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
                 topic: topic.clone(),
                 config_options,
                 start_offsets,
                 group_id_prefix,
                 cluster_id: scx.catalog.config().cluster_id,
-                key_envelope: key_envelope.clone(),
-            });
+                include_key: None,
+                include_timestamp: None,
+                include_partition: None,
+                include_topic: None,
+            };
+
+            for item in include_metadata {
+                match item.ty {
+                    SourceIncludeMetadataType::Key => {
+                        connector.include_key =
+                            Some(get_key_envelope(item.alias.clone(), envelope, &encoding)?)
+                    }
+                    SourceIncludeMetadataType::Timestamp => {
+                        bail_unsupported!("INCLUDE TIMESTAMP")
+                    }
+                    SourceIncludeMetadataType::Partition => {
+                        bail_unsupported!("INCLUDE PARTITION")
+                    }
+                    SourceIncludeMetadataType::Topic => {
+                        bail_unsupported!("INCLUDE TOPIC")
+                    }
+                }
+            }
+
+            if connector.include_key.is_none() && matches!(envelope, Envelope::Upsert) {
+                connector.include_key = Some(KeyEnvelope::LegacyUpsert)
+            }
+
+            let connector = ExternalSourceConnector::Kafka(connector);
 
             if consistency != Consistency::RealTime
                 && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
@@ -490,7 +513,7 @@ pub fn plan_create_source(
                 bail!("BYO consistency only supported for plain Debezium Kafka sources");
             }
 
-            (connector, encoding, key_envelope)
+            (connector, encoding)
         }
         CreateSourceConnector::Kinesis { arn, .. } => {
             let arn: ARN = arn
@@ -514,7 +537,7 @@ pub fn plan_create_source(
                 aws_info,
             });
             let encoding = get_encoding(format, envelope, with_options_original)?;
-            (connector, encoding, KeyEnvelope::None)
+            (connector, encoding)
         }
         CreateSourceConnector::File { path, compression } => {
             let tail = match with_options.remove("tail") {
@@ -536,7 +559,7 @@ pub fn plan_create_source(
                 tail,
             });
             let encoding = get_encoding(format, envelope, with_options_original)?;
-            (connector, encoding, KeyEnvelope::None)
+            (connector, encoding)
         }
         CreateSourceConnector::S3 {
             key_sources,
@@ -578,7 +601,7 @@ pub fn plan_create_source(
                 },
             });
             let encoding = get_encoding(format, envelope, with_options_original)?;
-            (connector, encoding, KeyEnvelope::None)
+            (connector, encoding)
         }
         CreateSourceConnector::Postgres {
             conn,
@@ -596,7 +619,7 @@ pub fn plan_create_source(
             });
 
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
-            (connector, encoding, KeyEnvelope::None)
+            (connector, encoding)
         }
         CreateSourceConnector::PubNub {
             subscribe_key,
@@ -610,11 +633,7 @@ pub fn plan_create_source(
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
-            (
-                connector,
-                SourceDataEncoding::Single(DataEncoding::Text),
-                KeyEnvelope::None,
-            )
+            (connector, SourceDataEncoding::Single(DataEncoding::Text))
         }
         CreateSourceConnector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
@@ -653,7 +672,7 @@ pub fn plan_create_source(
             let encoding = SourceDataEncoding::Single(DataEncoding::AvroOcf(AvroOcfEncoding {
                 reader_schema,
             }));
-            (connector, encoding, KeyEnvelope::None)
+            (connector, encoding)
         }
     };
 
@@ -774,7 +793,14 @@ pub fn plan_create_source(
         }
     }
 
-    let mut bare_desc = encoding.desc(&envelope, &key_envelope)?;
+    let mut bare_desc =
+        if let ExternalSourceConnector::Kafka(KafkaSourceConnector { include_key, .. }) =
+            &external_connector
+        {
+            encoding.desc(&envelope, include_key.as_ref())?
+        } else {
+            encoding.desc(&envelope, None)?
+        };
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
         Some(Value::Boolean(b)) => b,
@@ -896,7 +922,6 @@ pub fn plan_create_source(
             connector: external_connector,
             encoding,
             envelope,
-            key_envelope,
             consistency,
             ts_frequency,
             timeline,
@@ -1156,22 +1181,17 @@ fn compile_proto(schema: &str) -> Result<Vec<u8>, anyhow::Error> {
 }
 
 fn get_key_envelope(
-    key_envelope: &CreateSourceKeyEnvelope,
+    name: Option<Ident>,
     envelope: &Envelope,
     encoding: &SourceDataEncoding,
 ) -> Result<KeyEnvelope, anyhow::Error> {
-    if *key_envelope != CreateSourceKeyEnvelope::None
-        && matches!(envelope, Envelope::Debezium { .. })
-    {
+    if matches!(envelope, Envelope::Debezium { .. }) {
         bail!("Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.");
     }
-    Ok(match key_envelope {
-        CreateSourceKeyEnvelope::None if matches!(envelope, Envelope::Upsert { .. }) => {
-            KeyEnvelope::LegacyUpsert
-        }
-        CreateSourceKeyEnvelope::None => KeyEnvelope::None,
-        CreateSourceKeyEnvelope::Named(name) => KeyEnvelope::Named(name.clone().into_string()),
-        CreateSourceKeyEnvelope::Included => {
+    Ok(match name {
+        Some(name) => KeyEnvelope::Named(name.into_string()),
+        None if matches!(envelope, Envelope::Upsert { .. }) => KeyEnvelope::LegacyUpsert,
+        None => {
             // If the key is requested but comes from an unnamed type then it gets the name "key"
             //
             // Otherwise it gets the names of the columns in the type
