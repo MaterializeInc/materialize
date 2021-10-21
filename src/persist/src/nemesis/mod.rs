@@ -86,6 +86,7 @@ use crate::storage::SeqNo;
 
 pub mod direct;
 pub mod generator;
+pub mod progress;
 pub mod validator;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,7 +235,7 @@ impl FutureStep {
     pub fn recv(self) -> Step {
         let res = self.res.recv();
         let after = Instant::now();
-        log::debug!("{:?} res: {:?}", self.req_id, &res);
+        log::info!("{:?} res: {:?}", self.req_id, &res);
         let meta = StepMeta {
             req_id: self.req_id,
             before: self.before,
@@ -274,7 +275,6 @@ impl FutureRes {
 
 pub trait Runtime {
     fn run(&mut self, i: Input) -> FutureStep;
-    fn block_until(&mut self, stream: &str, ts: u64);
     fn finish(self);
 }
 
@@ -313,33 +313,26 @@ impl<R: Runtime> Runner<R> {
         // generator, where we disable most request types when the runtime or
         // storage are down, so that it becomes much more likely that we'll
         // generate traffic to bring them back.)
+        //
+        // Additionally, this helps ensure that ReadOutput has an interesting
+        // amount of output to read (see the NB in Seal). The Runtime now, when
+        // a seal call is successful, blocks the returned Future until the
+        // dataflow has caught up to the seal. Combined with this, we're
+        // guaranteed that a ReadOutput that trails a Seal by MAX_OUTSTANDING
+        // will include dataflow output up to that seal.
         for input in self.generator.take(num_steps) {
             while outstanding.len() >= Self::MAX_OUTSTANDING {
-                let step = outstanding.pop_front().unwrap().recv();
-                match &step.res {
-                    // Force the dataflows to make progress, so we don't end up
-                    // validating the very uninteresting case of no output.
-                    Res::Seal(SealReq { stream, ts }, Ok(_)) => {
-                        self.runtime.block_until(stream, *ts);
-                    }
-                    _ => {}
-                }
+                let step_fut = outstanding.pop_front().unwrap();
+                let step = step_fut.recv();
                 steps.push(step);
             }
+            log::info!("{:?} req: {:?}", input.req_id, &input.req);
             outstanding.push_back(self.runtime.run(input));
         }
 
         // Don't forget to await the final few requests before cleaning up.
-        while let Some(step) = outstanding.pop_front() {
-            let step = step.recv();
-            match &step.res {
-                // Force the dataflows to make progress, so we don't end up
-                // validating the very uninteresting case of no output.
-                Res::Seal(SealReq { stream, ts }, Ok(_)) => {
-                    self.runtime.block_until(stream, *ts);
-                }
-                _ => {}
-            }
+        while let Some(step_fut) = outstanding.pop_front() {
+            let step = step_fut.recv();
             steps.push(step);
         }
         self.runtime.finish();

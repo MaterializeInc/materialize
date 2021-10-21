@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, Timestamp};
@@ -29,7 +30,7 @@ pub struct Validator {
     writes_by_seqno: BTreeMap<(String, SeqNo), Vec<((String, ()), u64, isize)>>,
     output_by_stream:
         HashMap<String, Vec<ReadOutputEvent<(Result<(String, ()), String>, u64, isize)>>>,
-    available_snapshots: HashMap<SnapshotId, String>,
+    available_snapshots: HashMap<SnapshotId, (String, Instant)>,
     errors: Vec<String>,
     uptime: Uptime,
 }
@@ -42,9 +43,6 @@ impl Validator {
         history.sort_by_key(|s| s.meta.before);
         let uptime = Uptime::new(&history);
         let mut v = Validator::new(uptime);
-        // TODO: We'll need a sort here once we start validating concurrent
-        // timelines. Also likely a before and after time for each
-        // request/response.
         for step in history.into_iter() {
             v.step(step);
         }
@@ -366,7 +364,8 @@ impl Validator {
             && self.uptime.runtime_available(meta.before, meta.after);
         self.check_success(meta, &res, require_succeed);
         if let Ok(_) = res {
-            self.available_snapshots.insert(req.snap, req.stream);
+            self.available_snapshots
+                .insert(req.snap, (req.stream, meta.before));
         }
     }
 
@@ -380,8 +379,10 @@ impl Validator {
             None => {
                 self.check_success(meta, &res, false);
             }
-            Some(stream) => {
-                self.check_success(meta, &res, true);
+            Some((stream, before_snap_start)) => {
+                let require_succeed = self.uptime.storage_available(before_snap_start, meta.after)
+                    && self.uptime.runtime_available(before_snap_start, meta.after);
+                self.check_success(meta, &res, require_succeed);
                 if let Ok(res) = res {
                     let mut actual = res.contents;
                     let mut expected: Vec<((String, ()), u64, isize)> = self

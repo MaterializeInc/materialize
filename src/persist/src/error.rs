@@ -45,12 +45,12 @@ impl fmt::Display for Error {
 // Hack so we can debug_assert_eq against Result<(), Error>.
 impl PartialEq for Error {
     fn eq(&self, other: &Self) -> bool {
-        if let Error::String(s) = self {
-            if let Error::String(o) = other {
-                return s == o;
-            }
+        match (self, other) {
+            (Error::String(s), Error::String(o)) => s == o,
+            (Error::OutOfQuota(s), Error::OutOfQuota(o)) => s == o,
+            (Error::RuntimeShutdown, Error::RuntimeShutdown) => true,
+            _ => false,
         }
-        return false;
     }
 }
 
