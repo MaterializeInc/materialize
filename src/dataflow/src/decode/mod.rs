@@ -668,7 +668,7 @@ where
             .unwrap_or(""),
         value_encoding.op_name()
     );
-    let key_decoder = key_encoding.map(|key_encoding| {
+    let mut key_decoder = key_encoding.map(|key_encoding| {
         get_decoder(
             key_encoding,
             debug_name,
@@ -685,7 +685,7 @@ where
     let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_))
         && !matches!(envelope, SourceEnvelope::Debezium(..));
 
-    let value_decoder = get_decoder(
+    let mut value_decoder = get_decoder(
         value_encoding,
         debug_name,
         envelope,
@@ -695,27 +695,19 @@ where
         metrics,
     );
 
+    let mut n_seen = 0;
+    let mut value_buf = vec![];
     // The `position` value from `SourceOutput` is meaningless here -- it's just the index of a chunk.
     // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
-    let results = stream.unary_async(Pipeline, &op_name, move |_, _| {
-        let key_decoder = Rc::new(RefCell::new(key_decoder));
-        let value_decoder = Rc::new(RefCell::new(value_decoder));
-        let value_buf = Rc::new(RefCell::new(vec![]));
-        let n_seen = Rc::new(RefCell::new(0));
-        move |mut input, mut raw_output| {
-            let key_decoder = Rc::clone(&key_decoder);
-            let value_decoder = Rc::clone(&value_decoder);
-            let value_buf = Rc::clone(&value_buf);
-            let n_seen = Rc::clone(&n_seen);
-            async move {
-                let mut key_decoder = key_decoder.borrow_mut();
-                let mut value_decoder = value_decoder.borrow_mut();
-                let mut value_buf = value_buf.borrow_mut();
-                let mut n_seen = n_seen.borrow_mut();
+    let results = stream.unary_async2(
+        Pipeline,
+        &op_name,
+        move |_, _, mut bundle_stream| async move {
+            loop {
+                let (input, mut output) = bundle_stream.next().await;
 
                 let mut n_errors = 0;
                 let mut n_successes = 0;
-                let mut output = raw_output.activate();
                 while let Some((cap, data)) = input.next() {
                     // We must retain the capability in case we hit an await point. This is because
                     // CapabilityRef aren't enough to ensure the frontier doesn't move past us
@@ -754,7 +746,7 @@ where
                             MessagePayload::EOF => {
                                 let data = &mut &value_buf[..];
                                 let mut result = value_decoder
-                                    .eof(data, Some(*n_seen + 1), push_metadata)
+                                    .eof(data, Some(n_seen + 1), push_metadata)
                                     .transpose();
                                 if !data.is_empty() && !matches!(&result, Some(Err(_))) {
                                     result = Some(Err(DecodeError::Text(format!(
@@ -777,9 +769,9 @@ where
                                         session.give(DecodeResult {
                                             key,
                                             value: Some(value),
-                                            position: Some(*n_seen),
+                                            position: Some(n_seen),
                                         });
-                                        *n_seen += 1;
+                                        n_seen += 1;
                                     }
                                 }
                                 continue;
@@ -813,7 +805,7 @@ where
                                 let value = match value_decoder
                                     .next(
                                         value_bytes_remaining,
-                                        Some(*n_seen + 1), // Match historical practice - files start at 1, not 0.
+                                        Some(n_seen + 1), // Match historical practice - files start at 1, not 0.
                                         *upstream_time_millis,
                                         push_metadata,
                                     )
@@ -822,12 +814,12 @@ where
                                     Err(e) => Err(e),
                                     Ok(None) => {
                                         let leftover = value_bytes_remaining.to_vec();
-                                        *value_buf = leftover;
+                                        value_buf = leftover;
                                         break;
                                     }
                                     Ok(Some(value)) => Ok(value),
                                 };
-                                *n_seen += 1;
+                                n_seen += 1;
 
                                 // If the decoders decoded a message, they need to have made progress consuming the bytes.
                                 // Otherwise, we risk going into an infinite loop.
@@ -845,15 +837,15 @@ where
                                     session.give(DecodeResult {
                                         key,
                                         value: Some(value),
-                                        position: Some(*n_seen),
+                                        position: Some(n_seen),
                                     });
-                                    *value_buf = vec![];
+                                    value_buf = vec![];
                                     break;
                                 } else {
                                     session.give(DecodeResult {
                                         key: key.clone(),
                                         value: Some(value),
-                                        position: Some(*n_seen),
+                                        position: Some(n_seen),
                                     });
                                 }
                                 if is_err {
@@ -872,10 +864,8 @@ where
                 if n_successes > 0 {
                     value_decoder.log_successes(n_errors);
                 }
-                drop(output);
-                (input, raw_output)
             }
-        }
-    });
+        },
+    );
     (results, None)
 }
