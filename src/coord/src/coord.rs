@@ -106,12 +106,15 @@ use transform::Optimizer;
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
 use self::prometheus::Scraper;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
-use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState, Table};
+use crate::catalog::{
+    self, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState, Table,
+};
 use crate::client::{Client, Handle};
 use crate::command::{
     Cancelled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::antichain::AntichainToken;
+use crate::coord::dataflow_builder::DataflowBuilder;
 use crate::error::CoordError;
 use crate::persistcfg::PersistConfig;
 use crate::session::{
@@ -451,7 +454,9 @@ impl Coordinator {
                         self.indexes.insert(entry.id(), frontiers);
                     } else {
                         let index_id = entry.id();
-                        if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                        if let Some((name, description)) =
+                            Self::prepare_index_build(self.catalog.state(), &index_id)
+                        {
                             let df = self.dataflow_builder().build_index_dataflow(
                                 name,
                                 index_id,
@@ -846,7 +851,7 @@ impl Coordinator {
             Err(e) => {
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_by_id(id).is_some() {
-                    self.catalog_transact(vec![catalog::Op::DropItem(id)])
+                    self.catalog_transact(vec![catalog::Op::DropItem(id)], |_builder| Ok(()))
                         .expect("deleting placeholder sink cannot fail");
                 } else {
                     // Another session may have dropped the placeholder sink while we were
@@ -1610,7 +1615,7 @@ impl Coordinator {
     /// not the temporary schema itself.
     fn drop_temp_items(&mut self, conn_id: u32) {
         let ops = self.catalog.drop_temp_item_ops(conn_id);
-        self.catalog_transact(ops)
+        self.catalog_transact(ops, |_builder| Ok(()))
             .expect("unable to drop temporary items for conn_id");
     }
 
@@ -1628,6 +1633,10 @@ impl Coordinator {
             _ => unreachable!(),
         };
         sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
+        let as_of = SinkAsOf {
+            frontier: self.determine_frontier(sink.from),
+            strict: !sink.with_snapshot,
+        };
         let ops = vec![
             catalog::Op::DropItem(id),
             catalog::Op::CreateItem {
@@ -1637,21 +1646,21 @@ impl Coordinator {
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        self.catalog_transact(ops)?;
-        let as_of = SinkAsOf {
-            frontier: self.determine_frontier(sink.from),
-            strict: !sink.with_snapshot,
-        };
-        let sink_description = dataflow_types::SinkDesc {
-            from: sink.from,
-            from_desc: self.catalog.get_by_id(&sink.from).desc().unwrap().clone(),
-            connector: connector.clone(),
-            envelope: Some(sink.envelope),
-            as_of,
-        };
-        let df =
-            self.dataflow_builder()
-                .build_sink_dataflow(name.to_string(), id, sink_description);
+        let df = self.catalog_transact(ops, |mut builder| {
+            let sink_description = dataflow_types::SinkDesc {
+                from: sink.from,
+                from_desc: builder
+                    .catalog
+                    .get_by_id(&sink.from)
+                    .desc()
+                    .unwrap()
+                    .clone(),
+                connector: connector.clone(),
+                envelope: Some(sink.envelope),
+                as_of,
+            };
+            Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description))
+        })?;
 
         // For some sinks, we need to block compaction of each timestamp binding
         // until all sinks that depend on a given source have finished writing out that timestamp.
@@ -1935,7 +1944,7 @@ impl Coordinator {
                 oid: schema_oid,
             },
         ];
-        match self.catalog_transact(ops) {
+        match self.catalog_transact(ops, |_builder| Ok(())) {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
@@ -1955,7 +1964,7 @@ impl Coordinator {
             schema_name: plan.schema_name,
             oid,
         };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())) {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::SchemaAlreadyExists(_),
@@ -1974,7 +1983,7 @@ impl Coordinator {
             name: plan.name,
             oid,
         };
-        self.catalog_transact(vec![op])
+        self.catalog_transact(vec![op], |_builder| Ok(()))
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
@@ -2027,25 +2036,35 @@ impl Coordinator {
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
-        match self.catalog_transact(vec![
-            catalog::Op::CreateItem {
-                id: table_id,
-                oid: table_oid,
-                name,
-                item: CatalogItem::Table(table),
+        let df = self.catalog_transact(
+            vec![
+                catalog::Op::CreateItem {
+                    id: table_id,
+                    oid: table_oid,
+                    name,
+                    item: CatalogItem::Table(table),
+                },
+                catalog::Op::CreateItem {
+                    id: index_id,
+                    oid: index_oid,
+                    name: index_name,
+                    item: CatalogItem::Index(index),
+                },
+            ],
+            |mut builder| {
+                if let Some((name, description)) =
+                    Self::prepare_index_build(builder.catalog, &index_id)
+                {
+                    let df = builder.build_index_dataflow(name, index_id, description);
+                    Ok(Some(df))
+                } else {
+                    Ok(None)
+                }
             },
-            catalog::Op::CreateItem {
-                id: index_id,
-                oid: index_oid,
-                name: index_name,
-                item: CatalogItem::Index(index),
-            },
-        ]) {
-            Ok(_) => {
-                if let Some((name, description)) = self.prepare_index_build(&index_id) {
-                    let df =
-                        self.dataflow_builder()
-                            .build_index_dataflow(name, index_id, description);
+        );
+        match df {
+            Ok(df) => {
+                if let Some(df) = df {
                     self.ship_dataflow(df);
                 }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
@@ -2083,9 +2102,33 @@ impl Coordinator {
 
         let if_not_exists = plan.if_not_exists;
         let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
-        match self.catalog_transact(ops) {
-            Ok(()) => {
-                self.ship_sources(metadata);
+        match self.catalog_transact(ops, move |mut builder| {
+            let mut dfs = Vec::new();
+            let mut source_ids = Vec::new();
+            for (source_id, idx_id) in metadata {
+                source_ids.push(source_id);
+                if let Some(index_id) = idx_id {
+                    if let Some((name, description)) =
+                        Self::prepare_index_build(builder.catalog, &index_id)
+                    {
+                        let df = builder.build_index_dataflow(name, index_id, description);
+                        dfs.push(df);
+                    }
+                }
+            }
+            Ok((dfs, source_ids))
+        }) {
+            Ok((dfs, source_ids)) => {
+                // Do everything to instantiate the source at the coordinator and
+                // inform the timestamper and dataflow workers of its existence before
+                // shipping any dataflows that depend on its existence.
+                for source_id in source_ids {
+                    self.update_timestamper(source_id, true);
+                    let frontiers =
+                        self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
+                    self.sources.insert(source_id, frontiers);
+                }
+                self.ship_dataflows(dfs);
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2093,26 +2136,6 @@ impl Coordinator {
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
             Err(err) => Err(err),
-        }
-    }
-
-    fn ship_sources(&mut self, metadata: Vec<(GlobalId, Option<GlobalId>)>) {
-        for (source_id, idx_id) in metadata {
-            // Do everything to instantiate the source at the coordinator and
-            // inform the timestamper and dataflow workers of its existence before
-            // shipping any dataflows that depend on its existence.
-            self.update_timestamper(source_id, true);
-            let frontiers =
-                self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
-            self.sources.insert(source_id, frontiers);
-            if let Some(index_id) = idx_id {
-                if let Some((name, description)) = self.prepare_index_build(&index_id) {
-                    let df =
-                        self.dataflow_builder()
-                            .build_index_dataflow(name, index_id, description);
-                    self.ship_dataflow(df);
-                }
-            }
         }
     }
 
@@ -2228,7 +2251,7 @@ impl Coordinator {
                 depends_on: sink.depends_on,
             }),
         };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())) {
             Ok(()) => (),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -2343,17 +2366,20 @@ impl Coordinator {
             plan.materialize,
         )?;
 
-        match self.catalog_transact(ops) {
-            Ok(()) => {
-                if let Some(index_id) = index_id {
-                    if let Some((name, description)) = self.prepare_index_build(&index_id) {
-                        let df = self.dataflow_builder().build_index_dataflow(
-                            name,
-                            index_id,
-                            description,
-                        );
-                        self.ship_dataflow(df);
-                    }
+        match self.catalog_transact(ops, |mut builder| {
+            if let Some(index_id) = index_id {
+                if let Some((name, description)) =
+                    Self::prepare_index_build(builder.catalog, &index_id)
+                {
+                    let df = builder.build_index_dataflow(name, index_id, description);
+                    return Ok(Some(df));
+                }
+            }
+            Ok(None)
+        }) {
+            Ok(df) => {
+                if let Some(df) = df {
+                    self.ship_dataflow(df);
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2382,19 +2408,19 @@ impl Coordinator {
             }
         }
 
-        match self.catalog_transact(ops) {
-            Ok(()) => {
-                let mut dfs = vec![];
-                for index_id in index_ids {
-                    if let Some((name, description)) = self.prepare_index_build(&index_id) {
-                        let df = self.dataflow_builder().build_index_dataflow(
-                            name,
-                            index_id,
-                            description,
-                        );
-                        dfs.push(df);
-                    }
+        match self.catalog_transact(ops, |mut builder| {
+            let mut dfs = vec![];
+            for index_id in index_ids {
+                if let Some((name, description)) =
+                    Self::prepare_index_build(builder.catalog, &index_id)
+                {
+                    let df = builder.build_index_dataflow(name, index_id, description);
+                    dfs.push(df);
                 }
+            }
+            Ok(dfs)
+        }) {
+            Ok(dfs) => {
                 self.ship_dataflows(dfs);
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2433,16 +2459,19 @@ impl Coordinator {
             name,
             item: CatalogItem::Index(index),
         };
-        match self.catalog_transact(vec![op]) {
-            Ok(()) => {
-                if let Some((name, description)) = self.prepare_index_build(&id) {
-                    let df = self
-                        .dataflow_builder()
-                        .build_index_dataflow(name, id, description);
+        match self.catalog_transact(vec![op], |mut builder| {
+            if let Some((name, description)) = Self::prepare_index_build(builder.catalog, &id) {
+                let df = builder.build_index_dataflow(name, id, description);
+                Ok(Some(df))
+            } else {
+                Ok(None)
+            }
+        }) {
+            Ok(df) => {
+                if let Some(df) = df {
                     self.ship_dataflow(df);
                     self.set_index_options(id, options).expect("index enabled");
                 }
-
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2470,7 +2499,7 @@ impl Coordinator {
             name: plan.name,
             item: CatalogItem::Type(typ),
         };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())) {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
             Err(err) => Err(err),
         }
@@ -2481,7 +2510,7 @@ impl Coordinator {
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_database_ops(plan.name);
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops, |_builder| Ok(()))?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
@@ -2490,7 +2519,7 @@ impl Coordinator {
         plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_schema_ops(plan.name);
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops, |_builder| Ok(()))?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
@@ -2500,13 +2529,13 @@ impl Coordinator {
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops, |_builder| Ok(()))?;
         Ok(ExecuteResponse::DroppedRole)
     }
 
     fn sequence_drop_items(&mut self, plan: DropItemsPlan) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops, |_builder| Ok(()))?;
         Ok(match plan.ty {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => ExecuteResponse::DroppedSource,
@@ -3605,7 +3634,7 @@ impl Coordinator {
             id: plan.id,
             to_name: plan.to_name,
         };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())) {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
@@ -3644,18 +3673,22 @@ impl Coordinator {
 
         // If ops is not empty, index was disabled.
         if !ops.is_empty() {
-            self.catalog_transact(ops)?;
-            let (name, description) = self.prepare_index_build(&plan.id).expect("index enabled");
-            let df = self
-                .dataflow_builder()
-                .build_index_dataflow(name, plan.id, description);
+            let df = self.catalog_transact(ops, |mut builder| {
+                let (name, description) =
+                    Self::prepare_index_build(builder.catalog, &plan.id).expect("index enabled");
+                let df = builder.build_index_dataflow(name, plan.id, description);
+                Ok(df)
+            })?;
             self.ship_dataflow(df);
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), CoordError> {
+    fn catalog_transact<F, T>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<T, CoordError>
+    where
+        F: FnOnce(DataflowBuilder) -> Result<T, CoordError>,
+    {
         let mut sources_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
@@ -3699,7 +3732,17 @@ impl Coordinator {
             }
         }
 
-        let builtin_table_updates = self.catalog.transact(ops)?;
+        let indexes = &self.indexes;
+        let transient_id_counter = &mut self.transient_id_counter;
+
+        let (builtin_table_updates, result) = self.catalog.transact(ops, |catalog| {
+            let builder = DataflowBuilder {
+                catalog,
+                indexes,
+                transient_id_counter,
+            };
+            f(builder)
+        })?;
         self.send_builtin_table_updates(builtin_table_updates);
 
         if !sources_to_drop.is_empty() {
@@ -3736,7 +3779,7 @@ impl Coordinator {
             });
         }
 
-        Ok(())
+        Ok(result)
     }
 
     fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {

@@ -18,16 +18,16 @@ use super::*;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a> {
-    catalog: &'a Catalog,
-    indexes: &'a ArrangementFrontiers<Timestamp>,
-    transient_id_counter: &'a mut u64,
+    pub catalog: &'a CatalogState,
+    pub indexes: &'a ArrangementFrontiers<Timestamp>,
+    pub transient_id_counter: &'a mut u64,
 }
 
 impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    pub fn dataflow_builder(&mut self) -> DataflowBuilder {
+    pub fn dataflow_builder<'a>(&'a mut self) -> DataflowBuilder {
         DataflowBuilder {
-            catalog: &self.catalog,
+            catalog: self.catalog.state(),
             indexes: &self.indexes,
             transient_id_counter: &mut self.transient_id_counter,
         }
@@ -36,8 +36,11 @@ impl Coordinator {
     /// Prepares the arguments to an index build dataflow, by interrogating the catalog.
     ///
     /// Returns `None` if the index entry in the catalog in not enabled.
-    pub fn prepare_index_build(&self, index_id: &GlobalId) -> Option<(String, IndexDesc)> {
-        let index_entry = self.catalog.get_by_id(&index_id);
+    pub fn prepare_index_build(
+        catalog: &CatalogState,
+        index_id: &GlobalId,
+    ) -> Option<(String, IndexDesc)> {
+        let index_entry = catalog.get_by_id(&index_id);
         let index = match index_entry.item() {
             CatalogItem::Index(index) => index,
             _ => unreachable!("cannot create index dataflow on non-index"),
