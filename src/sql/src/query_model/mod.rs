@@ -13,7 +13,10 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 mod dot_generator;
+mod hir_generator;
 mod scalar_expr;
+#[cfg(test)]
+mod test;
 
 pub use scalar_expr::*;
 
@@ -264,6 +267,10 @@ impl QueryBox {
             BoxType::Except | BoxType::Union | BoxType::Intersect | BoxType::BaseTable(_) => {}
         }
         Ok(())
+    }
+
+    fn is_select(&self) -> bool {
+        matches!(self.box_type, BoxType::Select(_))
     }
 }
 

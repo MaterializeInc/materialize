@@ -1,0 +1,37 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+build
+select;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label="select;
+"
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label="{ Distinct: Preserve }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label="Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Values"
+        boxhead0 [ shape = record, label="{ Distinct: Preserve| ROW 0:  }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
