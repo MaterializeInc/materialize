@@ -224,8 +224,7 @@ pub struct Config<'a> {
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
-    worker_guards: WorkerGuards<()>,
-    worker_txs: Vec<crossbeam_channel::Sender<dataflow::Command>>,
+    dataflow_client: DataflowClient,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -287,6 +286,54 @@ pub struct Coordinator {
     write_lock_wait_group: VecDeque<DeferredPlan>,
 }
 
+/// State guarding the connection to dataflow workers.
+///
+/// This state is extracted from the coordinator to better reflection the abstraction boundary.
+/// Although it is present in the coordinator process / thread, it represents information best
+/// maintained by the dataflow module itself.
+pub struct DataflowClient {
+    /// Guards for worker threads.
+    worker_guards: WorkerGuards<()>,
+    /// Channels to broadcast commands to workers.
+    worker_txs: Vec<crossbeam_channel::Sender<dataflow::Command>>,
+}
+
+impl DataflowClient {
+    /// Creates a new dataflow client from connection objects.
+    pub fn new(
+        worker_guards: WorkerGuards<()>,
+        worker_txs: Vec<crossbeam_channel::Sender<dataflow::Command>>,
+    ) -> Self {
+        Self {
+            worker_guards,
+            worker_txs,
+        }
+    }
+
+    /// Reports the number of dataflow workers.
+    pub fn num_workers(&self) -> usize {
+        self.worker_txs.len()
+    }
+
+    /// Broadcasts a command to all dataflow workers.
+    fn broadcast(&self, cmd: dataflow::Command) {
+        log::trace!("Broadcasting dataflow command: {:?}", cmd);
+        for index in 1..self.worker_txs.len() {
+            self.worker_txs[index - 1]
+                .send(cmd.clone())
+                .expect("worker command receiver should not drop first")
+        }
+        if self.worker_txs.len() > 0 {
+            self.worker_txs[self.worker_txs.len() - 1]
+                .send(cmd)
+                .expect("worker command receiver should not drop first")
+        }
+        for handle in self.worker_guards.guards() {
+            handle.thread().unpark()
+        }
+    }
+}
+
 /// Metadata about an active connection.
 struct ConnMeta {
     /// A watch channel shared with the client to inform the client of
@@ -338,7 +385,7 @@ macro_rules! guard_write_critical_section {
 
 impl Coordinator {
     fn num_workers(&self) -> usize {
-        self.worker_txs.len()
+        self.dataflow_client.num_workers()
     }
 
     /// Assign a timestamp for a read.
@@ -4005,19 +4052,7 @@ impl Coordinator {
     }
 
     fn broadcast(&self, cmd: dataflow::Command) {
-        for index in 1..self.worker_txs.len() {
-            self.worker_txs[index - 1]
-                .send(cmd.clone())
-                .expect("worker command receiver should not drop first")
-        }
-        if self.worker_txs.len() > 0 {
-            self.worker_txs[self.worker_txs.len() - 1]
-                .send(cmd)
-                .expect("worker command receiver should not drop first")
-        }
-        for handle in self.worker_guards.guards() {
-            handle.thread().unpark()
-        }
+        self.dataflow_client.broadcast(cmd);
     }
 
     // Notify the timestamper thread that a source has been created or dropped.
@@ -4249,9 +4284,9 @@ pub async fn serve(
         .name("coordinator".to_string())
         .spawn(move || {
             let now = catalog.config().now;
+            let dataflow_client = DataflowClient::new(worker_guards, worker_txs);
             let mut coord = Coordinator {
-                worker_guards,
-                worker_txs,
+                dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 symbiosis,
@@ -4412,9 +4447,9 @@ pub fn serve_debug(
     let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
     let handle = TokioHandle::current();
     let thread = thread::spawn(move || {
+        let dataflow_client = DataflowClient::new(worker_guards, vec![worker_tx]);
         let mut coord = Coordinator {
-            worker_guards,
-            worker_txs: vec![worker_tx],
+            dataflow_client,
             view_optimizer: Optimizer::logical_optimizer(),
             catalog,
             symbiosis: None,
