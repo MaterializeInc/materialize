@@ -15,7 +15,10 @@ use std::fmt;
 use ore::id_gen::IdGen;
 
 mod dot;
+mod hir;
 mod scalar_expr;
+#[cfg(test)]
+mod test;
 
 pub use scalar_expr::*;
 
@@ -373,6 +376,10 @@ impl QueryBox {
             BoxType::Except | BoxType::Union | BoxType::Intersect | BoxType::BaseTable(_) => {}
         }
         Ok(())
+    }
+
+    fn is_select(&self) -> bool {
+        matches!(self.box_type, BoxType::Select(_))
     }
 }
 
