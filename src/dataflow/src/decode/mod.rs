@@ -521,107 +521,107 @@ where
             }
         }),
         &op_name,
-        move |_, _, mut bundle_stream| {
-            async move {
-                loop {
-                    let (input, mut output) = bundle_stream.next().await;
+        move |_, _, mut bundle_stream| async move {
+            loop {
+                let (input, mut output) = bundle_stream.next().await;
 
-                    let mut n_errors = 0;
-                    let mut n_successes = 0;
+                let mut n_errors = 0;
+                let mut n_successes = 0;
 
-                    while let Some((cap, data)) = input.next() {
-                        // We must retain the capability in case we hit an await point. This is
-                        // because CapabilityRefs aren't enough to ensure the frontier doesn't move
-                        // past us
-                        let cap = cap.retain();
-                        let mut session = output.session(&cap);
+                while let Some((cap, data)) = input.next() {
+                    // We must retain the capability in case we hit an await point. This is
+                    // because CapabilityRefs aren't enough to ensure the frontier doesn't move
+                    // past us
+                    let cap = cap.retain();
+                    let mut session = output.session(&cap);
 
-                        for SourceOutput {
-                            key,
-                            value,
-                            position,
-                            upstream_time_millis,
-                        } in data.iter()
+                    for SourceOutput {
+                        key,
+                        value,
+                        position,
+                        upstream_time_millis,
+                    } in data.iter()
+                    {
+                        let key_cursor = &mut key.as_slice();
+                        let key = if let (Some(key_decoder), false) =
+                            (key_decoder.as_mut(), key.is_empty())
                         {
-                            let key_cursor = &mut key.as_slice();
-                            let key = if let (Some(key_decoder), false) =
-                                (key_decoder.as_mut(), key.is_empty())
-                            {
-                                let mut key = key_decoder
-                                    .next(key_cursor, None, *upstream_time_millis, false).await
-                                    .transpose();
-                                if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
-                                    key = Some(Err(DecodeError::Text(format!(
-                                        "Unexpected bytes remaining for decoded key: {:?}",
-                                        key_cursor
-                                    ))
-                                    .into()));
+                            let mut key = key_decoder
+                                .next(key_cursor, None, *upstream_time_millis, false)
+                                .await
+                                .transpose();
+                            if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
+                                key = Some(Err(DecodeError::Text(format!(
+                                    "Unexpected bytes remaining for decoded key: {:?}",
+                                    key_cursor
+                                ))
+                                .into()));
+                            }
+                            key.or_else(|| key_decoder.eof(&mut &[][..], None, false).transpose())
+                        } else {
+                            None
+                        };
+
+                        if value == &MessagePayload::Data(vec![]) {
+                            session.give(DecodeResult {
+                                key,
+                                value: None,
+                                position: *position,
+                            });
+                        } else {
+                            let value = match &value {
+                                MessagePayload::Data(value) => {
+                                    let value_bytes_remaining = &mut value.as_slice();
+                                    let mut value = value_decoder
+                                        .next(
+                                            value_bytes_remaining,
+                                            *position,
+                                            *upstream_time_millis,
+                                            push_metadata,
+                                        )
+                                        .await
+                                        .transpose();
+                                    if let (Some(Ok(_)), false) =
+                                        (&value, value_bytes_remaining.is_empty())
+                                    {
+                                        value = Some(Err(DecodeError::Text(format!(
+                                            "Unexpected bytes remaining for decoded value: {:?}",
+                                            value_bytes_remaining
+                                        ))
+                                        .into()));
+                                    }
+                                    value.or_else(|| {
+                                        value_decoder
+                                            .eof(&mut &[][..], *position, push_metadata)
+                                            .transpose()
+                                    })
                                 }
-                                key.or_else(|| key_decoder.eof(&mut &[][..], None, false).transpose())
-                            } else {
-                                None
+                                MessagePayload::EOF => Some(Err(DecodeError::Text(format!(
+                                    "Unexpected EOF in delimited stream"
+                                ))
+                                .into())),
                             };
 
-                            if value == &MessagePayload::Data(vec![]) {
-                                session.give(DecodeResult {
-                                    key,
-                                    value: None,
-                                    position: *position,
-                                });
-                            } else {
-                                let value = match &value {
-                                    MessagePayload::Data(value) => {
-                                        let value_bytes_remaining = &mut value.as_slice();
-                                        let mut value = value_decoder
-                                            .next(
-                                                value_bytes_remaining,
-                                                *position,
-                                                *upstream_time_millis,
-                                                push_metadata,
-                                            ).await
-                                            .transpose();
-                                        if let (Some(Ok(_)), false) =
-                                            (&value, value_bytes_remaining.is_empty())
-                                        {
-                                            value = Some(Err(DecodeError::Text(format!(
-                                                "Unexpected bytes remaining for decoded value: {:?}",
-                                                value_bytes_remaining
-                                            ))
-                                            .into()));
-                                        }
-                                        value.or_else(|| {
-                                            value_decoder
-                                                .eof(&mut &[][..], *position, push_metadata)
-                                                .transpose()
-                                        })
-                                    }
-                                    MessagePayload::EOF => Some(Err(DecodeError::Text(format!(
-                                        "Unexpected EOF in delimited stream"
-                                    ))
-                                    .into())),
-                                };
-
-                                if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
-                                    n_errors += 1;
-                                } else if matches!(&value, Some(Ok(_))) {
-                                    n_successes += 1;
-                                }
-                                session.give(DecodeResult {
-                                    key,
-                                    value,
-                                    position: *position,
-                                });
+                            if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                                n_errors += 1;
+                            } else if matches!(&value, Some(Ok(_))) {
+                                n_successes += 1;
                             }
+                            session.give(DecodeResult {
+                                key,
+                                value,
+                                position: *position,
+                            });
                         }
                     }
+                }
 
-                    // Matching historical practice, we only log metrics on the value decoder.
-                    if n_errors > 0 {
-                        value_decoder.log_errors(n_errors);
-                    }
-                    if n_successes > 0 {
-                        value_decoder.log_successes(n_successes);
-                    }
+                // Matching historical practice, we only log metrics on the value decoder.
+                if n_errors > 0 {
+                    value_decoder.log_errors(n_errors);
+                }
+                if n_successes > 0 {
+                    value_decoder.log_successes(n_successes);
                 }
             }
         },
