@@ -1416,10 +1416,58 @@ pub mod plan {
     }
 }
 
-/// A description of how `[key, value]`-pairs need to be permuted to produce the original row.
+/// A description of how `[key, value]`-pairs need to be permuted to produce an original row.
+///
+/// Arrangements conceptually store data split in key-value pairs, where all data is grouped by
+/// the key. It is desirable to remove redundancy between the key and value by not repeating
+/// columns in the value that are already present in the key. This struct provides an abstraction
+/// to encode this deduplication of columns in the key.
+///
+/// A Permutation consists of two parts: An expression to thin the columns in the value and a
+/// permutation defined on the key appended with the value to reconstruct the original value.
+///
+/// # Example of an identity permutation
+///
+/// For identity mappings, the thinning leaves the value as-is and the permutation restores the
+/// original order of elements
+/// * Input: key expressions of length `n`: `[key_0, ..., key_n]`; `arity` of the row
+/// * Thinning: `[0, ..., arity]`
+/// * Permutation: `[n, ..., n + arity]`
+///
+/// # Example of a non-identity permutation
+///
+/// We remove all columns from a row that are present in the key.
+/// * Input: key expressions of length `n`: `[key_0, ..., key_n]`; `arity` of the row
+/// * Thinning: `[i \in 0, ..., arity | key_i != column reference]`
+/// * Permutation:  for each column `i` in the input:
+///   * if `i` is in the key: offset of `Column(i)` in key
+///   * offset in thinned row
+///
+/// # Joining permutations
+///
+/// For joined relations with thinned values, we need to construct a joined permutation to undo
+/// the thinning. Let's assume a join produces rows of the form `[key, value_1, value_2]` where
+/// the inputs where of the form `[key, value_1]` and `[key, value_2]` and the join groups on the
+/// key.
+///
+/// Conceptually, the joined permutation is the permutation of the left relation appended with the
+/// permutation of the right permutation. The right permutation needs to be offset by the length
+/// of the thinned values of the left relation, while keeping key references unchanged.
+///
+/// * Input 1: Key Column(0), value Column(1), permutation `[0, 1]`
+/// * Input 2: Key Column(0), value Column(1), Column(2), permutation `[0, 1, 2]`
+/// * Joined relation:
+///   0. Key Column(0),
+///   1. Value Column(1) of input 1,
+///   2. Key Column(0),
+///   3. Column(1) of input 2,
+///   4. Column(2) of input 2.
+/// * Result: Key Column(0), permutation `[0, 1, 0, 2, 3]`
 #[derive(Clone, Debug)]
 pub struct Permutation {
+    /// The arity of the key
     key_arity: usize,
+    /// The permutation to apply to undo the thinning.
     permutation: Vec<usize>,
 }
 
@@ -1528,7 +1576,14 @@ impl Permutation {
     /// Permute a `[key, value]` row to reconstruct a non-permuted variant.
     ///
     /// The function truncates the data to the length of the permutation, which should match
-    /// the expectation of any subsequent map/filter/project or opertator.
+    /// the expectation of any subsequent map/filter/project or operator.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let mut datum_vec = DatumVec::new();
+    /// let mut borrow = datum_vec.borrow_with_many(&[&key, &val]);
+    /// permutation.permute_in_place(&mut borrow);
+    /// ```
     pub fn permute_in_place<T: Copy>(&self, data: &mut Vec<T>) {
         let original_len = data.len();
         for p in &self.permutation {
