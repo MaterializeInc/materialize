@@ -521,9 +521,9 @@ where
             }
         }),
         &op_name,
-        move |_, _, mut bundle_stream| async move {
+        move |_, _, mut bundles| async move {
             loop {
-                let (input, mut output) = bundle_stream.next().await;
+                let (input, mut output) = bundles.next().await;
 
                 let mut n_errors = 0;
                 let mut n_successes = 0;
@@ -699,173 +699,166 @@ where
     let mut value_buf = vec![];
     // The `position` value from `SourceOutput` is meaningless here -- it's just the index of a chunk.
     // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
-    let results = stream.unary_async2(
-        Pipeline,
-        &op_name,
-        move |_, _, mut bundle_stream| async move {
-            loop {
-                let (input, mut output) = bundle_stream.next().await;
+    let results = stream.unary_async2(Pipeline, &op_name, move |_, _, mut bundles| async move {
+        loop {
+            let (input, mut output) = bundles.next().await;
 
-                let mut n_errors = 0;
-                let mut n_successes = 0;
-                while let Some((cap, data)) = input.next() {
-                    // We must retain the capability in case we hit an await point. This is because
-                    // CapabilityRef aren't enough to ensure the frontier doesn't move past us
-                    let cap = cap.retain();
-                    let mut session = output.session(&cap);
-                    for SourceOutput {
-                        key,
-                        value,
-                        position: _,
-                        upstream_time_millis,
-                    } in data.iter()
+            let mut n_errors = 0;
+            let mut n_successes = 0;
+            while let Some((cap, data)) = input.next() {
+                // We must retain the capability in case we hit an await point. This is because
+                // CapabilityRef aren't enough to ensure the frontier doesn't move past us
+                let cap = cap.retain();
+                let mut session = output.session(&cap);
+                for SourceOutput {
+                    key,
+                    value,
+                    position: _,
+                    upstream_time_millis,
+                } in data.iter()
+                {
+                    let key_cursor = &mut key.as_slice();
+                    let key = if let (Some(key_decoder), false) =
+                        (key_decoder.as_mut(), key.is_empty())
                     {
-                        let key_cursor = &mut key.as_slice();
-                        let key = if let (Some(key_decoder), false) =
-                            (key_decoder.as_mut(), key.is_empty())
-                        {
-                            let mut key = key_decoder
-                                .next(key_cursor, None, *upstream_time_millis, false)
-                                .await
+                        let mut key = key_decoder
+                            .next(key_cursor, None, *upstream_time_millis, false)
+                            .await
+                            .transpose();
+                        if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
+                            // Perhaps someday we'll assign semantics to multiple keys in one message, but for now it doesn't make sense.
+                            key = Some(Err(DecodeError::Text(format!(
+                                "Unexpected bytes remaining for decoded key: {:?}",
+                                key_cursor
+                            ))
+                            .into()));
+                        }
+                        key
+                    } else {
+                        None
+                    };
+
+                    let value = match value {
+                        MessagePayload::Data(data) => data,
+                        MessagePayload::EOF => {
+                            let data = &mut &value_buf[..];
+                            let mut result = value_decoder
+                                .eof(data, Some(n_seen + 1), push_metadata)
                                 .transpose();
-                            if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
-                                // Perhaps someday we'll assign semantics to multiple keys in one message, but for now it doesn't make sense.
-                                key = Some(Err(DecodeError::Text(format!(
-                                    "Unexpected bytes remaining for decoded key: {:?}",
-                                    key_cursor
+                            if !data.is_empty() && !matches!(&result, Some(Err(_))) {
+                                result = Some(Err(DecodeError::Text(format!(
+                                    "Saw unexpected EOF with bytes remaining in buffer: {:?}",
+                                    data
                                 ))
                                 .into()));
                             }
-                            key
-                        } else {
-                            None
-                        };
+                            value_buf.clear();
 
-                        let value = match value {
-                            MessagePayload::Data(data) => data,
-                            MessagePayload::EOF => {
-                                let data = &mut &value_buf[..];
-                                let mut result = value_decoder
-                                    .eof(data, Some(n_seen + 1), push_metadata)
-                                    .transpose();
-                                if !data.is_empty() && !matches!(&result, Some(Err(_))) {
-                                    result = Some(Err(DecodeError::Text(format!(
-                                        "Saw unexpected EOF with bytes remaining in buffer: {:?}",
-                                        data
-                                    ))
-                                    .into()));
-                                }
-                                value_buf.clear();
-
-                                match result {
-                                    None => continue,
-                                    Some(value) => {
-                                        if matches!(&key, Some(Err(_))) || matches!(&value, Err(_))
-                                        {
-                                            n_errors += 1;
-                                        } else if matches!(&value, Ok(_)) {
-                                            n_successes += 1;
-                                        }
-                                        session.give(DecodeResult {
-                                            key,
-                                            value: Some(value),
-                                            position: Some(n_seen),
-                                        });
-                                        n_seen += 1;
+                            match result {
+                                None => continue,
+                                Some(value) => {
+                                    if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
+                                        n_errors += 1;
+                                    } else if matches!(&value, Ok(_)) {
+                                        n_successes += 1;
                                     }
-                                }
-                                continue;
-                            }
-                        };
-
-                        // Check whether we have a partial message from last time.
-                        // If so, we need to prepend it to the bytes we got from _this_ message.
-                        let value = if value_buf.is_empty() {
-                            value
-                        } else {
-                            value_buf.extend_from_slice(&*value);
-                            &value_buf
-                        };
-
-                        if value.is_empty() {
-                            session.give(DecodeResult {
-                                key,
-                                value: None,
-                                position: None,
-                            });
-                        } else {
-                            let value_bytes_remaining = &mut value.as_slice();
-                            // The intent is that the below loop runs as long as there are more bytes to decode.
-                            //
-                            // We'd like to be able to write `while !value_cursor.empty()`
-                            // here, but that runs into borrow checker issues, so we use `loop`
-                            // and break manually.
-                            loop {
-                                let old_value_cursor = *value_bytes_remaining;
-                                let value = match value_decoder
-                                    .next(
-                                        value_bytes_remaining,
-                                        Some(n_seen + 1), // Match historical practice - files start at 1, not 0.
-                                        *upstream_time_millis,
-                                        push_metadata,
-                                    )
-                                    .await
-                                {
-                                    Err(e) => Err(e),
-                                    Ok(None) => {
-                                        let leftover = value_bytes_remaining.to_vec();
-                                        value_buf = leftover;
-                                        break;
-                                    }
-                                    Ok(Some(value)) => Ok(value),
-                                };
-                                n_seen += 1;
-
-                                // If the decoders decoded a message, they need to have made progress consuming the bytes.
-                                // Otherwise, we risk going into an infinite loop.
-                                assert!(
-                                    old_value_cursor != *value_bytes_remaining || value.is_err()
-                                );
-
-                                let is_err = value.is_err();
-                                if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
-                                    n_errors += 1;
-                                } else if matches!(&value, Ok(_)) {
-                                    n_successes += 1;
-                                }
-                                if value_bytes_remaining.is_empty() {
                                     session.give(DecodeResult {
                                         key,
                                         value: Some(value),
                                         position: Some(n_seen),
                                     });
-                                    value_buf = vec![];
-                                    break;
-                                } else {
-                                    session.give(DecodeResult {
-                                        key: key.clone(),
-                                        value: Some(value),
-                                        position: Some(n_seen),
-                                    });
+                                    n_seen += 1;
                                 }
-                                if is_err {
-                                    // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
-                                    // makes no sense to keep going.
+                            }
+                            continue;
+                        }
+                    };
+
+                    // Check whether we have a partial message from last time.
+                    // If so, we need to prepend it to the bytes we got from _this_ message.
+                    let value = if value_buf.is_empty() {
+                        value
+                    } else {
+                        value_buf.extend_from_slice(&*value);
+                        &value_buf
+                    };
+
+                    if value.is_empty() {
+                        session.give(DecodeResult {
+                            key,
+                            value: None,
+                            position: None,
+                        });
+                    } else {
+                        let value_bytes_remaining = &mut value.as_slice();
+                        // The intent is that the below loop runs as long as there are more bytes to decode.
+                        //
+                        // We'd like to be able to write `while !value_cursor.empty()`
+                        // here, but that runs into borrow checker issues, so we use `loop`
+                        // and break manually.
+                        loop {
+                            let old_value_cursor = *value_bytes_remaining;
+                            let value = match value_decoder
+                                .next(
+                                    value_bytes_remaining,
+                                    Some(n_seen + 1), // Match historical practice - files start at 1, not 0.
+                                    *upstream_time_millis,
+                                    push_metadata,
+                                )
+                                .await
+                            {
+                                Err(e) => Err(e),
+                                Ok(None) => {
+                                    let leftover = value_bytes_remaining.to_vec();
+                                    value_buf = leftover;
                                     break;
                                 }
+                                Ok(Some(value)) => Ok(value),
+                            };
+                            n_seen += 1;
+
+                            // If the decoders decoded a message, they need to have made progress consuming the bytes.
+                            // Otherwise, we risk going into an infinite loop.
+                            assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
+
+                            let is_err = value.is_err();
+                            if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
+                                n_errors += 1;
+                            } else if matches!(&value, Ok(_)) {
+                                n_successes += 1;
+                            }
+                            if value_bytes_remaining.is_empty() {
+                                session.give(DecodeResult {
+                                    key,
+                                    value: Some(value),
+                                    position: Some(n_seen),
+                                });
+                                value_buf = vec![];
+                                break;
+                            } else {
+                                session.give(DecodeResult {
+                                    key: key.clone(),
+                                    value: Some(value),
+                                    position: Some(n_seen),
+                                });
+                            }
+                            if is_err {
+                                // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
+                                // makes no sense to keep going.
+                                break;
                             }
                         }
                     }
                 }
-                // Matching historical practice, we only log metrics on the value decoder.
-                if n_errors > 0 {
-                    value_decoder.log_errors(n_errors);
-                }
-                if n_successes > 0 {
-                    value_decoder.log_successes(n_errors);
-                }
             }
-        },
-    );
+            // Matching historical practice, we only log metrics on the value decoder.
+            if n_errors > 0 {
+                value_decoder.log_errors(n_errors);
+            }
+            if n_successes > 0 {
+                value_decoder.log_successes(n_errors);
+            }
+        }
+    });
     (results, None)
 }
