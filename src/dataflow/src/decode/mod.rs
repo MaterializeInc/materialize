@@ -479,7 +479,7 @@ where
             .unwrap_or(""),
         value_encoding.op_name()
     );
-    let key_decoder = key_encoding.map(|key_encoding| {
+    let mut key_decoder = key_encoding.map(|key_encoding| {
         get_decoder(
             key_encoding,
             debug_name,
@@ -496,7 +496,7 @@ where
     let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_))
         && !matches!(envelope, SourceEnvelope::Debezium(..));
 
-    let value_decoder = get_decoder(
+    let mut value_decoder = get_decoder(
         value_encoding,
         debug_name,
         envelope,
@@ -510,7 +510,7 @@ where
     // Other decoders don't care; so we distribute things round-robin (i.e., by "position"), and
     // fall back to arbitrarily hashing by value if the upstream didn't give us a position.
     let use_key_contract = matches!(envelope, SourceEnvelope::Debezium(..));
-    let results = stream.unary_async(
+    let results = stream.unary_async2(
         Exchange::new(move |x: &SourceOutput<Vec<u8>, MessagePayload>| {
             if use_key_contract {
                 x.key.hashed()
@@ -521,19 +521,14 @@ where
             }
         }),
         &op_name,
-        move |_, _| {
-            let key_decoder = Rc::new(RefCell::new(key_decoder));
-            let value_decoder = Rc::new(RefCell::new(value_decoder));
-            move |mut input, mut raw_output| {
-                let key_decoder = Rc::clone(&key_decoder);
-                let value_decoder = Rc::clone(&value_decoder);
-                async move {
-                    let mut key_decoder = key_decoder.borrow_mut();
-                    let mut value_decoder = value_decoder.borrow_mut();
-                    let mut output = raw_output.activate();
+        move |_, _, mut bundle_stream| {
+            async move {
+                loop {
+                    let (input, mut output) = bundle_stream.next().await;
 
                     let mut n_errors = 0;
                     let mut n_successes = 0;
+
                     while let Some((cap, data)) = input.next() {
                         // We must retain the capability in case we hit an await point. This is
                         // because CapabilityRefs aren't enough to ensure the frontier doesn't move
@@ -627,8 +622,6 @@ where
                     if n_successes > 0 {
                         value_decoder.log_successes(n_successes);
                     }
-                    drop(output);
-                    (input, raw_output)
                 }
             }
         },

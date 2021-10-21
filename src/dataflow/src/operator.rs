@@ -67,6 +67,17 @@ where
         >,
         P: ParallelizationContract<G::Timestamp, D1>;
 
+    fn unary_async2<D2, B, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
+    where
+        D2: Data,
+        B: FnOnce(
+            Capability<G::Timestamp>,
+            OperatorInfo,
+            BundleStream<G::Timestamp, D1, P::Puller, D2, Tee<G::Timestamp, D2>>,
+        ) -> Fut,
+        Fut: Future<Output = std::convert::Infallible> + 'static,
+        P: ParallelizationContract<G::Timestamp, D1>;
+
     fn unary_async<D2, B, L, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
     where
         D2: Data,
@@ -217,6 +228,50 @@ where
         L: FnMut(D1) -> I + 'static;
 }
 
+pub struct Item<D>(Option<D>);
+
+impl<D: Unpin> Future for Item<D> {
+    type Output = D;
+
+    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.0.take() {
+            Some(item) => Poll::Ready(item),
+            None => Poll::Pending,
+        }
+    }
+}
+
+pub struct BundleStream<T, D1, P1, D2, P2>
+where
+    T: timely::progress::Timestamp,
+    P1: timely::communication::Pull<
+        timely::communication::Message<timely::dataflow::channels::Message<T, D1>>,
+    >,
+    P2: timely::communication::Push<
+        timely::communication::Message<timely::dataflow::channels::Message<T, D2>>,
+    >,
+{
+    input: InputHandle<T, D1, P1>,
+    output: OutputWrapper<T, D2, P2>,
+}
+
+impl<T, D1, P1, D2, P2> BundleStream<T, D1, P1, D2, P2>
+where
+    T: timely::progress::Timestamp,
+    P1: timely::communication::Pull<
+        timely::communication::Message<timely::dataflow::channels::Message<T, D1>>,
+    >,
+    P2: timely::communication::Push<
+        timely::communication::Message<timely::dataflow::channels::Message<T, D2>>,
+    >,
+{
+    pub fn next(
+        &mut self,
+    ) -> impl Future<Output = (&mut InputHandle<T, D1, P1>, OutputHandle<T, D2, P2>)> {
+        Item(Some((&mut self.input, self.output.activate())))
+    }
+}
+
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
 where
     D1: Data,
@@ -264,6 +319,45 @@ where
         });
 
         (ok_stream, err_stream)
+    }
+
+    fn unary_async2<D2, B, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
+    where
+        D2: Data,
+        B: FnOnce(
+            Capability<G::Timestamp>,
+            OperatorInfo,
+            BundleStream<G::Timestamp, D1, P::Puller, D2, Tee<G::Timestamp, D2>>,
+        ) -> Fut,
+        Fut: Future<Output = std::convert::Infallible> + 'static,
+        P: ParallelizationContract<G::Timestamp, D1>,
+    {
+        let mut builder = OperatorBuilder::new(name.to_owned(), self.scope());
+        let operator_info = builder.operator_info();
+
+        // unary operator has a single input and a single output
+        let input = builder.new_input(self, pact);
+        let (output, stream) = builder.new_output();
+
+        builder.build(move |mut capabilities| {
+            // `capabilities` is single-element vector since we have a single output.
+            let capability = capabilities.pop().unwrap();
+
+            // create a timely activator that will be wrapped in an async Waker/Context
+            let activator = Arc::new(self.scope().sync_activator_for(&operator_info.address[..]));
+
+            let bundle_stream = BundleStream { input, output };
+
+            let mut logic_fut = Box::pin(constructor(capability, operator_info, bundle_stream));
+
+            move |_frontiers| {
+                let waker = futures::task::waker_ref(&activator);
+                let mut cx = Context::from_waker(&waker);
+                assert!(Pin::new(&mut logic_fut).poll(&mut cx).is_pending());
+            }
+        });
+
+        stream
     }
 
     /// Like [Operator::unary] but its logic function is async.
