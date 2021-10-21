@@ -162,12 +162,12 @@ impl<'a, L> DeleteOnDropHistogram<'a, L>
 where
     L: PromLabelsExt<'a>,
 {
-    fn from_metric_vector(vec: &HistogramVec, labels: L) -> Self {
-        let inner = labels.get_from_metric_vec(vec);
+    fn from_metric_vector(vec: HistogramVec, labels: L) -> Self {
+        let inner = labels.get_from_metric_vec(&vec);
         Self {
             inner,
             labels,
-            vec: vec.clone(),
+            vec,
             _phantom: &PhantomData,
         }
     }
@@ -215,12 +215,12 @@ where
     P: Atomic,
     L: PromLabelsExt<'a>,
 {
-    fn from_metric_vector(vec: &GenericCounterVec<P>, labels: L) -> Self {
-        let inner = labels.get_from_metric_vec(vec);
+    fn from_metric_vector(vec: GenericCounterVec<P>, labels: L) -> Self {
+        let inner = labels.get_from_metric_vec(&vec);
         Self {
             inner,
             labels,
-            vec: vec.clone(),
+            vec,
             _phantom: &PhantomData,
         }
     }
@@ -272,7 +272,7 @@ impl<P: Atomic> CounterVecExt for GenericCounterVec<P> {
         &self,
         labels: L,
     ) -> DeleteOnDropCounter<'a, Self::CounterType, L> {
-        DeleteOnDropCounter::from_metric_vector(self, labels)
+        DeleteOnDropCounter::from_metric_vector(self.clone(), labels)
     }
 }
 
@@ -294,7 +294,7 @@ impl HistogramVecExt for HistogramVec {
         &self,
         labels: L,
     ) -> DeleteOnDropHistogram<'a, L> {
-        DeleteOnDropHistogram::from_metric_vector(self, labels)
+        DeleteOnDropHistogram::from_metric_vector(self.clone(), labels)
     }
 }
 
@@ -316,12 +316,12 @@ where
     P: Atomic,
     L: PromLabelsExt<'a>,
 {
-    fn from_metric_vector(vec: &GenericGaugeVec<P>, labels: L) -> Self {
-        let inner = labels.get_from_metric_vec(vec);
+    fn from_metric_vector(vec: GenericGaugeVec<P>, labels: L) -> Self {
+        let inner = labels.get_from_metric_vec(&vec);
         Self {
             inner,
             labels,
-            vec: vec.clone(),
+            vec,
             _phantom: &PhantomData,
         }
     }
@@ -370,7 +370,7 @@ impl<P: Atomic> GaugeVecExt for GenericGaugeVec<P> {
         &self,
         labels: L,
     ) -> DeleteOnDropGauge<'a, Self::GaugeType, L> {
-        DeleteOnDropGauge::from_metric_vector(self, labels)
+        DeleteOnDropGauge::from_metric_vector(self.clone(), labels)
     }
 }
 

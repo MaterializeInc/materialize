@@ -427,7 +427,7 @@ impl MapFilterProject {
     /// // Partition `original` using the available columns and current input arity.
     /// // This informs `partition` which columns are available, where they can be found,
     /// // and how many columns are not relevant but should be preserved.
-    /// let (before, after) = original.partition(&available_columns, 5);
+    /// let (before, after) = original.partition(available_columns, 5);
     ///
     /// // `before` sees all five input columns, and should append `a + b + c`.
     /// assert_eq!(before, MapFilterProject::new(5).map(vec![
@@ -450,7 +450,7 @@ impl MapFilterProject {
     /// // may not need all inputs. The `demand()` and `permute()` methods can
     /// // optimize the representation.
     /// ```
-    pub fn partition(self, available: &HashMap<usize, usize>, input_arity: usize) -> (Self, Self) {
+    pub fn partition(self, available: HashMap<usize, usize>, input_arity: usize) -> (Self, Self) {
         // Map expressions, filter predicates, and projections for `before` and `after`.
         let mut before_expr = Vec::new();
         let mut before_pred = Vec::new();
@@ -507,7 +507,7 @@ impl MapFilterProject {
         // Map from prior output location to location in un-projected `before`.
         // This map is used to correct references in `before` but it should be
         // adjusted to reflect `before`s projection prior to use in `after`.
-        let mut before_map = available.clone();
+        let mut before_map = available;
         // Input columns include any additional undescribed columns that may
         // not be captured by the `available` argument, so we must independently
         // track the current number of columns (vs relying on `before_map.len()`).
@@ -624,9 +624,8 @@ impl MapFilterProject {
     /// The supplied `shuffle` may not list columns that are not "demanded" by the
     /// instance, and so we should ensure that `self` is optimized to not reference
     /// columns that are not demanded.
-    pub fn permute(&mut self, shuffle: &HashMap<usize, usize>, new_input_arity: usize) {
+    pub fn permute(&mut self, mut shuffle: HashMap<usize, usize>, new_input_arity: usize) {
         self.remove_undemanded();
-        let mut shuffle = shuffle.clone();
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
         for index in 0..map.len() {
             // Intermediate columns are just shifted.
