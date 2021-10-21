@@ -20,7 +20,7 @@ use timely::progress::Antichain;
 use timely::Data as TimelyData;
 
 use crate::indexed::runtime::StreamReadHandle;
-use crate::indexed::ListenEvent;
+use crate::indexed::{ListenEvent, ListenFn};
 use crate::operators::replay::Replay;
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
@@ -50,11 +50,11 @@ where
         Stream<G, (String, u64, isize)>,
     ) {
         let (listen_tx, listen_rx) = mpsc::channel();
-        let listen_fn = Box::new(move |e| {
+        let listen_fn = ListenFn(Box::new(move |e| {
             // TODO: If send fails, it means the operator is no longer running.
             // We should probably allow the listen to deregister itself.
             let _ = listen_tx.send(e);
-        });
+        }));
 
         let snapshot = read.listen(listen_fn);
 

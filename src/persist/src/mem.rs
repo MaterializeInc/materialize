@@ -26,6 +26,7 @@ use crate::indexed::Indexed;
 use crate::storage::{Blob, LockInfo, Log, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
+#[derive(Debug)]
 struct MemLogCore {
     seqno: Range<SeqNo>,
     dataz: Vec<Vec<u8>>,
@@ -109,6 +110,7 @@ impl MemLogCore {
 }
 
 /// An in-memory implementation of [Log].
+#[derive(Debug)]
 pub struct MemLog {
     core: Arc<Mutex<MemLogCore>>,
 }
@@ -169,6 +171,7 @@ impl Log for MemLog {
     }
 }
 
+#[derive(Debug)]
 struct MemBlobCore {
     dataz: HashMap<String, Vec<u8>>,
     lock: Option<LockInfo>,
@@ -229,6 +232,7 @@ impl MemBlobCore {
 }
 
 /// An in-memory implementation of [Blob].
+#[derive(Debug)]
 pub struct MemBlob {
     core: Arc<Mutex<MemBlobCore>>,
 }
@@ -298,7 +302,7 @@ impl Blob for MemBlob {
 
 /// An in-memory representation of a [Log] and [Blob] that can be reused
 /// across dataflows
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemRegistry {
     log: Arc<Mutex<MemLogCore>>,
     blob: Arc<Mutex<MemBlobCore>>,
@@ -382,6 +386,7 @@ impl MemRegistry {
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
 /// across dataflows
 #[cfg(test)]
+#[derive(Debug)]
 pub struct MemMultiRegistry {
     log_by_path: HashMap<String, Arc<Mutex<MemLogCore>>>,
     blob_by_path: HashMap<String, Arc<Mutex<MemBlobCore>>>,

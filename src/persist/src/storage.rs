@@ -226,6 +226,7 @@ pub mod tests {
         Ok(entries)
     }
 
+    #[derive(Debug)]
     pub struct PathAndReentranceId<'a> {
         pub path: &'a str,
         pub reentrance_id: &'a str,

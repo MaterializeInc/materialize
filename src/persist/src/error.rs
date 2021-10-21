@@ -86,6 +86,7 @@ impl<T> From<sync::PoisonError<T>> for Error {
 ///
 /// This exists to let us keep the (surprisingly non-trivial) Log plumbing while
 /// we don't actually use it, but without the risk of accidentally using it.
+#[derive(Debug)]
 pub struct ErrorLog;
 
 impl Log for ErrorLog {

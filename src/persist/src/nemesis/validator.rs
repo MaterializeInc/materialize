@@ -21,6 +21,7 @@ use crate::nemesis::{
 };
 use crate::storage::SeqNo;
 
+#[derive(Debug)]
 pub struct Validator {
     seal_frontier: HashMap<String, u64>,
     since_frontier: HashMap<String, u64>,

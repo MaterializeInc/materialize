@@ -9,6 +9,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 
@@ -36,10 +37,11 @@ use crate::unreliable::UnreliableHandle;
 // it used to be. We should probably rename this to something like `Threads` (to
 // leave room for a future one that runs timely with processes and can stop them
 // without graceful shutdown) and reimplement Direct using Indexed.
+#[derive(Debug)]
 pub struct Direct {
-    start_fn: Box<dyn FnMut(UnreliableHandle) -> Result<RuntimeClient, Error>>,
+    start_fn: StartFn,
     pub persister: RuntimeClient,
-    worker: Worker<Thread>,
+    worker: TimelyWorker,
     unreliable: UnreliableHandle,
     streams: HashMap<
         String,
@@ -84,7 +86,7 @@ impl Runtime for Direct {
 
         // Poke the dataflows a bit. We really only need the one in seal (and
         // stop) but it can't hurt and maybe we'll uncover something.
-        self.worker.step();
+        self.worker.0.step();
 
         Step {
             req_id: i.req_id,
@@ -101,9 +103,9 @@ impl Direct {
     ) -> Result<Self, Error> {
         let unreliable = UnreliableHandle::default();
         let persister = start_fn(unreliable.clone())?;
-        let worker = Worker::new(WorkerConfig::default(), Thread::new());
+        let worker = TimelyWorker(Worker::new(WorkerConfig::default(), Thread::new()));
         Ok(Direct {
-            start_fn: Box::new(start_fn),
+            start_fn: StartFn(Box::new(start_fn)),
             persister,
             worker,
             unreliable,
@@ -138,7 +140,7 @@ impl Direct {
                 // This is expected to have been cleared by start.
                 debug_assert!(previous_output.is_none());
 
-                let probe = worker.dataflow(|scope| {
+                let probe = worker.0.dataflow(|scope| {
                     let mut probe = TimelyProbe::new();
                     let (ok_stream, _err_stream) = scope.persisted_source(&read);
                     // TODO: Do something with err_stream.
@@ -202,7 +204,7 @@ impl Direct {
         // Force the dataflows to make progress, so we don't end up validating
         // the very uninteresting case of no output.
         let probe = probe.clone();
-        self.worker.step_while(|| probe.less_than(&req.ts));
+        self.worker.0.step_while(|| probe.less_than(&req.ts));
 
         Ok(())
     }
@@ -250,9 +252,9 @@ impl Direct {
 
         // New dataflow means new output.
         self.output_by_stream_name.clear();
-        self.worker = Worker::new(WorkerConfig::default(), Thread::new());
+        self.worker = TimelyWorker(Worker::new(WorkerConfig::default(), Thread::new()));
 
-        let persister = (self.start_fn)(self.unreliable.clone())?;
+        let persister = (self.start_fn.0)(self.unreliable.clone())?;
         self.persister = persister;
 
         Ok(())
@@ -262,9 +264,25 @@ impl Direct {
         let res = self.persister.stop();
 
         // Stopping the persister should allow the dataflows to finish.
-        while self.worker.step() {}
+        while self.worker.0.step() {}
 
         res
+    }
+}
+
+struct StartFn(Box<dyn FnMut(UnreliableHandle) -> Result<RuntimeClient, Error>>);
+
+impl fmt::Debug for StartFn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StartFn").finish_non_exhaustive()
+    }
+}
+
+struct TimelyWorker(Worker<Thread>);
+
+impl fmt::Debug for TimelyWorker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TimelyWorker").finish_non_exhaustive()
     }
 }
 

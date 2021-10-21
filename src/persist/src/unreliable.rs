@@ -15,13 +15,14 @@ use std::sync::{Arc, Mutex};
 use crate::error::Error;
 use crate::storage::{Blob, Log, SeqNo};
 
+#[derive(Debug)]
 struct UnreliableCore {
     unavailable: bool,
     // TODO: Delays, what else?
 }
 
 /// A handle for controlling the behavior of an unreliable delegate.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UnreliableHandle {
     core: Arc<Mutex<UnreliableCore>>,
 }
@@ -68,6 +69,7 @@ impl UnreliableHandle {
 }
 
 /// An unreliable delegate to [Log].
+#[derive(Debug)]
 pub struct UnreliableLog<L> {
     handle: UnreliableHandle,
     log: L,
@@ -119,6 +121,7 @@ impl<L: Log> Log for UnreliableLog<L> {
 }
 
 /// An unreliable delegate to [Blob].
+#[derive(Debug)]
 pub struct UnreliableBlob<B> {
     handle: UnreliableHandle,
     blob: B,

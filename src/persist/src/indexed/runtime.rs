@@ -392,7 +392,7 @@ where
 
 /// A handle that allows writes of ((Key, Value), Time, Diff) updates into an
 /// [crate::indexed::Indexed] via a [RuntimeClient].
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct StreamWriteHandle<K, V> {
     id: Id,
     runtime: RuntimeClient,
@@ -406,6 +406,15 @@ impl<K, V> Clone for StreamWriteHandle<K, V> {
             runtime: self.runtime.clone(),
             _phantom: self._phantom,
         }
+    }
+}
+
+impl<K, V> fmt::Debug for StreamWriteHandle<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StreamWriteHandle")
+            .field("id", &self.id)
+            .field("runtime", &self.runtime)
+            .finish()
     }
 }
 
@@ -627,6 +636,7 @@ impl<K: Codec, V: Codec> Snapshot<K, V> for DecodedSnapshot<K, V> {
 }
 
 /// An [Iterator] representing one part of the data in a [DecodedSnapshot].
+#[derive(Debug)]
 pub struct DecodedSnapshotIter<K, V> {
     iter: IndexedSnapshotIter,
     _phantom: PhantomData<(K, V)>,
