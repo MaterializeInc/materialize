@@ -7,16 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cell::Cell;
+use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use pin_project::pin_project;
 use std::ops::Mul;
+use timely::communication::{Message, Pull, Push};
+use timely::dataflow::channels;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -26,6 +30,7 @@ use timely::dataflow::operators::generic::{
 };
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
+use timely::progress::Timestamp;
 use timely::Data;
 
 use repr::Diff;
@@ -67,7 +72,8 @@ where
         >,
         P: ParallelizationContract<G::Timestamp, D1>;
 
-    fn unary_async2<D2, B, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
+    /// Like [Operator::unary] but its logic function is async.
+    fn unary_async<D2, B, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
     where
         D2: Data,
         B: FnOnce(
@@ -75,24 +81,7 @@ where
             OperatorInfo,
             BundleStream<G::Timestamp, D1, P::Puller, D2, Tee<G::Timestamp, D2>>,
         ) -> Fut,
-        Fut: Future<Output = std::convert::Infallible> + 'static,
-        P: ParallelizationContract<G::Timestamp, D1>;
-
-    fn unary_async<D2, B, L, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
-    where
-        D2: Data,
-        B: FnOnce(Capability<G::Timestamp>, OperatorInfo) -> L,
-        L: FnMut(
-                InputHandle<G::Timestamp, D1, P::Puller>,
-                OutputWrapper<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
-            ) -> Fut
-            + 'static,
-        Fut: Future<
-            Output = (
-                InputHandle<G::Timestamp, D1, P::Puller>,
-                OutputWrapper<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
-            ),
-        >,
+        Fut: Future<Output = Infallible> + 'static,
         P: ParallelizationContract<G::Timestamp, D1>;
 
     /// Like [`timely::dataflow::operators::map::Map::map`], but `logic`
@@ -228,47 +217,64 @@ where
         L: FnMut(D1) -> I + 'static;
 }
 
-pub struct Item<D>(Option<D>);
+// The future type returned by [BundleStream::next]
+pub struct Next<'a, T, D1, P1, D2, P2>
+where
+    T: Timestamp,
+    P1: Pull<Message<channels::Message<T, D1>>>,
+    P2: Push<Message<channels::Message<T, D2>>>,
+{
+    item: Option<(&'a mut InputHandle<T, D1, P1>, OutputHandle<'a, T, D2, P2>)>,
+    data_available: &'a Cell<bool>,
+}
 
-impl<D: Unpin> Future for Item<D> {
-    type Output = D;
+impl<'a, T, D1, P1, D2, P2> Future for Next<'a, T, D1, P1, D2, P2>
+where
+    T: Timestamp,
+    P1: Pull<Message<channels::Message<T, D1>>>,
+    P2: Push<Message<channels::Message<T, D2>>>,
+{
+    type Output = (&'a mut InputHandle<T, D1, P1>, OutputHandle<'a, T, D2, P2>);
 
     fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.0.take() {
-            Some(item) => Poll::Ready(item),
-            None => Poll::Pending,
+        if self.data_available.get() {
+            Poll::Ready(self.item.take().expect("polled after completion"))
+        } else {
+            Poll::Pending
         }
     }
 }
 
 pub struct BundleStream<T, D1, P1, D2, P2>
 where
-    T: timely::progress::Timestamp,
-    P1: timely::communication::Pull<
-        timely::communication::Message<timely::dataflow::channels::Message<T, D1>>,
-    >,
-    P2: timely::communication::Push<
-        timely::communication::Message<timely::dataflow::channels::Message<T, D2>>,
-    >,
+    T: Timestamp,
+    P1: Pull<Message<channels::Message<T, D1>>>,
+    P2: Push<Message<channels::Message<T, D2>>>,
 {
     input: InputHandle<T, D1, P1>,
     output: OutputWrapper<T, D2, P2>,
+    data_available: Rc<Cell<bool>>,
 }
 
 impl<T, D1, P1, D2, P2> BundleStream<T, D1, P1, D2, P2>
 where
-    T: timely::progress::Timestamp,
-    P1: timely::communication::Pull<
-        timely::communication::Message<timely::dataflow::channels::Message<T, D1>>,
-    >,
-    P2: timely::communication::Push<
-        timely::communication::Message<timely::dataflow::channels::Message<T, D2>>,
-    >,
+    T: Timestamp,
+    P1: Pull<Message<channels::Message<T, D1>>>,
+    P2: Push<Message<channels::Message<T, D2>>>,
 {
-    pub fn next(
-        &mut self,
-    ) -> impl Future<Output = (&mut InputHandle<T, D1, P1>, OutputHandle<T, D2, P2>)> {
-        Item(Some((&mut self.input, self.output.activate())))
+    fn new(input: InputHandle<T, D1, P1>, output: OutputWrapper<T, D2, P2>) -> Self {
+        Self {
+            input,
+            output,
+            data_available: Rc::new(Cell::new(false)),
+        }
+    }
+
+    pub fn next(&mut self) -> Next<T, D1, P1, D2, P2> {
+        Next {
+            item: Some((&mut self.input, self.output.activate())),
+            data_available: &*self.data_available,
+        }
     }
 }
 
@@ -321,7 +327,8 @@ where
         (ok_stream, err_stream)
     }
 
-    fn unary_async2<D2, B, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
+    /// Like [Operator::unary] but its logic function is async.
+    fn unary_async<D2, B, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
     where
         D2: Data,
         B: FnOnce(
@@ -329,7 +336,7 @@ where
             OperatorInfo,
             BundleStream<G::Timestamp, D1, P::Puller, D2, Tee<G::Timestamp, D2>>,
         ) -> Fut,
-        Fut: Future<Output = std::convert::Infallible> + 'static,
+        Fut: Future<Output = Infallible> + 'static,
         P: ParallelizationContract<G::Timestamp, D1>,
     {
         let mut builder = OperatorBuilder::new(name.to_owned(), self.scope());
@@ -345,154 +352,21 @@ where
 
             // create a timely activator that will be wrapped in an async Waker/Context
             let activator = Arc::new(self.scope().sync_activator_for(&operator_info.address[..]));
+            let waker = futures::task::waker(activator);
 
-            let bundle_stream = BundleStream { input, output };
+            let bundle_stream = BundleStream::new(input, output);
+            let data_available = Rc::clone(&bundle_stream.data_available);
 
             let mut logic_fut = Box::pin(constructor(capability, operator_info, bundle_stream));
 
             move |_frontiers| {
-                let waker = futures::task::waker_ref(&activator);
+                // We don't know for sure that data is available. Timely could have scheduled this
+                // operator due to a future making progress so this can lead to spurious wake ups.
+                // If an InputHandle::is_empty method existed we could check it before polling
+                data_available.set(true);
                 let mut cx = Context::from_waker(&waker);
+                // The future can never resolve as its output type is Infallible
                 assert!(Pin::new(&mut logic_fut).poll(&mut cx).is_pending());
-            }
-        });
-
-        stream
-    }
-
-    /// Like [Operator::unary] but its logic function is async.
-    ///
-    /// Whenever timely schedules the operator because there is more data in the input handle the
-    /// supplied logic function will be called and the operator will keep polling the returned
-    /// future until completion. If timely re-schedules the operator because more data is available
-    /// but a future is pending, the data will be left intact and a new future will be constructed
-    /// as soon as the previous resovles.
-    ///
-    /// Due to limitations of the Rust type-system it is impossible for the logic closure to
-    /// receive mutable referneces to the handles directly like its sync counterpart. For this
-    /// reason, the closure is given owned handles for input and output that must be returned back
-    /// as the output of the future.
-    ///
-    /// ## Important ##
-    ///
-    /// The future returned must hit no await points if the input handle is empty. This restriction
-    /// might be lifted in the future if we can learn if an input handle is empty or not.
-    fn unary_async<D2, B, L, Fut, P>(&self, pact: P, name: &str, constructor: B) -> Stream<G, D2>
-    where
-        D2: Data,
-        B: FnOnce(Capability<G::Timestamp>, OperatorInfo) -> L,
-        L: FnMut(
-                InputHandle<G::Timestamp, D1, P::Puller>,
-                OutputWrapper<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
-            ) -> Fut
-            + 'static,
-        Fut: Future<
-            Output = (
-                InputHandle<G::Timestamp, D1, P::Puller>,
-                OutputWrapper<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
-            ),
-        >,
-        P: ParallelizationContract<G::Timestamp, D1>,
-    {
-        /// The state machine of this operator
-        #[pin_project(project = StateProj, project_replace = StateProjOwn)]
-        enum State<A, B> {
-            /// The operator is waiting for a future returned by `logic` to complete. Pinned access
-            /// is required in order to poll the future.
-            ///
-            /// The boolean flag indicates if the future has been polled at least once.
-            Waiting(bool, #[pin] A),
-            /// The operator is ready to process data and will transition to the `Waiting` state as
-            /// soon as timely re-schedules the operator
-            Ready(B),
-            /// This state is only transiently entered while transitioning from Ready -> Waiting.
-            /// The operator will panic if it ever stays permanently in the Invalid state
-            Invalid,
-        }
-
-        let mut builder = OperatorBuilder::new(name.to_owned(), self.scope());
-        let operator_info = builder.operator_info();
-
-        // unary operator has a single input and a single output
-        let input = builder.new_input(self, pact);
-        let (output, stream) = builder.new_output();
-
-        builder.build(move |mut capabilities| {
-            // `capabilities` is single-element vector since we have a single output.
-            let capability = capabilities.pop().unwrap();
-
-            // create a timely activator that will be wrapped in an async Waker/Context
-            let activator = Arc::new(self.scope().sync_activator_for(&operator_info.address[..]));
-
-            let logic = constructor(capability, operator_info);
-
-            // Allocate the operator state in the heap and pin it. By pinning the whole state we
-            // can poll the future within and crucially re-use the allocation whenever we have to
-            // re-create the future.
-            let mut state = Box::pin(State::Ready((input, output, logic)));
-
-            move |_frontiers| loop {
-                match state.as_mut().project() {
-                    // If we're in this state it means that there is data in the input handle so we
-                    // need to create a future and start polling it.
-                    StateProj::Ready(_) => {
-                        // Temporarily replace the operator state with the `Invalid` state in order
-                        // to take ownership of the input and output handles
-                        match state.as_mut().project_replace(State::Invalid) {
-                            StateProjOwn::Ready((input, output, mut logic)) => {
-                                state
-                                    .as_mut()
-                                    .project_replace(State::Waiting(false, async move {
-                                        // `logic` receives owned handles for input and output and
-                                        // must return them back so that wen can re-use them when
-                                        // we have to schedule the next future.
-                                        let (input, output) = logic(input, output).await;
-                                        (input, output, logic)
-                                    }));
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
-                    // If we're in this state it means that we are waiting on a future and either
-                    // the future called its waker and timely rescheduled us or there is more data
-                    // in the input handle. In either case all we can do is poll the future.
-                    StateProj::Waiting(polled, mut fut) => {
-                        let waker = futures::task::waker_ref(&activator);
-                        let mut context = Context::from_waker(&waker);
-
-                        // Remember if the future was polled before
-                        let was_polled_before = *polled;
-                        match Pin::new(&mut fut).poll(&mut context) {
-                            Poll::Ready(handles) => {
-                                // We're done polling and we got our handles back.
-                                state.as_mut().project_replace(State::Ready(handles));
-
-                                if !was_polled_before {
-                                    // The only way we can end up in Poll::Ready with
-                                    // `was_polled_before` being false is if the future never
-                                    // yielded (e.g if there were no await points). In this case we
-                                    // don't want to re-create a future because there is nothing
-                                    // do, so break.
-                                    //
-                                    // If however there was an await point then we don't know if
-                                    // timely re-scheduled us *only* because of the waker or if
-                                    // there is also data in the input handle. In this case, we'll
-                                    // re-create the future just in case and rely on it not doing
-                                    // any async work if the input handle is empty.
-                                    //
-                                    // This would be a lot simpler if there was an
-                                    // InputHandle::is_empty() method.
-                                    break;
-                                }
-                            }
-                            Poll::Pending => {
-                                *polled = true;
-                                break;
-                            }
-                        }
-                    }
-                    StateProj::Invalid => unreachable!(),
-                }
             }
         });
 

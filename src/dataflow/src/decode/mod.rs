@@ -510,7 +510,7 @@ where
     // Other decoders don't care; so we distribute things round-robin (i.e., by "position"), and
     // fall back to arbitrarily hashing by value if the upstream didn't give us a position.
     let use_key_contract = matches!(envelope, SourceEnvelope::Debezium(..));
-    let results = stream.unary_async2(
+    let results = stream.unary_async(
         Exchange::new(move |x: &SourceOutput<Vec<u8>, MessagePayload>| {
             if use_key_contract {
                 x.key.hashed()
@@ -695,11 +695,11 @@ where
         metrics,
     );
 
-    let mut n_seen = 0;
     let mut value_buf = vec![];
     // The `position` value from `SourceOutput` is meaningless here -- it's just the index of a chunk.
     // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
-    let results = stream.unary_async2(Pipeline, &op_name, move |_, _, mut bundles| async move {
+    let mut n_seen = 0;
+    let results = stream.unary_async(Pipeline, &op_name, move |_, _, mut bundles| async move {
         loop {
             let (input, mut output) = bundles.next().await;
 
