@@ -2515,7 +2515,7 @@ dependencies = [
 [[package]]
 name = "mzcloud"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/cloud-sdks#921bacf7ba9288df2b25610a38e7fa2c7a48f25b"
+source = "git+https://github.com/MaterializeInc/cloud-sdks#3e17e134530d27a57c0c48c0746709596d8fd6af"
 dependencies = [
  "reqwest",
  "serde",

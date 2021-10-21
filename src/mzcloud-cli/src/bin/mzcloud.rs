@@ -214,12 +214,20 @@ enum DeploymentsCommand {
     Logs {
         /// ID of the deployment.
         id: String,
+
+        /// Get the logs for the previous execution, rather than the currently running one.
+        #[structopt(long)]
+        previous: bool,
     },
 
     /// Download the logs from a Materialize deployment.
     TailscaleLogs {
         /// ID of the deployment.
         id: String,
+
+        /// Get the logs for the previous execution, rather than the currently running one.
+        #[structopt(long)]
+        previous: bool,
     },
 
     /// Connect to a Materialize deployment using psql.
@@ -337,12 +345,12 @@ async fn handle_deployment_operations(
             fs::write(&output_file, &bytes)?;
             println!("Certificate bundle saved to {}", &output_file);
         }
-        DeploymentsCommand::Logs { id } => {
-            let logs = deployments_logs_retrieve(&config, &id).await?;
+        DeploymentsCommand::Logs { id, previous } => {
+            let logs = deployments_logs_retrieve(&config, &id, Some(previous)).await?;
             print!("{}", logs);
         }
-        DeploymentsCommand::TailscaleLogs { id } => {
-            let logs = deployments_tailscale_logs_retrieve(&config, &id).await?;
+        DeploymentsCommand::TailscaleLogs { id, previous } => {
+            let logs = deployments_tailscale_logs_retrieve(&config, &id, Some(previous)).await?;
             print!("{}", logs);
         }
         DeploymentsCommand::Psql { id } => {
