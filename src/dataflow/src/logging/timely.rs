@@ -30,13 +30,22 @@ use crate::replay::MzReplay;
 use dataflow_types::logging::LoggingConfig;
 use repr::{datum_list_size, datum_size, Datum, Row, Timestamp};
 
-/// Constructs the logging dataflows and returns a logger and trace handles.
+/// Constructs the logging dataflow for timely logs.
+///
+/// Params
+/// * `worker`: The Timely worker hosting the log analysis dataflow.
+/// * `config`: Logging configuration
+/// * `linked`: The source to read log events from.
+/// * `activator`: A handle to acknowledge activations.
+///
+/// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
+/// the original rows.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
     activator: RcActivator,
-) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle, Permutation)> {
+) -> std::collections::HashMap<LogVariant, (KeysValsHandle, Permutation)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
     let peers = worker.peers();
 
@@ -451,7 +460,6 @@ pub fn construct<A: Allocate>(
                 let key = variant.index_by();
                 let (permutation, value) =
                     Permutation::construct_from_columns(&key, variant.desc().arity());
-                let key_clone = key.clone();
                 let trace = collection
                     .map({
                         let mut row_packer = Row::default();
@@ -466,7 +474,7 @@ pub fn construct<A: Allocate>(
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                result.insert(variant, (key_clone, trace, permutation));
+                result.insert(variant, (trace, permutation));
             }
         }
         result

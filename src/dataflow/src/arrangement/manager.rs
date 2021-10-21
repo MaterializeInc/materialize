@@ -198,8 +198,9 @@ impl TraceManager {
 }
 
 /// Bundles together traces for the successful computations (`oks`), the
-/// failed computations (`errs`), and additional tokens that should share
-/// the lifetime of the bundled traces (`to_drop`).
+/// failed computations (`errs`), additional tokens that should share
+/// the lifetime of the bundled traces (`to_drop`), and a permutation
+/// describing how to reconstruct the original row (`permutation`).
 #[derive(Clone)]
 pub struct TraceBundle {
     oks: KeysValsHandle,

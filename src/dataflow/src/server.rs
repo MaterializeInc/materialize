@@ -599,7 +599,7 @@ where
         }
 
         // Install traces as maintained indexes
-        for (log, (_, trace, permutation)) in t_traces {
+        for (log, (trace, permutation)) in t_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
@@ -607,7 +607,7 @@ where
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace, permutation)) in r_traces {
+        for (log, (trace, permutation)) in r_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
@@ -615,7 +615,7 @@ where
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace, permutation)) in d_traces {
+        for (log, (trace, permutation)) in d_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
@@ -623,7 +623,7 @@ where
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace, permutation)) in m_traces {
+        for (log, (trace, permutation)) in m_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces

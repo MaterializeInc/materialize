@@ -176,10 +176,9 @@ where
                         let mut borrow = datum_vec.borrow_with_many(&[k, v]);
                         permutation.permute_in_place(&mut borrow);
                         row_builder.extend(&*borrow);
-                        // assert_eq!(&row_builder, v, "permutation: {:?}", permutation);
                         row_builder.finish_and_reuse()
                     }),
-                    errs.as_collection(|k, _v| k.clone()),
+                    errs.as_collection(|k, &()| k.clone()),
                 )
             }
             ArrangementFlavor::Trace(_, oks, errs, permutation) => {
@@ -189,10 +188,9 @@ where
                         let mut borrow = datum_vec.borrow_with_many(&[k, v]);
                         permutation.permute_in_place(&mut borrow);
                         row_builder.extend(&*borrow);
-                        // assert_eq!(&row_builder, v, "permutation: {:?}", permutation);
                         row_builder.finish_and_reuse()
                     }),
-                    errs.as_collection(|k, _v| k.clone()),
+                    errs.as_collection(|k, &()| k.clone()),
                 )
             }
         }
@@ -234,7 +232,7 @@ where
                     },
                     refuel,
                 );
-                let errs = errs.as_collection(|k, _v| k.clone());
+                let errs = errs.as_collection(|k, &()| k.clone());
                 return (oks, errs);
             }
             ArrangementFlavor::Trace(_, oks, errs, permutation) => {
@@ -251,7 +249,7 @@ where
                     },
                     refuel,
                 );
-                let errs = errs.as_collection(|k, _v| k.clone());
+                let errs = errs.as_collection(|k, &()| k.clone());
                 return (oks, errs);
             }
         }
@@ -489,7 +487,7 @@ where
                     let temp_storage = RowArena::new();
                     row_packer.try_extend(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
                     let key_row = row_packer.finish_and_reuse();
-                    row_packer.extend(val.iter().map(|k| datums[*k]));
+                    row_packer.extend(val.iter().map(|c| datums[*c]));
                     let val_row = row_packer.finish_and_reuse();
                     Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });
