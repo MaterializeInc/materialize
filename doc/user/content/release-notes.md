@@ -105,6 +105,9 @@ List new features before bug fixes.
 
 - Evaluate TopK operators on constant inputs at query compile time.
 
+- Add the [`session_user`](/sql/functions/#system-information-func) system
+  information function.
+
 {{% version-header v0.9.9 %}}
 
 - **Breaking change.** Fix a bug that inadvertently let users create `char

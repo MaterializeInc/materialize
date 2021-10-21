@@ -547,6 +547,9 @@
   - signature: 'current_user() -> text'
     description: >-
       Returns the name of the user who executed the containing query.
+  - signature: 'session_user -> text'
+    description: >-
+      Returns the name of the user who executed the containing query.
   - signature: 'mz_row_size(expr: Record) -> int'
     description: Returns the number of bytes used to store a row.
 
