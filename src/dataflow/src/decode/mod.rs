@@ -532,7 +532,7 @@ where
                     // We must retain the capability in case we hit an await point. This is
                     // because CapabilityRefs aren't enough to ensure the frontier doesn't move
                     // past us
-                    let cap = cap.retain();
+                    // let cap = cap.retain();
                     let mut session = output.session(&cap);
 
                     for SourceOutput {
@@ -708,7 +708,7 @@ where
             while let Some((cap, data)) = input.next() {
                 // We must retain the capability in case we hit an await point. This is because
                 // CapabilityRef aren't enough to ensure the frontier doesn't move past us
-                let cap = cap.retain();
+                // let cap = cap.retain();
                 let mut session = output.session(&cap);
                 for SourceOutput {
                     key,
