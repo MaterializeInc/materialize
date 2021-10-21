@@ -237,7 +237,7 @@ where
     type Output = (&'a mut InputHandle<T, D1, P1>, OutputHandle<'a, T, D2, P2>);
 
     fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.data_available.get() {
+        if self.data_available.replace(false) {
             Poll::Ready(self.item.take().expect("polled after completion"))
         } else {
             Poll::Pending
@@ -262,14 +262,6 @@ where
     P1: Pull<Message<channels::Message<T, D1>>>,
     P2: Push<Message<channels::Message<T, D2>>>,
 {
-    fn new(input: InputHandle<T, D1, P1>, output: OutputWrapper<T, D2, P2>) -> Self {
-        Self {
-            input,
-            output,
-            data_available: Rc::new(Cell::new(false)),
-        }
-    }
-
     pub fn next(&mut self) -> Next<T, D1, P1, D2, P2> {
         Next {
             item: Some((&mut self.input, self.output.activate())),
@@ -354,8 +346,13 @@ where
             let activator = Arc::new(self.scope().sync_activator_for(&operator_info.address[..]));
             let waker = futures::task::waker(activator);
 
-            let bundle_stream = BundleStream::new(input, output);
-            let data_available = Rc::clone(&bundle_stream.data_available);
+            let data_available = Rc::new(Cell::new(false));
+
+            let bundle_stream = BundleStream {
+                input,
+                output,
+                data_available: Rc::clone(&data_available),
+            };
 
             let mut logic_fut = Box::pin(constructor(capability, operator_info, bundle_stream));
 
