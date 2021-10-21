@@ -115,19 +115,22 @@ fn bench_read_persisted_source<M: Measurement>(
             let mut probe = ProbeHandle::new();
 
             worker.dataflow(|scope| {
-                let (oks, _errs) = scope.persisted_source(&read);
-
-                oks.map(move |((key, _value), time, diff)| {
-                    let mut result = 0;
-                    for a_byte in key.iter().take(4) {
-                        result ^= a_byte;
-                    }
-                    ((result, ()), time, diff)
-                })
-                .as_collection()
-                .filter(|(key, _value)| *key % 2 == 0)
-                .count()
-                .probe_with(&mut probe);
+                scope
+                    .persisted_source(&read)
+                    .flat_map(move |(data, time, diff)| match data {
+                        Err(_err) => None,
+                        Ok((key, _value)) => Some({
+                            let mut result = 0;
+                            for a_byte in key.iter().take(4) {
+                                result ^= a_byte;
+                            }
+                            ((result, ()), time, diff)
+                        }),
+                    })
+                    .as_collection()
+                    .filter(|(key, _value)| *key % 2 == 0)
+                    .count()
+                    .probe_with(&mut probe);
             });
 
             while probe.less_than(&expected_input_frontier) {

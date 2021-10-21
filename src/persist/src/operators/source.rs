@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::{Concat, Map, OkErr};
+use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::Data as TimelyData;
@@ -30,10 +30,7 @@ pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyDat
     fn persisted_source(
         &mut self,
         read: &StreamReadHandle<K, V>,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    );
+    ) -> Stream<G, (Result<(K, V), String>, u64, isize)>;
 }
 
 impl<G, K, V> PersistedSource<G, K, V> for G
@@ -45,10 +42,7 @@ where
     fn persisted_source(
         &mut self,
         read: &StreamReadHandle<K, V>,
-    ) -> (
-        Stream<G, ((K, V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    ) {
+    ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
         let (listen_tx, listen_rx) = mpsc::channel();
         let listen_fn = ListenFn(Box::new(move |e| {
             // TODO: If send fails, it means the operator is no longer running.
@@ -66,33 +60,26 @@ where
         // it for the operator.
 
         // listen to new data
-        let (ok_new, err_new) = listen_source(self, snapshot_seal, listen_rx);
-        let err_new_decode = err_new.flat_map(std::convert::identity);
+        let new = listen_source(self, snapshot_seal, listen_rx);
 
         // Replay the previously persisted data, if any.
-        let (ok_previous, err_previous) = self.replay(snapshot);
+        let previous = self.replay(snapshot);
 
-        let ok_all = ok_previous.concat(&ok_new);
-        let err_all = err_previous.concat(&err_new_decode);
-
-        (ok_all, err_all)
+        previous.concat(&new)
     }
 }
 
 /// Creates a source that listens on the given `listen_rx`.
-fn listen_source<S, K, V>(
-    scope: &S,
+fn listen_source<G, K, V>(
+    scope: &G,
     // This uses an `Option<Antichain<_>>` and not an empty `Antichain` to signal that there is no
     // initial frontier because an empty frontier would signal that we are at "the end of time",
     // meaning that there will be no more events in the future.
     initial_frontier: Option<Antichain<u64>>,
     listen_rx: Receiver<ListenEvent<Vec<u8>, Vec<u8>>>,
-) -> (
-    Stream<S, ((K, V), u64, isize)>,
-    Stream<S, Vec<(String, u64, isize)>>,
-)
+) -> Stream<G, (Result<(K, V), String>, u64, isize)>
 where
-    S: Scope<Timestamp = u64>,
+    G: Scope<Timestamp = u64>,
     K: TimelyData + Codec + Send,
     V: TimelyData + Codec + Send,
 {
@@ -154,7 +141,11 @@ where
         }
     });
 
-    source_stream.ok_err(|u| flatten_decoded_update(u))
+    source_stream.map(|u| match u {
+        ((Ok(k), Ok(v)), ts, diff) => (Ok((k, v)), ts, diff),
+        ((Err(err), _), ts, diff) => (Err(err), ts, diff),
+        ((_, Err(err)), ts, diff) => (Err(err), ts, diff),
+    })
 }
 
 #[cfg(test)]
@@ -162,12 +153,13 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::{Capture, Probe};
+    use timely::dataflow::operators::{Capture, OkErr, Probe};
     use timely::dataflow::ProbeHandle;
     use timely::Config;
 
     use crate::error::Error;
     use crate::mem::MemRegistry;
+    use crate::operators::split_ok_err;
     use crate::unreliable::UnreliableHandle;
 
     use super::*;
@@ -180,7 +172,8 @@ mod tests {
         let (oks, errs) = timely::execute_directly(move |worker| {
             let (oks, errs) = worker.dataflow(|scope| {
                 let (_, read) = p.create_or_load::<String, ()>("1").unwrap();
-                let (ok_stream, err_stream) = scope.persisted_source(&read);
+                let (ok_stream, err_stream) =
+                    scope.persisted_source(&read).ok_err(|x| split_ok_err(x));
                 (ok_stream.capture(), err_stream.capture())
             });
 
@@ -249,7 +242,7 @@ mod tests {
 
             worker.dataflow(|scope| {
                 let (_, read) = p.create_or_load::<String, ()>("1").unwrap();
-                let (oks, _rrs) = scope.persisted_source(&read);
+                let (oks, _rrs) = scope.persisted_source(&read).ok_err(|x| split_ok_err(x));
 
                 oks.probe_with(&mut probe);
             });
@@ -293,7 +286,7 @@ mod tests {
         timely::execute(Config::process(2), move |worker| {
             worker.dataflow(|scope| {
                 let (write, read) = p.create_or_load("1").unwrap();
-                let (ok_stream, _) = scope.persisted_source(&read);
+                let (ok_stream, _) = scope.persisted_source(&read).ok_err(|x| split_ok_err(x));
 
                 // Write one thing from each worker again. This time at timestamp 2.
                 write
@@ -345,7 +338,7 @@ mod tests {
 
         let recv = timely::execute_directly(move |worker| {
             let recv = worker.dataflow(|scope| {
-                let (_, err_stream) = scope.persisted_source(&read);
+                let (_, err_stream) = scope.persisted_source(&read).ok_err(|x| split_ok_err(x));
                 err_stream.capture()
             });
 
@@ -408,8 +401,8 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(2));
                 }
                 worker.dataflow(|scope| {
-                    let (ok_stream, _err_stream) = scope.persisted_source(&read);
-                    ok_stream.probe_with(&mut probe);
+                    let data = scope.persisted_source(&read);
+                    data.probe_with(&mut probe);
                 });
 
                 while probe.less_than(&1) {
@@ -434,17 +427,5 @@ mod tests {
             .expect("timely workers failed");
 
         Ok(())
-    }
-}
-
-fn flatten_decoded_update<K, V>(
-    update: ((Result<K, String>, Result<V, String>), u64, isize),
-) -> Result<((K, V), u64, isize), Vec<(String, u64, isize)>> {
-    let ((k, v), ts, diff) = update;
-    match (k, v) {
-        (Ok(k), Ok(v)) => Ok(((k, v), ts, diff)),
-        (Err(k_err), Ok(_)) => Err(vec![(k_err, ts, diff)]),
-        (Ok(_), Err(v_err)) => Err(vec![(v_err, ts, diff)]),
-        (Err(k_err), Err(v_err)) => Err(vec![(k_err, ts, diff), (v_err, ts, diff)]),
     }
 }

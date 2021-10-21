@@ -15,7 +15,7 @@ use persist_types::Codec;
 use timely::dataflow::channels::pushers::buffer::AutoflushSession;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
-use timely::dataflow::operators::{ActivateCapability, Concat, Map, UnorderedInput};
+use timely::dataflow::operators::{ActivateCapability, Concat, Map, OkErr, UnorderedInput};
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::ActivateOnDrop;
 use timely::Data as TimelyData;
@@ -23,6 +23,7 @@ use timely::Data as TimelyData;
 use crate::future::Future;
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
 use crate::operators::replay::Replay;
+use crate::operators::split_ok_err;
 use crate::storage::SeqNo;
 
 /// A persistent equivalent of [UnorderedInput].
@@ -62,7 +63,7 @@ where
 
         // Replay the previously persisted data, if any.
         let snapshot = read.snapshot();
-        let (ok_previous, err_previous) = self.replay(snapshot);
+        let (ok_previous, err_previous) = self.replay(snapshot).ok_err(|x| split_ok_err(x));
 
         let ok_previous = ok_previous.map(|((k, _), ts, diff)| (k, ts, diff));
 

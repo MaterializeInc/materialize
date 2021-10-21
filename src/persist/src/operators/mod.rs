@@ -15,3 +15,12 @@ pub mod replay;
 pub mod source;
 pub mod stream;
 pub mod upsert;
+
+pub(crate) fn split_ok_err<K, V>(
+    x: (Result<(K, V), String>, u64, isize),
+) -> Result<((K, V), u64, isize), (String, u64, isize)> {
+    match x {
+        (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
+        (Err(err), ts, diff) => Err((err, ts, diff)),
+    }
+}
