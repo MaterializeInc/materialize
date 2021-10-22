@@ -9,12 +9,11 @@
 
 use itertools::Itertools;
 
-use crate::plan::HirScalarExpr;
+use crate::plan::expr::{HirRelationExpr, HirScalarExpr, JoinKind};
 use crate::query_model::{
-    BoxId, BoxType, Column, ColumnReference, DistinctOperation, Expr, Model, QuantifierType, Values,
+    BoxId, BoxType, Column, ColumnReference, DistinctOperation, Expr, Model, OuterJoin,
+    QuantifierType, Select, Values,
 };
-
-use crate::plan::expr::HirRelationExpr;
 
 pub struct FromHir {
     /// The model being built.
@@ -102,6 +101,66 @@ impl FromHir {
                     select_box.borrow_mut().add_predicate(Box::new(expr));
                 }
                 select_id
+            }
+            HirRelationExpr::Join {
+                left,
+                right,
+                on,
+                kind,
+            } => {
+                let box_type = if matches!(
+                    kind,
+                    JoinKind::LeftOuter { .. } | JoinKind::RightOuter { .. } | JoinKind::FullOuter
+                ) {
+                    BoxType::OuterJoin(OuterJoin::new())
+                } else {
+                    BoxType::Select(Select::new())
+                };
+                let join_box = self.model.make_box(box_type);
+
+                // Left box
+                let left_box = self.generate_internal(left);
+                let left_q_type = if matches!(kind, JoinKind::LeftOuter { .. }) {
+                    QuantifierType::PreservedForeach
+                } else {
+                    QuantifierType::Foreach
+                };
+
+                let _ = self.model.make_quantifier(left_q_type, left_box, join_box);
+
+                // Right box
+                let right_box = if kind.is_lateral() {
+                    self.within_context(join_box, &mut |generator| -> BoxId {
+                        generator.generate_internal(right)
+                    })
+                } else {
+                    self.generate_internal(right)
+                };
+
+                let right_q_type = if matches!(kind, JoinKind::RightOuter { .. }) {
+                    QuantifierType::PreservedForeach
+                } else {
+                    QuantifierType::Foreach
+                };
+
+                let _ = self
+                    .model
+                    .make_quantifier(right_q_type, right_box, join_box);
+
+                // ON clause
+                let predicate = self.generate_expr(on, join_box);
+                self.model
+                    .get_box(join_box)
+                    .borrow_mut()
+                    .add_predicate(Box::new(predicate));
+
+                // Default projection
+                self.model
+                    .get_box(join_box)
+                    .borrow_mut()
+                    .add_all_input_columns(&self.model);
+
+                join_box
             }
             _ => panic!("unsupported expression type"),
         }
