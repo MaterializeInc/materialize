@@ -11,7 +11,7 @@ use itertools::Itertools;
 
 use crate::plan::HirScalarExpr;
 use crate::query_model::{
-    BoxId, BoxType, Column, ColumnReference, Expr, Model, QuantifierType, Values,
+    BoxId, BoxType, Column, ColumnReference, DistinctOperation, Expr, Model, QuantifierType, Values,
 };
 
 use crate::plan::expr::HirRelationExpr;
@@ -78,6 +78,24 @@ impl FromHir {
                         }),
                         alias: None,
                     });
+                }
+                select_id
+            }
+            HirRelationExpr::Distinct { input } => {
+                let select_id = self.generate_select(input);
+                let mut select_box = self.model.get_box(select_id).borrow_mut();
+                select_box.distinct = DistinctOperation::Enforce;
+                select_id
+            }
+            HirRelationExpr::Filter { input, predicates } => {
+                let input_box = self.generate_internal(input);
+                // Wrap the input within a select so the referenced columns are
+                // in the expected order
+                let select_id = self.wrap_within_select(input_box);
+                for predicate in predicates {
+                    let expr = self.generate_expr(predicate, select_id);
+                    let select_box = self.model.get_box(select_id);
+                    select_box.borrow_mut().add_predicate(Box::new(expr));
                 }
                 select_id
             }
