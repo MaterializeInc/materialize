@@ -9,15 +9,17 @@
 
 //! Replace operators on constants collections with constant collections.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
+use std::convert::TryInto;
 use std::iter;
 
-use expr::{AggregateExpr, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
+use expr::{AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
 use repr::{Datum, Diff, RelationType, Row, RowArena};
 
 use crate::{TransformArgs, TransformError};
 
-/// Replace operators on constants collections with constant collections.
+/// Replace operators on constant collections with constant collections.
 #[derive(Debug)]
 pub struct FoldConstants {
     /// An optional maximum size, after which optimization can cease.
@@ -79,7 +81,7 @@ impl FoldConstants {
                     aggregate.expr.reduce(input_typ);
                 }
 
-                // Guard against evaluating expression that may contain temporal expressions.
+                // Guard against evaluating an expression that may contain temporal expressions.
                 if group_key.iter().any(|e| e.contains_temporal())
                     || aggregates.iter().any(|a| a.expr.contains_temporal())
                 {
@@ -97,7 +99,21 @@ impl FoldConstants {
                     };
                 }
             }
-            MirRelationExpr::TopK { .. } => { /*too complicated*/ }
+            MirRelationExpr::TopK {
+                input,
+                group_key,
+                order_key,
+                limit,
+                offset,
+                ..
+            } => {
+                if let MirRelationExpr::Constant { rows, .. } = &mut **input {
+                    if let Ok(rows) = rows {
+                        Self::fold_topk_constant(group_key, order_key, limit, offset, rows);
+                    }
+                    *relation = input.take_dangerous();
+                }
+            }
             MirRelationExpr::Negate { input } => {
                 if let MirRelationExpr::Constant { rows, .. } = &mut **input {
                     if let Ok(rows) = rows {
@@ -480,6 +496,75 @@ impl FoldConstants {
             })
             .collect();
         Ok(new_rows)
+    }
+
+    fn fold_topk_constant<'a>(
+        group_key: &[usize],
+        order_key: &[ColumnOrder],
+        limit: &Option<usize>,
+        offset: &usize,
+        rows: &'a mut [(Row, Diff)],
+    ) {
+        // helper functions for comparing elements by order_key and group_key
+        let cmp_order_key = |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
+            let lhs = lhs.0.unpack();
+            let rhs = rhs.0.unpack();
+            expr::compare_columns(order_key, &lhs, &rhs, || lhs.cmp(&rhs))
+        };
+        let cmp_group_key = {
+            let group_key = group_key
+                .iter()
+                .map(|column| ColumnOrder {
+                    column: *column,
+                    desc: false,
+                })
+                .collect::<Vec<ColumnOrder>>();
+            move |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
+                let lhs = &lhs.0.unpack();
+                let rhs = &rhs.0.unpack();
+                expr::compare_columns(&group_key, lhs, rhs, || Ordering::Equal)
+            }
+        };
+        let same_group_key =
+            |lhs: &(Row, Diff), rhs: &(Row, Diff)| cmp_group_key(lhs, rhs) == Ordering::Equal;
+
+        // compute Ordering based on the sort_key, otherwise consider all rows equal
+        rows.sort_by(&cmp_order_key);
+
+        // sort by the grouping key if not empty, keeping order_key as a secondary sort
+        if !group_key.is_empty() {
+            rows.sort_by(&cmp_group_key);
+        };
+
+        let mut cursor = 0;
+        while cursor < rows.len() {
+            // first, reset the remaining limit and offset for the current group
+            let mut offset_rem: isize = offset.clone().try_into().unwrap();
+            let mut limit_rem: Option<isize> = limit.clone().map(|x| x.try_into().unwrap());
+
+            let mut finger = cursor;
+            while finger < rows.len() && same_group_key(&rows[cursor], &rows[finger]) {
+                if rows[finger].1 < 0 {
+                    // ignore elements with negative diff
+                    rows[finger].1 = 0;
+                } else {
+                    // determine how many of the leading rows to ignore,
+                    // then decrement the diff and remaining offset by that number
+                    let rows_to_ignore = std::cmp::min(offset_rem, rows[finger].1);
+                    rows[finger].1 -= rows_to_ignore;
+                    offset_rem -= rows_to_ignore;
+                    // determine how many of the remaining rows to retain,
+                    // then update the diff and decrement the remaining limit by that number
+                    if let Some(limit_rem) = &mut limit_rem {
+                        let rows_to_retain = std::cmp::min(*limit_rem, rows[finger].1);
+                        rows[finger].1 = rows_to_retain;
+                        *limit_rem -= rows_to_retain;
+                    }
+                }
+                finger += 1;
+            }
+            cursor = finger;
+        }
     }
 
     fn fold_flat_map_constant(
