@@ -189,6 +189,11 @@ impl FromHir {
                 };
                 Expr::ColumnReference(self.find_column_within_box(context_box, c.column))
             }
+            HirScalarExpr::CallBinary { func, expr1, expr2 } => Expr::CallBinary {
+                func: func.clone(),
+                expr1: Box::new(self.generate_expr(expr1, context_box)),
+                expr2: Box::new(self.generate_expr(expr2, context_box)),
+            },
             HirScalarExpr::Select(expr) => {
                 let box_id = self.within_context(context_box, &mut |generator| -> BoxId {
                     generator.generate_select(expr)

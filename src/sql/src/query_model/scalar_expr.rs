@@ -14,6 +14,8 @@ use repr::*;
 
 use crate::query_model::{QuantifierId, QuantifierSet};
 
+pub use expr::BinaryFunc;
+
 /// Representation for scalar expressions within a query graph model.
 /// Similar to HirScalarExpr but:
 /// * subqueries are represented as column references to the subquery
@@ -29,6 +31,11 @@ pub enum Expr {
     ColumnReference(ColumnReference),
     BaseColumn(BaseColumn),
     Literal(Row, ColumnType),
+    CallBinary {
+        func: BinaryFunc,
+        expr1: Box<Expr>,
+        expr2: Box<Expr>,
+    },
 }
 
 impl fmt::Display for Expr {
@@ -42,6 +49,13 @@ impl fmt::Display for Expr {
             }
             Expr::Literal(row, _) => {
                 write!(f, "{}", row.unpack_first())
+            }
+            Expr::CallBinary { func, expr1, expr2 } => {
+                if func.is_infix_op() {
+                    write!(f, "({} {} {})", expr1, func, expr2)
+                } else {
+                    write!(f, "{}({}, {})", func, expr1, expr2)
+                }
             }
         }
     }
@@ -59,6 +73,10 @@ impl Expr {
                 if context.contains(&c.quantifier_id) {
                     column_refs.insert(c.clone());
                 }
+            }
+            Expr::CallBinary { expr1, expr2, .. } => {
+                expr1.collect_column_references_from_context(context, column_refs);
+                expr2.collect_column_references_from_context(context, column_refs);
             }
             Expr::Literal(..) | Expr::BaseColumn(_) => {}
         }
