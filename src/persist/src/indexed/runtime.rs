@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use differential_dataflow::trace::Description;
 use log;
 use ore::metrics::MetricsRegistry;
 use persist_types::Codec;
@@ -46,6 +47,7 @@ enum Cmd {
     Destroy(String, PFutureHandle<bool>),
     Write(Vec<(Id, ColumnarRecords)>, PFutureHandle<SeqNo>),
     Seal(Vec<Id>, u64, PFutureHandle<SeqNo>),
+    GetDescription(String, PFutureHandle<Description<u64>>),
     AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
     Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
     Listen(
@@ -197,6 +199,7 @@ impl RuntimeCore {
                 Cmd::Destroy(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Write(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Seal(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
+                Cmd::GetDescription(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::AllowCompaction(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
@@ -296,6 +299,18 @@ impl RuntimeClient {
         let write = StreamWriteHandle::new(name.to_owned(), id, self.clone());
         let meta = StreamReadHandle::new(name.to_owned(), id, self.clone());
         Ok((write, meta))
+    }
+
+    /// Returns a [Description] of the stream identified by `id_str`.
+    // TODO: We might want to think about returning only the compaction frontier (since) and seal
+    // timestamp (upper) here. Description seems more oriented towards describing batches, and in
+    // our case the lower is always `Antichain::from_elem(Timestamp::minimum())`. We could return a
+    // tuple or create our own Description-like return type for this.
+    pub fn get_description(&self, id_str: &str) -> Result<Description<u64>, Error> {
+        let (tx, rx) = PFuture::new();
+        self.core.send(Cmd::GetDescription(id_str.to_owned(), tx));
+        let seal_frontier = rx.recv()?;
+        Ok(seal_frontier)
     }
 
     /// Asynchronously persists `(Key, Value, Time, Diff)` updates for the
@@ -871,6 +886,9 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 Cmd::Seal(ids, ts, res) => {
                     self.indexed.seal(ids, ts, res);
                 }
+                Cmd::GetDescription(id_str, res) => {
+                    self.indexed.get_description(&id_str, res);
+                }
                 Cmd::AllowCompaction(id_sinces, res) => {
                     self.indexed.allow_compaction(id_sinces, res);
                 }
@@ -1066,6 +1084,62 @@ mod tests {
             let (_, meta) = persister.create_or_load("0")?;
             assert_eq!(meta.snapshot()?.read_to_end()?, data);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn seal_get_description_roundtrip() -> Result<(), Error> {
+        let id = "test";
+
+        let mut registry = MemRegistry::new();
+        let persister = registry.runtime_no_reentrance()?;
+        let (write, _) = persister.create_or_load::<(), ()>(id)?;
+
+        // Initial seal frontier should be `0`.
+        let upper = persister.get_description(id)?.upper().clone();
+        assert_eq!(upper, Antichain::from_elem(0));
+
+        write.seal(42);
+
+        let upper = persister.get_description(id)?.upper().clone();
+        assert_eq!(upper, Antichain::from_elem(42));
+
+        Ok(())
+    }
+
+    #[test]
+    fn allow_compaction_get_description_roundtrip() -> Result<(), Error> {
+        let id = "test";
+
+        let mut registry = MemRegistry::new();
+        let persister = registry.runtime_no_reentrance()?;
+        let (write, _) = persister.create_or_load::<(), ()>(id)?;
+
+        // Initial compaction/since frontier should be `0`.
+        let since = persister.get_description(id)?.since().clone();
+        assert_eq!(since, Antichain::from_elem(0));
+
+        write.seal(100).recv()?;
+        write.allow_compaction(Antichain::from_elem(42)).recv()?;
+
+        let since = persister.get_description(id)?.since().clone();
+        assert_eq!(since, Antichain::from_elem(42));
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_description_lower() -> Result<(), Error> {
+        let id = "test";
+
+        let mut registry = MemRegistry::new();
+        let persister = registry.runtime_no_reentrance()?;
+        let (_write, _) = persister.create_or_load::<(), ()>(id)?;
+
+        // `lower` will always be `Antichain::from_elem(Timestamp::minimum())`.
+        let since = persister.get_description(id)?.lower().clone();
+        assert_eq!(since, Antichain::from_elem(0));
 
         Ok(())
     }

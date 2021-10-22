@@ -25,8 +25,10 @@ use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::time::Instant;
 
+use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use timely::progress::Antichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::error::Error;
 use crate::indexed::arrangement::{Arrangement, ArrangementSnapshot};
@@ -936,6 +938,35 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             }
             pending.add_response(PendingResponse::SeqNo(res, resp));
         })
+    }
+}
+
+impl<L: Log, B: Blob> Indexed<L, B> {
+    /// Returns a [Description] of the stream identified by `id_str`.
+    // TODO: We might want to think about returning only the compaction frontier (since) and seal
+    // timestamp (upper) here. Description seems more oriented towards describing batches, and in
+    // our case the lower is always `Antichain::from_elem(Timestamp::minimum())`. We could return a
+    // tuple or create our own Description-like return type for this.
+    fn get_description(&mut self, id_str: &str, res: PFutureHandle<Description<u64>>) {
+        res.fill((|| {
+            self.drain_pending()?;
+            self.apply_unbatched_cmd(|state, _, _| {
+                let registration = state.id_mapping.iter().find(|s| s.name == id_str);
+                match registration {
+                    Some(registration) => {
+                        let arrangement = state
+                            .arrangements
+                            .get(&registration.id)
+                            .expect("missing trace");
+                        let upper = arrangement.get_seal();
+                        let since = arrangement.since();
+                        let lower = Antichain::from_elem(u64::minimum());
+                        Ok(Description::new(lower, upper, since))
+                    }
+                    None => Err(Error::String(format!("Unknown registration '{}'", id_str))),
+                }
+            })
+        })());
     }
 }
 
