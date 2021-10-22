@@ -294,10 +294,6 @@ impl Optimizer {
     pub fn physical_optimizer() -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform + Send + Sync>> = vec![
-            // Inline Let expressions whose values are just Maps, Filters, and
-            // Projects around a Get because JoinImplementation cannot lift them
-            // through a Let expression.
-            Box::new(crate::inline_let::InlineLet { inline_mfp: true }),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
@@ -320,18 +316,28 @@ impl Optimizer {
         Self { transforms }
     }
 
-    /// Simple fusion and elision transformations to render the query readable.
-    pub fn pre_optimization() -> Self {
+    /// Contains the logical optimizations that should run after cross-view
+    /// transformations run.
+    pub fn logical_cleanup_pass() -> Self {
         let transforms: Vec<Box<dyn crate::Transform + Send + Sync>> = vec![
-            Box::new(crate::fusion::join::Join),
-            Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
-            Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
-            Box::new(crate::fusion::filter::Filter),
+            // Delete unnecessary maps.
             Box::new(crate::fusion::map::Map),
-            Box::new(crate::fusion::negate::Negate),
-            Box::new(crate::projection_extraction::ProjectionExtraction),
-            Box::new(crate::fusion::project::Project),
-            Box::new(crate::fusion::join::Join),
+            Box::new(crate::Fixpoint {
+                limit: 100,
+                transforms: vec![
+                    // Projection pushdown may unblock fusing joins and unions.
+                    Box::new(crate::fusion::join::Join),
+                    Box::new(crate::redundant_join::RedundantJoin),
+                    // Redundant join produces projects that need to be fused.
+                    Box::new(crate::fusion::project::Project),
+                    Box::new(crate::fusion::union::Union),
+                    // This goes after union fusion so we can cancel out
+                    // more branches at a time.
+                    Box::new(crate::union_cancel::UnionBranchCancellation),
+                    Box::new(crate::cse::relation_cse::RelationCSE),
+                    Box::new(crate::inline_let::InlineLet { inline_mfp: true }),
+                ],
+            }),
         ];
         Self { transforms }
     }
