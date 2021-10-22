@@ -318,7 +318,7 @@ impl Optimizer {
 
     /// Contains the logical optimizations that should run after cross-view
     /// transformations run.
-    pub fn logical_optimizer2() -> Self {
+    pub fn logical_cleanup_pass() -> Self {
         let transforms: Vec<Box<dyn crate::Transform + Send + Sync>> = vec![
             // Delete unnecessary maps.
             Box::new(crate::fusion::map::Map),
