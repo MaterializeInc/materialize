@@ -22,12 +22,14 @@ use crate::storage::{Blob, LockInfo, Log, SeqNo};
 
 /// Inner struct handles to separate files that store the data and metadata about the
 /// most recently truncated sequence number for [FileLog].
+#[derive(Debug)]
 struct FileLogCore {
     dataz: File,
     metadata: File,
 }
 
 /// A naive implementation of [Log] backed by files.
+#[derive(Debug)]
 pub struct FileLog {
     base_dir: Option<PathBuf>,
     dataz: Arc<Mutex<FileLogCore>>,
@@ -267,6 +269,7 @@ impl Log for FileLog {
 }
 
 /// Implementation of [Blob] backed by files.
+#[derive(Debug)]
 pub struct FileBlob {
     base_dir: Option<PathBuf>,
 }

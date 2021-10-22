@@ -11,6 +11,7 @@
 //! updates, indexed by time.
 
 use std::collections::VecDeque;
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -63,6 +64,7 @@ use crate::storage::{Blob, SeqNo};
 /// - All entries are after or equal to some time frontier and less than some
 ///   SeqNo.
 /// - TODO: Space usage.
+#[derive(Debug)]
 pub struct Unsealed {
     id: Id,
     // NB: This is a closed lower bound. When Indexed seals a time, only data
@@ -341,7 +343,6 @@ impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
 // This intentionally stores the batches as a VecDeque so we can return the data
 // in roughly increasing timestamp order, but it's unclear if this is in any way
 // important.
-#[derive(Debug)]
 pub struct UnsealedSnapshotIter {
     /// A closed lower bound on the times of contained updates.
     ts_lower: Antichain<u64>,
@@ -350,6 +351,17 @@ pub struct UnsealedSnapshotIter {
 
     current_batch: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
     batches: VecDeque<Future<Arc<BlobUnsealedBatch>>>,
+}
+
+impl fmt::Debug for UnsealedSnapshotIter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UnsealedSnapshotIter")
+            .field("ts_lower", &self.ts_lower)
+            .field("ts_upper", &self.ts_upper)
+            .field("current_batch(len)", &self.current_batch.len())
+            .field("batches", &self.batches)
+            .finish()
+    }
 }
 
 impl Iterator for UnsealedSnapshotIter {

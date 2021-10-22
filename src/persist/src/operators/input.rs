@@ -9,6 +9,8 @@
 
 //! A Timely Dataflow operator that synchronously persists stream input.
 
+use std::fmt;
+
 use persist_types::Codec;
 use timely::dataflow::channels::pushers::buffer::AutoflushSession;
 use timely::dataflow::channels::pushers::{Counter, Tee};
@@ -85,6 +87,7 @@ where
 }
 
 /// A persistent equivalent of [UnorderedHandle].
+#[derive(Debug)]
 pub struct PersistentUnorderedHandle<K: TimelyData> {
     write: Box<StreamWriteHandle<K, ()>>,
     handle: UnorderedHandle<u64, (K, u64, isize)>,
@@ -114,6 +117,15 @@ pub struct PersistentUnorderedSession<'b, K: timely::Data> {
             Counter<u64, (K, u64, isize), Tee<u64, (K, u64, isize)>>,
         >,
     >,
+}
+
+impl<'b, K: timely::Data> fmt::Debug for PersistentUnorderedSession<'b, K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PersistentUnorderedSession")
+            .field("write", &self.write)
+            .field("session", &"...")
+            .finish()
+    }
 }
 
 impl<'b, K: timely::Data + Codec> PersistentUnorderedSession<'b, K> {

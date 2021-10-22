@@ -657,7 +657,7 @@ mod tests {
     use timely::dataflow::operators::Capture;
 
     use crate::error::Error;
-    use crate::indexed::{ListenEvent, SnapshotExt};
+    use crate::indexed::{ListenEvent, ListenFn, SnapshotExt};
     use crate::mem::MemRegistry;
     use crate::unreliable::UnreliableHandle;
 
@@ -834,24 +834,24 @@ mod tests {
 
         {
             let listen_tx = listen_tx.clone();
-            let listen_fn = Box::new(move |e| {
+            let listen_fn = ListenFn(Box::new(move |e| {
                 match e {
                     ListenEvent::Sealed(t) => listen_tx.send(Sealed::Primary(t)).unwrap(),
                     _ => panic!("unexpected data"),
                 };
                 ()
-            });
+            }));
 
             primary_read.listen(listen_fn)?;
         };
         {
-            let listen_fn = Box::new(move |e| {
+            let listen_fn = ListenFn(Box::new(move |e| {
                 match e {
                     ListenEvent::Sealed(t) => listen_tx.send(Sealed::Condition(t)).unwrap(),
                     _ => panic!("unexpected data"),
                 };
                 ()
-            });
+            }));
 
             condition_read.listen(listen_fn)?;
         };

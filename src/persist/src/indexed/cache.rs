@@ -39,6 +39,7 @@ use crate::storage::Blob;
 /// unpredictable. I think we probably want a soft limit and a hard limit where
 /// the soft limit does some alerting and the hard limit starts blocking (or
 /// erroring) until disk space frees up.
+#[derive(Debug)]
 pub struct BlobCache<B: Blob> {
     metrics: Metrics,
     blob: Arc<Mutex<B>>,

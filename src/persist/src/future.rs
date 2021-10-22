@@ -58,6 +58,7 @@ impl<T> Future<T> {
 }
 
 /// A handle for filling the result of an asynchronous computation.
+#[derive(Debug)]
 pub struct FutureHandle<T>(oneshot::Sender<Result<T, Error>>);
 
 impl<T> FutureHandle<T> {

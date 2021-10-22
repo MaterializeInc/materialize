@@ -9,6 +9,8 @@
 
 //! An S3 implementation of [Blob] storage.
 
+use std::fmt;
+
 use aws_util::aws::ConnectInfo;
 use rusoto_core::{ByteStream, Region, RusotoError};
 use rusoto_s3::{
@@ -25,6 +27,16 @@ pub struct Config {
     client: S3Client,
     bucket: String,
     prefix: String,
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("client", &"...")
+            .field("bucket", &self.bucket)
+            .field("prefix", &self.prefix)
+            .finish()
+    }
 }
 
 impl Config {
@@ -150,6 +162,7 @@ impl Config {
 // - Resolve what to do with LOCK, this impl is race-y.
 // - Everything on the s3 client is async, but the persist runtime is not. Make
 //   the Log and Blob traits async and figure out how to deal with the fallout.
+#[derive(Debug)]
 pub struct S3Blob {
     blob_async: S3BlobAsync,
 }
@@ -196,6 +209,16 @@ struct S3BlobAsync {
     client: Option<S3Client>,
     bucket: String,
     prefix: String,
+}
+
+impl fmt::Debug for S3BlobAsync {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("S3BlobAsync")
+            .field("client", &"...")
+            .field("bucket", &self.bucket)
+            .field("prefix", &self.prefix)
+            .finish()
+    }
 }
 
 impl S3BlobAsync {

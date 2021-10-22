@@ -13,9 +13,9 @@
 //! This is directly a persistent analog of [differential_dataflow::trace::Trace].
 
 use std::collections::VecDeque;
-use std::mem;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::{fmt, mem};
 
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -74,6 +74,7 @@ use crate::storage::Blob;
 /// - The compaction levels across the list of batches in a trace are weakly decreasing
 ///   (non-increasing) when iterating from oldest to most recent time intervals.
 /// - TODO: Space usage.
+#[derive(Debug)]
 pub struct Trace {
     id: Id,
     // NB: We may at some point need to break this up into separate logical and
@@ -334,6 +335,15 @@ impl Default for TraceSnapshotIter {
             current_batch: Vec::new(),
             batches: VecDeque::new(),
         }
+    }
+}
+
+impl fmt::Debug for TraceSnapshotIter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TraceSnapshotIter")
+            .field("current_batch(len)", &self.current_batch.len())
+            .field("batches", &self.batches)
+            .finish()
     }
 }
 

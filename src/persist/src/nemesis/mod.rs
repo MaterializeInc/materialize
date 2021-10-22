@@ -210,6 +210,7 @@ pub trait Runtime {
     fn finish(self);
 }
 
+#[derive(Debug)]
 pub struct Runner<R: Runtime> {
     generator: Generator,
     runtime: R,

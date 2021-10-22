@@ -67,6 +67,7 @@ impl Default for GeneratorConfig {
     }
 }
 
+#[derive(Debug)]
 struct GeneratorState {
     running: bool,
     seal_frontier: HashMap<String, u64>,
@@ -285,6 +286,7 @@ impl ReqGenerator {
     }
 }
 
+#[derive(Debug)]
 pub struct Generator {
     seed: u64,
     config: GeneratorConfig,

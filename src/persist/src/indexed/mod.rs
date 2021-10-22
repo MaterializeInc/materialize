@@ -20,6 +20,7 @@ pub mod trace;
 pub mod unsealed;
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::time::Instant;
@@ -42,6 +43,7 @@ use crate::indexed::trace::{Trace, TraceSnapshot, TraceSnapshotIter};
 use crate::indexed::unsealed::{Unsealed, UnsealedSnapshot, UnsealedSnapshotIter};
 use crate::storage::{Blob, Log, SeqNo};
 
+#[derive(Debug)]
 enum PendingResponse {
     SeqNo(FutureHandle<SeqNo>, Result<SeqNo, Error>),
     Unit(FutureHandle<()>, Result<(), Error>),
@@ -77,6 +79,7 @@ impl PendingResponse {
 
 /// This struct holds changes to [Indexed] that have not been committed to
 /// persistent storage or sent to downstream listeners.
+#[derive(Debug)]
 struct Pending {
     writes: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>>,
     responses: Vec<PendingResponse>,
@@ -188,6 +191,7 @@ impl Pending {
 ///   storage, and clears and responds to all pending responses.
 /// - Pending writes, seals, and allow_compactions are drained before processing
 ///   any other type of request.
+#[derive(Debug)]
 pub struct Indexed<L: Log, B: Blob> {
     next_stream_id: Id,
     unsealeds_seqno_upper: SeqNo,
@@ -762,10 +766,10 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         for (id, updates) in updates_for_listeners.drain() {
             if let Some(listen_fns) = self.listeners.get(&id) {
                 if listen_fns.len() == 1 {
-                    listen_fns[0](ListenEvent::Records(updates));
+                    listen_fns[0].0(ListenEvent::Records(updates));
                 } else {
                     for listen_fn in listen_fns.iter() {
-                        listen_fn(ListenEvent::Records(updates.clone()));
+                        listen_fn.0(ListenEvent::Records(updates.clone()));
                     }
                 }
             }
@@ -774,7 +778,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         for (id, seal) in seals_by_id.drain() {
             if let Some(listen_fns) = self.listeners.get(&id) {
                 for listen_fn in listen_fns.iter() {
-                    listen_fn(ListenEvent::Sealed(seal));
+                    listen_fn.0(ListenEvent::Sealed(seal));
                 }
             }
         }
@@ -1062,7 +1066,13 @@ pub enum ListenEvent<K, V> {
 }
 
 /// The callback used by [Indexed::listen].
-pub type ListenFn<K, V> = Box<dyn Fn(ListenEvent<K, V>) + Send>;
+pub struct ListenFn<K, V>(pub Box<dyn Fn(ListenEvent<K, V>) + Send>);
+
+impl<K, V> fmt::Debug for ListenFn<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ListenFn").finish_non_exhaustive()
+    }
+}
 
 /// An isolated, consistent read of previously written (Key, Value, Time, Diff)
 /// updates.
@@ -1155,6 +1165,7 @@ impl Snapshot<Vec<u8>, Vec<u8>> for IndexedSnapshot {
 //
 // This intentionally chains trace before unsealed so we get the data in roughly
 // increasing timestamp order, but it's unclear if this is in any way important.
+#[derive(Debug)]
 pub struct IndexedSnapshotIter {
     since: Antichain<u64>,
     iter: std::iter::Chain<TraceSnapshotIter, UnsealedSnapshotIter>,
@@ -1224,7 +1235,7 @@ mod tests {
 
         // Register a listener for writes.
         let (listen_tx, listen_rx) = mpsc::channel();
-        let listen_fn: ListenFn<Vec<u8>, Vec<u8>> = Box::new(move |e| match e {
+        let listen_fn: ListenFn<Vec<u8>, Vec<u8>> = ListenFn(Box::new(move |e| match e {
             ListenEvent::Records(records) => {
                 for ((k, v), ts, diff) in records.iter() {
                     listen_tx
@@ -1233,7 +1244,7 @@ mod tests {
                 }
             }
             ListenEvent::Sealed(_) => {}
-        });
+        }));
         block_on(|res| i.listen(id, listen_fn, res))?;
 
         // After a write, all data is in the unsealed.
