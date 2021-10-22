@@ -10,6 +10,8 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use repr::*;
+
 use crate::query_model::{QuantifierId, QuantifierSet};
 
 /// Representation for scalar expressions within a query graph model.
@@ -35,6 +37,9 @@ pub enum BoxScalarExpr {
     /// A leaf column. Only allowed as standalone expressions in the
     /// projection of `BaseTable` and `TableFunction` boxes.
     BaseColumn(BaseColumn),
+    /// A literal value.
+    /// (A single datum stored as a row, because we can't own a Datum)
+    Literal(Row, ColumnType),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -57,6 +62,9 @@ impl fmt::Display for BoxScalarExpr {
             BoxScalarExpr::BaseColumn(c) => {
                 write!(f, "C{}", c.position)
             }
+            BoxScalarExpr::Literal(row, _) => {
+                write!(f, "{}", row.unpack_first())
+            }
         }
     }
 }
@@ -74,7 +82,7 @@ impl BoxScalarExpr {
                     column_refs.insert(c.clone());
                 }
             }
-            Expr::BaseColumn(_) => {}
+            BoxScalarExpr::Literal(..) | BoxScalarExpr::BaseColumn(_) => {}
         }
     }
 }
