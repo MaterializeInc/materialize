@@ -136,7 +136,7 @@ impl JoinClosure {
         // Next, partition `mfp` into `before` and `after`, the former of which can be
         // applied now.
         let (mut before, after) = std::mem::replace(mfp, MapFilterProject::new(mfp.input_arity))
-            .partition(columns, columns.len());
+            .partition(columns.clone(), columns.len());
 
         // Add any newly created columns to `columns`. These columns may be referenced
         // by `after`, and it will be important to track their locations.
@@ -304,7 +304,8 @@ impl JoinBuildState {
                 expr.permute_map(&column_map);
             }
         }
-        mfp.permute(&column_map, column_map.len());
+        let column_map_len = column_map.len();
+        mfp.permute(column_map, column_map_len);
         mfp.optimize();
 
         JoinClosure {

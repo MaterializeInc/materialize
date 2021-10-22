@@ -644,10 +644,11 @@ impl KeyValPlan {
         for column in demand.iter() {
             demand_map.insert(*column, demand_map.len());
         }
-        key_mfp.permute(&demand_map, demand_map.len());
+        key_mfp.permute(demand_map.clone(), demand_map.len());
         key_mfp.optimize();
         let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();
-        val_mfp.permute(&demand_map, demand_map.len());
+        let demand_map_len = demand_map.len();
+        val_mfp.permute(demand_map, demand_map_len);
         val_mfp.optimize();
         let val_plan = val_mfp.into_plan().unwrap().into_nontemporal().unwrap();
 

@@ -411,10 +411,10 @@ fn implement_arrangements<'a>(
         if let Some(mut lifted_mfp) = lifted_mfp {
             lifted_mfp.permute(
                 // globalize all input column references
-                &(new_join_mapper
+                new_join_mapper
                     .local_columns(index)
-                    .zip(new_join_mapper.global_columns(index)))
-                .collect(),
+                    .zip(new_join_mapper.global_columns(index))
+                    .collect(),
                 // shift the position of scalars to be after the last input
                 // column
                 arity,

@@ -635,13 +635,13 @@ impl ParsedDateTime {
         let mut annotated_parts = Vec::new();
 
         while let Some(part) = value_parts.pop_front() {
-            let mut fmt = determine_format_w_datetimefield(&part)?;
+            let mut fmt = determine_format_w_datetimefield(part.clone())?;
             // If you cannot determine the format of this part, try to infer its
             // format.
             if fmt.is_none() {
                 fmt = match value_parts.pop_front() {
                     Some(next_part) => {
-                        match determine_format_w_datetimefield(&next_part)? {
+                        match determine_format_w_datetimefield(next_part.clone())? {
                             Some(TimePartFormat::SqlStandard(f)) => {
                                 match f {
                                     // Do not capture this token because expression
@@ -998,7 +998,7 @@ fn fill_pdt_time(
     mut pdt: &mut ParsedDateTime,
     mut actual: &mut VecDeque<TimeStrToken>,
 ) -> Result<(), String> {
-    match determine_format_w_datetimefield(actual)? {
+    match determine_format_w_datetimefield(actual.clone())? {
         Some(TimePartFormat::SqlStandard(leading_field)) => {
             let mut expected = expected_dur_like_tokens(leading_field)?;
 
@@ -1311,13 +1311,11 @@ struct AnnotatedIntervalPart {
 ///
 /// Note that `toks` should _not_ contain space
 fn determine_format_w_datetimefield(
-    toks: &VecDeque<TimeStrToken>,
+    mut toks: VecDeque<TimeStrToken>,
 ) -> Result<Option<TimePartFormat>, String> {
     use DateTimeField::*;
     use TimePartFormat::*;
     use TimeStrToken::*;
-
-    let mut toks = toks.clone();
 
     trim_and_return_sign(&mut toks);
 
@@ -2032,7 +2030,7 @@ mod test {
             let s = tokenize_time_str(test.0).unwrap();
 
             match (
-                determine_format_w_datetimefield(&s).unwrap(),
+                determine_format_w_datetimefield(s).unwrap(),
                 test.1.as_ref(),
             ) {
                 (Some(a), Some(b)) => {
@@ -2061,7 +2059,7 @@ mod test {
 
         for test in test_cases.iter() {
             let s = tokenize_time_str(test.0).unwrap();
-            match determine_format_w_datetimefield(&s) {
+            match determine_format_w_datetimefield(s) {
                 Err(e) => assert_eq!(e.to_string(), test.1),
                 Ok(f) => panic!(
                     "Test passed when expected to fail: {}, generated {:?}",
