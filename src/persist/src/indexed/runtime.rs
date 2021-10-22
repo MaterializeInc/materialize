@@ -43,6 +43,7 @@ enum Cmd {
         FutureHandle<SeqNo>,
     ),
     Seal(Vec<Id>, u64, FutureHandle<()>),
+    GetSeal(String, FutureHandle<Antichain<u64>>),
     AllowCompaction(Vec<(Id, Antichain<u64>)>, FutureHandle<()>),
     Snapshot(Id, FutureHandle<IndexedSnapshot>),
     Listen(
@@ -199,6 +200,7 @@ impl RuntimeCore {
                 Cmd::Destroy(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Write(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Seal(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
+                Cmd::GetSeal(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::AllowCompaction(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
@@ -298,6 +300,14 @@ impl RuntimeClient {
         let write = StreamWriteHandle::new(id, self.clone());
         let meta = StreamReadHandle::new(id, self.clone());
         Ok((write, meta))
+    }
+
+    /// Returns the seal frontier of the stream identified by `id_str`.
+    pub fn get_seal(&self, id_str: &str) -> Result<Antichain<u64>, Error> {
+        let (tx, rx) = Future::new();
+        self.core.send(Cmd::GetSeal(id_str.to_owned(), tx));
+        let seal_frontier = rx.recv()?;
+        Ok(seal_frontier)
     }
 
     /// Asynchronously persists `(Key, Value, Time, Diff)` updates for the
@@ -816,6 +826,9 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 Cmd::Seal(ids, ts, res) => {
                     self.indexed.seal(ids, ts, res);
                 }
+                Cmd::GetSeal(id_str, res) => {
+                    self.indexed.get_seal(&id_str, res);
+                }
                 Cmd::AllowCompaction(id_sinces, res) => {
                     self.indexed.allow_compaction(id_sinces, res);
                 }
@@ -986,6 +999,23 @@ mod tests {
             let (_, meta) = persister.create_or_load("0")?;
             assert_eq!(meta.snapshot()?.read_to_end()?, data);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_seal_roundtrip() -> Result<(), Error> {
+        let id = "test";
+
+        let mut registry = MemRegistry::new();
+        let persister = registry.runtime_no_reentrance()?;
+        let (write, _) = persister.create_or_load::<(), ()>(id)?;
+
+        // Initial seal frontier should be `0`.
+        assert_eq!(persister.get_seal(id)?, Antichain::from_elem(0));
+
+        write.seal(42);
+        assert_eq!(persister.get_seal(id)?, Antichain::from_elem(42));
 
         Ok(())
     }

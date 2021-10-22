@@ -930,6 +930,25 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         self.pending.add_response(PendingResponse::Unit(res, resp));
     }
 
+    // TODO: not sure I cargo-culted the foo/do_foo pattern correctly.
+    /// Internal `get_seal`.
+    fn do_get_seal(&self, id_str: &str) -> Result<Antichain<u64>, Error> {
+        let registration = self.id_mapping.iter().find(|s| s.name == id_str);
+        match registration {
+            Some(registration) => {
+                let seal_frontier = self.traces.get(&registration.id).expect("missing trace");
+                Ok(seal_frontier.get_seal())
+            }
+            None => Err(Error::String(format!("Unknown registration '{}'", id_str))),
+        }
+    }
+
+    /// Returns the current seal frontier of the collection identifier by `id_str`.
+    fn get_seal(&self, id_str: &str, res: FutureHandle<Antichain<u64>>) {
+        let resp = self.do_get_seal(id_str);
+        res.fill(resp);
+    }
+
     fn do_allow_compaction(&mut self, id_sinces: Vec<(Id, Antichain<u64>)>) -> Result<(), Error> {
         for (id, since) in id_sinces.iter() {
             let trace = self
