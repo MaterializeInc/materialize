@@ -18,7 +18,6 @@
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
 use std::cmp;
-use std::convert::TryFrom;
 use std::env;
 use std::ffi::CStr;
 use std::fmt;

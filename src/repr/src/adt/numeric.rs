@@ -12,8 +12,6 @@
 //!
 //! [`rust-dec`]: https://github.com/MaterializeInc/rust-dec/
 
-use std::convert::TryFrom;
-
 use anyhow::bail;
 use dec::{Context, Decimal};
 use lazy_static::lazy_static;
@@ -340,7 +338,6 @@ fn test_twos_comp_numeric_primitive() {
     where
         P: Into<Numeric> + TryFrom<Numeric> + Eq + PartialEq + std::fmt::Debug + Copy,
     {
-        use std::convert::TryInto;
         let mut e = [0; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH];
         e[Numeric::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()..].copy_from_slice(&i_be_bytes);
         let mut w = [0; NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH];

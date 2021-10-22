@@ -15,7 +15,6 @@
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 use std::str;

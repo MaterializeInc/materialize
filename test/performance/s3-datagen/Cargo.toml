@@ -2,7 +2,7 @@
 name = "s3-datagen"
 description = "Generate data in S3 for testing our S3 sources"
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

@@ -2,7 +2,7 @@
 name = "lowertest-derive"
 description = "Macros to support unit testing of lower parts of the stack"
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [lib]

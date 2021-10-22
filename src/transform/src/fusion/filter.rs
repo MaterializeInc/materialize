@@ -74,7 +74,7 @@ impl Filter {
                 predicates: p2,
             } = &mut **input
             {
-                predicates.extend(p2.drain(..));
+                predicates.append(p2);
                 *input = Box::new(inner.take_dangerous());
             }
 

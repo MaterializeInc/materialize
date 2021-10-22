@@ -13,7 +13,6 @@
 //! `ALTER`, `CREATE`, and `DROP`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryFrom;
 use std::fs;
 use std::iter;
 use std::path::PathBuf;

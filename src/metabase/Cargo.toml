@@ -2,7 +2,7 @@
 name = "metabase"
 description = "An API client for Metabase."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

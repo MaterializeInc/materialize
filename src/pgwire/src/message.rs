@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::io;
 
 use bytes::BytesMut;

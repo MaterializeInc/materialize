@@ -9,7 +9,6 @@
 
 #![allow(clippy::as_conversions)]
 
-use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 

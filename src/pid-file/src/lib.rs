@@ -34,7 +34,6 @@
 
 #![warn(missing_docs)]
 
-use std::convert::TryInto;
 use std::ffi::{CString, NulError};
 use std::fmt;
 use std::fs::Permissions;

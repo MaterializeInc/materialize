@@ -2,7 +2,7 @@
 name = "kafka-util"
 description = "Utilities for working with Kafka."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

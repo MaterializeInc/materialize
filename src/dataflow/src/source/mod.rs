@@ -15,7 +15,6 @@ use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::fmt::{self, Debug};
 use std::rc::Rc;
 use std::sync::Arc;

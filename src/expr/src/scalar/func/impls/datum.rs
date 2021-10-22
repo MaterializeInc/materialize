@@ -9,7 +9,6 @@
 
 use crate::EvalError;
 use repr::Datum;
-use std::convert::TryFrom;
 
 sqlfunc!(
     #[sqlname = "isnull"]

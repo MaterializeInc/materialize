@@ -2,7 +2,7 @@
 name = "coordtest"
 description = "Postgres wire protocol test framework."
 version = "0.0.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]

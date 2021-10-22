@@ -12,7 +12,6 @@
 //! The most important struct in here is the [`AvroDebeziumDecoder`]
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::num::ParseIntError;
 
 use anyhow::anyhow;

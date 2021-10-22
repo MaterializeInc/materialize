@@ -11,7 +11,6 @@
 //! updates for the mz_metrics table.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::pin::Pin;
 
 use anyhow::anyhow;

@@ -10,7 +10,6 @@
 //! An interactive dataflow server.
 
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use timely::progress::reachability::logging::TrackerEvent;

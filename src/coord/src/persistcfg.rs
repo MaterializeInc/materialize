@@ -9,7 +9,6 @@
 
 //! Materialize-specific persistence configuration.
 
-use std::convert::TryFrom;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

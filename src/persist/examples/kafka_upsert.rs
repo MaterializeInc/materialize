@@ -431,8 +431,6 @@ struct AssignedTimestamp(u64);
 struct SourceTimestamp<P, O>(P, O);
 
 mod kafka_offset_impls {
-    use std::convert::TryFrom;
-
     use persist_types::Codec;
 
     use crate::AssignedTimestamp;
