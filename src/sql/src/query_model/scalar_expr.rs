@@ -10,6 +10,8 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use repr::*;
+
 use crate::query_model::{QuantifierId, QuantifierSet};
 
 /// Representation for scalar expressions within a query graph model.
@@ -26,6 +28,7 @@ use crate::query_model::{QuantifierId, QuantifierSet};
 pub enum Expr {
     ColumnReference(ColumnReference),
     BaseColumn(BaseColumn),
+    Literal(Row, ColumnType),
 }
 
 impl fmt::Display for Expr {
@@ -36,6 +39,9 @@ impl fmt::Display for Expr {
             }
             Expr::BaseColumn(c) => {
                 write!(f, "C{}", c.position)
+            }
+            Expr::Literal(row, _) => {
+                write!(f, "{}", row.unpack_first())
             }
         }
     }
@@ -54,7 +60,7 @@ impl Expr {
                     column_refs.insert(c.clone());
                 }
             }
-            Expr::BaseColumn(_) => {}
+            Expr::Literal(..) | Expr::BaseColumn(_) => {}
         }
     }
 }

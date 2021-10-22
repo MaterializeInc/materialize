@@ -9,7 +9,10 @@
 
 use itertools::Itertools;
 
-use crate::query_model::{BoxId, BoxType, Model, QuantifierType, Values};
+use crate::plan::HirScalarExpr;
+use crate::query_model::{
+    BoxId, BoxType, Column, ColumnReference, Expr, Model, QuantifierType, Values,
+};
 
 use crate::plan::expr::HirRelationExpr;
 
@@ -50,6 +53,34 @@ impl FromHir {
                     rows: rows.iter().map(|_| Vec::new()).collect_vec(),
                 }))
             }
+            HirRelationExpr::Map { input, scalars } => {
+                let box_id = self.generate_select(input);
+                // @todo self-referencing Maps
+                for scalar in scalars.iter() {
+                    let expr = self.generate_expr(scalar, box_id);
+                    let b = self.model.get_box(box_id);
+                    b.borrow_mut().columns.push(Column { expr, alias: None });
+                }
+                box_id
+            }
+            HirRelationExpr::Project { input, outputs } => {
+                let input_box_id = self.generate_internal(input);
+                let select_id = self.model.make_select_box();
+                let quantifier_id =
+                    self.model
+                        .make_quantifier(QuantifierType::Foreach, input_box_id, select_id);
+                let mut select_box = self.model.get_box(select_id).borrow_mut();
+                for position in outputs {
+                    select_box.columns.push(Column {
+                        expr: Expr::ColumnReference(ColumnReference {
+                            quantifier_id,
+                            position: *position,
+                        }),
+                        alias: None,
+                    });
+                }
+                select_id
+            }
             _ => panic!("unsupported expression type"),
         }
     }
@@ -64,5 +95,34 @@ impl FromHir {
         let mut select_box = self.model.get_box(select_id).borrow_mut();
         select_box.add_all_input_columns(&self.model);
         select_id
+    }
+
+    fn generate_expr(&mut self, expr: &HirScalarExpr, context_box: BoxId) -> Expr {
+        match expr {
+            HirScalarExpr::Literal(row, col_type) => Expr::Literal(row.clone(), col_type.clone()),
+            HirScalarExpr::Column(c) => {
+                if c.level != 0 {
+                    panic!("correlated columns not yet supported");
+                }
+                Expr::ColumnReference(self.find_column_within_box(context_box, c.column))
+            }
+            _ => panic!("unsupported expression type"),
+        }
+    }
+
+    fn find_column_within_box(&self, box_id: BoxId, mut position: usize) -> ColumnReference {
+        let b = self.model.get_box(box_id).borrow();
+        for q_id in b.quantifiers.iter() {
+            let q = self.model.get_quantifier(*q_id).borrow();
+            let ib = self.model.get_box(q.input_box).borrow();
+            if position < ib.columns.len() {
+                return ColumnReference {
+                    quantifier_id: *q_id,
+                    position,
+                };
+            }
+            position -= ib.columns.len();
+        }
+        panic!("column not found")
     }
 }
