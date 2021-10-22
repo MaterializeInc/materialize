@@ -138,7 +138,7 @@ RUN mkdir rust \
         ;; \
     esac \
     && rm -rf rust \
-    && cargo install --root /usr/local --version "=1.28.0" cargo-deb \
+    && cargo install --root /usr/local --version "=1.32.0" cargo-deb \
     && cargo install --root /usr/local --version "=0.8.4" cargo-deny
 
 # Link Rust's internal lld into the cross-compiling sysroot. This avoids
