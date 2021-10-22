@@ -17,7 +17,10 @@ use crate::query_model::{
 use crate::plan::expr::HirRelationExpr;
 
 pub struct FromHir {
+    /// The model being built.
     model: Model,
+    /// The stack of context boxes for resolving offset-based column references.
+    context_stack: Vec<BoxId>,
 }
 
 impl FromHir {
@@ -25,6 +28,7 @@ impl FromHir {
     pub fn generate(expr: &HirRelationExpr) -> Model {
         let mut generator = FromHir {
             model: Model::new(),
+            context_stack: Vec::new(),
         };
         generator.model.top_box = generator.generate_select(expr);
         generator.model
@@ -119,10 +123,24 @@ impl FromHir {
         match expr {
             HirScalarExpr::Literal(row, col_type) => Expr::Literal(row.clone(), col_type.clone()),
             HirScalarExpr::Column(c) => {
-                if c.level != 0 {
-                    panic!("correlated columns not yet supported");
-                }
+                let context_box = if c.level == 0 {
+                    context_box
+                } else {
+                    self.context_stack[self.context_stack.len() - c.level]
+                };
                 Expr::ColumnReference(self.find_column_within_box(context_box, c.column))
+            }
+            HirScalarExpr::Select(expr) => {
+                let box_id = self.within_context(context_box, &mut |generator| -> BoxId {
+                    generator.generate_select(expr)
+                });
+                let quantifier_id =
+                    self.model
+                        .make_quantifier(QuantifierType::Scalar, box_id, context_box);
+                Expr::ColumnReference(ColumnReference {
+                    quantifier_id,
+                    position: 0,
+                })
             }
             _ => panic!("unsupported expression type"),
         }
@@ -142,5 +160,15 @@ impl FromHir {
             position -= ib.columns.len();
         }
         panic!("column not found")
+    }
+
+    fn within_context<F, T>(&mut self, context_box: BoxId, f: &mut F) -> T
+    where
+        F: FnMut(&mut Self) -> T,
+    {
+        self.context_stack.push(context_box);
+        let result = f(self);
+        self.context_stack.pop();
+        result
     }
 }
