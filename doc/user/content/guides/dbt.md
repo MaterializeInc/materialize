@@ -69,7 +69,7 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
 1. Open `profiles.yml` and adapt it to connect to your Materialize instance using the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize).
 
-    As an example, the following profile would allow you to connect to Materialize in two different environments: an instance running locally (`dev`) and a Materialized Cloud instance (`prod`).
+    As an example, the following profile would allow you to connect to Materialize in two different environments: an instance running locally (`dev`) and a Materialize Cloud instance (`prod`).
 
     ```yaml
     default:
@@ -126,7 +126,7 @@ An important difference in using dbt with Materialize is that **your models stay
 
     <h5>Creating a source</h5>
 
-    You can instruct dbt to create a [source](/sql/create-source/) in Materialize using the custom `source` [materialization](#materializations):
+    You can instruct dbt to create a [source](/sql/create-source) in Materialize using the custom `source` [materialization](#materializations):
 
     ```sql
     {{ config(materialized='source') }}
@@ -145,7 +145,7 @@ An important difference in using dbt with Materialize is that **your models stay
 
     <h5>Creating a view</h5>
 
-    dbt models are materialized as `views` by default, so to create a [view](/sql/create-view/) in Materialize you can simply provide the SQL statement in the model (and skip the `materialized` configuration parameter):
+    dbt models are materialized as `views` by default, so to create a [view](/sql/create-view) in Materialize you can simply provide the SQL statement in the model (and skip the `materialized` configuration parameter):
 
     ```sql
     SELECT
@@ -161,7 +161,7 @@ An important difference in using dbt with Materialize is that **your models stay
 
     <h5>Creating a materialized view</h5>
 
-    This is where Materialize goes beyond dbt's incremental models (and traditional databases), with [materialized views](/sql/create-materialized-view/) that **continually update** as the underlying data changes:
+    This is where Materialize goes beyond dbt's incremental models (and traditional databases), with [materialized views](/sql/create-materialized-view) that **continually update** as the underlying data changes:
 
     ```sql
     {{ config(materialized='materializedview') }}
