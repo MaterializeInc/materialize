@@ -26,15 +26,16 @@ use uuid::Uuid;
 
 use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
 use repr::strconv;
-use sql_parser::ast::{
-    display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
-    CreateSourceStatement, CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnector, CsrSeed, CsvColumns, DbzMode, Envelope, Expr, Format, Ident, ProtobufSchema,
-    Query, Raw, RawName, Select, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins,
-    UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
-};
 use sql_parser::parser::parse_columns;
 
+use crate::ast::{
+    display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
+    CreateSourceKeyEnvelope, CreateSourceStatement, CreateViewsDefinitions,
+    CreateViewsSourceTarget, CreateViewsStatement, CsrConnector, CsrSeed, CsvColumns, DbzMode,
+    Envelope, Expr, Format, Ident, ProtobufSchema, Query, Raw, RawName, Select, SelectItem,
+    SetExpr, Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
+    WithOption, WithOptionValue,
+};
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::normalize;
@@ -199,7 +200,9 @@ pub fn purify(
 
             purify_source_format(format, connector, &envelope, file, &config_options).await?;
 
-            if key_envelope.is_present() && !matches!(format, CreateSourceFormat::KeyValue { .. }) {
+            if *key_envelope != CreateSourceKeyEnvelope::None
+                && !matches!(format, CreateSourceFormat::KeyValue { .. })
+            {
                 bail!(
                     "INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT"
                 );
@@ -368,24 +371,24 @@ async fn purify_source_format(
         bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 
-    // the existing semantics of Upsert is that specifying a simple bare format
-    // duplicates the format into the key.
+    // For backwards compatibility, using ENVELOPE UPSERT with a bare FORMAT
+    // BYTES or FORMAT TEXT uses the specified format for both the key and the
+    // value.
     //
-    // TODO(bwm): We should either make this the semantics everywhere, or deprecate
-    // this.
-    if matches!(connector, CreateSourceConnector::Kafka { .. })
-        && matches!(envelope, Envelope::Upsert)
-        && format.is_simple()
-    {
-        let value = format.value().map(|f| f.clone());
-        if let Some(value) = value {
+    // TODO(bwm): We should either make these semantics apply everywhere, or
+    // deprecate this.
+    match (&connector, &envelope, &*format) {
+        (
+            CreateSourceConnector::Kafka { .. },
+            Envelope::Upsert,
+            CreateSourceFormat::Bare(f @ Format::Bytes | f @ Format::Text),
+        ) => {
             *format = CreateSourceFormat::KeyValue {
-                key: value.clone(),
-                value,
-            }
-        } else {
-            bail!("Upsert requires either a VALUE FORMAT or a bare TEXT or BYTES format");
-        };
+                key: f.clone(),
+                value: f.clone(),
+            };
+        }
+        _ => (),
     }
 
     match format {
