@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.44"
 aws-util = { path = "../aws-util" }
-backtrace = "0.3.61"
+backtrace = "0.3.62"
 bincode = { version = "1.3.3", optional = true }
 build-info = { path = "../build-info" }
 byteorder = "1.4.3"
