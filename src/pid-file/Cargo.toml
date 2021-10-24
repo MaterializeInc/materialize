@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-libc = "0.2.104"
+libc = "0.2.105"
 ore = { path = "../ore", default-features = false }
 
 [dev-dependencies]
