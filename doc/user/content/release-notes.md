@@ -103,6 +103,9 @@ List new features before bug fixes.
 
 {{% version-header v0.9.11 %}}
 
+- Disallow `UPDATE` and `DELETE` operations on tables when boot in
+  `--disable-user-indexes` mode.
+
 {{% version-header v0.9.10 %}}
 
 - Evaluate TopK operators on constant inputs at query compile time.
