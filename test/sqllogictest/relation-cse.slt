@@ -447,33 +447,30 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 
 | Union %1 %2
 
 %4 =
+| Get materialize.public.t1 (u1)
+| Project ()
+| ArrangeBy ()
+
+%5 =
 | Get %3 (l1)
 | Project ()
 | Distinct group=()
 | Negate
 
-%5 =
+%6 =
 | Constant ()
 
-%6 =
-| Union %4 %5
+%7 =
+| Union %5 %6
 | Map null
 
-%7 = Let l2 =
-| Union %3 %6
-
 %8 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| ArrangeBy ()
+| Union %3 %7
 
 %9 =
-| Get %7 (l2)
-| ArrangeBy ()
-
-%10 =
-| Join %8 %9 %7
-| | implementation = Differential %7 %8.() %9.()
+| Join %4 %8
+| | implementation = Differential %8 %4.()
+| Project (#0, #0)
 
 EOF
 

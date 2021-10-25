@@ -110,19 +110,35 @@ impl Transform for Fixpoint {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        for _ in 0..self.limit {
-            let original = relation.clone();
-            for transform in self.transforms.iter() {
-                transform.transform(
-                    relation,
-                    TransformArgs {
-                        id_gen: args.id_gen,
-                        indexes: args.indexes,
-                    },
-                )?;
+        // The number of iterations for a relation to settle depends on the
+        // number of nodes in the relation. Instead of picking an arbitrary
+        // hard limit on the number of iterations, we use a soft limit and
+        // check whether the relation has become simpler after reaching it.
+        // If so, we perform another pass of transforms. Otherwise, there is
+        // a bug somewhere that prevents the relation from settling on a
+        // stable shape.
+        loop {
+            let mut original_count = 0;
+            relation.visit(&mut |_| original_count += 1);
+            for _ in 0..self.limit {
+                let original = relation.clone();
+                for transform in self.transforms.iter() {
+                    transform.transform(
+                        relation,
+                        TransformArgs {
+                            id_gen: args.id_gen,
+                            indexes: args.indexes,
+                        },
+                    )?;
+                }
+                if *relation == original {
+                    return Ok(());
+                }
             }
-            if *relation == original {
-                return Ok(());
+            let mut final_count = 0;
+            relation.visit(&mut |_| final_count += 1);
+            if final_count >= original_count {
+                break;
             }
         }
         let original = relation.clone();

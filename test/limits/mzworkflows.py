@@ -286,7 +286,7 @@ class TablesOuterJoinOn(Generator):
 
 class SubqueriesScalarSelectListWithCondition(Generator):
     COUNT = min(
-        Generator.COUNT, 10
+        Generator.COUNT, 100
     )  # https://github.com/MaterializeInc/materialize/issues/8598
 
     @classmethod
@@ -294,7 +294,8 @@ class SubqueriesScalarSelectListWithCondition(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         select_list = ", ".join(
-            f"(SELECT * FROM t1 AS a{i} WHERE a{i}.f1 = t1.f1)" for i in cls.no_first()
+            f"(SELECT f1 FROM t1 AS a{i} WHERE a{i}.f1 + 1 = t1.f1 + 1)"
+            for i in cls.no_first()
         )
         print(f"> SELECT {select_list} FROM t1;")
         print(" ".join("1" for i in cls.no_first()))
