@@ -33,13 +33,8 @@ impl ProtobufDecoderState {
             events_error: 0,
         }
     }
-    pub fn get_value(
-        &mut self,
-        bytes: &[u8],
-        position: Option<i64>,
-        push_metadata: bool,
-    ) -> Option<Result<Row, DataflowError>> {
-        match self.decoder.decode(bytes, position, push_metadata) {
+    pub fn get_value(&mut self, bytes: &[u8]) -> Option<Result<Row, DataflowError>> {
+        match self.decoder.decode(bytes) {
             Ok(row) => {
                 if let Some(row) = row {
                     self.events_success += 1;

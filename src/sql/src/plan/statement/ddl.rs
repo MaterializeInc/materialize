@@ -856,14 +856,12 @@ pub fn plan_create_source(
         }
     }
 
-    // TODO(benesch): the available metadata columns should not depend
-    // on the format.
-    //
     // TODO(brennan): They should not depend on the envelope either. Figure out a way to
     // make all of this more tasteful.
-    if !matches!(encoding.value_ref(), DataEncoding::Avro { .. })
-        && !matches!(envelope, SourceEnvelope::Debezium(_, _))
-    {
+    if !matches!(
+        envelope,
+        SourceEnvelope::Debezium(_, _) | SourceEnvelope::CdcV2
+    ) {
         for (name, ty) in external_connector.metadata_columns() {
             bare_desc = bare_desc.with_named_column(name, ty);
         }

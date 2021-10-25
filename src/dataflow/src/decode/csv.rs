@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::iter;
-
 use dataflow_types::{CsvEncoding, DataflowError, DecodeError, LinearOperator};
 use repr::{Datum, Row};
 
@@ -70,12 +68,7 @@ impl CsvDecoderState {
         }
     }
 
-    pub fn decode(
-        &mut self,
-        chunk: &mut &[u8],
-        coord: Option<i64>,
-        push_metadata: bool,
-    ) -> Result<Option<Row>, DataflowError> {
+    pub fn decode(&mut self, chunk: &mut &[u8]) -> Result<Option<Row>, DataflowError> {
         loop {
             let (result, n_input, n_output, n_ends) = self.csv_reader.read_record(
                 *chunk,
@@ -116,33 +109,15 @@ impl CsvDecoderState {
                                 Ok(output) => {
                                     self.events_success += 1;
                                     let mut row_packer = std::mem::take(&mut self.row_packer);
-                                    if push_metadata {
-                                        row_packer.extend(
-                                            (0..self.n_cols)
-                                                .map(|i| {
-                                                    Datum::String(
-                                                        if self.next_row_is_header
-                                                            || self.demanded[i]
-                                                        {
-                                                            &output[self.ends[i]..self.ends[i + 1]]
-                                                        } else {
-                                                            ""
-                                                        },
-                                                    )
-                                                })
-                                                .chain(iter::once(Datum::from(coord))),
-                                        );
-                                    } else {
-                                        row_packer.extend((0..self.n_cols).map(|i| {
-                                            Datum::String(
-                                                if self.next_row_is_header || self.demanded[i] {
-                                                    &output[self.ends[i]..self.ends[i + 1]]
-                                                } else {
-                                                    ""
-                                                },
-                                            )
-                                        }));
-                                    }
+                                    row_packer.extend((0..self.n_cols).map(|i| {
+                                        Datum::String(
+                                            if self.next_row_is_header || self.demanded[i] {
+                                                &output[self.ends[i]..self.ends[i + 1]]
+                                            } else {
+                                                ""
+                                            },
+                                        )
+                                    }));
                                     self.row_packer = row_packer;
                                     self.output_cursor = 0;
                                     self.ends_cursor = 1;

@@ -9,7 +9,6 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::iter;
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use ::regex::Regex;
@@ -189,30 +188,13 @@ pub(crate) enum PreDelimitedFormat {
 }
 
 impl PreDelimitedFormat {
-    pub fn decode(
-        &mut self,
-        bytes: &[u8],
-        upstream_coord: Option<i64>,
-        push_metadata: bool,
-    ) -> Result<Option<Row>, DataflowError> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DataflowError> {
         match self {
-            PreDelimitedFormat::Bytes => Ok(Some(if push_metadata {
-                Row::pack(
-                    iter::once(Datum::Bytes(bytes)).chain(iter::once(Datum::from(upstream_coord))),
-                )
-            } else {
-                Row::pack(Some(Datum::Bytes(bytes)))
-            })),
+            PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
                     .map_err(|_| DecodeError::Text("Failed to decode UTF-8".to_string()))?;
-                Ok(Some(if push_metadata {
-                    Row::pack(
-                        iter::once(Datum::String(s)).chain(iter::once(Datum::from(upstream_coord))),
-                    )
-                } else {
-                    Row::pack(Some(Datum::String(s)))
-                }))
+                Ok(Some(Row::pack(Some(Datum::String(s)))))
             }
             PreDelimitedFormat::Regex(regex, row_packer) => {
                 let s = std::str::from_utf8(bytes)
@@ -227,14 +209,9 @@ impl PreDelimitedFormat {
                         .skip(1)
                         .map(|c| Datum::from(c.map(|c| c.as_str()))),
                 );
-                if push_metadata {
-                    row_packer.push(Datum::from(upstream_coord));
-                }
                 Ok(Some(row_packer.finish_and_reuse()))
             }
-            PreDelimitedFormat::Protobuf(pb) => pb
-                .get_value(bytes, upstream_coord, push_metadata)
-                .transpose(),
+            PreDelimitedFormat::Protobuf(pb) => pb.get_value(bytes).transpose(),
         }
     }
 }
@@ -261,9 +238,7 @@ impl DataDecoder {
     pub fn next(
         &mut self,
         bytes: &mut &[u8],
-        upstream_coord: Option<i64>,
         upstream_time_millis: Option<i64>,
-        push_metadata: bool,
     ) -> Result<Option<Row>, DataflowError> {
         match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
@@ -274,14 +249,12 @@ impl DataDecoder {
                 };
                 let data = &bytes[0..chunk_idx];
                 *bytes = &bytes[chunk_idx + 1..];
-                format.decode(data, upstream_coord, push_metadata)
+                format.decode(data)
             }
-            DataDecoderInner::Avro(avro) => {
-                avro.decode(bytes, upstream_coord, upstream_time_millis, push_metadata)
-            }
-            DataDecoderInner::Csv(csv) => csv.decode(bytes, upstream_coord, push_metadata),
+            DataDecoderInner::Avro(avro) => avro.decode(bytes, upstream_time_millis),
+            DataDecoderInner::Csv(csv) => csv.decode(bytes),
             DataDecoderInner::PreDelimited(format) => {
-                let result = format.decode(*bytes, upstream_coord, push_metadata);
+                let result = format.decode(*bytes);
                 *bytes = &[];
                 result
             }
@@ -292,15 +265,10 @@ impl DataDecoder {
     ///
     /// This is distinct from `next` because, for example, a CSV record should be returned even if it
     /// does not end in a newline.
-    pub fn eof(
-        &mut self,
-        bytes: &mut &[u8],
-        upstream_coord: Option<i64>,
-        push_metadata: bool,
-    ) -> Result<Option<Row>, DataflowError> {
+    pub fn eof(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DataflowError> {
         match &mut self.inner {
             DataDecoderInner::Csv(csv) => {
-                let result = csv.decode(bytes, upstream_coord, push_metadata);
+                let result = csv.decode(bytes);
                 csv.reset_for_new_object();
                 result
             }
@@ -311,7 +279,7 @@ impl DataDecoder {
                 if data.is_empty() {
                     Ok(None)
                 } else {
-                    format.decode(data, upstream_coord, push_metadata)
+                    format.decode(data)
                 }
             }
             _ => Ok(None),
@@ -489,11 +457,6 @@ where
         )
     });
 
-    // push the `mz_offset` column for everything but Kafka/Avro _OR_ Debezium.
-    // There is no logical reason for this but historical practice
-    let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_))
-        && !matches!(envelope, SourceEnvelope::Debezium(..));
-
     let mut value_decoder = get_decoder(
         value_encoding,
         debug_name,
@@ -537,7 +500,7 @@ where
                             (key_decoder.as_mut(), key.is_empty())
                         {
                             let mut key = key_decoder
-                                .next(key_cursor, None, *upstream_time_millis, false)
+                                .next(key_cursor, *upstream_time_millis)
                                 .transpose();
                             if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
                                 key = Some(Err(DecodeError::Text(format!(
@@ -546,7 +509,7 @@ where
                                 ))
                                 .into()));
                             }
-                            key.or_else(|| key_decoder.eof(&mut &[][..], None, false).transpose())
+                            key.or_else(|| key_decoder.eof(&mut &[][..]).transpose())
                         } else {
                             None
                         };
@@ -562,12 +525,7 @@ where
                                 MessagePayload::Data(value) => {
                                     let value_bytes_remaining = &mut value.as_slice();
                                     let mut value = value_decoder
-                                        .next(
-                                            value_bytes_remaining,
-                                            *position,
-                                            *upstream_time_millis,
-                                            push_metadata,
-                                        )
+                                        .next(value_bytes_remaining, *upstream_time_millis)
                                         .transpose();
                                     if let (Some(Ok(_)), false) =
                                         (&value, value_bytes_remaining.is_empty())
@@ -578,11 +536,7 @@ where
                                         ))
                                         .into()));
                                     }
-                                    value.or_else(|| {
-                                        value_decoder
-                                            .eof(&mut &[][..], *position, push_metadata)
-                                            .transpose()
-                                    })
+                                    value.or_else(|| value_decoder.eof(&mut &[][..]).transpose())
                                 }
                                 MessagePayload::EOF => Some(Err(DecodeError::Text(format!(
                                     "Unexpected EOF in delimited stream"
@@ -667,11 +621,6 @@ where
         )
     });
 
-    // push the `mz_offset` column for everything but Kafka/Avro _OR_ Debezium.
-    // There is no logical reason for this but historical practice
-    let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_))
-        && !matches!(envelope, SourceEnvelope::Debezium(..));
-
     let mut value_decoder = get_decoder(
         value_encoding,
         debug_name,
@@ -705,7 +654,7 @@ where
                         (key_decoder.as_mut(), key.is_empty())
                     {
                         let mut key = key_decoder
-                            .next(key_cursor, None, *upstream_time_millis, false)
+                            .next(key_cursor, *upstream_time_millis)
                             .transpose();
                         if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
                             // Perhaps someday we'll assign semantics to multiple keys in one message, but for now it doesn't make sense.
@@ -724,9 +673,7 @@ where
                         MessagePayload::Data(data) => data,
                         MessagePayload::EOF => {
                             let data = &mut &value_buf[..];
-                            let mut result = value_decoder
-                                .eof(data, Some(n_seen + 1), push_metadata)
-                                .transpose();
+                            let mut result = value_decoder.eof(data).transpose();
                             if !data.is_empty() && !matches!(&result, Some(Err(_))) {
                                 result = Some(Err(DecodeError::Text(format!(
                                     "Saw unexpected EOF with bytes remaining in buffer: {:?}",
@@ -780,12 +727,9 @@ where
                         // and break manually.
                         loop {
                             let old_value_cursor = *value_bytes_remaining;
-                            let value = match value_decoder.next(
-                                value_bytes_remaining,
-                                Some(n_seen + 1), // Match historical practice - files start at 1, not 0.
-                                *upstream_time_millis,
-                                push_metadata,
-                            ) {
+                            let value = match value_decoder
+                                .next(value_bytes_remaining, *upstream_time_millis)
+                            {
                                 Err(e) => Err(e),
                                 Ok(None) => {
                                     let leftover = value_bytes_remaining.to_vec();
