@@ -1245,7 +1245,7 @@ impl PendingPeek {
             });
             if copies < 0 {
                 return Err(format!(
-                    "Invalid data in source, saw retractions ({}) for row that does not exist: {}",
+                    "Invalid data in source errors, saw retractions ({}) for row that does not exist: {}",
                     copies * -1,
                     cursor.key(&storage),
                 ));
