@@ -211,7 +211,7 @@ where
                     base_metrics,
                 };
 
-                let (collection, capability) = if let ExternalSourceConnector::PubNub(
+                let (mut collection, capability) = if let ExternalSourceConnector::PubNub(
                     pubnub_connector,
                 ) = connector
                 {
@@ -332,41 +332,93 @@ where
                                     .push(Rc::new(tok));
                             }
 
-                            // render debezium or regular upsert
+                            // render envelopes
                             match &envelope {
-                                SourceEnvelope::Debezium(_, DebeziumMode::Upsert) => {
-                                    let mut trackstate = (
-                                        HashMap::new(),
-                                        render_state
-                                            .metrics
-                                            .debezium_upsert_count_for(src_id, self.dataflow_id),
-                                    );
-                                    let results = results.flat_map(
-                                            move |DecodeResult { key, value, .. }| {
-                                                let (keys, metrics) = &mut trackstate;
-                                                #[rustfmt::skip]
-                                                let value = value.map(|value| {
-                                                    match key {
-                                                        None => Err::<_, DataflowError>(
-                                                            DecodeError::Text(
-                                                                "All upsert keys should decode to a value."
-                                                                    .to_string(),
-                                                            )
-                                                            .into(),
-                                                        ),
-                                                        Some(Err(e)) => Err(e),
-                                                        Some(Ok(key)) => {
-                                                            rewrite_for_upsert(value, keys, key, metrics)
+                                SourceEnvelope::Debezium(dedupe_strategy, mode) => {
+                                    let results = match mode {
+                                        DebeziumMode::Upsert => {
+                                            let mut trackstate = (
+                                                HashMap::new(),
+                                                render_state.metrics.debezium_upsert_count_for(
+                                                    src_id,
+                                                    self.dataflow_id,
+                                                ),
+                                            );
+                                            results.flat_map(
+                                                move |DecodeResult { key, value, .. }| {
+                                                    let (keys, metrics) = &mut trackstate;
+                                                    #[rustfmt::skip]
+                                                    let value = value.map(|value| {
+                                                        match key {
+                                                            None => Err::<_, DataflowError>(
+                                                                DecodeError::Text(
+                                                                    "All upsert keys should decode to a value."
+                                                                        .to_string(),
+                                                                )
+                                                                .into(),
+                                                            ),
+                                                            Some(Err(e)) => Err(e),
+                                                            Some(Ok(key)) => {
+                                                                rewrite_for_upsert(value, keys, key, metrics)
+                                                            }
                                                         }
-                                                    }
-                                                });
-                                                value
-                                            },
-                                        );
+                                                    });
+                                                    value
+                                                },
+                                            )
+                                        }
+                                        DebeziumMode::Plain => {
+                                            results.flat_map(|DecodeResult { value, .. }| value)
+                                        }
+                                    };
                                     let (stream, errors) = results.ok_err(std::convert::identity);
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
                                         errors.pass_through("decode-errors").as_collection();
+
+                                    let dbz_key_indices = match &src.connector {
+                                        SourceConnector::External {
+                                            encoding:
+                                                SourceDataEncoding::KeyValue {
+                                                    key:
+                                                        DataEncoding::Avro(AvroEncoding {
+                                                            schema: key_schema,
+                                                            ..
+                                                        }),
+                                                    ..
+                                                },
+                                            ..
+                                        } => {
+                                            let fields = match &src.bare_desc.typ().column_types[0]
+                                                .scalar_type
+                                            {
+                                                ScalarType::Record { fields, .. } => fields.clone(),
+                                                _ => unreachable!(),
+                                            };
+                                            let row_desc = RelationDesc::from_names_and_types(
+                                                fields.into_iter().map(|(n, t)| (Some(n), t)),
+                                            );
+                                            // these must be available because the DDL parsing logic already
+                                            // checks this and bails in case the key is not correct
+                                            let key_indices =
+                                                interchange::avro::validate_key_schema(key_schema, &row_desc)
+                                                    .expect(
+                                                    "Invalid key schema, this indicates a bug in Materialize",
+                                                );
+                                            Some(key_indices)
+                                        }
+                                        _ => None,
+                                    };
+
+                                    let stream = dedupe_strategy.clone().render(
+                                        stream,
+                                        self.debug_name.to_string(),
+                                        scope.index(),
+                                        // Debezium decoding has produced two extra fields, with the dedupe information and the upstream time in millis
+                                        src.bare_desc.arity() + 2,
+                                        dbz_key_indices,
+                                    );
+
                                     (stream, Some(errors))
                                 }
                                 SourceEnvelope::Upsert => {
@@ -397,52 +449,6 @@ where
                     }
 
                     (stream, capability)
-                };
-
-                // render debezium dedupe
-                let mut collection = match &envelope {
-                    SourceEnvelope::Debezium(dedupe_strategy, _) => {
-                        let dbz_key_indices = match &src.connector {
-                            SourceConnector::External {
-                                encoding:
-                                    SourceDataEncoding::KeyValue {
-                                        key:
-                                            DataEncoding::Avro(AvroEncoding {
-                                                schema: key_schema, ..
-                                            }),
-                                        ..
-                                    },
-                                ..
-                            } => {
-                                let fields = match &src.bare_desc.typ().column_types[0].scalar_type
-                                {
-                                    ScalarType::Record { fields, .. } => fields.clone(),
-                                    _ => unreachable!(),
-                                };
-                                let row_desc = RelationDesc::from_names_and_types(
-                                    fields.into_iter().map(|(n, t)| (Some(n), t)),
-                                );
-                                // these must be available because the DDL parsing logic already
-                                // checks this and bails in case the key is not correct
-                                let key_indices =
-                                    interchange::avro::validate_key_schema(key_schema, &row_desc)
-                                        .expect(
-                                        "Invalid key schema, this indicates a bug in Materialize",
-                                    );
-                                Some(key_indices)
-                            }
-                            _ => None,
-                        };
-                        dedupe_strategy.clone().render(
-                            collection,
-                            self.debug_name.to_string(),
-                            scope.index(),
-                            // Debezium decoding has produced two extra fields, with the dedupe information and the upstream time in millis
-                            src.bare_desc.arity() + 2,
-                            dbz_key_indices,
-                        )
-                    }
-                    _ => collection,
                 };
 
                 // Force a shuffling of data in case sources are not uniformly distributed.
