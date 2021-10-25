@@ -25,9 +25,7 @@ use dataflow_types::*;
 use expr::{GlobalId, Id, SourceInstanceId};
 use ore::cast::CastFrom;
 use ore::now::NowFn;
-use repr::RelationDesc;
-use repr::ScalarType;
-use repr::{Row, Timestamp};
+use repr::{Datum, RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -424,6 +422,14 @@ where
                                 SourceEnvelope::Upsert => {
                                     let upsert_operator_name = format!("{}-upsert", source_name);
 
+                                    // append position metadata to the output row
+                                    let results = results.map(|mut d| {
+                                        if let Some(Ok(ref mut row)) = d.value {
+                                            row.push(Datum::from(d.position));
+                                        }
+                                        d
+                                    });
+
                                     super::upsert::upsert(
                                         &upsert_operator_name,
                                         &results,
@@ -558,48 +564,63 @@ where
 {
     match key_envelope {
         KeyEnvelope::None => results
-            .flat_map(|DecodeResult { key: _, value, .. }| value)
+            .flat_map(
+                |DecodeResult {
+                     value, position, ..
+                 }| {
+                    value.map(|result| {
+                        let mut row = result?;
+                        row.push(Datum::from(position));
+                        Ok(row)
+                    })
+                },
+            )
             .ok_err(std::convert::identity),
         KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
             .flat_map(flatten_key_value)
             .map(|maybe_kv| {
-                maybe_kv.map(|(mut key, value)| {
+                maybe_kv.map(|(mut key, value, position)| {
                     key.extend_by_row(&value);
+                    key.push(Datum::from(position));
                     key
                 })
             })
             .ok_err(std::convert::identity),
         KeyEnvelope::Named(_) => results
             .flat_map(flatten_key_value)
-            .map(|maybe_kv| match maybe_kv {
-                Ok((mut key, value)) => {
+            .map(|maybe_kv| {
+                maybe_kv.map(|(mut key, value, position)| {
                     // Named semantics rename a key that is a single column, and encode a
                     // multi-column field as a struct with that name
-                    match key.iter().count() {
-                        1 => {
-                            key.extend_by_row(&value);
-                            Ok(key)
-                        }
-                        _ => {
-                            let mut new_row = Row::default();
-                            new_row.push_list(key.iter());
-                            new_row.extend_by_row(&value);
-                            Ok(new_row)
-                        }
-                    }
-                }
-                Err(e) => Err(e),
+                    let mut row = if key.iter().nth(1).is_none() {
+                        key.extend_by_row(&value);
+                        key
+                    } else {
+                        let mut new_row = Row::default();
+                        new_row.push_list(key.iter());
+                        new_row.extend_by_row(&value);
+                        new_row
+                    };
+                    row.push(Datum::from(position));
+                    row
+                })
             })
             .ok_err(std::convert::identity),
     }
 }
 
 /// Handle possibly missing key or value portions of messages
-fn flatten_key_value(result: DecodeResult) -> Option<Result<(Row, Row), DataflowError>> {
-    let DecodeResult { key, value, .. } = result;
+fn flatten_key_value(
+    result: DecodeResult,
+) -> Option<Result<(Row, Row, Option<i64>), DataflowError>> {
+    let DecodeResult {
+        key,
+        value,
+        position,
+    } = result;
     match (key, value) {
         (Some(key), Some(value)) => match (key, value) {
-            (Ok(key), Ok(value)) => Some(Ok((key, value))),
+            (Ok(key), Ok(value)) => Some(Ok((key, value, position))),
             // always prioritize the value error if either or both have an error
             (_, Err(e)) => Some(Err(e)),
             (Err(e), _) => Some(Err(e)),

@@ -43,12 +43,7 @@ impl Decoder {
         }
     }
 
-    pub fn decode(
-        &mut self,
-        bytes: &[u8],
-        position: Option<i64>,
-        push_metadata: bool,
-    ) -> Result<Option<Row>> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>> {
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
         let mut deserializer =
             Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream)
@@ -71,9 +66,6 @@ impl Decoder {
             &relation_type.typ().column_types,
             &mut packer,
         )?;
-        if push_metadata {
-            packer.push(Datum::from(position));
-        }
         Ok(Some(packer.finish_and_reuse()))
     }
 }
