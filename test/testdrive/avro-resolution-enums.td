@@ -33,6 +33,7 @@ $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} publish=
 
 > SHOW COLUMNS FROM resolution_enums
 f1 false text
+mz_offset false bigint
 
 > SELECT f1 FROM resolution_enums
 E1

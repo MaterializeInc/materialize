@@ -17,7 +17,7 @@ $ set 2columns={"type": "record", "name": "schema_more_columns", "fields": [ {"n
 $ kafka-create-topic topic=resolution-1to2
 
 $ kafka-ingest format=avro topic=resolution-1to2 schema=${1column} publish=true timestamp=1
-{"f1": "val_f1b"}
+{"f1": "val_f1a"}
 
 > CREATE MATERIALIZED SOURCE resolution_1to2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-1to2-${testdrive.seed}'
@@ -25,10 +25,10 @@ $ kafka-ingest format=avro topic=resolution-1to2 schema=${1column} publish=true 
   ENVELOPE NONE
 
 $ kafka-ingest format=avro topic=resolution-1to2 schema=${2columns} publish=true timestamp=2
-{"f1": "val_f1a", "f2": "val_f2a"}
+{"f1": "val_f1b", "f2": "val_f2b"}
 
 > SELECT * FROM resolution_1to2
-f1
+f1 mz_offset
 ---
-val_f1a
-val_f1b
+val_f1a 1
+val_f1b 2

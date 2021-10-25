@@ -48,14 +48,14 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 $ kafka-verify format=avro sink=materialize.public.upsert_input_sink sort-messages=true
-{"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "fish", "f2": 1000}
-{"key1": "fish", "key2": 2} {"key1": "fish", "key2": 2, "f1": "fish", "f2": 1000}
+{"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "fish", "f2": 1000, "mz_offset": 2}
+{"key1": "fish", "key2": 2} {"key1": "fish", "key2": 2, "f1": "fish", "f2": 1000, "mz_offset": 1}
 
 $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema} publish=true
 {"key1": "fisch", "key2": 42} {"f1": "richtig, fisch", "f2": 2000}
 
 $ kafka-verify format=avro sink=materialize.public.upsert_input_sink
-{"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "richtig, fisch", "f2": 2000}
+{"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "richtig, fisch", "f2": 2000, "mz_offset": 3}
 
 # More complicated scenarios: super keys, consistency input/output
 

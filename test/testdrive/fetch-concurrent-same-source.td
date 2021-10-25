@@ -38,18 +38,18 @@ true
 > DECLARE c2 CURSOR FOR SELECT * FROM fetch_concurrent_same_source;
 
 > FETCH ALL c1;
-123
-234
-345
+123 1
+234 2
+345 3
 
 > FETCH ALL c2;
-123
-234
-345
+123 1
+234 2
+345 3
 
 > DECLARE c3 CURSOR FOR SELECT * FROM fetch_concurrent_same_source;
 
 > FETCH ALL c3;
-123
-234
-345
+123 1
+234 2
+345 3

@@ -50,9 +50,9 @@ INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 column name "id" is ambiguous
 
 > SELECT * FROM avro_data_conflict
-id id b
--------
-1 2 3
+id id b mz_offset
+-----------------
+1 2 3   1
 
 > CREATE MATERIALIZED SOURCE avro_data_explicit (key_id, id, b)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
@@ -72,9 +72,9 @@ key_id id b
   INCLUDE KEY AS renamed_id
 
 > SELECT * FROM avro_data_as
-renamed_id id b
-------------
-1 2 3
+renamed_id  id  b  mz_offset
+----------------------------
+1           2   3  1
 
 
 > CREATE MATERIALIZED SOURCE avro_avro_data (key_id, id, b)
@@ -92,9 +92,9 @@ renamed_id id b
   ENVELOPE UPSERT
 
 > SELECT * FROM avro_data_upsert
-renamed id b
-------------
-1 2 3
+renamed  id  b  mz_offset
+-------------------------
+1        2   3  1
 
 $ set multikeyschema={
     "type": "record",
@@ -125,9 +125,9 @@ $ kafka-ingest format=avro key-format=avro topic=avro-data-record key-schema=${m
   ENVELOPE NONE
 
 > SELECT * FROM avro_key_record_flattened
-id geo a
---------
-1 nyc 99
+id geo a mz_offset
+------------------
+1 nyc 99 1
 
 > CREATE MATERIALIZED SOURCE avro_key_record_renamed
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-record-${testdrive.seed}'

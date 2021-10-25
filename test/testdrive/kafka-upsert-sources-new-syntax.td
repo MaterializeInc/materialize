@@ -45,11 +45,11 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
   ENVELOPE UPSERT
 
 > SELECT * from avroavro
-key           f1       f2
----------------------------
-fish          fish     1000
-birdmore      geese    56
-mammalmore    moose    2
+key           f1       f2    mz_offset
+--------------------------------------
+fish          fish     1000  1
+birdmore      geese    56    6
+mammalmore    moose    2     9
 
 $ kafka-create-topic topic=textavro
 
@@ -75,12 +75,12 @@ $ file-append path=data-schema.json
   ENVELOPE UPSERT
 
 > select * from bytesavro
-key0          f1       f2
----------------------------
-fish          fish     1000
-b\xc3\xacrd1  goose    1
-birdmore      geese    2
-mammal1       moose    1
+key0          f1       f2    mz_offset
+--------------------------------------
+fish          fish     1000  1
+b\xc3\xacrd1  goose    1     2
+birdmore      geese    2     3
+mammal1       moose    1     4
 
 $ kafka-ingest format=avro topic=textavro key-format=bytes key-terminator=: schema=${schema} publish=true
 bìrd1:
@@ -89,11 +89,11 @@ mämmalmore: {"f1": "moose", "f2": 42}
 mammal1:
 
 > select * from textavro
-key0          f1       f2
----------------------------
-fish          fish     1000
-birdmore      geese    56
-mämmalmore    moose    42
+key0          f1       f2    mz_offset
+--------------------------------------
+fish          fish     1000  1
+birdmore      geese    56    6
+mämmalmore    moose    42    7
 
 $ kafka-create-topic topic=textbytes
 
@@ -273,12 +273,12 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 
 > CREATE MATERIALIZED VIEW realtimeavroavro_view as SELECT * from realtimeavroavro;
 
-> select f3, f4, f1, f2 from realtimeavroavro_view
-f3        f4      f1             f2
------------------------------------
-fire      yang    dog            42
-<null>    yin     sheep          54
-water     <null>  crocodile      7
+> select * from realtimeavroavro_view
+f3        f4      f1             f2  mz_offset
+----------------------------------------------
+fire      yang    dog            42  1
+<null>    yin     sheep          54  5
+water     <null>  crocodile      7   7
 
 # Ensure that Upsert sources work with `start_offset`
 > CREATE MATERIALIZED SOURCE realtimeavroavro_ff
@@ -290,10 +290,10 @@ water     <null>  crocodile      7
   ENVELOPE UPSERT
 
 > SELECT * FROM realtimeavroavro_ff
-f3        f1        f1           f2
------------------------------------
-<null>    yin       sheep        54
-water     <null>    crocodile    7
+f3        f1        f1           f2  mz_offset
+----------------------------------------------
+<null>    yin       sheep        54  5
+water     <null>    crocodile    7   7
 
 # ensure that having deletion on a key that never existed does not break anything
 $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
@@ -307,12 +307,12 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 {"f3": {"string": "water"}, "f1": null}
 
 > select * from realtimeavroavro_view
-f3         f4          f1             f2
------------------------------------------
-fire       yang        dog            42
-air        qi          chicken        47
-<null>     yin         dog            243
-earth      dao         rhinoceros     211
+f3         f4          f1             f2   mz_offset
+----------------------------------------------------
+fire       yang        dog            42   1
+air        qi          chicken        47   13
+<null>     yin         dog            243  15
+earth      dao         rhinoceros     211  12
 
 $ kafka-create-topic topic=realtimefilteravro
 

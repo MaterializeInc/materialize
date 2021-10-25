@@ -221,10 +221,10 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
   ENVELOPE NONE
 
 > SELECT * FROM non_dbz_data
-a b
+a b mz_offset
 ---
-1 2
-2 3
+1 2 1
+2 3 2
 
 # Test an Avro source without a Debezium envelope starting at specified partition offsets.
 
@@ -243,9 +243,9 @@ $ kafka-ingest format=avro topic=non-dbz-data-multi-partition schema=${non-dbz-s
   ENVELOPE NONE
 
 > SELECT * FROM non_dbz_data_multi_partition
-a  b
------
-4  1
+a  b  mz_offset
+---------------
+4  1  1
 
 > CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
@@ -254,10 +254,10 @@ a  b
   ENVELOPE NONE
 
 > SELECT * FROM non_dbz_data_multi_partition_2
-a  b
------
-1  2
-4  1
+a  b  mz_offset
+---------------
+1  2  1
+4  1  1
 
 > CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition_fast_forwarded
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
@@ -266,9 +266,9 @@ a  b
   ENVELOPE NONE
 
 > SELECT * FROM non_dbz_data_multi_partition_fast_forwarded
-a  b
-----
-1  2
+a  b  mz_offset
+---------------
+1  2  1
 
 > CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition_fast_forwarded_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
@@ -277,9 +277,9 @@ a  b
   ENVELOPE NONE
 
 > SELECT * FROM non_dbz_data_multi_partition_fast_forwarded_2
-a  b
-----
-4  1
+a  b  mz_offset
+---------------
+4  1  1
 
 # Test an Avro source without a Debezium envelope with specified offsets and varying partition numbers.
 
@@ -304,14 +304,14 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
   ENVELOPE NONE
 
 > SELECT * FROM non_dbz_data_varying_partition_2
-a  b
-----
-5  6
+a  b  mz_offset
+---------------
+5  6  1
 
 $ kafka-add-partitions topic=non-dbz-data-varying-partition total-partitions=2
 
 # Reading data that's ingested to a new partition takes longer than the default timeout.
-$ set-sql-timeout duration=60s
+$ set-sql-timeout duration=20s
 
 $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz-schema} timestamp=1 partition=1
 {"a": 7, "b": 8}
@@ -320,18 +320,18 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 # Because the start offset for any new partitions will be 0, the first record sent to the new
 # partition will be included.
 > SELECT * FROM non_dbz_data_varying_partition
-a  b
------
-7  8
-9  10
+a  b   mz_offset
+----------------
+7  8   1
+9  10  2
 
 # Because the start offsets erronously included an offset for partition 1 (which didn't exist at the time),
 # the first record ingested into partition 1 will be ignored.
 > SELECT * FROM non_dbz_data_varying_partition_2
-a  b
------
-5  6
-9  10
+a  b   mz_offset
+----------------
+5  6   1
+9  10  2
 
 # There should be two partitions for the last created source / consumer (non_dbz_data_varying_partition_2)
 > SELECT count(*) FROM mz_kafka_consumer_partitions GROUP BY source_id;
@@ -362,10 +362,10 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 # Because the start offset for any new partitions will be 0, the first record sent to the new
 # partition will be included.
 > SELECT * FROM non_dbz_data_varying_partition_3
-a  b
------
-9  10
-11 12
+a  b   mz_offset
+----------------
+9  10  2
+11 12  1
 
 # There should three partitions for the last three sources / consumers (non_dbz_data_varying_partition_[123])
 > SELECT count(*) FROM mz_kafka_consumer_partitions GROUP BY source_id;
@@ -647,9 +647,9 @@ $ kafka-ingest format=avro topic=non-subset-key key-format=avro key-schema=${key
   ENVELOPE NONE
 
 > SELECT * FROM non_subset_key
-a
----
-"asdf"
+a       mz_offset
+-----------------
+"asdf"  1
 
 # Test that Postgres-style sources can be ingested.
 $ set pg-dbz-schema={

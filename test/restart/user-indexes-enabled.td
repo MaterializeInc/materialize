@@ -64,7 +64,7 @@ logging_derived_mat
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > SELECT * FROM mat_data
-1
+1 1
 
 > SHOW MATERIALIZED SOURCES
 mat_data
@@ -103,7 +103,7 @@ $ kafka-ingest format=avro topic=join-data schema=${join-schema} timestamp=1
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.snk_indexes_enabled sort-messages=true
-{"before": null, "after": {"row":{"a": 1}}}
+{"before": null, "after": {"row":{"a": 1, "mz_offset": 1}}}
 
 # 🔬 Tables
 

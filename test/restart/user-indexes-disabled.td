@@ -77,6 +77,7 @@ unable to automatically determine a query timestamp
 on_name   key_name              seq_in_index  column_name  expression  nullable enabled
 ---------------------------------------------------------------------------------------
 mat_data  mat_data_primary_idx  1             a            <null>      false    false
+mat_data  mat_data_primary_idx  2             mz_offset    <null>      false    false
 mat_data  ms_drop_idx           1             a            <null>      false    false
 
 > DROP INDEX ms_drop_idx;
@@ -85,6 +86,7 @@ mat_data  ms_drop_idx           1             a            <null>      false    
 on_name   key_name              seq_in_index  column_name  expression  nullable enabled
 ---------------------------------------------------------------------------------------
 mat_data  mat_data_primary_idx  1             a            <null>      false    false
+mat_data  mat_data_primary_idx  2             mz_offset    <null>      false    false
 
 # 🔬🔬🔬🔬 Non-materialized views
 
@@ -184,12 +186,13 @@ mat_view
 on_name   key_name              seq_in_index  column_name  expression  nullable enabled
 ---------------------------------------------------------------------------------------
 mat_data  mat_data_primary_idx  1             a            <null>      false    true
+mat_data  mat_data_primary_idx  2             mz_offset    <null>      false    true
 
 > SHOW MATERIALIZED SOURCES
 mat_data
 
 > SELECT * FROM mat_data
-1
+1 1
 
 # 🔬🔬🔬 Non-materialized views
 
@@ -207,7 +210,7 @@ unable to automatically determine a query timestamp
 
 # With indexes enabled, data starts flowing to sinks
 $ kafka-verify format=avro sink=materialize.public.snk_indexes_disabled sort-messages=true
-{"before": null, "after": {"row":{"a": 1}}}
+{"before": null, "after": {"row":{"a": 1, "mz_offset": 1}}}
 
 # 🔬🔬 Tables
 

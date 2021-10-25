@@ -56,19 +56,19 @@ true
 > DECLARE c2 CURSOR FOR SELECT * FROM fetch_concurrent_two_sources2_view;
 
 > FETCH 1 c1;
-12
+12 1
 
 > FETCH 1 c2;
-12
+12 1
 
 > FETCH 1 c1;
-23
+23 2
 
 > FETCH 1 c2;
-23
+23 2
 
 > FETCH 1 c1;
-34
+34 3
 
 > FETCH 1 c2;
-34
+34 3

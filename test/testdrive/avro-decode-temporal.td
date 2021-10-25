@@ -25,10 +25,10 @@ $ kafka-ingest format=avro topic=avro-decode-date schema=${date} timestamp=1
   ENVELOPE NONE
 
 > SELECT * FROM avro_decode_date
-1969-12-31
-1970-01-01
-1970-01-02
-+35771-04-27
+1969-12-31 1
+1970-01-01 2
+1970-01-02 3
++35771-04-27 4
 
 # Time and time-millis do not appear to be decoded to a temporal data type, see rc/avro/tests/schema.rs
 
@@ -48,10 +48,10 @@ $ kafka-ingest format=avro topic=avro-decode-time-millis schema=${time-millis} t
   ENVELOPE NONE
 
 > SELECT * FROM avro_decode_time_millis
--1
-0
-1
-12345678
+-1 1
+0 2
+1 3
+12345678 4
 
 #
 # timestamp-millis
@@ -77,14 +77,14 @@ $ kafka-ingest format=avro topic=avro-decode-timestamp-millis schema=${timestamp
   ENVELOPE NONE
 
 > SELECT * FROM avro_decode_timestamp_millis
-"1970-01-01 00:00:00"
-"1970-01-01 00:00:00.001"
-"1970-01-01 00:00:00.010"
-"1970-01-01 00:00:00.100"
-"1970-01-01 00:00:01"
-"1970-01-01 00:00:10"
-"1970-01-01 00:01:01"
-"1970-01-15 06:56:07.890"
+"1970-01-01 00:00:00" 1
+"1970-01-01 00:00:00.001" 2
+"1970-01-01 00:00:00.010" 3
+"1970-01-01 00:00:00.100" 4
+"1970-01-01 00:00:01" 5
+"1970-01-01 00:00:10" 6
+"1970-01-01 00:01:01" 7
+"1970-01-15 06:56:07.890" 8
 
 #
 # timestamp-micros
@@ -110,14 +110,14 @@ $ kafka-ingest format=avro topic=avro-decode-timestamp-micros schema=${timestamp
   ENVELOPE NONE
 
 > SELECT * FROM avro_decode_timestamp_micros
-"1970-01-01 00:00:00"
-"1970-01-01 00:00:00.000001"
-"1970-01-01 00:00:00.000010"
-"1970-01-01 00:00:00.000100"
-"1970-01-01 00:00:00.001"
-"1970-01-01 00:00:00.010"
-"1970-01-01 00:01:01"
-"1970-01-01 00:20:34.567890"
+"1970-01-01 00:00:00" 1
+"1970-01-01 00:00:00.000001" 2
+"1970-01-01 00:00:00.000010" 3
+"1970-01-01 00:00:00.000100" 4
+"1970-01-01 00:00:00.001" 5
+"1970-01-01 00:00:00.010" 6
+"1970-01-01 00:01:01" 7
+"1970-01-01 00:20:34.567890" 8
 
 #
 # local-timestamp-millis is not decoded to a temporal type
@@ -142,13 +142,13 @@ $ kafka-ingest format=avro topic=avro-decode-local-timestamp-millis schema=${loc
   ENVELOPE NONE
 
 > SELECT * FROM avro_decode_local_timestamp_millis
-0
-1
-10
-100
-1000
-10000
-1234567890
+0 1
+1 2
+10 3
+100 4
+1000 5
+10000 6
+1234567890 7
 
 #
 # duration is not tested because there is no support for "fixed"

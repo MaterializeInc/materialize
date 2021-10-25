@@ -59,14 +59,14 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 > EXPLAIN SELECT key2, key1 FROM t1 GROUP BY key1, key2, key2 || 'a';
 "%0 =| Get t1| Project (#1, #0)"
 
-> EXPLAIN SELECT DISTINCT key1, key2, nokey FROM t1;
+> EXPLAIN SELECT DISTINCT key1, key2, nokey, mz_offset FROM t1;
 "%0 =| Get t1"
 
-> EXPLAIN SELECT key1, key2, nokey FROM t1 GROUP BY key1, key2, nokey;
+> EXPLAIN SELECT key1, key2, nokey, mz_offset FROM t1 GROUP BY key1, key2, nokey, mz_offset;
 "%0 =| Get t1"
 
 > EXPLAIN SELECT key1, key2 FROM t1 GROUP BY key1, key2 HAVING key1 = 'a';
-"%0 =| Get t1| Filter (#0 = \"a\")| Map \"a\"| Project (#3, #1)"
+"%0 =| Get t1| Filter (#0 = \"a\")| Map \"a\"| Project (#4, #1)"
 
 # Optimization not possible - explicit distinct is present in plan
 
@@ -164,14 +164,14 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
 > EXPLAIN SELECT key2, key1 FROM t1_pkne GROUP BY key1, key2, key2 || 'a';
 "%0 =| Get t1_pkne| Project (#1, #0)"
 
-> EXPLAIN SELECT DISTINCT key1, key2, nokey FROM t1_pkne;
+> EXPLAIN SELECT DISTINCT key1, key2, nokey, mz_offset FROM t1_pkne;
 "%0 =| Get t1_pkne"
 
-> EXPLAIN SELECT key1, key2, nokey FROM t1_pkne GROUP BY key1, key2, nokey;
+> EXPLAIN SELECT key1, key2, nokey, mz_offset FROM t1_pkne GROUP BY key1, key2, nokey, mz_offset;
 "%0 =| Get t1_pkne"
 
 > EXPLAIN SELECT key1, key2 FROM t1_pkne GROUP BY key1, key2 HAVING key1 = 'a';
-"%0 =| Get t1_pkne| Filter (#0 = \"a\")| Map \"a\"| Project (#3, #1)"
+"%0 =| Get t1_pkne| Filter (#0 = \"a\")| Map \"a\"| Project (#4, #1)"
 
 # Optimization not possible - explicit distinct is present in plan
 

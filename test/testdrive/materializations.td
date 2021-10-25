@@ -94,12 +94,12 @@ b  ?column?
 > CREATE DEFAULT INDEX ON data_view
 
 > SELECT * FROM data_view
-a  b
-----
-1  1
-2  1
-3  1
-1  2
+a  b  mz_offset
+---------------
+1  1  1
+2  1  2
+3  1  3
+1  2  4
 
 > CREATE VIEW test3 AS
   SELECT b, min(a) FROM data_view GROUP BY b
@@ -214,12 +214,12 @@ unable to automatically determine a query timestamp
 > CREATE INDEX data_view_idx on data_view(a)
 
 > SELECT * from data_view
-a b
----
-1 1
-2 1
-3 1
-1 2
+a b mz_offset
+-------------
+1 1 1
+2 1 2
+3 1 3
+1 2 4
 
 # Existing materialized dependencies can be selected from as normal.
 > SELECT * from test6
@@ -240,12 +240,12 @@ b  c
 > CREATE INDEX data_view_idx2 on data_view(a)
 
 > SELECT * from data_view
-a b
----
-1 1
-2 1
-3 1
-1 2
+a b mz_offset
+-------------
+1 1 1
+2 1 2
+3 1 3
+1 2 4
 
 > SELECT * from test6
 d
@@ -264,12 +264,12 @@ b  c
 > DROP INDEX data_view_idx
 
 > SELECT * from data_view
-a b
----
-1 1
-2 1
-3 1
-1 2
+a b mz_offset
+-------------
+1 1 1
+2 1 2
+3 1 3
+1 2 4
 
 > SELECT * from test6
 d
@@ -300,12 +300,12 @@ $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=1
 {"a": 1, "b": 2}
 
 > SELECT * from mat_data
-a  b
-----
--1 0
--1 1
-3  4
-1  2
+a  b  mz_offset
+---------------
+-1 0  1
+-1 1  2
+3  4  3
+1  2  4
 
 > SHOW SOURCES
 name
@@ -386,16 +386,16 @@ $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=2
 > CREATE INDEX mat_data_idx3 on mat_data(b)
 
 > SELECT * from mat_data
-a  b
-----
--1 0
--1 1
-3  4
-1  2
--3 0
--1 0
-0  4
-1  2
+a  b  mz_offset
+---------------
+-1 0  1
+-1 1  2
+3  4  3
+1  2  4
+-3 0  5
+-1 0  6
+0  4  7
+1  2  8
 
 > SELECT * from test7
 count

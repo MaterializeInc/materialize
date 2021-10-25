@@ -31,11 +31,11 @@ $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestam
 {"f1": 123}
 
 > FETCH 1 c WITH (timeout='60s');
-<TIMESTAMP> 1 123
+<TIMESTAMP> 1 123 1
 
 $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestamp=2
 {"f1": 234}
 
 # The row just inserted is ours to fetch
 > FETCH 1 c WITH (timeout='60s');
-<TIMESTAMP> 1 234
+<TIMESTAMP> 1 234 2

@@ -76,7 +76,7 @@ $ kafka-ingest format=avro topic=avro-types-int2long schema=${int} timestamp=1
   ENVELOPE NONE
 
 > SELECT * FROM avro_types_int2long
-123
+123 1
 
 #
 # int -> float
@@ -161,4 +161,4 @@ $ kafka-ingest format=avro topic=avro-types-string2bytes schema=${string} timest
   ENVELOPE NONE
 
 > SELECT * FROM avro_types_string2bytes
-"abc \\xd0\\xb0\\xd0\\xb1\\xd1\\x86"
+"abc \\xd0\\xb0\\xd0\\xb1\\xd1\\x86" 1

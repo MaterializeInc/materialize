@@ -27,9 +27,9 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
   ENVELOPE NONE
 
 > SELECT * FROM tail_without_snapshot;
-123
-234
-345
+123 1
+234 2
+345 3
 
 > BEGIN
 
@@ -41,4 +41,4 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 {"f1": 567}
 
 > FETCH 1 FROM c WITH (timeout = '60s')
-<TIMESTAMP> 1 567
+<TIMESTAMP> 1 567 4

@@ -126,8 +126,8 @@ $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repea
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.kafka_ingest_repeat_sink sort-messages=true
-{"before":null,"after":{"row":{"f1":"fish"}}}
-{"before":null,"after":{"row":{"f1":"fish"}}}
+{"before":null,"after":{"row":{"f1":"fish", "mz_offset": 1}}}
+{"before":null,"after":{"row":{"f1":"fish", "mz_offset": 2}}}
 
 # kafka-verify with regexp (the set-regexp from above is used
 

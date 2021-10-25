@@ -28,7 +28,7 @@ $ kafka-ingest format=avro topic=resolution-2to1 schema=${1column} publish=true 
 {"f1": "val_f1b"}
 
 > SELECT * FROM resolution_2to1
-f1 f2
+f1 f2 mz_offset
 ---
-val_f1a val_f2a
-val_f1b default_f2
+val_f1a val_f2a 1
+val_f1b default_f2 2
