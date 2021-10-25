@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::{Concat, Map, OkErr, ToStream};
+use timely::dataflow::operators::{Concat, Map, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::Data as TimelyData;
@@ -58,31 +58,22 @@ where
 
         let snapshot = read.listen(listen_fn);
 
+        let snapshot_seal = snapshot
+            .as_ref()
+            .map_or(None, |snapshot| Some(snapshot.get_seal()));
+
         // TODO: Plumb the name of the stream down through the handles and use
         // it for the operator.
-        let (ok_all, err_all) = match snapshot {
-            Err(err) => {
-                (
-                    operator::empty(self),
-                    // TODO: Figure out how to make these retractable.
-                    vec![(format!("replaying persisted data: {}", err), 0, 1)].to_stream(self),
-                )
-            }
-            Ok(snapshot) => {
-                let snapshot_seal = snapshot.get_seal();
 
-                // listen to new data
-                let (ok_new, err_new) = listen_source(self, snapshot_seal, listen_rx);
-                let err_new_decode = err_new.flat_map(std::convert::identity);
+        // listen to new data
+        let (ok_new, err_new) = listen_source(self, snapshot_seal, listen_rx);
+        let err_new_decode = err_new.flat_map(std::convert::identity);
 
-                // Replay the previously persisted data, if any.
-                let (ok_previous, err_previous) = self.replay(snapshot);
+        // Replay the previously persisted data, if any.
+        let (ok_previous, err_previous) = self.replay(snapshot);
 
-                let ok_all = ok_previous.concat(&ok_new);
-                let err_all = err_previous.concat(&err_new_decode);
-                (ok_all, err_all)
-            }
-        };
+        let ok_all = ok_previous.concat(&ok_new);
+        let err_all = err_previous.concat(&err_new_decode);
 
         (ok_all, err_all)
     }
@@ -91,7 +82,10 @@ where
 /// Creates a source that listens on the given `listen_rx`.
 fn listen_source<S, K, V>(
     scope: &S,
-    lower_filter: Antichain<u64>,
+    // This uses an `Option<Antichain<_>>` and not an empty `Antichain` to signal that there is no
+    // initial frontier because an empty frontier would signal that we are at "the end of time",
+    // meaning that there will be no more events in the future.
+    initial_frontier: Option<Antichain<u64>>,
     listen_rx: Receiver<ListenEvent<Vec<u8>, Vec<u8>>>,
 ) -> (
     Stream<S, ((K, V), u64, isize)>,
@@ -112,8 +106,10 @@ where
         // that, though, I don't think we can downgrade this capability because
         // downgrading can only happen when `old_ts` <= `new_ts`, which is not
         // the case when an Antichain has multiple elements.
-        for element in lower_filter.iter() {
-            capability.downgrade(element);
+        if let Some(initial_frontier) = initial_frontier {
+            for element in initial_frontier.iter() {
+                capability.downgrade(element);
+            }
         }
 
         let mut cap = Some(capability);
@@ -270,7 +266,6 @@ mod tests {
         Ok(())
     }
 
-    // TODO: At the moment, this test hangs indefinitely. Currently unclear why.
     #[test]
     #[ignore]
     fn multiple_workers() -> Result<(), Error> {
@@ -376,6 +371,67 @@ mod tests {
         ),
         ];
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    // Previously, creating a persistent source would create differently shaped operator graphs,
+    // depending on whether an internal call to persistence was successful or not. Timely dataflow
+    // doesn't like that, which would manifest in hanging worker threads when trying to shut down.
+    //
+    // This test concurrently shuts down the persist runtime (which will make the internal
+    // `listen()` call fail) and creates a bunch of timely workers. Some workers are expected to
+    // call `listen` before the runtime is shut down and some after. We "help" the test a bit by
+    // inserting `thread::sleep()` calls in strategic places, this way it is almost guaranteed to
+    // fail without the fix.
+    #[test]
+    fn regression_8687_deterministic_operator_construction() -> Result<(), Error> {
+        let mut p = MemRegistry::new().runtime_no_reentrance()?;
+        let (write, read) = p.create_or_load::<String, ()>("1").unwrap();
+
+        // Write some data.
+        let data = vec![(("ciao".into(), ()), 1, 1), (("bello".into(), ()), 1, 1)];
+        write.write(&data).recv().expect("write failed");
+        write.seal(1).recv().expect("seal failed");
+
+        // Concurrently shut down the runtime and create multiple timely workers/threads from a
+        // second thread that create a persistent source.
+        let runtime_shutdown = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1));
+            p.stop().expect("shutdown failed");
+        });
+
+        let timely = std::thread::spawn(move || {
+            let guards = timely::execute(Config::process(3), move |worker| {
+                let mut probe = ProbeHandle::new();
+                if worker.index() == 0 {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                worker.dataflow(|scope| {
+                    let (ok_stream, _err_stream) = scope.persisted_source(&read);
+                    ok_stream.probe_with(&mut probe);
+                });
+
+                while probe.less_than(&1) {
+                    worker.step();
+                }
+            })?;
+
+            let result: Result<Vec<_>, _> = guards.join().into_iter().collect();
+
+            result
+        });
+
+        // Assert that we can shut down cleanly. Without the fix, this test would not fail but
+        // would hang indefinitely while trying to shut down the timely workers.
+        runtime_shutdown
+            .join()
+            .expect("joining runtime thread failed");
+
+        timely
+            .join()
+            .expect("joining timely launcher thread failed")
+            .expect("timely workers failed");
 
         Ok(())
     }
