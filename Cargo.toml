@@ -74,11 +74,3 @@ rustc-demangle = { opt-level = 3 }
 # it's unlikely we're going to get interactive access to a debugger in
 # production installations, but we still want useful crash reports.
 debug = 1
-
-# TODO - remove this once a release of `headers` without a dependency on `time`
-# goes out.
-#
-# We don't want to depend on `time` because it triggers
-# https://rustsec.org/advisories/RUSTSEC-2020-0071 .
-[patch.crates-io]
-headers = { git = "https://github.com/hyperium/headers" }
