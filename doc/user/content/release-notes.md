@@ -101,6 +101,8 @@ List new features before bug fixes.
 
 {{< /comment >}}
 
+{{% version-header v0.9.11 %}}
+
 {{% version-header v0.9.10 %}}
 
 - Evaluate TopK operators on constant inputs at query compile time.
