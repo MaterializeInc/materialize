@@ -164,15 +164,26 @@ fn test_hir_generator() {
                                 }
                             };
 
-                            let model =
+                            let mut model =
                                 query_model::hir_generator::FromHir::generate(&planned_query.expr);
 
-                            match query_model::dot_generator::DotGenerator::new()
-                                .generate(&model, &s.input)
+                            let mut output = match query_model::dot_generator::DotGenerator::new()
+                                .generate(&model, &format!("{} (before rewrites)", s.input))
+                            {
+                                Ok(graph) => graph,
+                                Err(e) => return format!("graph generation error: {}", e),
+                            };
+
+                            query_model::rewrite_engine::rewrite_model(&mut model);
+
+                            output += &match query_model::dot_generator::DotGenerator::new()
+                                .generate(&model, &format!("{} (after rewrites)", s.input))
                             {
                                 Ok(graph) => graph,
                                 Err(e) => format!("graph generation error: {}", e),
-                            }
+                            };
+
+                            output
                         } else {
                             panic!("invalid query: {}", s.input);
                         }

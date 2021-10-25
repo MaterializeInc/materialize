@@ -14,6 +14,7 @@ use std::fmt;
 
 mod dot_generator;
 mod hir_generator;
+mod rewrite_engine;
 mod scalar_expr;
 #[cfg(test)]
 mod test;
@@ -269,6 +270,58 @@ impl QueryBox {
         Ok(())
     }
 
+    /// Visit all the expressions in this query box.
+    fn visit_expressions_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut Expr) -> Result<(), E>,
+    {
+        for c in self.columns.iter_mut() {
+            f(&mut c.expr)?;
+        }
+        match &mut self.box_type {
+            BoxType::Select(select) => {
+                for p in select.predicates.iter_mut() {
+                    f(p)?;
+                }
+                if let Some(order_key) = &mut select.order_key {
+                    for p in order_key.iter_mut() {
+                        f(p)?;
+                    }
+                }
+                if let Some(limit) = &mut select.limit {
+                    f(limit)?;
+                }
+                if let Some(offset) = &mut select.offset {
+                    f(offset)?;
+                }
+            }
+            BoxType::OuterJoin(outer_join) => {
+                for p in outer_join.predicates.iter_mut() {
+                    f(p)?;
+                }
+            }
+            BoxType::Grouping(grouping) => {
+                for p in grouping.key.iter_mut() {
+                    f(p)?;
+                }
+            }
+            BoxType::Values(values) => {
+                for row in values.rows.iter_mut() {
+                    for value in row.iter_mut() {
+                        f(value)?;
+                    }
+                }
+            }
+            BoxType::TableFunction(table_function) => {
+                for p in table_function.parameters.iter_mut() {
+                    f(p)?;
+                }
+            }
+            BoxType::Except | BoxType::Union | BoxType::Intersect | BoxType::BaseTable(_) => {}
+        }
+        Ok(())
+    }
+
     fn is_select(&self) -> bool {
         matches!(self.box_type, BoxType::Select(_))
     }
@@ -303,7 +356,7 @@ impl BoxType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum DistinctOperation {
     Enforce,
     Guaranteed,
