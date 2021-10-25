@@ -12,13 +12,12 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `BEGIN` and `COMMIT`.
 
-use crate::ast::display::AstDisplay;
 use crate::ast::{
     CommitStatement, RollbackStatement, SetTransactionStatement, StartTransactionStatement,
-    TransactionMode,
+    TransactionAccessMode, TransactionMode,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::Plan;
+use crate::plan::{Plan, StartTransactionPlan};
 
 pub fn describe_start_transaction(
     _: &StatementContext,
@@ -31,8 +30,8 @@ pub fn plan_start_transaction(
     _: &StatementContext,
     StartTransactionStatement { modes }: StartTransactionStatement,
 ) -> Result<Plan, anyhow::Error> {
-    verify_transaction_modes(&modes)?;
-    Ok(Plan::StartTransaction)
+    let access = verify_transaction_modes(modes)?;
+    Ok(Plan::StartTransaction(StartTransactionPlan { access }))
 }
 
 pub fn describe_set_transaction(
@@ -49,16 +48,21 @@ pub fn plan_set_transaction(
     bail_unsupported!("SET TRANSACTION")
 }
 
-fn verify_transaction_modes(modes: &[TransactionMode]) -> Result<(), anyhow::Error> {
+fn verify_transaction_modes(
+    modes: Vec<TransactionMode>,
+) -> Result<Option<TransactionAccessMode>, anyhow::Error> {
+    let mut access = None;
     for mode in modes {
         match mode {
             // Although we are only serializable, it's not wrong to accept lower isolation
             // levels because we still meet the required guarantees for those.
             TransactionMode::IsolationLevel(_) => {}
-            _ => bail_unsupported!(format!("transaction mode {}", mode.to_ast_string())),
+            TransactionMode::AccessMode(mode) => {
+                access = Some(mode);
+            }
         }
     }
-    Ok(())
+    Ok(access)
 }
 
 pub fn describe_rollback(

@@ -23,7 +23,7 @@ use tokio::sync::OwnedMutexGuard;
 use expr::GlobalId;
 use pgrepr::Format;
 use repr::{Datum, Diff, Row, ScalarType, Timestamp};
-use sql::ast::{Raw, Statement};
+use sql::ast::{Raw, Statement, TransactionAccessMode};
 use sql::plan::{Params, PlanContext, StatementDesc};
 
 use crate::error::CoordError;
@@ -88,13 +88,18 @@ impl Session {
 
     /// Starts an explicit transaction, or changes an implicit to an explicit
     /// transaction.
-    pub fn start_transaction(mut self, wall_time: DateTime<Utc>) -> Self {
+    pub fn start_transaction(
+        mut self,
+        wall_time: DateTime<Utc>,
+        access: Option<TransactionAccessMode>,
+    ) -> Self {
         match self.transaction {
             TransactionStatus::Default | TransactionStatus::Started(_) => {
                 self.transaction = TransactionStatus::InTransaction(Transaction {
                     pcx: PlanContext::new(wall_time),
                     ops: TransactionOps::None,
                     write_lock_guard: None,
+                    access,
                 });
             }
             TransactionStatus::InTransactionImplicit(txn) => {
@@ -114,6 +119,7 @@ impl Session {
                 pcx: PlanContext::new(wall_time),
                 ops: TransactionOps::None,
                 write_lock_guard: None,
+                access: None,
             };
             match stmts {
                 1 => self.transaction = TransactionStatus::Started(txn),
@@ -165,26 +171,38 @@ impl Session {
     /// cannot be merged (i.e., a read cannot be merged to an insert).
     pub fn add_transaction_ops(&mut self, add_ops: TransactionOps) -> Result<(), CoordError> {
         match &mut self.transaction {
-            TransactionStatus::Started(Transaction { ops, .. })
-            | TransactionStatus::InTransaction(Transaction { ops, .. })
-            | TransactionStatus::InTransactionImplicit(Transaction { ops, .. }) => match ops {
-                TransactionOps::None => *ops = add_ops,
-                TransactionOps::Peeks(txn_ts) => match add_ops {
-                    TransactionOps::Peeks(add_ts) => {
-                        assert_eq!(*txn_ts, add_ts);
+            TransactionStatus::Started(Transaction { ops, access, .. })
+            | TransactionStatus::InTransaction(Transaction { ops, access, .. })
+            | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
+                match ops {
+                    TransactionOps::None => {
+                        if matches!(access, Some(TransactionAccessMode::ReadOnly))
+                            && matches!(add_ops, TransactionOps::Writes(_))
+                        {
+                            return Err(CoordError::ReadOnlyTransaction);
+                        }
+                        *ops = add_ops;
                     }
-                    _ => return Err(CoordError::ReadOnlyTransaction),
-                },
-                TransactionOps::Tail => return Err(CoordError::TailOnlyTransaction),
-                TransactionOps::Writes(txn_writes) => match add_ops {
-                    TransactionOps::Writes(mut add_writes) => {
-                        txn_writes.append(&mut add_writes);
-                    }
-                    _ => {
-                        return Err(CoordError::WriteOnlyTransaction);
-                    }
-                },
-            },
+                    TransactionOps::Peeks(txn_ts) => match add_ops {
+                        TransactionOps::Peeks(add_ts) => {
+                            assert_eq!(*txn_ts, add_ts);
+                        }
+                        _ => return Err(CoordError::ReadOnlyTransaction),
+                    },
+                    TransactionOps::Tail => return Err(CoordError::TailOnlyTransaction),
+                    TransactionOps::Writes(txn_writes) => match add_ops {
+                        TransactionOps::Writes(mut add_writes) => {
+                            // We should have already checked the access above, but make sure we don't miss
+                            // it anyway.
+                            assert!(!matches!(access, Some(TransactionAccessMode::ReadOnly)));
+                            txn_writes.append(&mut add_writes);
+                        }
+                        _ => {
+                            return Err(CoordError::WriteOnlyTransaction);
+                        }
+                    },
+                }
+            }
             TransactionStatus::Default | TransactionStatus::Failed(_) => {
                 unreachable!()
             }
@@ -214,6 +232,7 @@ impl Session {
                 pcx: _,
                 ops: TransactionOps::Peeks(ts),
                 write_lock_guard: _,
+                access: _,
             }) => *ts,
             _ => get_ts()?,
         };
@@ -573,6 +592,8 @@ pub struct Transaction {
     pub ops: TransactionOps,
     /// Holds the coordinator's write lock.
     write_lock_guard: Option<OwnedMutexGuard<()>>,
+    /// Access mode (read only, read write).
+    access: Option<TransactionAccessMode>,
 }
 
 impl Transaction {

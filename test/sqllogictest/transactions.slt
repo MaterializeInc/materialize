@@ -415,9 +415,6 @@ db error: ERROR: unknown catalog item 'u21'
 
 # Test transaction syntax that we don't support.
 
-statement error READ WRITE not yet supported
-BEGIN READ WRITE
-
 statement ok
 BEGIN ISOLATION LEVEL SERIALIZABLE
 
@@ -436,3 +433,31 @@ BEGIN ISOLATION LEVEL REPEATABLE READ
 
 statement ok
 COMMIT
+
+# Access modes.
+
+statement ok
+BEGIN TRANSACTION READ WRITE
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN TRANSACTION READ ONLY
+
+query I
+SELECT 1
+----
+1
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN TRANSACTION READ ONLY
+
+statement error transaction in read-only mode
+INSERT INTO t (a) VALUES (1)
+
+statement ok
+ROLLBACK
