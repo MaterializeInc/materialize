@@ -206,6 +206,44 @@ impl FromHir {
                     position: 0,
                 })
             }
+
+            HirScalarExpr::Exists(expr) => {
+                // EXISTS(...) subqueries are represented as TRUE IN (SELECT TRUE ...)
+                let box_id = self.within_context(context_box, &mut |generator| -> BoxId {
+                    generator.generate_internal(expr)
+                });
+                let literal_true = self.generate_expr(&HirScalarExpr::literal_true(), context_box);
+
+                // The SELECT box wrapping the EXISTS subquery
+                let select_id = self.model.make_select_box();
+                let _ = self
+                    .model
+                    .make_quantifier(QuantifierType::Foreach, box_id, select_id);
+                self.model
+                    .get_box(select_id)
+                    .borrow_mut()
+                    .columns
+                    .push(Column {
+                        expr: literal_true.clone(),
+                        alias: None,
+                    });
+
+                // Add the existential (IN) quantifier in the context box
+                let quantifier_id =
+                    self.model
+                        .make_quantifier(QuantifierType::Existential, select_id, context_box);
+
+                // Return the existential comparison
+                let col_ref = Expr::ColumnReference(ColumnReference {
+                    quantifier_id,
+                    position: 0,
+                });
+                Expr::CallBinary {
+                    func: expr::BinaryFunc::Eq,
+                    expr1: Box::new(literal_true),
+                    expr2: Box::new(col_ref),
+                }
+            }
             _ => panic!("unsupported expression type"),
         }
     }
