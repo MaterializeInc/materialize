@@ -105,6 +105,12 @@ $ kafka-verify format=avro sink=materialize.public.snk_indexes_disabled sort-mes
 ! INSERT INTO t VALUES (1)
 cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
 
+! UPDATE t SET a = 1
+cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
+
+! DELETE FROM t;
+cannot perform operation on "materialize.public.t" while its default index ("materialize.public.t_primary_idx") is disabled
+
 # Selects work but are always empty
 > SELECT * FROM t
 

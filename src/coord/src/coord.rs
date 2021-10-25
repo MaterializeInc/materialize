@@ -3364,6 +3364,10 @@ impl Coordinator {
         session: &mut Session,
         plan: SendDiffsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        if self.catalog.config().disable_user_indexes {
+            self.catalog.ensure_default_index_enabled(plan.id)?;
+        }
+
         // Take a detour through ChangeBatch so we can consolidate updates. Useful
         // especially for UPDATE where a row shouldn't change.
         let mut rows = ChangeBatch::with_capacity(plan.updates.len());
@@ -3392,13 +3396,7 @@ impl Coordinator {
         session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id: plan.id, rows }]))?;
         Ok(match plan.kind {
             MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
-            MutationKind::Insert => {
-                if self.catalog.config().disable_user_indexes {
-                    self.catalog.ensure_default_index_enabled(plan.id)?;
-                }
-
-                ExecuteResponse::Inserted(affected_rows)
-            }
+            MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
             MutationKind::Update => ExecuteResponse::Updated(affected_rows / 2),
         })
     }
