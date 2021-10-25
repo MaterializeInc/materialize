@@ -15,6 +15,7 @@ use crate::query_model::{
     QuantifierType, Select, Values,
 };
 
+/// Generates a Query Graph Model for a given SQL query represented as a HirRelationExpr.
 pub struct FromHir {
     /// The model being built.
     model: Model,
@@ -43,6 +44,7 @@ impl FromHir {
         box_id
     }
 
+    /// Generates a sub-graph representing the given expression.
     fn generate_internal(&mut self, expr: &HirRelationExpr) -> BoxId {
         match expr {
             // HirRelationExpr::Get { id, typ } => {
@@ -178,6 +180,7 @@ impl FromHir {
         select_id
     }
 
+    /// Lowers an expression, adding any subquery as a quantifier in the given `context_box`.
     fn generate_expr(&mut self, expr: &HirScalarExpr, context_box: BoxId) -> Expr {
         match expr {
             HirScalarExpr::Literal(row, col_type) => Expr::Literal(row.clone(), col_type.clone()),
@@ -248,6 +251,9 @@ impl FromHir {
         }
     }
 
+    /// Translates the offset-based representation for column references in Hir into
+    /// a quantifier ID and the offset of the column within the projection of that
+    /// quantifier.
     fn find_column_within_box(&self, box_id: BoxId, mut position: usize) -> ColumnReference {
         let b = self.model.get_box(box_id).borrow();
         for q_id in b.quantifiers.iter() {
@@ -264,6 +270,9 @@ impl FromHir {
         panic!("column not found")
     }
 
+    /// Executes a given action within a context where the columns of `context_box`
+    /// are visible. Used for translating lateral references and column references
+    /// from the parent query in subqueries.
     fn within_context<F, T>(&mut self, context_box: BoxId, f: &mut F) -> T
     where
         F: FnMut(&mut Self) -> T,
