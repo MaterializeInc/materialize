@@ -19,6 +19,9 @@ true
 > SELECT current_user = current_role AND current_user != '';
 true
 
+> SELECT session_user = current_role AND session_user != '';
+true
+
 > SELECT now() - pg_postmaster_start_time() > interval '1 second' AND now() - pg_postmaster_start_time() < interval '1 year';
 true
 
