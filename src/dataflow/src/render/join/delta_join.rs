@@ -77,8 +77,10 @@ pub struct DeltaStagePlan {
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
     stream_key: Vec<MirScalarExpr>,
-    /// The arity of the stream
-    stream_arity: usize,
+    /// The permutation of the stream
+    stream_permutation: Permutation,
+    /// The thinning expression to apply on the value part of the stream
+    stream_thinning: Vec<usize>,
     /// The key expressions to use for the lookup relation.
     lookup_key: Vec<MirScalarExpr>,
     /// The closure to apply to the concatenation of columns
@@ -165,19 +167,20 @@ impl DeltaJoinPlan {
                     input_mapper.global_columns(*lookup_relation),
                     &lookup_key_rebased,
                 );
-                let next_stream_arity = closure.before.projection.len();
+                let (stream_permutation, stream_thinning) =
+                    Permutation::construct_from_expr(&stream_key, stream_arity);
+                stream_arity = closure.before.projection.len();
 
                 bound_inputs.push(*lookup_relation);
                 // record the stage plan as next in the path.
                 stage_plans.push(DeltaStagePlan {
                     lookup_relation: *lookup_relation,
                     stream_key,
-                    stream_arity,
+                    stream_permutation,
+                    stream_thinning,
                     lookup_key: lookup_key.clone(),
                     closure,
                 });
-
-                stream_arity = next_stream_arity;
             }
             // determine a final closure, and complete the path plan.
             let final_closure = join_build_state.complete();
@@ -388,7 +391,8 @@ where
                         let DeltaStagePlan {
                             lookup_relation,
                             stream_key,
-                            stream_arity,
+                            stream_permutation,
+                            stream_thinning,
                             lookup_key,
                             closure,
                         } = stage_plan;
@@ -409,7 +413,8 @@ where
                                             local.enter_region(region),
                                             &permutation,
                                             stream_key,
-                                            stream_arity,
+                                            stream_permutation,
+                                            stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
                                         )
@@ -419,7 +424,8 @@ where
                                             local.enter_region(region),
                                             &permutation,
                                             stream_key,
-                                            stream_arity,
+                                            stream_permutation,
+                                            stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
                                         )
@@ -432,7 +438,8 @@ where
                                             trace.enter_region(region),
                                             &permutation,
                                             stream_key,
-                                            stream_arity,
+                                            stream_permutation,
+                                            stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
                                         )
@@ -442,7 +449,8 @@ where
                                             trace.enter_region(region),
                                             &permutation,
                                             stream_key,
-                                            stream_arity,
+                                            stream_permutation,
+                                            stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
                                         )
@@ -531,7 +539,8 @@ fn build_halfjoin<G, Tr, CF>(
     trace: Arranged<G, Tr>,
     permutation: &Permutation,
     prev_key: Vec<MirScalarExpr>,
-    prev_arity: usize,
+    prev_permutation: Permutation,
+    prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,
 ) -> (
@@ -545,8 +554,6 @@ where
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    let (updates_permutation, prev_value_expr) =
-        Permutation::construct_from_expr(&prev_key, prev_arity);
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -561,7 +568,7 @@ where
                     .map(|e| e.eval(&datums_local, &temp_storage)),
             )?;
             let row_key = row_packer.finish_and_reuse();
-            row_packer.extend(prev_value_expr.iter().map(|e| datums_local[*e]));
+            row_packer.extend(prev_thinning.iter().map(|e| datums_local[*e]));
             let row_value = row_packer.finish_and_reuse();
             // Explicit drop to release borrow on `row` so that it can be returned.
             drop(datums_local);
@@ -575,7 +582,7 @@ where
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
 
-    let permutation = updates_permutation.join(permutation);
+    let permutation = prev_permutation.join(permutation);
     let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
         &updates,
         trace,
