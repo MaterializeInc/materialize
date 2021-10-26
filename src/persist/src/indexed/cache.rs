@@ -86,16 +86,15 @@ impl<B: Blob> BlobCache<B> {
 
     /// Synchronously fetches the batch for the given key.
     fn fetch_unsealed_batch_sync(&self, key: &str) -> Result<Arc<BlobUnsealedBatch>, Error> {
-        let bytes = self
-            .blob
-            .lock()?
-            .get(key)?
-            .ok_or_else(|| Error::from(format!("no blob for key: {}", key)))?;
+        let bytes =
+            self.blob.lock()?.get(key)?.ok_or_else(|| {
+                Error::from(format!("no blob for unsealed batch at key: {}", key))
+            })?;
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
         let batch: Abomonated<BlobUnsealedBatch, Vec<u8>> = unsafe { Abomonated::new(bytes) }
-            .ok_or_else(|| Error::from(format!("invalid batch at key: {}", key)))?;
+            .ok_or_else(|| Error::from(format!("invalid unsealed batch at key: {}", key)))?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
@@ -150,7 +149,11 @@ impl<B: Blob> BlobCache<B> {
         batch: BlobUnsealedBatch,
     ) -> Result<u64, Error> {
         if key == Self::META_KEY {
-            return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
+            return Err(format!(
+                "cannot write unsealed batch to meta key: {}",
+                Self::META_KEY
+            )
+            .into());
         }
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
@@ -198,12 +201,12 @@ impl<B: Blob> BlobCache<B> {
             .blob
             .lock()?
             .get(key)?
-            .ok_or_else(|| Error::from(format!("no blob for key: {}", key)))?;
+            .ok_or_else(|| Error::from(format!("no blob for trace batch at key: {}", key)))?;
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
         let batch: Abomonated<BlobTraceBatch, Vec<u8>> = unsafe { Abomonated::new(bytes) }
-            .ok_or_else(|| Error::from(format!("invalid batch at key: {}", key)))?;
+            .ok_or_else(|| Error::from(format!("invalid trace batch at key: {}", key)))?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
