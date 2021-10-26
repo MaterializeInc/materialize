@@ -58,8 +58,10 @@ pub struct LinearStagePlan {
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
     stream_key: Vec<MirScalarExpr>,
-    /// The arity of the stream
-    stream_arity: usize,
+    /// The permutation of the stream
+    stream_permutation: Permutation,
+    /// The thinning expression to apply on the value part of the stream
+    stream_thinning: Vec<usize>,
     /// The key expressions to use for the lookup relation.
     lookup_key: Vec<MirScalarExpr>,
     /// The closure to apply to the concatenation of columns
@@ -129,7 +131,9 @@ impl LinearJoinPlan {
                 input_mapper.global_columns(*lookup_relation),
                 &lookup_key_rebased,
             );
-            let next_stream_arity = closure.before.projection.len();
+            let (stream_permutation, stream_thinning) =
+                Permutation::construct_from_expr(&stream_key, stream_arity);
+            stream_arity = closure.before.projection.len();
 
             bound_inputs.push(*lookup_relation);
 
@@ -137,12 +141,11 @@ impl LinearJoinPlan {
             stage_plans.push(LinearStagePlan {
                 lookup_relation: *lookup_relation,
                 stream_key,
-                stream_arity,
+                stream_permutation,
+                stream_thinning,
                 lookup_key: lookup_key.clone(),
                 closure,
             });
-
-            stream_arity = next_stream_arity;
         }
 
         // determine a final closure, and complete the path plan.
@@ -256,7 +259,8 @@ where
             let stream = self.differential_join(
                 joined,
                 stage_plan.stream_key,
-                stage_plan.stream_arity,
+                stage_plan.stream_permutation,
+                stage_plan.stream_thinning,
                 inputs[stage_plan.lookup_relation].clone(),
                 stage_plan.lookup_key,
                 stage_plan.closure,
@@ -308,7 +312,8 @@ where
         &mut self,
         mut joined: JoinedFlavor<G, T>,
         stream_key: Vec<MirScalarExpr>,
-        stream_arity: usize,
+        stream_permutation: Permutation,
+        stream_thinning: Vec<usize>,
         lookup_relation: CollectionBundle<G, Row, T>,
         lookup_key: Vec<MirScalarExpr>,
         closure: JoinClosure,
@@ -316,8 +321,6 @@ where
     ) -> Collection<G, Row> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let (permutation, value_expr) =
-                Permutation::construct_from_expr(&stream_key, stream_arity);
             let mut row_packer = Row::default();
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
@@ -331,7 +334,7 @@ where
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
                     let key = row_packer.finish_and_reuse();
-                    row_packer.extend(value_expr.iter().map(|e| datums_local[*e]));
+                    row_packer.extend(stream_thinning.iter().map(|e| datums_local[*e]));
                     let value = row_packer.finish_and_reuse();
                     Ok((key, value))
                 }
@@ -339,7 +342,7 @@ where
             errors.push(errs);
             use crate::arrangement::manager::RowSpine;
             let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
-            joined = JoinedFlavor::Local(arranged, permutation);
+            joined = JoinedFlavor::Local(arranged, stream_permutation);
         }
 
         // Ensure that the correct arrangement exists.
