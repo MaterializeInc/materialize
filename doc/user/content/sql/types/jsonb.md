@@ -9,7 +9,7 @@ aliases:
 ---
 
 `jsonb` data expresses a JavaScript Object Notation (JSON) object similar to
-PostgreSQL's implementation.
+[PostgreSQL's implementation](https://www.postgresql.org/docs/current/datatype-json.html).
 
 Detail | Info
 -------|------

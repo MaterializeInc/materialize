@@ -5,7 +5,7 @@ source without applying any formatting or decoding.
 
 Raw byte-formatted sources have one column, which, by default, is named `data`.
 
-#### Extracting JSON data from bytes
+### Extracting JSON data from bytes
 
 Materialize cannot receive JSON data directly from a source. Instead, you must
 create a source that stores the data it receives as raw bytes (**FORMAT
@@ -21,3 +21,6 @@ FROM (
     FROM bytea_source
 )
 ```
+
+`jsonb` data expresses a JSON object similar to [PostgreSQL’s implementation](https://www.postgresql.org/docs/current/datatype-json.html).
+For more information, see [`jsonb`](/sql/types/jsonb/).
