@@ -133,6 +133,8 @@ impl Direct {
         match streams.entry(name.to_string()) {
             Entry::Occupied(x) => Ok(x.into_mut()),
             Entry::Vacant(x) => {
+                // TODO: should we also do the "correct" thing here and not error out? Instead
+                // passing the Result to persisted_source().
                 let (write, read) = persister.create_or_load::<String, ()>(name)?;
 
                 let (output_tx, output_rx) = mpsc::channel();
@@ -144,7 +146,7 @@ impl Direct {
 
                 let probe = worker.0.dataflow(|scope| {
                     let mut probe = TimelyProbe::new();
-                    let out = scope.persisted_source(&read);
+                    let out = scope.persisted_source(Ok(read.clone()));
                     out.probe_with(&mut probe).capture_into(output_tx);
                     probe
                 });

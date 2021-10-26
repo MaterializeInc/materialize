@@ -16,8 +16,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
 use persist::operators::source::PersistedSource;
-use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, OkErr, ToStream};
+use timely::dataflow::operators::{Concat, OkErr};
 use timely::dataflow::operators::{Map, UnorderedInput};
 use timely::dataflow::Scope;
 
@@ -97,19 +96,14 @@ where
                 let (ok_stream, err_collection) = match (&mut render_state.persist, persisted_name)
                 {
                     (Some(persist), Some(stream_name)) => {
-                        let persisted_stream = persist.create_or_load(&stream_name);
-                        let (persist_ok_stream, persist_err_stream) = match persisted_stream {
-                            Ok((_, read)) => scope.persisted_source(&read).ok_err(|x| match x {
+                        let read = persist
+                            .create_or_load(&stream_name)
+                            .map(|(_write, read)| read);
+                        let (persist_ok_stream, persist_err_stream) =
+                            scope.persisted_source(read).ok_err(|x| match x {
                                 (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
                                 (Err(err), ts, diff) => Err((err, ts, diff)),
-                            }),
-                            Err(err) => {
-                                let ok_stream = empty(scope);
-                                let (ts, diff) = (0, 1);
-                                let err_stream = vec![(err.to_string(), ts, diff)].to_stream(scope);
-                                (ok_stream, err_stream)
-                            }
-                        };
+                            });
                         let (persist_ok_stream, decode_err_stream) =
                             persist_ok_stream.ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
                         let persist_err_collection = persist_err_stream
