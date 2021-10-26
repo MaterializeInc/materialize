@@ -529,10 +529,10 @@ where
                 input,
                 key_val_plan,
                 plan,
-                arity,
+                permutation,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_reduce(input, key_val_plan, plan, arity)
+                self.render_reduce(input, key_val_plan, plan, permutation)
             }
             Plan::TopK {
                 input,
@@ -658,6 +658,7 @@ pub mod plan {
     use crate::render::reduce::{KeyValPlan, ReducePlan};
     use crate::render::threshold::ThresholdPlan;
     use crate::render::top_k::TopKPlan;
+    use crate::render::Permutation;
     use dataflow_types::DataflowDescription;
     use expr::{
         EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
@@ -797,8 +798,8 @@ pub mod plan {
             /// on the properties of the reduction, and the input itself. Please check
             /// out the documentation for this type for more detail.
             plan: ReducePlan,
-            /// Arity of the output
-            arity: usize,
+            /// Permutation of the produced arrangement
+            permutation: Permutation,
         },
         /// Key-based "Top K" operator, retaining the first K records in each group.
         TopK {
@@ -1073,13 +1074,14 @@ pub mod plan {
                     );
                     let output_keys = reduce_plan.keys(group_key.len());
                     let arity = group_key.len() + aggregates.len();
+                    let permutation = Permutation::identity(key_val_plan.key_arity(), arity);
                     // Return the plan, and the keys it produces.
                     (
                         Plan::Reduce {
                             input: Box::new(input),
                             key_val_plan,
                             plan: reduce_plan,
-                            arity,
+                            permutation,
                         },
                         output_keys,
                     )
@@ -1463,7 +1465,7 @@ pub mod plan {
 ///   3. Column(1) of input 2,
 ///   4. Column(2) of input 2.
 /// * Result: Key Column(0), permutation `[0, 1, 0, 2, 3]`
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Permutation {
     /// The arity of the key
     key_arity: usize,
@@ -1590,5 +1592,10 @@ impl Permutation {
             data.push(data[*p]);
         }
         data.drain(..original_len);
+    }
+
+    /// The arity of the permutation
+    pub fn arity(&self) -> usize {
+        self.permutation.len()
     }
 }

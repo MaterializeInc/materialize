@@ -480,7 +480,7 @@ impl ReducePlan {
         collection: Collection<G, (Row, Row)>,
         err_input: Collection<G, DataflowError>,
         key_arity: usize,
-        arity: usize,
+        permutation: Permutation,
     ) -> CollectionBundle<G, Row, T>
     where
         G: Scope,
@@ -540,7 +540,7 @@ impl ReducePlan {
                 build_collation(to_collate, expr.aggregate_types, &mut collection.scope()).into()
             }
         };
-        arrangement_or_bundle.into_bundle(key_arity, arity, err_input)
+        arrangement_or_bundle.into_bundle(key_arity, permutation, err_input)
     }
 }
 
@@ -569,22 +569,20 @@ where
     fn into_bundle<T>(
         self,
         key_arity: usize,
-        arity: usize,
+        permutation: Permutation,
         err_input: Collection<G, DataflowError>,
     ) -> CollectionBundle<G, Row, T>
     where
         G::Timestamp: Lattice + Refines<T>,
         T: Timestamp + Lattice,
     {
+        let arity = permutation.arity();
         match self {
-            ArrangementOrCollection::Arrangement(arrangement) => {
-                let permutation = Permutation::identity(key_arity, arity);
-                CollectionBundle::from_columns(
-                    0..key_arity,
-                    ArrangementFlavor::Local(arrangement, err_input.arrange(), permutation),
-                    arity,
-                )
-            }
+            ArrangementOrCollection::Arrangement(arrangement) => CollectionBundle::from_columns(
+                0..key_arity,
+                ArrangementFlavor::Local(arrangement, err_input.arrange(), permutation),
+                arity,
+            ),
             ArrangementOrCollection::Collection(oks) => {
                 CollectionBundle::from_collections(oks, err_input, arity)
             }
@@ -666,6 +664,11 @@ impl KeyValPlan {
             skips,
         }
     }
+
+    /// The arity of the key plan
+    pub fn key_arity(&self) -> usize {
+        self.key_plan.projection.len()
+    }
 }
 
 impl<G, T> Context<G, Row, T>
@@ -681,7 +684,7 @@ where
         input: CollectionBundle<G, Row, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
-        arity: usize,
+        permutation: Permutation,
     ) -> CollectionBundle<G, Row, T> {
         let KeyValPlan {
             key_plan,
@@ -747,7 +750,7 @@ where
         err = err.concat(&err_input);
 
         // Render the reduce plan
-        reduce_plan.render(ok, err, key_arity, arity)
+        reduce_plan.render(ok, err, key_arity, permutation)
     }
 }
 
