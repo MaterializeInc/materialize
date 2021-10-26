@@ -1399,9 +1399,10 @@ pub const PG_SETTINGS: BuiltinView = BuiltinView {
     name: "pg_settings",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_settings AS SELECT
-    NULL::pg_catalog.text AS name,
-    NULL::pg_catalog.text AS setting
-    WHERE false",
+    *
+FROM (VALUES
+    ('max_index_keys'::pg_catalog.text, '1000'::pg_catalog.text)
+) AS _ (name, setting)",
     id: GlobalId::System(5026),
     needs_logs: false,
 };
