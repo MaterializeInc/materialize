@@ -290,6 +290,7 @@ impl MirScalarExpr {
         matches!(self, MirScalarExpr::Literal(Err(_), _typ))
     }
 
+    /// If self is a column, return the column index, otherwise `None`.
     pub fn as_column(&self) -> Option<usize> {
         if let MirScalarExpr::Column(c) = self {
             Some(*c)

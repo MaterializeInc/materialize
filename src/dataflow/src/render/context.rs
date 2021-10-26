@@ -165,6 +165,11 @@ where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
+    /// Presents `self` as a stream of updates.
+    ///
+    /// This method presents the contents as they are, without further computation.
+    /// If you have logic that could be applied to each record, consider using the
+    /// `flat_map` methods which allows this and can reduce the work done.
     pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
         let mut datum_vec = DatumVec::new();
         let mut row_builder = Row::default();
@@ -196,6 +201,11 @@ where
         }
     }
 
+    /// Applies logic to elements of `self` and returns the results.
+    ///
+    /// If `key` is set, this is a promise that `logic` will produce no results on
+    /// records for which the key does not evaluate to the value. This is used to
+    /// leap directly to exactly those records.
     pub fn flat_map<I, L>(
         &self,
         key: Option<Row>,
@@ -226,6 +236,7 @@ where
                     move |k, v, t, d| {
                         let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
                         permutation.permute_in_place(&mut borrow);
+                        // TODO: Change `logic` to take a `DatumVecBorrow`.
                         row_builder.clear();
                         row_builder.extend(&*borrow);
                         logic(RefOrMut::Mut(&mut row_builder), t, d)
@@ -390,6 +401,10 @@ where
     ///
     /// This logic is sufficiently interesting that we want to write it only
     /// once, and thereby avoid any skew in the two uses of the logic.
+    ///
+    /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
+    /// where key and value are rows. Often, a [Permutation] is approriate to present the row's
+    /// columns in the expected order.
     fn flat_map_core<Tr, I, L>(
         trace: &Arranged<S, Tr>,
         key: Option<Row>,

@@ -613,7 +613,8 @@ pub mod datum_vec {
             borrow
         }
 
-        /// Borrow an instance with a specific lifetime, and pre-populate with `Row`s.
+        /// Borrow an instance with a specific lifetime, and pre-populate with `Row`s, for example
+        /// first adding a key followed by its values.
         pub fn borrow_with_many<'a>(&'a mut self, rows: &[&'a Row]) -> DatumVecBorrow<'a> {
             let mut borrow = self.borrow();
             for row in rows {
@@ -1418,7 +1419,10 @@ pub mod plan {
     }
 }
 
-/// A description of how `[key, value]`-pairs need to be permuted to produce an original row.
+/// A permutation is applied to a `Row` split into a key and a value part, and presents it as if
+/// it is the row containing as its columns the columns referenced by `permutation`. The `key_arity`
+/// describes how many columns are in the key, which is important when joining relations and forming
+/// joint permutations.
 ///
 /// Arrangements conceptually store data split in key-value pairs, where all data is grouped by
 /// the key. It is desirable to remove redundancy between the key and value by not repeating
