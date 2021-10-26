@@ -973,3 +973,187 @@ NULL  NULL
 1  1
 2  2
 3  3
+
+query T multiline
+EXPLAIN TYPED RAW PLAN FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 END, 'TEXT';
+----
+%0 =
+| Constant ()
+| | types = ()
+| | keys = ()
+| Map if (select(%1) = 1) then {0} els {2}, "TEXT"
+| | types = (integer, text)
+| | keys = ()
+| |
+| | %1 =
+| | | Constant ()
+| | | | types = ()
+| | | | keys = ()
+| | | Map 1
+| | | | types = (integer)
+| | | | keys = ()
+| |
+
+EOF
+
+query T multiline
+EXPLAIN TYPED DECORRELATED PLAN FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 END, 'TEXT';
+----
+%0 = Let l0 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%1 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%2 = Let l1 =
+| Join %0 %1
+| | implementation = Unimplemented
+| | types = ()
+| | keys = (())
+
+%3 = Let l2 =
+| Get %2 (l1)
+| | types = ()
+| | keys = (())
+| | types = ()
+| | keys = (())
+
+%4 = Let l3 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%5 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%6 = Let l4 =
+| Join %4 %5
+| | implementation = Unimplemented
+| | types = ()
+| | keys = (())
+
+%7 = Let l5 =
+| Get %6 (l4)
+| | types = ()
+| | keys = (())
+| | types = ()
+| | keys = (())
+| Map 1
+| | types = (integer)
+| | keys = (())
+| Project (#0)
+| | types = (integer)
+| | keys = (())
+
+%8 =
+| Get %7 (l5)
+| | types = (integer)
+| | keys = (())
+| Reduce group=()
+| | agg count(true)
+| | types = (bigint)
+| | keys = (())
+| Filter (#0 > 1)
+| | types = (bigint)
+| | keys = (())
+| Project ()
+| | types = ()
+| | keys = (())
+| Map (err: more than one record produced in subquery)
+| | types = (integer)
+| | keys = (())
+
+%9 = Let l6 =
+| Union %7 %8
+| | types = (integer)
+| | keys = ()
+| | types = (integer)
+| | keys = ()
+
+%10 =
+| Get %9 (l6)
+| | types = (integer)
+| | keys = ()
+| Distinct group=()
+| | types = ()
+| | keys = (())
+| Negate
+| | types = ()
+| | keys = ()
+
+%11 =
+| Get %4 (l3)
+| | types = ()
+| | keys = (())
+| Distinct group=()
+| | types = ()
+| | keys = (())
+
+%12 =
+| Union %10 %11
+| | types = ()
+| | keys = ()
+
+%13 =
+| Join %12 %4
+| | implementation = Unimplemented
+| | types = ()
+| | keys = ()
+| Project ()
+| | types = ()
+| | keys = ()
+
+%14 =
+| Constant (null)
+| | types = (integer?)
+| | keys = (())
+
+%15 =
+| Join %13 %14
+| | implementation = Unimplemented
+| | types = (integer?)
+| | keys = ()
+
+%16 =
+| Union %9 %15
+| | types = (integer?)
+| | keys = ()
+| | types = (integer?)
+| | keys = ()
+
+%17 =
+| Join %3 %16
+| | implementation = Unimplemented
+| | types = (integer?)
+| | keys = ()
+| Project (#0)
+| | types = (integer?)
+| | keys = ()
+| | types = (integer?)
+| | keys = ()
+| | types = (integer?)
+| | keys = ()
+| Map if (#0 = 1) then {0} else {2}
+| | types = (integer?, integer)
+| | keys = ()
+| Map "TEXT"
+| | types = (integer?, integer, text)
+| | keys = ()
+| Project (#1, #2)
+| | types = (integer, text)
+| | keys = ()
+| | types = (integer, text)
+| | keys = ()
+
+EOF
+
+query IT
+SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 END, 'TEXT';
+----
+0  TEXT
