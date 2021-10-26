@@ -26,6 +26,10 @@ Materialize will attempt to choose a `key` to ensure that the data are well dist
 For example, if a collection has a primary key, Materialize will default to this key for an arrangement.
 Each of `key` and `val` can be `()`, corresponding to "no key" and "the key is the value", respectively.
 
+Materialize only stores each column once in an arrangement.
+If a relation is indexed by a subset of its columns, the key columns will be de-duplicated from the value, such that the value only contains non-key columns.
+This avoids a memory overhead otherwise incurred by storing the same data multiple times.
+
 To investigate the existing arrangements, query the `mz_arrangement_sizes` logging source.
 There are several diagnostic views in `mz_catalog` that connect this information to operator names, and group it by dataflow.
 
