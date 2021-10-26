@@ -180,26 +180,6 @@ pub enum CreateSourceFormat<T: AstInfo> {
     },
 }
 
-impl<T: AstInfo + PartialEq> CreateSourceFormat<T> {
-    /// True if this is a Bare format that can contain no configuration
-    pub fn is_simple(&self) -> bool {
-        match self {
-            CreateSourceFormat::Bare(f) => f.is_simple(),
-            CreateSourceFormat::KeyValue { .. } => false,
-            CreateSourceFormat::None => false,
-        }
-    }
-
-    /// The value portion of a `KeyValue` format, or the only format in `Bare`
-    pub fn value(&self) -> Option<&Format<T>> {
-        match self {
-            CreateSourceFormat::None => None,
-            CreateSourceFormat::Bare(f) => Some(f),
-            CreateSourceFormat::KeyValue { value, .. } => Some(value),
-        }
-    }
-}
-
 impl<T: AstInfo> AstDisplay for CreateSourceFormat<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
@@ -231,13 +211,6 @@ pub enum Format<T: AstInfo> {
     },
     Json,
     Text,
-}
-
-impl<T: AstInfo> Format<T> {
-    /// True if the format cannot carry any configuration
-    pub fn is_simple(&self) -> bool {
-        matches!(self, Format::Bytes | Format::Text)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -291,24 +264,12 @@ impl AstDisplay for CreateSourceKeyEnvelope {
 }
 impl_display!(CreateSourceKeyEnvelope);
 
-impl CreateSourceKeyEnvelope {
-    pub fn is_present(&self) -> bool {
-        !matches!(self, CreateSourceKeyEnvelope::None)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Envelope {
     None,
     Debezium(DbzMode),
     Upsert,
     CdcV2,
-}
-
-impl Default for Envelope {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl AstDisplay for Envelope {
@@ -373,12 +334,6 @@ pub enum Compression {
     None,
 }
 
-impl Default for Compression {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
 impl AstDisplay for Compression {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
@@ -395,12 +350,6 @@ pub enum DbzMode {
     Plain,
     /// `ENVELOPE DEBEZIUM UPSERT`
     Upsert,
-}
-
-impl Default for DbzMode {
-    fn default() -> Self {
-        Self::Plain
-    }
 }
 
 impl AstDisplay for DbzMode {
@@ -462,10 +411,8 @@ impl AstDisplay for CreateSourceConnector {
                 f.write_str("FILE '");
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
-                if compression != &Default::default() {
-                    f.write_str(" COMPRESSION ");
-                    f.write_node(compression);
-                }
+                f.write_str(" COMPRESSION ");
+                f.write_node(compression);
             }
             CreateSourceConnector::Kafka { broker, topic, key } => {
                 f.write_str("KAFKA BROKER '");
@@ -503,10 +450,8 @@ impl AstDisplay for CreateSourceConnector {
                 }
                 f.write_str(" USING");
                 f.write_node(&display::comma_separated(key_sources));
-                if compression != &Default::default() {
-                    f.write_str(" COMPRESSION ");
-                    f.write_node(compression);
-                }
+                f.write_str(" COMPRESSION ");
+                f.write_node(compression);
             }
             CreateSourceConnector::Postgres {
                 conn,

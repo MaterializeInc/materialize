@@ -415,7 +415,9 @@ pub fn plan_create_source(
         },
         None => scx.catalog.config().timestamp_frequency,
     };
-    if !matches!(connector, CreateSourceConnector::Kafka { .. }) && key_envelope.is_present() {
+    if *key_envelope != CreateSourceKeyEnvelope::None
+        && !matches!(connector, CreateSourceConnector::Kafka { .. })
+    {
         bail_unsupported!("INCLUDE KEY with non-Kafka sources");
     }
 
@@ -1161,7 +1163,9 @@ fn get_key_envelope(
     envelope: &Envelope,
     encoding: &SourceDataEncoding,
 ) -> Result<KeyEnvelope, anyhow::Error> {
-    if key_envelope.is_present() && matches!(envelope, Envelope::Debezium { .. }) {
+    if *key_envelope != CreateSourceKeyEnvelope::None
+        && matches!(envelope, Envelope::Debezium { .. })
+    {
         bail!("Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.");
     }
     Ok(match key_envelope {

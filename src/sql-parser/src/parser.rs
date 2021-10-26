@@ -1749,7 +1749,7 @@ impl<'a> Parser<'a> {
             }
             envelope
         } else {
-            Default::default()
+            Envelope::None
         };
 
         Ok(Statement::CreateSource(CreateSourceStatement {
