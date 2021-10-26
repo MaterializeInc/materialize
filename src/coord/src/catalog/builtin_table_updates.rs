@@ -24,7 +24,7 @@ use crate::catalog::builtin::{
     MZ_ROLES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    Catalog, CatalogItem, Func, Index, Sink, SinkConnector, SinkConnectorState, Source, Table,
+    CatalogItem, CatalogState, Func, Index, Sink, SinkConnector, SinkConnectorState, Source, Table,
     Type, TypeInner, SYSTEM_CONN_ID,
 };
 
@@ -39,7 +39,7 @@ pub struct BuiltinTableUpdate {
     pub diff: Diff,
 }
 
-impl Catalog {
+impl CatalogState {
     pub(super) fn pack_database_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
         let database = &self.by_name[name];
         BuiltinTableUpdate {
