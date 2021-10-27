@@ -225,6 +225,7 @@ impl FromHir {
         unreachable!("column not found")
     }
 
+    /// Executes the given action within the context of the given box.
     fn within_context<F, T>(&mut self, context_box: BoxId, f: &mut F) -> T
     where
         F: FnMut(&mut Self) -> T,

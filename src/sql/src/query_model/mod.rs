@@ -9,13 +9,14 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use ore::id_gen::IdGen;
 
 mod dot;
 mod hir;
+mod lowering;
 mod scalar_expr;
 #[cfg(test)]
 mod test;
@@ -77,7 +78,7 @@ pub struct Column {
 }
 
 /// Enum that describes the DISTINCT property of a `QueryBox`.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DistinctOperation {
     /// Distinctness of the output of the box must be enforced by
     /// the box.
@@ -105,7 +106,7 @@ pub struct Quantifier {
     pub alias: Option<Ident>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum QuantifierType {
     /// An ALL subquery.
     All,
@@ -380,6 +381,37 @@ impl QueryBox {
 
     fn is_select(&self) -> bool {
         matches!(self.box_type, BoxType::Select(_))
+    }
+
+    /// Correlation information of the quantifiers in this box. Returns a map
+    /// containing, for each quantifier, the column references from sibling
+    /// quantifiers they are correlated with.
+    fn correlation_info(&self, model: &Model) -> BTreeMap<QuantifierId, HashSet<ColumnReference>> {
+        let mut correlation_info = BTreeMap::new();
+        for q_id in self.quantifiers.iter() {
+            // collect the column references from the current context within
+            // the subgraph under the current quantifier
+            let mut column_refs = HashSet::new();
+            let mut f = |inner_box: &RefCell<QueryBox>| -> Result<(), ()> {
+                inner_box.borrow().visit_expressions(
+                    &mut |expr: &BoxScalarExpr| -> Result<(), ()> {
+                        expr.collect_column_references_from_context(
+                            &self.quantifiers,
+                            &mut column_refs,
+                        );
+                        Ok(())
+                    },
+                )
+            };
+            let q = model.get_quantifier(*q_id).borrow();
+            model
+                .visit_pre_boxes_in_subgraph(&mut f, q.input_box)
+                .unwrap();
+            if !column_refs.is_empty() {
+                correlation_info.insert(*q_id, column_refs);
+            }
+        }
+        correlation_info
     }
 }
 

@@ -51,6 +51,7 @@ pub struct ColumnReference {
 #[derive(Debug, PartialEq, Clone)]
 pub struct BaseColumn {
     pub position: usize,
+    pub column_type: repr::ColumnType,
 }
 
 impl fmt::Display for BoxScalarExpr {
