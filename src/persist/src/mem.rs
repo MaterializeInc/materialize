@@ -318,7 +318,7 @@ impl Blob for MemBlob {
     }
 
     fn list_keys(&self) -> Result<Vec<String>, Error> {
-        self.core.lock()?.list_keys()
+        self.core_lock()?.list_keys()
     }
 
     fn close(&mut self) -> Result<bool, Error> {
