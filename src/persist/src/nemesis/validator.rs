@@ -14,10 +14,10 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
-use crate::indexed::ListenEvent;
 use crate::nemesis::{
-    AllowCompactionReq, ReadOutputReq, ReadOutputRes, ReadSnapshotReq, ReadSnapshotRes, ReqId, Res,
-    SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle, WriteRes,
+    AllowCompactionReq, ReadOutputEvent, ReadOutputReq, ReadOutputRes, ReadSnapshotReq,
+    ReadSnapshotRes, ReqId, Res, SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq,
+    WriteReqMulti, WriteReqSingle, WriteRes,
 };
 use crate::storage::SeqNo;
 
@@ -26,7 +26,8 @@ pub struct Validator {
     seal_frontier: HashMap<String, u64>,
     since_frontier: HashMap<String, u64>,
     writes_by_seqno: BTreeMap<(String, SeqNo), Vec<((String, ()), u64, isize)>>,
-    output_by_stream: HashMap<String, Vec<ListenEvent<String, ()>>>,
+    output_by_stream:
+        HashMap<String, Vec<ReadOutputEvent<(Result<(String, ()), String>, u64, isize)>>>,
     available_snapshots: HashMap<SnapshotId, String>,
     errors: Vec<String>,
     storage_available: bool,
@@ -178,19 +179,30 @@ impl Validator {
             // Start by finding the latest seal.
             let mut latest_seal = Timestamp::minimum();
             let mut all_received_writes = Vec::new();
+            let mut all_received_errors = Vec::new();
             for e in all_stream_output.iter() {
                 match e {
-                    ListenEvent::Sealed(ts) => {
+                    ReadOutputEvent::Sealed(ts) => {
                         if *ts > latest_seal {
                             latest_seal = *ts;
                         }
                     }
-                    ListenEvent::Records(records) => {
-                        for ((k, v), ts, diff) in records.iter() {
-                            all_received_writes.push(((k.clone(), *v), *ts, *diff));
+                    ReadOutputEvent::Records(records) => {
+                        for r in records.iter() {
+                            match r {
+                                (Ok((k, v)), ts, diff) => {
+                                    all_received_writes.push(((k.clone(), *v), *ts, *diff))
+                                }
+                                (Err(err), _, _) => all_received_errors.push(err.clone()),
+                            }
                         }
                     }
                 }
+            }
+
+            // If we've gotten any errors out of the dataflow, all bets are off.
+            if !all_received_errors.is_empty() {
+                return;
             }
 
             // The latest seal shouldn't be past anything we sent.

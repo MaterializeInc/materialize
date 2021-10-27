@@ -17,13 +17,14 @@ use std::hash::Hash;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Concat, Map};
+use timely::dataflow::operators::{Concat, Map, OkErr};
 use timely::dataflow::operators::{Delay, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
 use crate::operators::replay::Replay;
+use crate::operators::split_ok_err;
 use crate::operators::stream::Persist;
 use crate::operators::stream::RetractFutureUpdates;
 
@@ -116,7 +117,8 @@ where
 
         let (restored_upsert_oks, _state_errs) = {
             let snapshot = persist_config.read_handle.snapshot();
-            let (restored_oks, restored_errs) = self.scope().replay(snapshot);
+            let (restored_oks, restored_errs) =
+                self.scope().replay(snapshot).ok_err(|x| split_ok_err(x));
             let restored_upsert_oks = restored_oks.filter_and_retract_future_updates(
                 name,
                 persist_config.write_handle.clone(),

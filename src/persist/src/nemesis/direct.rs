@@ -24,11 +24,11 @@ use crate::error::Error;
 use crate::indexed::runtime::{
     self, DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
-use crate::indexed::{ListenEvent, SnapshotExt};
+use crate::indexed::SnapshotExt;
 use crate::nemesis::{
-    AllowCompactionReq, Input, ReadOutputReq, ReadOutputRes, ReadSnapshotReq, ReadSnapshotRes, Req,
-    Res, Runtime, SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteReqMulti,
-    WriteReqSingle, WriteRes,
+    AllowCompactionReq, Input, ReadOutputEvent, ReadOutputReq, ReadOutputRes, ReadSnapshotReq,
+    ReadSnapshotRes, Req, Res, Runtime, SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq,
+    WriteReqMulti, WriteReqSingle, WriteRes,
 };
 use crate::operators::source::PersistedSource;
 use crate::unreliable::UnreliableHandle;
@@ -51,8 +51,10 @@ pub struct Direct {
             TimelyProbe<u64>,
         ),
     >,
-    output_by_stream_name:
-        HashMap<String, Receiver<TimelyCaptureEvent<u64, ((String, ()), u64, isize)>>>,
+    output_by_stream_name: HashMap<
+        String,
+        Receiver<TimelyCaptureEvent<u64, (Result<(String, ()), String>, u64, isize)>>,
+    >,
     snapshots: HashMap<SnapshotId, DecodedSnapshot<String, ()>>,
 }
 
@@ -142,9 +144,8 @@ impl Direct {
 
                 let probe = worker.0.dataflow(|scope| {
                     let mut probe = TimelyProbe::new();
-                    let (ok_stream, _err_stream) = scope.persisted_source(&read);
-                    // TODO: Do something with err_stream.
-                    ok_stream.probe_with(&mut probe).capture_into(output_tx);
+                    let out = scope.persisted_source(&read);
+                    out.probe_with(&mut probe).capture_into(output_tx);
                     probe
                 });
 
@@ -184,12 +185,12 @@ impl Direct {
                         // happens to work.
                         for (ts, ts_diff) in x {
                             if ts_diff > 0 {
-                                contents.push(ListenEvent::Sealed(ts));
+                                contents.push(ReadOutputEvent::Sealed(ts));
                             }
                         }
                     }
                     TimelyCaptureEvent::Messages(_, x) => {
-                        contents.push(ListenEvent::Records(x));
+                        contents.push(ReadOutputEvent::Records(x));
                     }
                 }
             }

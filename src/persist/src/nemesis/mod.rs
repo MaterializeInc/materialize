@@ -77,7 +77,6 @@ use rand::RngCore;
 use timely::progress::Antichain;
 
 use crate::error::Error;
-use crate::indexed::ListenEvent;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::validator::Validator;
 
@@ -171,8 +170,16 @@ pub struct ReadOutputReq {
 }
 
 #[derive(Clone, Debug)]
+pub enum ReadOutputEvent<D> {
+    /// Records in the data stream.
+    Records(Vec<D>),
+    /// Progress of the data stream.
+    Sealed(u64),
+}
+
+#[derive(Clone, Debug)]
 pub struct ReadOutputRes {
-    contents: Vec<ListenEvent<String, ()>>,
+    contents: Vec<ReadOutputEvent<(Result<(String, ()), String>, u64, isize)>>,
 }
 
 #[derive(Clone, Debug)]

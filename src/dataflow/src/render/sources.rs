@@ -99,7 +99,10 @@ where
                     (Some(persist), Some(stream_name)) => {
                         let persisted_stream = persist.create_or_load(&stream_name);
                         let (persist_ok_stream, persist_err_stream) = match persisted_stream {
-                            Ok((_, read)) => scope.persisted_source(&read),
+                            Ok((_, read)) => scope.persisted_source(&read).ok_err(|x| match x {
+                                (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
+                                (Err(err), ts, diff) => Err((err, ts, diff)),
+                            }),
                             Err(err) => {
                                 let ok_stream = empty(scope);
                                 let (ts, diff) = (0, 1);

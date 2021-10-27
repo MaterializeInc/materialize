@@ -914,12 +914,13 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 #[cfg(test)]
 mod tests {
     use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::{Capture, Probe};
+    use timely::dataflow::operators::{Capture, OkErr, Probe};
     use timely::dataflow::ProbeHandle;
 
     use crate::indexed::SnapshotExt;
     use crate::mem::{MemMultiRegistry, MemRegistry};
     use crate::operators::source::PersistedSource;
+    use crate::operators::split_ok_err;
 
     use super::*;
 
@@ -1132,7 +1133,8 @@ mod tests {
 
             let mut probe = ProbeHandle::new();
             let ok_stream = worker.dataflow(|scope| {
-                let (ok_stream, _err_stream) = scope.persisted_source(&read);
+                let (ok_stream, _err_stream) =
+                    scope.persisted_source(&read).ok_err(|x| split_ok_err(x));
                 ok_stream.probe_with(&mut probe).capture()
             });
 
