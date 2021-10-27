@@ -107,7 +107,11 @@ List new features before bug fixes.
   `date_trunc` but supports "truncating" to arbitrary intervals.
 
 - Fix incorrect results for a certain class of degenerate join queries.
-  {{% gh 8747 %}}
+
+- Fix a bug in `pg_catalog.pg_attribute` that would incorrectly omit
+  certain rows based on the underlying column type.
+
+- Add the `type_oid` column to [`mz_columns`](/sql/system-catalog#mz_columns).
 
 {{% version-header v0.9.11 %}}
 

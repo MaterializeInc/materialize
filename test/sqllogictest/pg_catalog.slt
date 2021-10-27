@@ -1,0 +1,105 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+
+# Verify that pg_attribute works for all column types.
+statement ok
+CREATE TABLE coltypes(
+c__bool _bool,
+c__bpchar _bpchar,
+c__bytea _bytea,
+c__char _char,
+c__date _date,
+c__float4 _float4,
+c__float8 _float8,
+c__int2 _int2,
+c__int4 _int4,
+c__int8 _int8,
+c__interval _interval,
+c__jsonb _jsonb,
+c__numeric _numeric,
+c__oid _oid,
+c__regproc _regproc,
+c__text _text,
+c__time _time,
+c__timestamp _timestamp,
+c__timestamptz _timestamptz,
+c__uuid _uuid,
+c__varchar _varchar,
+c_bool bool,
+c_bpchar bpchar,
+c_bytea bytea,
+c_char char,
+c_date date,
+c_float4 float4,
+c_float8 float8,
+c_int2 int2,
+c_int4 int4,
+c_int8 int8,
+c_interval interval,
+c_jsonb jsonb,
+c_numeric numeric,
+c_oid oid,
+c_regproc regproc,
+c_text text,
+c_time time,
+c_timestamp timestamp,
+c_timestamptz timestamptz,
+c_uuid uuid,
+c_varchar varchar
+);
+----
+
+query IT
+SELECT atttypid, attname FROM pg_attribute WHERE attrelid = (SELECT oid FROM mz_tables WHERE name='coltypes') ORDER BY atttypid
+----
+16  c_bool
+17  c_bytea
+20  c_int8
+21  c_int2
+23  c_int4
+24  c_regproc
+25  c_text
+26  c_oid
+700  c_float4
+701  c_float8
+1000  c__bool
+1001  c__bytea
+1005  c__int2
+1007  c__int4
+1008  c__regproc
+1009  c__text
+1014  c__char
+1014  c__bpchar
+1015  c__varchar
+1016  c__int8
+1021  c__float4
+1022  c__float8
+1028  c__oid
+1042  c_char
+1042  c_bpchar
+1043  c_varchar
+1082  c_date
+1083  c_time
+1114  c_timestamp
+1115  c__timestamp
+1182  c__date
+1183  c__time
+1184  c_timestamptz
+1185  c__timestamptz
+1186  c_interval
+1187  c__interval
+1231  c__numeric
+1700  c_numeric
+2950  c_uuid
+2951  c__uuid
+3802  c_jsonb
+3807  c__jsonb
