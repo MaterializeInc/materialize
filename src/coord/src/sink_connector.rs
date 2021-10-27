@@ -372,8 +372,9 @@ async fn build_kafka(
     config.set("bootstrap.servers", &builder.broker_addrs.to_string());
     for (k, v) in builder.config_options.iter() {
         // Explicitly reject the statistics interval option here because its not
-        // properly supported for this client.
-        if k != "statistics.interval.ms" {
+        // properly supported for this client. Explicitly reject isolation level
+        // as it's a consumer property and will generate WARNs.
+        if k != "statistics.interval.ms" && k != "isolation.level" {
             config.set(k, v);
         }
     }
