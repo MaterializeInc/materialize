@@ -169,6 +169,13 @@ impl S3Blob {
         let blob = S3Blob { blob_async };
         Ok(blob)
     }
+
+    /// Override the maximum number of keys we get information about per list
+    /// objects request to `max_keys`
+    #[cfg(test)]
+    fn set_max_keys(&mut self, max_keys: i64) {
+        self.blob_async.set_max_keys(max_keys)
+    }
 }
 
 impl Blob for S3Blob {
@@ -202,6 +209,10 @@ struct S3BlobAsync {
     client: Option<S3Client>,
     bucket: String,
     prefix: String,
+    // Maximum number of keys we get information about per list-objects request.
+    //
+    // Defaults to 1000 which is the current AWS max.
+    max_keys: i64,
 }
 
 impl S3BlobAsync {
@@ -212,6 +223,7 @@ impl S3BlobAsync {
             client: Some(config.client),
             bucket: config.bucket,
             prefix: config.prefix,
+            max_keys: 1_000,
         };
         let _ = blob.lock(lock_info).await?;
         Ok(blob)
@@ -219,6 +231,11 @@ impl S3BlobAsync {
 
     fn get_path(&self, key: &str) -> String {
         format!("{}/{}", self.prefix, key)
+    }
+
+    #[cfg(test)]
+    fn set_max_keys(&mut self, max_keys: i64) {
+        self.max_keys = max_keys;
     }
 
     async fn lock(&self, new_lock: LockInfo) -> Result<(), Error> {
@@ -297,7 +314,7 @@ impl S3BlobAsync {
         let mut list_objects_req = ListObjectsV2Request {
             bucket: self.bucket.clone(),
             prefix: Some(self.prefix.clone()),
-            max_keys: Some(1_000),
+            max_keys: Some(self.max_keys),
             ..Default::default()
         };
         let prefix = self.get_path("");
@@ -394,7 +411,9 @@ mod tests {
                 bucket: config.bucket.clone(),
                 prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, t.path),
             };
-            S3Blob::new(config, lock_info)
+            let mut blob = S3Blob::new(config, lock_info)?;
+            blob.set_max_keys(2);
+            Ok(blob)
         })?;
         drop(guard);
         Ok(())

@@ -412,6 +412,20 @@ pub mod tests {
         blob0.set("k0", values[1].clone(), false)?;
         assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
 
+        // Insert multiple keys back to back and validate that we can list
+        // them all out.
+        let mut expected_keys = empty_keys;
+        for i in 1..=5 {
+            let key = format!("k{}", i);
+            blob0.set(&key, values[0].clone(), false)?;
+            expected_keys.push(key);
+        }
+
+        // Blob contains the key we just inserted.
+        let mut blob_keys = blob0.list_keys()?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, keys(&expected_keys, "k0"));
+
         // Cannot reuse a blob once it is closed.
         assert_eq!(blob0.close(), Ok(true));
         assert!(blob0.get("k0").is_err());
