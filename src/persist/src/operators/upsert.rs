@@ -35,6 +35,9 @@ pub trait PersistentUpsert<G, K: Codec, V: Codec, T> {
     /// Turns a stream of keyed upserts into a stream of differential updates and also persists
     /// upserts to the [`StreamWriteHandle`] given in `persist_config`.
     ///
+    /// The first output stream is the stream of differential updates while the second output
+    /// stream contains persistence errors.
+    ///
     /// The input is a stream of `(Key, Option<Val>, timestamp)` tuples, where "timestamp"
     /// expresses a happens-before relationship and could, for example, be a Kafka offset.  The
     /// contents of the collection are defined key-by-key, where each optional value in sequence either
@@ -64,7 +67,10 @@ pub trait PersistentUpsert<G, K: Codec, V: Codec, T> {
         name: &str,
         as_of_frontier: Antichain<u64>,
         persist_config: PersistentUpsertConfig<K, V>,
-    ) -> Stream<G, ((K, V), u64, isize)>
+    ) -> (
+        Stream<G, ((K, V), u64, isize)>,
+        Stream<G, (String, u64, isize)>,
+    )
     where
         G: Scope<Timestamp = u64>;
 }
@@ -109,7 +115,10 @@ where
         name: &str,
         as_of_frontier: Antichain<u64>,
         persist_config: PersistentUpsertConfig<K, V>,
-    ) -> Stream<G, ((K, V), u64, isize)>
+    ) -> (
+        Stream<G, ((K, V), u64, isize)>,
+        Stream<G, (String, u64, isize)>,
+    )
     where
         G: Scope<Timestamp = u64>,
     {
@@ -264,7 +273,7 @@ where
             },
         );
 
-        let (new_upsert_oks, _new_upsert_persist_errs) =
+        let (new_upsert_oks, new_upsert_persist_errs) =
             new_upsert_oks.persist(name, persist_config.write_handle);
 
         // Also pull the timestamp of restored data up to the as_of_frontier. We are doing this in
@@ -283,7 +292,10 @@ where
                 time
             });
 
-        new_upsert_oks.concat(&restored_upsert_oks)
+        (
+            new_upsert_oks.concat(&restored_upsert_oks),
+            new_upsert_persist_errs,
+        )
     }
 }
 

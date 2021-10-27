@@ -147,7 +147,7 @@ where
     let source_records = source_records
         .map(|((key, value), source_ts, _assigned_ts, _diff)| (key, Some(value), source_ts));
 
-    let upsert_oks = source_records.persistent_upsert(
+    let (upsert_oks, upsert_persist_errs) = source_records.persistent_upsert(
         "kafka_example",
         Antichain::from_elem(u64::MIN),
         PersistentUpsertConfig::new(start_ts, out_read, out_write.clone()),
@@ -169,7 +169,9 @@ where
     // be held back until data is persisted and sealed by the upstream persist/seal operators.
     let records_persist_ok = upsert_oks.await_frontier("upsert_state");
 
-    let errs = bindings_persist_err.concat(&seal_err);
+    let errs = bindings_persist_err
+        .concat(&seal_err)
+        .concat(&upsert_persist_errs);
 
     Ok((records_persist_ok, errs))
 }

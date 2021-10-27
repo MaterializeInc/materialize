@@ -47,6 +47,12 @@ pub trait Persist<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     ///
     /// **Note:** If you need to also replay persisted data when restarting, concatenate the output
     /// of this operator with the output of `replay()`.
+    ///
+    // TODO: The goal for the persistence operators is to have one combined output stream of
+    // `Result<T, E`. However, for operators that need to pass through all input updates, this
+    // seems excessively expensive if the input updates are not already wrapped in `Result`.  We
+    // therefore return two separate output streams for now but might want to reconsider this
+    // holistically, when/if we can already wrap all updates in `Result` at the source.
     fn persist(
         &self,
         name: &str,

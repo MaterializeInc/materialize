@@ -13,11 +13,12 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 
 use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use dataflow_types::{DataflowError, DecodeError, LinearOperator};
+use dataflow_types::{DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails};
 use expr::{EvalError, MirScalarExpr};
 use log::error;
 use persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
@@ -131,14 +132,20 @@ where
         None
     };
 
-    let upsert_output = match persist_config {
-        None => upsert_core(
-            stream,
-            source_arity,
-            predicates,
-            position_or,
-            as_of_frontier,
-        ),
+    let (upsert_output, upsert_persist_errs) = match persist_config {
+        None => {
+            let upsert_output = upsert_core(
+                stream,
+                source_arity,
+                predicates,
+                position_or,
+                as_of_frontier,
+            );
+
+            let upsert_errs = operator::empty(&stream.scope());
+
+            (upsert_output, upsert_errs)
+        }
         Some(upsert_persist_config) => {
             // This is slightly awkward: We don't want to persist full DataflowErrors,so we unpack
             // only DecodeError, which we are more willing to persist. We have to translate to
@@ -185,7 +192,7 @@ where
 
             let mut row_packer = repr::Row::default();
 
-            let upsert_output =
+            let (upsert_output, upsert_persist_errs) =
                 stream.persistent_upsert(source_name, as_of_frontier, upsert_persist_config);
 
             // Apply Map-Filter-Project and also map back from DecodeError to DataflowError because
@@ -213,7 +220,19 @@ where
                 }
             });
 
-            mapped_upsert_ok
+            // TODO: It is not ideal that persistence errors end up in the same differential error
+            // collection as other errors because they are transient/indefinite errors that we
+            // should be treating differently. We do not, however, at the current time have to
+            // infrastructure for treating these errors differently, so we're adding them to the
+            // same error collections.
+            let source_name = source_name.to_owned();
+            let upsert_persist_errs = upsert_persist_errs.map(move |(err, ts, diff)| {
+                let source_error =
+                    SourceError::new(source_name.clone(), SourceErrorDetails::Persistence(err));
+                (source_error.into(), ts, diff)
+            });
+
+            (mapped_upsert_ok, upsert_persist_errs)
         }
     };
 
@@ -237,6 +256,8 @@ where
         oks = oks2;
         errs = errs.concat(&errs2);
     }
+
+    let errs = errs.concat(&upsert_persist_errs);
 
     (oks, errs)
 }
