@@ -652,6 +652,16 @@ pub fn plan_copy_from_rows(
         typ: typ.clone(),
     };
 
+    // Exit early with just the raw constant if we know that all columns are present
+    // and in the correct order. This lets us bypass expensive downstream optimizations
+    // more easily, as at every stage we know this expression is nothing more than
+    // a constant (as opposed to e.g. a constant with wiith an identity map and identity
+    // projection).
+    let default: Vec<_> = (0..desc.arity()).collect();
+    if columns == default {
+        return Ok(expr);
+    }
+
     // Fill in any omitted columns and rearrange into correct order
     let mut map_exprs = vec![];
     let mut project_key = Vec::with_capacity(desc.arity());
