@@ -10,7 +10,12 @@
 //! Modular Timely Dataflow operators that can persist and seal updates in streams.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::fmt::Debug;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::Context;
 
 use persist_types::Codec;
 
@@ -64,6 +69,7 @@ where
         Stream<G, ((K, V), u64, isize)>,
         Stream<G, (String, u64, isize)>,
     ) {
+        let scope = self.scope();
         let operator_name = format!("persist({})", name);
         let mut persist_op = OperatorBuilder::new(operator_name.clone(), self.scope());
 
@@ -73,13 +79,15 @@ where
         let (mut error_output, error_output_stream) = persist_op.new_output();
 
         let mut buffer = Vec::new();
-        let mut write_futures = HashMap::new();
-        let mut input_frontier =
-            Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
         let error_output_port = error_output_stream.name().port;
 
+        // An activator that allows futures to re-schedule this operator when ready.
+        let activator = Arc::new(scope.sync_activator_for(&persist_op.operator_info().address[..]));
+
+        let mut pending_futures = VecDeque::new();
+
         persist_op.build(move |_capabilities| {
-            move |frontiers| {
+            move |_frontiers| {
                 let mut data_output = data_output.activate();
                 let mut error_output = error_output.activate();
 
@@ -92,57 +100,58 @@ where
                     let mut session = data_output.session(&cap);
                     session.give_vec(&mut buffer);
 
-                    let write_futures = &mut write_futures
-                        .entry(cap.retain_for_output(error_output_port))
-                        .or_insert_with(|| Vec::new());
-                    write_futures.push(write_future);
+                    // We are not using the capability for the main output later, but we are
+                    // holding on to it to keep the frontier from advancing because that frontier
+                    // is used downstream to track how far we have persisted. This is used, for
+                    // example, by seal()/conditional_seal() operators and await_frontier().
+                    pending_futures.push_back((
+                        cap.delayed(cap.time()),
+                        cap.retain_for_output(error_output_port),
+                        write_future,
+                    ));
                 });
 
-                // Block on outstanding writes when the input frontier advances.
-                // This way, when the downstream frontier advances, we know that all writes that
-                // are before it are done.
-                let new_input_frontier = frontiers[0].frontier();
-                let progress =
-                    !PartialOrder::less_equal(&new_input_frontier, &input_frontier.borrow());
+                // Swing through all pending futures and see if they're ready. Ready futures will
+                // invoke the Activator, which will make sure that we arrive here, even when there
+                // are no changes in the input frontier or new input.
+                let waker = futures_util::task::waker_ref(&activator);
+                let mut context = Context::from_waker(&waker);
 
-                if !progress {
-                    return;
-                }
+                while let Some((cap, error_cap, pending_future)) = pending_futures.front_mut() {
+                    match Pin::new(pending_future).poll(&mut context) {
+                        std::task::Poll::Ready(result) => {
+                            match result {
+                                Ok(seq_no) => {
+                                    log::trace!(
+                                        "In {}, finished writing for time: {}, seq_no: {:?}",
+                                        &operator_name,
+                                        cap.time(),
+                                        seq_no,
+                                    );
+                                }
+                                Err(e) => {
+                                    let mut session = error_output.session(&error_cap);
+                                    let error = format!(
+                                        "In {}, error writing data for time {}: {}",
+                                        &operator_name,
+                                        error_cap.time(),
+                                        e
+                                    );
+                                    log::error!("{}", error);
 
-                input_frontier.clear();
-                input_frontier.extend(new_input_frontier.into_iter().cloned());
-                let contained_times: Vec<_> = write_futures
-                    .keys()
-                    .filter(|time| !input_frontier.less_equal(time.time()))
-                    .cloned()
-                    .collect();
+                                    // TODO: make error retractable? Probably not...
+                                    session.give((error, *error_cap.time(), 1));
+                                }
+                            }
 
-                // TODO: Even more pipelining: the operator should yield when the futures
-                // are not ready and re-schedule itself using an `Activator`. As it is, we
-                // have a synchronization barrier once every second (default timestamping
-                // interval).
-                // TODO: Potentially move the logic for determining when futures are ready
-                // and frontier management into a struct/impl.
-                for time in contained_times {
-                    let write_futures = write_futures.remove(&time).expect("missing futures");
-
-                    log::trace!(
-                        "In {} waiting on write futures for time: {}",
-                        &operator_name,
-                        time.time()
-                    );
-                    for future in write_futures {
-                        if let Err(e) = future.recv() {
-                            let mut session = error_output.session(&time);
-                            // TODO: make error retractable? Probably not...
-                            session.give((e.to_string(), *time.time(), 1));
+                            let _ = pending_futures.pop_front().expect("known to exist");
+                        }
+                        std::task::Poll::Pending => {
+                            // We assume that write requests are worked off in order and stop
+                            // trying for the first write that is not done.
+                            break;
                         }
                     }
-                    log::trace!(
-                        "In {} finished write futures for time: {}",
-                        &operator_name,
-                        time.time()
-                    );
                 }
             }
         });
@@ -733,7 +742,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let expected = vec![(
-            "failed to append to unsealed: unavailable: blob set".to_string(),
+            "In persist(test), error writing data for time 0: failed to append to unsealed: unavailable: blob set".to_string(),
             0,
             1,
         )];
