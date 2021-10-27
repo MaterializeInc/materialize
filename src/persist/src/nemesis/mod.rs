@@ -69,7 +69,9 @@
 // - Vary key size
 // - Deleting streams
 
+use std::collections::VecDeque;
 use std::env;
+use std::time::Instant;
 
 use ore::test::init_logging;
 use rand::rngs::OsRng;
@@ -77,8 +79,10 @@ use rand::RngCore;
 use timely::progress::Antichain;
 
 use crate::error::Error;
+use crate::future::Future;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::validator::Validator;
+use crate::storage::SeqNo;
 
 pub mod direct;
 pub mod generator;
@@ -109,8 +113,15 @@ pub struct Input {
 }
 
 #[derive(Debug)]
-pub struct Step {
+pub struct StepMeta {
     req_id: ReqId,
+    before: Instant,
+    after: Instant,
+}
+
+#[derive(Debug)]
+pub struct Step {
+    meta: StepMeta,
     res: Res,
 }
 
@@ -212,8 +223,58 @@ pub struct ReadSnapshotRes {
     contents: Vec<((String, ()), u64, isize)>,
 }
 
+#[derive(Debug)]
+pub struct FutureStep {
+    req_id: ReqId,
+    before: Instant,
+    res: FutureRes,
+}
+
+impl FutureStep {
+    pub fn recv(self) -> Step {
+        let res = self.res.recv();
+        let after = Instant::now();
+        log::debug!("{:?} res: {:?}", self.req_id, &res);
+        let meta = StepMeta {
+            req_id: self.req_id,
+            before: self.before,
+            after,
+        };
+        Step { meta, res }
+    }
+}
+
+#[derive(Debug)]
+pub enum FutureRes {
+    Write(WriteReq, Result<Future<SeqNo>, Error>),
+    Seal(SealReq, Result<Future<()>, Error>),
+    AllowCompaction(AllowCompactionReq, Result<Future<()>, Error>),
+    Ready(Res),
+}
+
+impl FutureRes {
+    pub fn recv(self) -> Res {
+        match self {
+            FutureRes::Write(req, res) => {
+                let res = res.and_then(|res| res.recv().map(|seqno| WriteRes { seqno: seqno.0 }));
+                Res::Write(req, res)
+            }
+            FutureRes::Seal(req, res) => {
+                let res = res.and_then(|res| res.recv());
+                Res::Seal(req, res)
+            }
+            FutureRes::AllowCompaction(req, res) => {
+                let res = res.and_then(|res| res.recv());
+                Res::AllowCompaction(req, res)
+            }
+            FutureRes::Ready(res) => res,
+        }
+    }
+}
+
 pub trait Runtime {
-    fn run(&mut self, i: Input) -> Step;
+    fn run(&mut self, i: Input) -> FutureStep;
+    fn block_until(&mut self, stream: &str, ts: u64);
     fn finish(self);
 }
 
@@ -221,24 +282,69 @@ pub trait Runtime {
 pub struct Runner<R: Runtime> {
     generator: Generator,
     runtime: R,
-    steps: Vec<Step>,
 }
 
 impl<R: Runtime> Runner<R> {
+    const MAX_OUTSTANDING: usize = 10;
+
     pub fn new(generator: Generator, runtime: R) -> Self {
-        Runner {
-            generator,
-            runtime,
-            steps: Vec::new(),
-        }
+        Runner { generator, runtime }
     }
 
-    pub fn run(mut self, steps: usize) -> Vec<Step> {
-        for input in self.generator.take(steps) {
-            self.steps.push(self.runtime.run(input));
+    pub fn run(mut self, num_steps: usize) -> Vec<Step> {
+        let mut outstanding = VecDeque::<FutureStep>::with_capacity(Self::MAX_OUTSTANDING);
+        let mut steps = Vec::with_capacity(num_steps);
+
+        // Pipeline up to MAX_OUTSTANDING requests by filling up `outstanding`
+        // from the back with un-awaited requests and, once it hits our pipeline
+        // limit, popping them off the front (and blocking) before issuing any
+        // new ones. This helps keep the traffic more interesting by ensuring
+        // that we don't (for example) hit a StorageUnavailable or Stop and then
+        // immediately fill every in-flight request with an Error.
+        //
+        // Concretely: imagine if we issues every request simultaneously and
+        // then waited for them all to finish. What is likely to happen is that
+        // every write/seal/allow compaction request errors because either
+        // storage is unavailable or the runtime is restarting. Or, perhaps, the
+        // seal with the highest timestamp ends up executing first and every
+        // write and seal for a lower timestamp errors. These are valid
+        // histories, but they aren't interesting tests of the system. (Another
+        // example of a way we tune the traffic to make it interesting is in the
+        // generator, where we disable most request types when the runtime or
+        // storage are down, so that it becomes much more likely that we'll
+        // generate traffic to bring them back.)
+        for input in self.generator.take(num_steps) {
+            while outstanding.len() >= Self::MAX_OUTSTANDING {
+                let step = outstanding.pop_front().unwrap().recv();
+                match &step.res {
+                    // Force the dataflows to make progress, so we don't end up
+                    // validating the very uninteresting case of no output.
+                    Res::Seal(SealReq { stream, ts }, Ok(_)) => {
+                        self.runtime.block_until(stream, *ts);
+                    }
+                    _ => {}
+                }
+                steps.push(step);
+            }
+            outstanding.push_back(self.runtime.run(input));
+        }
+
+        // Don't forget to await the final few requests before cleaning up.
+        while let Some(step) = outstanding.pop_front() {
+            let step = step.recv();
+            match &step.res {
+                // Force the dataflows to make progress, so we don't end up
+                // validating the very uninteresting case of no output.
+                Res::Seal(SealReq { stream, ts }, Ok(_)) => {
+                    self.runtime.block_until(stream, *ts);
+                }
+                _ => {}
+            }
+            steps.push(step);
         }
         self.runtime.finish();
-        self.steps
+
+        steps
     }
 }
 
