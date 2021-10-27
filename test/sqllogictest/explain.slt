@@ -311,3 +311,261 @@ EXPLAIN SELECT mz_logical_timestamp()
 | Map mz_logical_timestamp()
 
 EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 2
+      }
+    },
+    "keys": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ]
+    ],
+    "mfp": {
+      "expressions": [],
+      "predicates": [],
+      "projection": [
+        0,
+        1
+      ],
+      "input_arity": 2
+    },
+    "key_val": null
+  }
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 2
+      }
+    },
+    "keys": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ]
+    ],
+    "mfp": {
+      "expressions": [],
+      "predicates": [],
+      "projection": [
+        0,
+        1
+      ],
+      "input_arity": 2
+    },
+    "key_val": null
+  }
+}
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR VIEW ordered_view
+----
+{
+  "TopK": {
+    "input": {
+      "Get": {
+        "id": {
+          "Global": {
+            "User": 2
+          }
+        },
+        "keys": [
+          [
+            {
+              "Column": 0
+            },
+            {
+              "Column": 1
+            }
+          ]
+        ],
+        "mfp": {
+          "expressions": [],
+          "predicates": [],
+          "projection": [
+            0,
+            1
+          ],
+          "input_arity": 2
+        },
+        "key_val": null
+      }
+    },
+    "top_k_plan": {
+      "Basic": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 1,
+            "desc": false
+          },
+          {
+            "column": 0,
+            "desc": true
+          }
+        ],
+        "limit": 5,
+        "offset": 0,
+        "arity": 2
+      }
+    }
+  }
+}
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
+----
+{
+  "TopK": {
+    "input": {
+      "Get": {
+        "id": {
+          "Global": {
+            "User": 2
+          }
+        },
+        "keys": [
+          [
+            {
+              "Column": 0
+            },
+            {
+              "Column": 1
+            }
+          ]
+        ],
+        "mfp": {
+          "expressions": [],
+          "predicates": [],
+          "projection": [
+            0,
+            1
+          ],
+          "input_arity": 2
+        },
+        "key_val": null
+      }
+    },
+    "top_k_plan": {
+      "Basic": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 1,
+            "desc": false
+          },
+          {
+            "column": 0,
+            "desc": true
+          }
+        ],
+        "limit": 5,
+        "offset": 0,
+        "arity": 2
+      }
+    }
+  }
+}
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 2
+      }
+    },
+    "keys": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ]
+    ],
+    "mfp": {
+      "expressions": [],
+      "predicates": [],
+      "projection": [
+        0,
+        1
+      ],
+      "input_arity": 2
+    },
+    "key_val": null
+  }
+}
+
+Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 2
+      }
+    },
+    "keys": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ]
+    ],
+    "mfp": {
+      "expressions": [],
+      "predicates": [],
+      "projection": [
+        0,
+        1
+      ],
+      "input_arity": 2
+    },
+    "key_val": null
+  }
+}
+
+Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+
+EOF

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! This module houses a pretty printer for the parts of a
-//! [`DataflowDesc`] that are relevant to dataflow rendering.
+//! [`DataflowDescription`] that are relevant to dataflow rendering.
 //!
 //! Format details:
 //!
@@ -30,50 +30,63 @@
 
 use std::fmt;
 
-use crate::{DataflowDesc, LinearOperator};
+use crate::{DataflowDescription, LinearOperator};
 
 use expr::explain::{Indices, ViewExplanation};
-use expr::{ExprHumanizer, GlobalId, MirRelationExpr, RowSetFinishing};
+use expr::{ExprHumanizer, GlobalId, OptimizedMirRelationExpr, RowSetFinishing};
+use ore::result::ResultExt;
 use ore::str::{bracketed, separated};
 
+pub trait ViewFormatter<ViewExpr> {
+    fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &LinearOperator) -> fmt::Result;
+    fn fmt_view(&self, f: &mut fmt::Formatter, view: &ViewExpr) -> fmt::Result;
+}
+
 /// An `Explanation` facilitates pretty-printing of the parts of a
-/// [`DataflowDesc`] that are relevant to dataflow rendering.
+/// [`DataflowDescription`] that are relevant to dataflow rendering.
 ///
 /// By default, the [`fmt::Display`] implementation renders the expression as
 /// described in the module docs. Additional information may be attached to the
 /// explanation via the other public methods on the type.
 #[derive(Debug)]
-pub struct Explanation<'a> {
+pub struct Explanation<'a, Formatter, ViewExpr>
+where
+    Formatter: ViewFormatter<ViewExpr>,
+{
+    /// Determines how sources and views are formatted
+    formatter: &'a Formatter,
     expr_humanizer: &'a dyn ExprHumanizer,
     /// Each source that has some [`LinearOperator`].
     sources: Vec<(GlobalId, &'a LinearOperator)>,
     /// One `ViewExplanation` per view in the dataflow.
-    views: Vec<(GlobalId, ViewExplanation<'a>)>,
+    views: Vec<(GlobalId, &'a ViewExpr)>,
     /// An optional `RowSetFinishing` to mention at the end.
     finishing: Option<RowSetFinishing>,
 }
 
-impl<'a> Explanation<'a> {
-    /// Creates an explanation for a [`MirRelationExpr`].
+impl<'a, Formatter, ViewExpr> Explanation<'a, Formatter, ViewExpr>
+where
+    Formatter: ViewFormatter<ViewExpr>,
+{
     pub fn new(
-        expr: &'a MirRelationExpr,
+        expr: &'a ViewExpr,
         expr_humanizer: &'a dyn ExprHumanizer,
-    ) -> Explanation<'a> {
-        Explanation {
+        formatter: &'a Formatter,
+    ) -> Self {
+        Self {
+            formatter,
             expr_humanizer,
             sources: vec![],
-            views: vec![(
-                GlobalId::Explain,
-                ViewExplanation::new(expr, expr_humanizer),
-            )],
+            views: vec![(GlobalId::Explain, expr)],
             finishing: None,
         }
     }
 
     pub fn new_from_dataflow(
-        dataflow: &'a DataflowDesc,
+        dataflow: &'a DataflowDescription<ViewExpr>,
         expr_humanizer: &'a dyn ExprHumanizer,
-    ) -> Explanation<'a> {
+        formatter: &'a Formatter,
+    ) -> Self {
         let sources = dataflow
             .source_imports
             .iter()
@@ -88,25 +101,14 @@ impl<'a> Explanation<'a> {
         let views = dataflow
             .objects_to_build
             .iter()
-            .map(|build_desc| {
-                (
-                    build_desc.id,
-                    ViewExplanation::new(&build_desc.view, expr_humanizer),
-                )
-            })
+            .map(|build_desc| (build_desc.id, &build_desc.view))
             .collect::<Vec<_>>();
-        Explanation {
+        Self {
+            formatter,
             expr_humanizer,
             sources,
             views,
             finishing: None,
-        }
-    }
-
-    /// Attach type information into the explanation.
-    pub fn explain_types(&mut self) {
-        for (_, view) in &mut self.views {
-            view.explain_types();
         }
     }
 
@@ -116,7 +118,10 @@ impl<'a> Explanation<'a> {
     }
 }
 
-impl<'a> fmt::Display for Explanation<'a> {
+impl<'a, Formatter, ViewExpr> fmt::Display for Explanation<'a, Formatter, ViewExpr>
+where
+    Formatter: ViewFormatter<ViewExpr>,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for (id, operator) in &self.sources {
             writeln!(
@@ -127,18 +132,7 @@ impl<'a> fmt::Display for Explanation<'a> {
                     .unwrap_or_else(|| "?".to_owned()),
                 id,
             )?;
-            if !operator.predicates.is_empty() {
-                writeln!(
-                    f,
-                    "| Filter {}",
-                    separated(", ", operator.predicates.iter())
-                )?;
-            }
-            writeln!(
-                f,
-                "| Project {}",
-                bracketed("(", ")", Indices(&operator.projection))
-            )?;
+            self.formatter.fmt_source_body(f, operator)?;
             writeln!(f)?;
         }
         for (view_num, (id, view)) in self.views.iter().enumerate() {
@@ -158,7 +152,7 @@ impl<'a> fmt::Display for Explanation<'a> {
                     )?,
                 }
             }
-            view.fmt(f)?;
+            self.formatter.fmt_view(f, view)?;
         }
 
         if let Some(finishing) = &self.finishing {
@@ -176,5 +170,64 @@ impl<'a> fmt::Display for Explanation<'a> {
         }
 
         Ok(())
+    }
+}
+
+pub struct JsonViewFormatter {}
+
+impl<ViewExpr: serde::Serialize> ViewFormatter<ViewExpr> for JsonViewFormatter {
+    fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &LinearOperator) -> fmt::Result {
+        let operator_str = match serde_json::to_string_pretty(operator).map_err_to_string() {
+            Ok(o) => o,
+            Err(e) => e,
+        };
+        writeln!(f, "{}", operator_str)
+    }
+
+    fn fmt_view(&self, f: &mut fmt::Formatter, view: &ViewExpr) -> fmt::Result {
+        let view_str = match serde_json::to_string_pretty(view).map_err_to_string() {
+            Ok(o) => o,
+            Err(e) => e,
+        };
+        writeln!(f, "{}", view_str)
+    }
+}
+
+pub struct DataflowGraphFormatter<'a> {
+    expr_humanizer: &'a dyn ExprHumanizer,
+    typed: bool,
+}
+
+impl<'a> DataflowGraphFormatter<'a> {
+    pub fn new(expr_humanizer: &'a dyn ExprHumanizer, typed: bool) -> Self {
+        Self {
+            expr_humanizer,
+            typed,
+        }
+    }
+}
+
+impl<'a> ViewFormatter<OptimizedMirRelationExpr> for DataflowGraphFormatter<'a> {
+    fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &LinearOperator) -> fmt::Result {
+        if !operator.predicates.is_empty() {
+            writeln!(
+                f,
+                "| Filter {}",
+                separated(", ", operator.predicates.iter())
+            )?;
+        }
+        writeln!(
+            f,
+            "| Project {}",
+            bracketed("(", ")", Indices(&operator.projection))
+        )
+    }
+
+    fn fmt_view(&self, f: &mut fmt::Formatter, view: &OptimizedMirRelationExpr) -> fmt::Result {
+        let mut explain = ViewExplanation::new(view, self.expr_humanizer);
+        if self.typed {
+            explain.explain_types();
+        }
+        fmt::Display::fmt(&explain, f)
     }
 }
