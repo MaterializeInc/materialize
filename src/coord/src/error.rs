@@ -45,6 +45,12 @@ pub enum CoordError {
     InvalidAlterOnDisabledIndex(String),
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
+    /// The value of the specified parameter is incorrect
+    InvalidParameterValue {
+        parameter: &'static (dyn Var + Send + Sync),
+        value: String,
+        reason: String,
+    },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection,
     /// Expression violated a column's constraint
@@ -243,6 +249,17 @@ impl fmt::Display for CoordError {
                 "parameter {} requires a {} value",
                 p.name().quoted(),
                 p.type_name().quoted()
+            ),
+            CoordError::InvalidParameterValue {
+                parameter,
+                value,
+                reason,
+            } => write!(
+                f,
+                "parameter {} cannot have value {}: {}",
+                parameter.name().quoted(),
+                value.quoted(),
+                reason,
             ),
             CoordError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")

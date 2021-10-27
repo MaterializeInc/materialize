@@ -16,16 +16,49 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-services = [Materialized(options="--persistent-user-tables"), Testdrive(no_reset=True)]
+materialized = Materialized(options="--persistent-user-tables")
+
+# This instance of Mz is used for failpoint testing. By using --disable-persistent-system-tables-test
+# we ensure that only testdrive-initiated actions cause I/O. The --workers 1 is used due to #8739
+
+mz_without_system_tables = Materialized(
+    name="mz_without_system_tables",
+    hostname="materialized",
+    options="--persistent-user-tables --disable-persistent-system-tables-test --workers 1",
+)
+
+services = [materialized, mz_without_system_tables, Testdrive(no_reset=True)]
 
 
-def workflow_persistent_tables(w: Workflow):
+def workflow_persistence(w: Workflow):
+    workflow_user_tables(w)
+    workflow_failpoints(w)
+
+
+def workflow_user_tables(w: Workflow):
     w.start_services(services=["materialized"])
     w.wait_for_mz(service="materialized")
 
-    w.run_service(service="testdrive-svc", command="table-persistence-before-*.td")
+    w.run_service(
+        service="testdrive-svc",
+        command="user-tables/table-persistence-before-*.td",
+    )
 
     w.kill_services(services=["materialized"], signal="SIGKILL")
     w.start_services(services=["materialized"])
 
-    w.run_service(service="testdrive-svc", command="table-persistence-after-*.td")
+    w.run_service(
+        service="testdrive-svc",
+        command="user-tables/table-persistence-after-*.td",
+    )
+
+    w.kill_services(services=["materialized"], signal="SIGKILL")
+
+
+def workflow_failpoints(w: Workflow):
+    w.start_services(services=["mz_without_system_tables"])
+    w.wait_for_mz(service="mz_without_system_tables")
+
+    w.run_service(service="testdrive-svc", command="failpoints/*.td")
+
+    w.kill_services(services=["mz_without_system_tables"], signal="SIGKILL")

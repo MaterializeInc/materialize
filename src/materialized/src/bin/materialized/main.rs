@@ -39,6 +39,7 @@ use backtrace::Backtrace;
 use chrono::Utc;
 use clap::AppSettings;
 use coord::{PersistConfig, PersistFileStorage, PersistStorage};
+use fail::FailScenario;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::info;
@@ -356,6 +357,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     panic::set_hook(Box::new(handle_panic));
     sys::enable_sigbus_sigsegv_backtraces()?;
     sys::enable_termination_signal_cleanup()?;
+
+    // Initialize fail crate for failpoint support
+    let _failpoint_scenario = FailScenario::setup();
 
     if args.version > 0 {
         println!("materialized {}", materialized::BUILD_INFO.human_version());

@@ -643,6 +643,7 @@ dependencies = [
  "derivative",
  "differential-dataflow",
  "expr",
+ "fail",
  "futures",
  "interchange",
  "itertools",
@@ -1365,6 +1366,17 @@ dependencies = [
  "repr_test_util",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "fail"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3be3c61c59fdc91f5dbc3ea31ee8623122ce80057058be560654c5d410d181a6"
+dependencies = [
+ "lazy_static",
+ "log",
+ "rand 0.7.3",
 ]
 
 [[package]]
@@ -2265,6 +2277,7 @@ dependencies = [
  "dataflow",
  "dataflow-types",
  "differential-dataflow",
+ "fail",
  "fallible-iterator",
  "flate2",
  "futures",
@@ -2976,6 +2989,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "differential-dataflow",
+ "fail",
  "futures-executor",
  "futures-util",
  "log",

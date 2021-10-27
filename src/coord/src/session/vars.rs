@@ -53,6 +53,12 @@ const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
 };
 
+const FAILPOINTS: ServerVar<str> = ServerVar {
+    name: static_uncased_str!("failpoints"),
+    value: "",
+    description: "Allows failpoints to be dynamically activated.",
+};
+
 const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     name: static_uncased_str!("integer_datetimes"),
     value: &true,
@@ -136,6 +142,7 @@ pub struct Vars {
     database: SessionVar<str>,
     date_style: ServerVar<str>,
     extra_float_digits: SessionVar<i32>,
+    failpoints: ServerVar<str>,
     integer_datetimes: ServerVar<bool>,
     search_path: ServerVar<[&'static str]>,
     server_version: ServerVar<str>,
@@ -154,6 +161,7 @@ impl Default for Vars {
             database: SessionVar::new(&DATABASE),
             date_style: DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
+            failpoints: FAILPOINTS,
             integer_datetimes: INTEGER_DATETIMES,
             search_path: SEARCH_PATH,
             server_version: SERVER_VERSION,
@@ -176,6 +184,7 @@ impl Vars {
             &self.database,
             &self.date_style,
             &self.extra_float_digits,
+            &self.failpoints,
             &self.integer_datetimes,
             &self.search_path,
             &self.server_version,
@@ -224,6 +233,8 @@ impl Vars {
             Ok(&self.date_style)
         } else if name == EXTRA_FLOAT_DIGITS.name {
             Ok(&self.extra_float_digits)
+        } else if name == FAILPOINTS.name {
+            Ok(&self.failpoints)
         } else if name == INTEGER_DATETIMES.name {
             Ok(&self.integer_datetimes)
         } else if name == SEARCH_PATH.name {
@@ -269,6 +280,34 @@ impl Vars {
             Ok(())
         } else if name == EXTRA_FLOAT_DIGITS.name {
             self.extra_float_digits.set(value)
+        } else if name == FAILPOINTS.name {
+            for mut cfg in value.trim().split(';') {
+                cfg = cfg.trim();
+                if cfg.is_empty() {
+                    continue;
+                }
+                let mut splits = cfg.splitn(2, '=');
+                let failpoint = splits
+                    .next()
+                    .ok_or_else(|| CoordError::InvalidParameterValue {
+                        parameter: &FAILPOINTS,
+                        value: value.into(),
+                        reason: "missing failpoint name".into(),
+                    })?;
+                let action = splits
+                    .next()
+                    .ok_or_else(|| CoordError::InvalidParameterValue {
+                        parameter: &FAILPOINTS,
+                        value: value.into(),
+                        reason: "missing failpoint action".into(),
+                    })?;
+                fail::cfg(failpoint, action).map_err(|e| CoordError::InvalidParameterValue {
+                    parameter: &FAILPOINTS,
+                    value: value.into(),
+                    reason: e,
+                })?;
+            }
+            Ok(())
         } else if name == INTEGER_DATETIMES.name {
             Err(CoordError::ReadOnlyParameter(&INTEGER_DATETIMES))
         } else if name == SEARCH_PATH.name {
