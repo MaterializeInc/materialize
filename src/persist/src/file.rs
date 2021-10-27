@@ -365,6 +365,47 @@ impl Blob for FileBlob {
 
         Ok(())
     }
+
+    fn list_keys(&self) -> Result<Vec<String>, Error> {
+        let base_dir = match &self.base_dir {
+            Some(base_dir) => base_dir.canonicalize()?,
+            None => return Err(Error::from("FileBlob unexpectedly closed")),
+        };
+        let mut ret = vec![];
+
+        for entry in fs::read_dir(&base_dir)? {
+            let entry = entry?;
+            let path = entry.path().canonicalize()?;
+
+            if !path.is_file() {
+                // Ignore '.' and '..' directory entries if they come up.
+                if path == base_dir {
+                    continue;
+                } else if let Some(parent) = base_dir.parent() {
+                    if path == parent {
+                        continue;
+                    }
+                } else {
+                    return Err(Error::from(format!(
+                        "unexpectedly found directory while iterating through FileBlob: {}",
+                        path.display()
+                    )));
+                }
+            }
+
+            // The file name is guaranteed to be non-None iff the path is a
+            // normal file.
+            let file_name = path.file_name();
+            if let Some(name) = file_name {
+                let name = name.to_str();
+                if let Some(name) = name {
+                    ret.push(name.to_owned());
+                }
+            }
+        }
+        Ok(ret)
+    }
+
     fn close(&mut self) -> Result<bool, Error> {
         if let Some(base_dir) = self.base_dir.as_ref() {
             let lockfile_path = Self::lockfile_path(&base_dir);

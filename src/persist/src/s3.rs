@@ -14,7 +14,8 @@ use std::fmt;
 use aws_util::aws::ConnectInfo;
 use rusoto_core::{ByteStream, Region, RusotoError};
 use rusoto_s3::{
-    DeleteObjectRequest, GetObjectError, GetObjectRequest, PutObjectRequest, S3Client, S3,
+    DeleteObjectRequest, GetObjectError, GetObjectRequest, ListObjectsV2Request, PutObjectRequest,
+    S3Client, S3,
 };
 use tokio::io::AsyncReadExt;
 
@@ -181,6 +182,13 @@ impl S3Blob {
         let blob = S3Blob { blob_async };
         Ok(blob)
     }
+
+    /// Override the maximum number of keys we get information about per list
+    /// objects request to `max_keys`
+    #[cfg(test)]
+    fn set_max_keys(&mut self, max_keys: i64) {
+        self.blob_async.set_max_keys(max_keys)
+    }
 }
 
 impl Blob for S3Blob {
@@ -199,6 +207,11 @@ impl Blob for S3Blob {
         futures_executor::block_on(self.blob_async.delete(key))
     }
 
+    fn list_keys(&self) -> Result<Vec<String>, Error> {
+        // TODO: Make Blob async. See the productionize comment on [S3Blob].
+        futures_executor::block_on(self.blob_async.list_keys())
+    }
+
     fn close(&mut self) -> Result<bool, Error> {
         // TODO: Make Blob async. See the productionize comment on [S3Blob].
         futures_executor::block_on(self.blob_async.close())
@@ -209,6 +222,10 @@ struct S3BlobAsync {
     client: Option<S3Client>,
     bucket: String,
     prefix: String,
+    // Maximum number of keys we get information about per list-objects request.
+    //
+    // Defaults to 1000 which is the current AWS max.
+    max_keys: i64,
 }
 
 impl fmt::Debug for S3BlobAsync {
@@ -229,6 +246,7 @@ impl S3BlobAsync {
             client: Some(config.client),
             bucket: config.bucket,
             prefix: config.prefix,
+            max_keys: 1_000,
         };
         let _ = blob.lock(lock_info).await?;
         Ok(blob)
@@ -236,6 +254,11 @@ impl S3BlobAsync {
 
     fn get_path(&self, key: &str) -> String {
         format!("{}/{}", self.prefix, key)
+    }
+
+    #[cfg(test)]
+    fn set_max_keys(&mut self, max_keys: i64) {
+        self.max_keys = max_keys;
     }
 
     async fn lock(&self, new_lock: LockInfo) -> Result<(), Error> {
@@ -308,6 +331,52 @@ impl S3BlobAsync {
         Ok(())
     }
 
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        let mut ret = vec![];
+        let client = self.ensure_open()?;
+        let mut list_objects_req = ListObjectsV2Request {
+            bucket: self.bucket.clone(),
+            prefix: Some(self.prefix.clone()),
+            max_keys: Some(self.max_keys),
+            ..Default::default()
+        };
+        let prefix = self.get_path("");
+
+        loop {
+            let resp = client
+                .list_objects_v2(list_objects_req.clone())
+                .await
+                .map_err(|err| Error::from(err.to_string()))?;
+            if let Some(contents) = resp.contents {
+                for object in contents.iter() {
+                    if let Some(key) = object.key.as_ref() {
+                        if let Some(key) = key.strip_prefix(&prefix) {
+                            ret.push(key.to_string());
+                        } else {
+                            return Err(Error::from(format!(
+                                "found key with invalid prefix: {}",
+                                key
+                            )));
+                        }
+                    }
+                }
+            } else {
+                return Err(Error::from(format!(
+                    "s3 response contents empty: {:?}",
+                    resp
+                )));
+            }
+
+            if resp.next_continuation_token.is_some() {
+                list_objects_req.continuation_token = resp.next_continuation_token;
+            } else {
+                break;
+            }
+        }
+
+        Ok(ret)
+    }
+
     async fn delete(&self, key: &str) -> Result<(), Error> {
         let client = self.ensure_open()?;
         let path = self.get_path(key);
@@ -365,7 +434,9 @@ mod tests {
                 bucket: config.bucket.clone(),
                 prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, t.path),
             };
-            S3Blob::new(config, lock_info)
+            let mut blob = S3Blob::new(config, lock_info)?;
+            blob.set_max_keys(2);
+            Ok(blob)
         })?;
         drop(guard);
         Ok(())

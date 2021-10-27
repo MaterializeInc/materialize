@@ -152,6 +152,11 @@ impl<B: Blob> Blob for UnreliableBlob<B> {
         self.blob.set(key, value, allow_overwrite)
     }
 
+    fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.handle.check_unavailable("blob list keys")?;
+        self.blob.list_keys()
+    }
+
     fn delete(&mut self, key: &str) -> Result<(), Error> {
         self.handle.check_unavailable("blob delete")?;
         self.blob.delete(key)
