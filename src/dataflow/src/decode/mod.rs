@@ -635,7 +635,8 @@ where
 
     // The `position` value from `SourceOutput` is meaningless here -- it's just the index of a chunk.
     // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
-    let mut n_seen = 0;
+    // Historically, non-delimited sources have their offset start at 1
+    let mut n_seen = 1..;
     let results = stream.unary_frontier(Pipeline, &op_name, move |_, _| {
         move |input, output| {
             let mut n_errors = 0;
@@ -694,9 +695,8 @@ where
                                     session.give(DecodeResult {
                                         key,
                                         value: Some(value),
-                                        position: Some(n_seen),
+                                        position: n_seen.next(),
                                     });
-                                    n_seen += 1;
                                 }
                             }
                             continue;
@@ -738,7 +738,6 @@ where
                                 }
                                 Ok(Some(value)) => Ok(value),
                             };
-                            n_seen += 1;
 
                             // If the decoders decoded a message, they need to have made progress consuming the bytes.
                             // Otherwise, we risk going into an infinite loop.
@@ -754,7 +753,7 @@ where
                                 session.give(DecodeResult {
                                     key,
                                     value: Some(value),
-                                    position: Some(n_seen),
+                                    position: n_seen.next(),
                                 });
                                 value_buf = vec![];
                                 break;
@@ -762,7 +761,7 @@ where
                                 session.give(DecodeResult {
                                     key: key.clone(),
                                     value: Some(value),
-                                    position: Some(n_seen),
+                                    position: n_seen.next(),
                                 });
                             }
                             if is_err {
