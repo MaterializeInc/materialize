@@ -77,12 +77,14 @@ pub struct DeltaStagePlan {
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
     stream_key: Vec<MirScalarExpr>,
-    /// The permutation of the stream
-    stream_permutation: Permutation,
     /// The thinning expression to apply on the value part of the stream
     stream_thinning: Vec<usize>,
     /// The key expressions to use for the lookup relation.
     lookup_key: Vec<MirScalarExpr>,
+    /// The permutation of the lookup relation
+    lookup_permutation: Permutation,
+    /// The permutation of the output
+    join_permutation: Permutation,
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     closure: JoinClosure,
@@ -169,6 +171,11 @@ impl DeltaJoinPlan {
                 );
                 let (stream_permutation, stream_thinning) =
                     Permutation::construct_from_expr(&stream_key, stream_arity);
+                let (lookup_permutation, _) = Permutation::construct_from_expr(
+                    &lookup_key,
+                    input_mapper.input_arity(*lookup_relation),
+                );
+                let join_permutation = stream_permutation.join(&lookup_permutation);
                 stream_arity = closure.before.projection.len();
 
                 bound_inputs.push(*lookup_relation);
@@ -176,9 +183,10 @@ impl DeltaJoinPlan {
                 stage_plans.push(DeltaStagePlan {
                     lookup_relation: *lookup_relation,
                     stream_key,
-                    stream_permutation,
                     stream_thinning,
                     lookup_key: lookup_key.clone(),
+                    lookup_permutation,
+                    join_permutation,
                     closure,
                 });
             }
@@ -243,6 +251,7 @@ where
                 for stage_plan in path_plan.stage_plans.iter() {
                     let lookup_idx = stage_plan.lookup_relation;
                     let lookup_key = stage_plan.lookup_key.clone();
+                    let lookup_permutation = stage_plan.lookup_permutation.clone();
                     arrangements
                         .entry((lookup_idx, lookup_key.clone()))
                         .or_insert_with(|| {
@@ -254,17 +263,17 @@ where
                                         lookup_idx, lookup_key,
                                     )
                                 }) {
-                                ArrangementFlavor::Local(oks, errs, permutation) => {
+                                ArrangementFlavor::Local(oks, errs, _) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
                                         scope_errs.push(errs.as_collection(|k, _v| k.clone()));
                                     }
-                                    (permutation, Ok(oks.enter(inner)))
+                                    (lookup_permutation, Ok(oks.enter(inner)))
                                 }
-                                ArrangementFlavor::Trace(_gid, oks, errs, permutation) => {
+                                ArrangementFlavor::Trace(_gid, oks, errs, _) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
                                         scope_errs.push(errs.as_collection(|k, _v| k.clone()));
                                     }
-                                    (permutation, Err(oks.enter(inner)))
+                                    (lookup_permutation, Err(oks.enter(inner)))
                                 }
                             }
                         });
@@ -390,9 +399,10 @@ where
                         let DeltaStagePlan {
                             lookup_relation,
                             stream_key,
-                            stream_permutation,
                             stream_thinning,
                             lookup_key,
+                            lookup_permutation: _,
+                            join_permutation,
                             closure,
                         } = stage_plan;
 
@@ -405,15 +415,14 @@ where
                         // we might have: either dataflow-local or an imported trace.
                         let (oks, errs) =
                             match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
-                                (permutation, Ok(local)) => {
+                                (_, Ok(local)) => {
                                     if source_relation < lookup_relation {
                                         build_halfjoin(
                                             update_stream,
                                             local.enter_region(region),
-                                            &permutation,
                                             stream_key,
-                                            stream_permutation,
                                             stream_thinning,
+                                            join_permutation,
                                             |t1, t2| t1.le(t2),
                                             closure,
                                         )
@@ -421,24 +430,22 @@ where
                                         build_halfjoin(
                                             update_stream,
                                             local.enter_region(region),
-                                            &permutation,
                                             stream_key,
-                                            stream_permutation,
                                             stream_thinning,
+                                            join_permutation,
                                             |t1, t2| t1.lt(t2),
                                             closure,
                                         )
                                     }
                                 }
-                                (permutation, Err(trace)) => {
+                                (_, Err(trace)) => {
                                     if source_relation < lookup_relation {
                                         build_halfjoin(
                                             update_stream,
                                             trace.enter_region(region),
-                                            &permutation,
                                             stream_key,
-                                            stream_permutation,
                                             stream_thinning,
+                                            join_permutation,
                                             |t1, t2| t1.le(t2),
                                             closure,
                                         )
@@ -446,10 +453,9 @@ where
                                         build_halfjoin(
                                             update_stream,
                                             trace.enter_region(region),
-                                            &permutation,
                                             stream_key,
-                                            stream_permutation,
                                             stream_thinning,
+                                            join_permutation,
                                             |t1, t2| t1.lt(t2),
                                             closure,
                                         )
@@ -536,10 +542,9 @@ use differential_dataflow::Collection;
 fn build_halfjoin<G, Tr, CF>(
     updates: Collection<G, (Row, G::Timestamp)>,
     trace: Arranged<G, Tr>,
-    permutation: &Permutation,
     prev_key: Vec<MirScalarExpr>,
-    prev_permutation: Permutation,
     prev_thinning: Vec<usize>,
+    permutation: Permutation,
     comparison: CF,
     closure: JoinClosure,
 ) -> (
@@ -581,7 +586,6 @@ where
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
 
-    let permutation = prev_permutation.join(permutation);
     let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
         &updates,
         trace,
