@@ -211,19 +211,16 @@ impl HirRelationExpr {
                     //
                     // The sequential traversal is present as expressions are allowed to depend on the
                     // values of prior expressions.
-                    let first_scalar = input.arity();
-                    let num_scalars = scalars.len();
+                    let mut scalar_columns = Vec::new();
                     for scalar in scalars {
                         let scalar =
                             scalar.applied_to(id_gen, col_map, &mut input, &Some(&subquery_map));
                         input = input.map(vec![scalar]);
+                        scalar_columns.push(input.arity() - 1);
                     }
 
-                    input = input.project(
-                        (0..old_arity)
-                            .chain(first_scalar..first_scalar + num_scalars)
-                            .collect(),
-                    );
+                    // Discard any new columns added by the lowering of the scalar expressions
+                    input = input.project((0..old_arity).chain(scalar_columns).collect());
                 }
 
                 input
