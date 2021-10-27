@@ -33,8 +33,9 @@ use repr::{Diff, Row};
 use serde::{Deserialize, Serialize};
 
 use crate::arrangement::manager::RowSpine;
-use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
+use crate::render::context::{CollectionBundle, EnsureArrangement};
+use crate::render::Permutation;
 
 /// A plan describing how to compute a threshold operation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,11 +57,7 @@ impl ThresholdPlan {
         let mut keys = Vec::new();
         match self {
             ThresholdPlan::Basic(plan) => {
-                keys.push(
-                    (0..plan.arity)
-                        .map(|column| expr::MirScalarExpr::Column(column))
-                        .collect::<Vec<_>>(),
-                );
+                keys.push(plan.ensure_arrangement.0.clone());
             }
             ThresholdPlan::Retractions(_plan) => {}
         }
@@ -71,16 +68,16 @@ impl ThresholdPlan {
 /// A plan to maintain all inputs with positive counts.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BasicThresholdPlan {
-    /// The number of columns in the input and output.
-    arity: usize,
+    /// Description of how to arrange the output
+    ensure_arrangement: EnsureArrangement,
 }
 
 /// A plan to maintain all inputs with negative counts, which are subtracted from the output
 /// in order to maintain an equivalent collection compared to [BasicThresholdPlan].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RetractionsThresholdPlan {
-    /// The number of columns in the input and output.
-    arity: usize,
+    /// Description of how to arrange the output
+    ensure_arrangement: EnsureArrangement,
 }
 
 impl ThresholdPlan {
@@ -88,10 +85,17 @@ impl ThresholdPlan {
     /// switch between an implementation that maintains rows with negative counts (`true`), or
     /// rows with positive counts (`false`).
     pub fn create_from(arity: usize, maintain_retractions: bool) -> Self {
+        // Arrange the input by all columns in order.
+        let mut all_columns = Vec::new();
+        for column in 0..arity {
+            all_columns.push(expr::MirScalarExpr::Column(column));
+        }
+        let (permutation, thinning) = Permutation::construct_from_expr(&all_columns, arity);
+        let ensure_arrangement = (all_columns, permutation, thinning);
         if maintain_retractions {
-            ThresholdPlan::Retractions(RetractionsThresholdPlan { arity })
+            ThresholdPlan::Retractions(RetractionsThresholdPlan { ensure_arrangement })
         } else {
-            ThresholdPlan::Basic(BasicThresholdPlan { arity })
+            ThresholdPlan::Basic(BasicThresholdPlan { ensure_arrangement })
         }
     }
 }
@@ -124,19 +128,15 @@ where
 /// zero. It returns a [CollectionBundle] populated from a local arrangement.
 pub fn build_threshold_basic<G, T>(
     input: CollectionBundle<G, Row, T>,
-    arity: usize,
+    arrangement: EnsureArrangement,
 ) -> CollectionBundle<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    // Arrange the input by all columns in order.
-    let mut all_columns = Vec::new();
-    for column in 0..arity {
-        all_columns.push(expr::MirScalarExpr::Column(column));
-    }
-    let input = input.ensure_arrangements(Some(all_columns.clone()));
+    let all_columns = arrangement.0.clone();
+    let input = input.ensure_arrangements(Some(arrangement));
     let arrangement = input
         .arrangement(&all_columns)
         .expect("Arrangement ensured to exist");
@@ -146,7 +146,6 @@ where
             CollectionBundle::from_expressions(
                 all_columns,
                 ArrangementFlavor::Local(oks, errs, permutation),
-                arity,
             )
         }
         ArrangementFlavor::Trace(_, oks, errs, permutation) => {
@@ -156,7 +155,6 @@ where
             CollectionBundle::from_expressions(
                 all_columns,
                 ArrangementFlavor::Local(oks, errs, permutation),
-                arity,
             )
         }
     }
@@ -169,19 +167,15 @@ where
 /// which itself is not an arrangement.
 pub fn build_threshold_retractions<G, T>(
     input: CollectionBundle<G, Row, T>,
-    arity: usize,
+    arrangement: EnsureArrangement,
 ) -> CollectionBundle<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    // Arrange the input by all columns in order.
-    let mut all_columns = Vec::new();
-    for column in 0..arity {
-        all_columns.push(expr::MirScalarExpr::Column(column));
-    }
-    let input = input.ensure_arrangements(Some(all_columns.clone()));
+    let all_columns = arrangement.0.clone();
+    let input = input.ensure_arrangements(Some(arrangement));
     let arrangement = input
         .arrangement(&all_columns)
         .expect("Arrangement ensured to exist");
@@ -199,7 +193,7 @@ where
         .negate()
         .concat(&oks)
         .consolidate();
-    CollectionBundle::from_collections(oks, errs, arity)
+    CollectionBundle::from_collections(oks, errs)
 }
 
 impl<G, T> Context<G, Row, T>
@@ -214,11 +208,11 @@ where
         threshold_plan: ThresholdPlan,
     ) -> CollectionBundle<G, Row, T> {
         match threshold_plan {
-            ThresholdPlan::Basic(BasicThresholdPlan { arity }) => {
-                build_threshold_basic(input, arity)
+            ThresholdPlan::Basic(BasicThresholdPlan { ensure_arrangement }) => {
+                build_threshold_basic(input, ensure_arrangement)
             }
-            ThresholdPlan::Retractions(RetractionsThresholdPlan { arity }) => {
-                build_threshold_retractions(input, arity)
+            ThresholdPlan::Retractions(RetractionsThresholdPlan { ensure_arrangement }) => {
+                build_threshold_retractions(input, ensure_arrangement)
             }
         }
     }

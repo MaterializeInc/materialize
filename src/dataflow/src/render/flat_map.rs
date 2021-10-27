@@ -29,7 +29,6 @@ where
         exprs: Vec<MirScalarExpr>,
         mfp: MapFilterProject,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
-        let arity = mfp.projection.len();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_collection();
         let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
@@ -83,6 +82,6 @@ where
         let ok_collection = oks.as_collection();
         let new_err_collection = errs.as_collection();
         let err_collection = err_collection.concat(&new_err_collection);
-        CollectionBundle::from_collections(ok_collection, err_collection, arity)
+        CollectionBundle::from_collections(ok_collection, err_collection)
     }
 }

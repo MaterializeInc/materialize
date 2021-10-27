@@ -64,6 +64,10 @@ pub struct LinearStagePlan {
     stream_thinning: Vec<usize>,
     /// The key expressions to use for the lookup relation.
     lookup_key: Vec<MirScalarExpr>,
+    /// The lookup key permutation
+    lookup_permutation: Permutation,
+    /// The thinning expression to apply on the lookup relation
+    lookup_thinning: Vec<usize>,
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     closure: JoinClosure,
@@ -133,6 +137,10 @@ impl LinearJoinPlan {
             );
             let (stream_permutation, stream_thinning) =
                 Permutation::construct_from_expr(&stream_key, stream_arity);
+            let (lookup_permutation, lookup_thinning) = Permutation::construct_from_expr(
+                &lookup_key,
+                input_mapper.input_arity(*lookup_relation),
+            );
             stream_arity = closure.before.projection.len();
 
             bound_inputs.push(*lookup_relation);
@@ -144,6 +152,8 @@ impl LinearJoinPlan {
                 stream_permutation,
                 stream_thinning,
                 lookup_key: lookup_key.clone(),
+                lookup_permutation,
+                lookup_thinning,
                 closure,
             });
         }
@@ -196,7 +206,6 @@ where
         inputs: Vec<CollectionBundle<G, Row, T>>,
         linear_plan: LinearJoinPlan,
         scope: &mut G,
-        arity: usize,
     ) -> CollectionBundle<G, Row, T> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
@@ -258,12 +267,8 @@ where
             // and the logic is centralized there.
             let stream = self.differential_join(
                 joined,
-                stage_plan.stream_key,
-                stage_plan.stream_permutation,
-                stage_plan.stream_thinning,
                 inputs[stage_plan.lookup_relation].clone(),
-                stage_plan.lookup_key,
-                stage_plan.closure,
+                stage_plan,
                 &mut errors,
             );
             // Update joined results and capture any errors.
@@ -298,7 +303,6 @@ where
             CollectionBundle::from_collections(
                 joined,
                 differential_dataflow::collection::concatenate(scope, errors),
-                arity,
             )
         } else {
             panic!("Unexpectedly arranged join output");
@@ -311,12 +315,17 @@ where
     fn differential_join(
         &mut self,
         mut joined: JoinedFlavor<G, T>,
-        stream_key: Vec<MirScalarExpr>,
-        stream_permutation: Permutation,
-        stream_thinning: Vec<usize>,
         lookup_relation: CollectionBundle<G, Row, T>,
-        lookup_key: Vec<MirScalarExpr>,
-        closure: JoinClosure,
+        LinearStagePlan {
+            stream_key,
+            stream_permutation,
+            stream_thinning,
+            lookup_key,
+            lookup_permutation,
+            lookup_thinning,
+            closure,
+            lookup_relation: _,
+        }: LinearStagePlan,
         errors: &mut Vec<Collection<G, DataflowError>>,
     ) -> Collection<G, Row> {
         // If we have only a streamed collection, we must first form an arrangement.
@@ -346,7 +355,11 @@ where
         }
 
         // Ensure that the correct arrangement exists.
-        let lookup_relation = lookup_relation.ensure_arrangements(Some(lookup_key.clone()));
+        let lookup_relation = lookup_relation.ensure_arrangements(Some((
+            lookup_key.clone(),
+            lookup_permutation,
+            lookup_thinning,
+        )));
 
         // Demultiplex the four different cross products of arrangement types we might have.
         let arrangement = lookup_relation

@@ -569,15 +569,13 @@ where
         G::Timestamp: Lattice + Refines<T>,
         T: Timestamp + Lattice,
     {
-        let arity = permutation.arity();
         match self {
             ArrangementOrCollection::Arrangement(arrangement) => CollectionBundle::from_columns(
                 0..key_arity,
                 ArrangementFlavor::Local(arrangement, err_input.arrange(), permutation),
-                arity,
             ),
             ArrangementOrCollection::Collection(oks) => {
-                CollectionBundle::from_collections(oks, err_input, arity)
+                CollectionBundle::from_collections(oks, err_input)
             }
         }
     }

@@ -220,7 +220,6 @@ where
         inputs: Vec<CollectionBundle<G, Row, G::Timestamp>>,
         join_plan: DeltaJoinPlan,
         scope: &mut G,
-        arity: usize,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
         // Collects error streams for the ambient scope.
         let mut scope_errs = Vec::new();
@@ -514,7 +513,7 @@ where
                 differential_dataflow::collection::concatenate(scope, scope_errs),
             )
         });
-        CollectionBundle::from_collections(oks, errs, arity)
+        CollectionBundle::from_collections(oks, errs)
     }
 }
 

@@ -279,7 +279,6 @@ where
 {
     pub collection: Option<(Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, V, T>>,
-    pub arity: usize,
 }
 
 impl<S: Scope, V: Data, T: Lattice> CollectionBundle<S, V, T>
@@ -291,10 +290,8 @@ where
     pub fn from_collections(
         oks: Collection<S, V, Diff>,
         errs: Collection<S, DataflowError, Diff>,
-        arity: usize,
     ) -> Self {
         Self {
-            arity,
             collection: Some((oks, errs)),
             arranged: BTreeMap::default(),
         }
@@ -304,12 +301,10 @@ where
     pub fn from_expressions(
         exprs: Vec<MirScalarExpr>,
         arrangements: ArrangementFlavor<S, V, T>,
-        arity: usize,
     ) -> Self {
         let mut arranged = BTreeMap::new();
         arranged.insert(exprs, arrangements);
         Self {
-            arity,
             collection: None,
             arranged,
         }
@@ -319,15 +314,18 @@ where
     pub fn from_columns<I: IntoIterator<Item = usize>>(
         columns: I,
         arrangements: ArrangementFlavor<S, V, T>,
-        arity: usize,
     ) -> Self {
         let mut keys = Vec::new();
         for column in columns {
             keys.push(MirScalarExpr::Column(column));
         }
-        Self::from_expressions(keys, arrangements, arity)
+        Self::from_expressions(keys, arrangements)
     }
 }
+
+/// Parameter type to [CollectionBundle::ensure_arrangements], describing a key, a permutation of
+/// data and a thinning expression.
+pub type EnsureArrangement = (Vec<MirScalarExpr>, Permutation, Vec<usize>);
 
 impl<S: Scope, T: Lattice> CollectionBundle<S, Row, T>
 where
@@ -478,11 +476,11 @@ where
     }
 
     /// Ensures that arrangements in `keys` are present, creating them if they do not exist.
-    pub fn ensure_arrangements<K: IntoIterator<Item = Vec<MirScalarExpr>>>(
+    pub fn ensure_arrangements<K: IntoIterator<Item = EnsureArrangement>>(
         mut self,
         keys: K,
     ) -> Self {
-        for key in keys {
+        for (key, permutation, thinning) in keys {
             if !self.arranged.contains_key(&key) {
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
@@ -494,7 +492,6 @@ where
                     self.collection = Some(self.as_collection());
                 }
                 let (oks, errs) = self.as_collection();
-                let (permutation, val) = Permutation::construct_from_expr(&key, self.arity);
                 let mut row_packer = Row::default();
 
                 let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
@@ -502,7 +499,7 @@ where
                     let temp_storage = RowArena::new();
                     row_packer.try_extend(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
                     let key_row = row_packer.finish_and_reuse();
-                    row_packer.extend(val.iter().map(|c| datums[*c]));
+                    row_packer.extend(thinning.iter().map(|c| datums[*c]));
                     let val_row = row_packer.finish_and_reuse();
                     Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });

@@ -147,7 +147,6 @@ where
                     crate::render::CollectionBundle::from_collections(
                         ok_collection,
                         err_collection,
-                        src.bare_desc.arity(),
                     ),
                 );
             }
@@ -616,11 +615,7 @@ where
                 // Introduce the stream by name, as an unarranged collection.
                 self.insert_id(
                     Id::Global(src_id),
-                    crate::render::CollectionBundle::from_collections(
-                        collection,
-                        err_collection,
-                        src.bare_desc.arity(),
-                    ),
+                    crate::render::CollectionBundle::from_collections(collection, err_collection),
                 );
 
                 let token = Rc::new(capability);

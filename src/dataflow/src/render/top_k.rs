@@ -160,7 +160,6 @@ where
         &mut self,
         input: CollectionBundle<G, Row, G::Timestamp>,
         top_k_plan: TopKPlan,
-        arity: usize,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
         let (ok_input, err_input) = input.as_collection();
 
@@ -207,7 +206,7 @@ where
             ok_result.leave_region()
         });
 
-        return CollectionBundle::from_collections(ok_result, err_input, arity);
+        return CollectionBundle::from_collections(ok_result, err_input);
 
         /// Constructs a TopK dataflow subgraph.
         fn build_topk<G>(
