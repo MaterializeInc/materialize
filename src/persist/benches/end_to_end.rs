@@ -108,15 +108,15 @@ fn bench_read_persisted_source<M: Measurement>(
             let mut runtime =
                 create_runtime(&persistence_base_path, &nonce).expect("missing runtime");
 
-            let (_write, read) = runtime
+            let read = runtime
                 .create_or_load::<Vec<u8>, Vec<u8>>(&collection_id)
-                .expect("could not load persistent collection");
+                .map(|(_write, read)| read);
 
             let mut probe = ProbeHandle::new();
 
             worker.dataflow(|scope| {
                 scope
-                    .persisted_source(&read)
+                    .persisted_source(read)
                     .flat_map(move |(data, time, diff)| match data {
                         Err(_err) => None,
                         Ok((key, _value)) => Some({

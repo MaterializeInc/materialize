@@ -1123,7 +1123,15 @@ mod tests {
         let data = vec![(("foo".into(), ()), 1, 1), (("foo".into(), ()), 1000, -1)];
 
         let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let (write, read) = p.create_or_load::<String, ()>("1").unwrap();
+        let handles = p.create_or_load::<String, ()>("1");
+        let read = handles
+            .as_ref()
+            .map(|(_write, read)| read.clone())
+            .map_err(|e| e.clone());
+        let write = handles
+            .as_ref()
+            .map(|(write, _read)| write.clone())
+            .unwrap();
 
         let ok = timely::execute_directly(move |worker| {
             let writes = std::thread::spawn(move || {
@@ -1134,7 +1142,7 @@ mod tests {
             let mut probe = ProbeHandle::new();
             let ok_stream = worker.dataflow(|scope| {
                 let (ok_stream, _err_stream) =
-                    scope.persisted_source(&read).ok_err(|x| split_ok_err(x));
+                    scope.persisted_source(read).ok_err(|x| split_ok_err(x));
                 ok_stream.probe_with(&mut probe).capture()
             });
 
