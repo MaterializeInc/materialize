@@ -548,7 +548,9 @@ where
         trace,
         |time| time.saturating_sub(1),
         comparison,
-        |timer, _count| timer.elapsed().ge(&std::time::Duration::from_millis(10)),
+        // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
+        // in that we seem to yield too much and do too little work when we do.
+        |_timer, count| count > 1_000_000,
         // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
         move |_key, stream_row, lookup_row, initial, time, diff1, diff2| {
             let temp_storage = RowArena::new();
