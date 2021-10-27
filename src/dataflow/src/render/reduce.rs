@@ -488,30 +488,26 @@ impl ReducePlan {
         T: Timestamp + Lattice,
     {
         // Convenience wrapper to render the right kind of hierarchical plan.
-        let build_hierarchical = |collection: Collection<G, (Row, Row)>,
-                                  expr: HierarchicalPlan,
-                                  top_level: bool| match expr {
-            HierarchicalPlan::Monotonic(expr) => build_monotonic(collection, expr, top_level),
-            HierarchicalPlan::Bucketed(expr) => build_bucketed(collection, expr, top_level),
-        };
+        let build_hierarchical =
+            |collection: Collection<G, (Row, Row)>, expr: HierarchicalPlan| match expr {
+                HierarchicalPlan::Monotonic(expr) => build_monotonic(collection, expr),
+                HierarchicalPlan::Bucketed(expr) => build_bucketed(collection, expr),
+            };
 
         // Convenience wrapper to render the right kind of basic plan.
-        let build_basic =
-            |collection: Collection<G, (Row, Row)>, expr: BasicPlan, top_level: bool| match expr {
-                BasicPlan::Single(index, aggr) => {
-                    build_basic_aggregate(collection, index, &aggr, top_level)
-                }
-                BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
-            };
+        let build_basic = |collection: Collection<G, (Row, Row)>, expr: BasicPlan| match expr {
+            BasicPlan::Single(index, aggr) => build_basic_aggregate(collection, index, &aggr),
+            BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs),
+        };
 
         let arrangement_or_bundle: ArrangementOrCollection<G> = match self {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
             ReducePlan::Distinct => build_distinct(collection).into(),
             ReducePlan::DistinctNegated => build_distinct_retractions(collection).into(),
-            ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true).into(),
-            ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true).into(),
-            ReducePlan::Basic(expr) => build_basic(collection, expr, true).into(),
+            ReducePlan::Accumulable(expr) => build_accumulable(collection, expr).into(),
+            ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr).into(),
+            ReducePlan::Basic(expr) => build_basic(collection, expr).into(),
             // Otherwise, we need to render something different for each type of
             // reduction, and then stitch them together.
             ReducePlan::Collation(expr) => {
@@ -521,20 +517,17 @@ impl ReducePlan {
                 if let Some(accumulable) = expr.accumulable {
                     to_collate.push((
                         ReductionType::Accumulable,
-                        build_accumulable(collection.clone(), accumulable, false),
+                        build_accumulable(collection.clone(), accumulable),
                     ));
                 }
                 if let Some(hierarchical) = expr.hierarchical {
                     to_collate.push((
                         ReductionType::Hierarchical,
-                        build_hierarchical(collection.clone(), hierarchical, false),
+                        build_hierarchical(collection.clone(), hierarchical),
                     ));
                 }
                 if let Some(basic) = expr.basic {
-                    to_collate.push((
-                        ReductionType::Basic,
-                        build_basic(collection.clone(), basic, false),
-                    ));
+                    to_collate.push((ReductionType::Basic, build_basic(collection.clone(), basic)));
                 }
                 // Now we need to collate them together.
                 build_collation(to_collate, expr.aggregate_types, &mut collection.scope()).into()
@@ -783,7 +776,7 @@ where
     concatenate(scope, to_concat)
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceCollation", {
             let mut row_packer = Row::default();
-            move |key, input, output| {
+            move |_key, input, output| {
                 // The inputs are pairs of a reduction type, and a row consisting of densely packed fused
                 // aggregate values.
                 // We need to reconstitute the final value by:
@@ -820,9 +813,7 @@ where
                     }
                 }
 
-                // First, fill our output row with key information.
-                row_packer.extend(key.iter());
-                // Next merge results into the order they were asked for.
+                // Merge results into the order they were asked for.
                 for typ in aggregate_types.iter() {
                     match typ {
                         ReductionType::Accumulable => {
@@ -889,12 +880,10 @@ where
 /// This function assumes that we are explicitly rendering multiple basic aggregations.
 /// For each aggregate, we render a different reduce operator, and then fuse
 /// results together into a final arrangement that presents all the results
-/// in the order specified by `aggrs`. `prepend_keys` is true if the arrangement
-/// produced by this function needs to be reused by other views.
+/// in the order specified by `aggrs`.
 fn build_basic_aggregates<G>(
     input: Collection<G, (Row, Row)>,
     aggrs: Vec<(usize, AggregateExpr)>,
-    prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
     G: Scope,
@@ -909,18 +898,13 @@ where
     );
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
-        let result = build_basic_aggregate(input.clone(), index, &aggr, false);
+        let result = build_basic_aggregate(input.clone(), index, &aggr);
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
     differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceFuseBasic", {
             let mut row_packer = Row::default();
-            move |key, input, output| {
-                // First, fill our output row with key information if requested.
-                if prepend_key {
-                    row_packer.extend(key.iter());
-                }
-
+            move |_key, input, output| {
                 for ((_, row), _) in input.iter() {
                     let datum = row.unpack_first();
                     row_packer.push(datum);
@@ -932,13 +916,11 @@ where
 
 /// Build the dataflow to compute a single basic aggregation.
 ///
-/// This method also applies distinctness if required. `prepend_keys` is true if
-/// the arrangement produced by this function needs to be reused by other views.
+/// This method also applies distinctness if required.
 fn build_basic_aggregate<G>(
     input: Collection<G, (Row, Row)>,
     index: usize,
     aggr: &AggregateExpr,
-    prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
     G: Scope,
@@ -951,23 +933,12 @@ where
     } = aggr.clone();
 
     // Extract the value we were asked to aggregate over.
-    let mut partial = if !prepend_key {
-        let mut packer = Row::default();
-        input.map(move |(key, row)| {
-            let value = row.iter().nth(index).unwrap();
-            packer.push(value);
-            (key, packer.finish_and_reuse())
-        })
-    } else {
-        // If the arrangement produced by this function is going to be exported
-        // for reuse that implies that theres only a single aggregation in the
-        // whole reduce, and only one value in the values row. Let's complain if
-        // we're trying to aggregate over anything else.
-        if index != 0 {
-            log::error!("Computing single basic aggregate on index {} with prepend-keys=true. Expected index 0", index);
-        }
-        input
-    };
+    let mut packer = Row::default();
+    let mut partial = input.map(move |(key, row)| {
+        let value = row.iter().nth(index).unwrap();
+        packer.push(value);
+        (key, packer.finish_and_reuse())
+    });
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
@@ -976,7 +947,7 @@ where
 
     partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
         let mut row_packer = Row::default();
-        move |key, source, target| {
+        move |_key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
             // see them, we should report when we do. We may want to bake even more info
             // in here in the future.
@@ -996,9 +967,6 @@ where
                 let iter = source.iter().flat_map(|(v, w)| {
                     std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
                 });
-                if prepend_key {
-                    row_packer.extend(key.iter());
-                }
                 row_packer.push(func.eval(iter, &RowArena::new()));
                 target.push((row_packer.finish_and_reuse(), 1));
             }
@@ -1012,8 +980,7 @@ where
 /// This function renders a single reduction tree that computes aggregations with
 /// a priority queue implemented with a series of reduce operators that partition
 /// the input into buckets, and compute the aggregation over very small buckets
-/// and feed the results up to larger buckets. `prepend_keys` is true if the
-/// arrangement produced by this function needs to be reused by other views.
+/// and feed the results up to larger buckets.
 ///
 /// Note that this implementation currently ignores the distinct bit because we
 /// currently only perform min / max hierarchically and the reduction tree
@@ -1025,7 +992,6 @@ fn build_bucketed<G>(
         skips,
         buckets,
     }: BucketedPlan,
-    prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
     G: Scope,
@@ -1057,7 +1023,7 @@ where
     // Arrange the final result into (key, Row)
     partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
         let mut row_packer = Row::default();
-        move |key, source, target| {
+        move |_key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
             // see them, we should report when we do. We may want to bake even more info
             // in here in the future.
@@ -1069,10 +1035,6 @@ where
                     }
                 }
             } else {
-                // Pack the value with the key as the result.
-                if prepend_key {
-                    row_packer.extend(key.iter());
-                }
                 for (aggr_index, func) in aggr_funcs.iter().enumerate() {
                     let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
                     row_packer.push(func.eval(iter, &RowArena::new()));
@@ -1138,13 +1100,9 @@ where
 
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
 /// on monotonic inputs.
-///
-/// `prepend_keys` is true if the arrangement produced by this function needs to
-/// be reused by other views.
 fn build_monotonic<G>(
     collection: Collection<G, (Row, Row)>,
     MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
-    prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
     G: Scope,
@@ -1189,13 +1147,8 @@ where
         .arrange_by_self()
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
             let mut row_packer = Row::default();
-            move |key, input, output| {
+            move |_key, input, output| {
                 let accum = &input[0].1;
-                // Pack the value with the key as the result.
-                if prepend_key {
-                    row_packer.extend(key.iter());
-                }
-
                 for monoid in accum.iter() {
                     match monoid {
                         monoids::ReductionMonoid::Min(row) => row_packer.extend(row.iter()),
@@ -1489,9 +1442,6 @@ impl Multiply<isize> for Accum {
 /// they can be accumulated in place. The `count` operator promotes the accumulated
 /// values to data, at which point a final map applies operator-specific logic to
 /// yield the final aggregate.
-///
-/// If `prepend_key` is specified, the key is prepended to the arranged values, making
-/// the arrangement suitable for publication itself.
 fn build_accumulable<G>(
     collection: Collection<G, (Row, Row)>,
     AccumulablePlan {
@@ -1499,7 +1449,6 @@ fn build_accumulable<G>(
         simple_aggrs,
         distinct_aggrs,
     }: AccumulablePlan,
-    prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
     G: Scope,
@@ -1722,12 +1671,8 @@ where
         .arrange_by_self()
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
             let mut row_packer = Row::default();
-            move |key, input, output| {
+            move |_key, input, output| {
                 let accum = &input[0].1;
-                // Pack the value with the key as the result.
-                if prepend_key {
-                    row_packer.extend(key.iter());
-                }
 
                 for (aggr, accum) in full_aggrs.iter().zip(accum) {
                     // This should perhaps be un-recoverable, as we risk panicking in the ReduceCollation

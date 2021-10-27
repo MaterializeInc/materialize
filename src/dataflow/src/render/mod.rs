@@ -1075,7 +1075,10 @@ pub mod plan {
                     );
                     let output_keys = reduce_plan.keys(group_key.len());
                     let arity = group_key.len() + aggregates.len();
-                    let permutation = Permutation::identity(key_val_plan.key_arity(), arity);
+                    let (permutation, _thinning) = Permutation::construct_from_columns(
+                        &(0..key_val_plan.key_arity()).collect::<Vec<_>>(),
+                        arity,
+                    );
                     // Return the plan, and the keys it produces.
                     (
                         Plan::Reduce {
