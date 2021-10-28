@@ -44,9 +44,6 @@ pub fn plan_set_variable(
         value,
     }: SetVariableStatement,
 ) -> Result<Plan, anyhow::Error> {
-    if local {
-        bail_unsupported!("SET LOCAL");
-    }
     Ok(Plan::SetVariable(SetVariablePlan {
         name: variable.to_string(),
         value: match value {
@@ -54,6 +51,7 @@ pub fn plan_set_variable(
             SetVariableValue::Literal(lit) => lit.to_string(),
             SetVariableValue::Ident(ident) => ident.into_string(),
         },
+        local,
     }))
 }
 

@@ -13,6 +13,7 @@ use std::fmt;
 use uncased::UncasedStr;
 
 use crate::error::CoordError;
+use crate::session::EndTransactionAction;
 
 // TODO(benesch): remove this when SergioBenitez/uncased#3 resolves.
 macro_rules! static_uncased_str {
@@ -124,7 +125,10 @@ const TRANSACTION_ISOLATION: ServerVar<str> = ServerVar {
 /// at runtime via the `ALTER SYSTEM` or `SET` statements. Parameters that are
 /// set in a session take precedence over database defaults, which in turn take
 /// precedence over command line arguments, which in turn take precedence over
-/// settings in the on-disk configuration.
+/// settings in the on-disk configuration. Note that changing the value of
+/// parameters obeys transaction semantics: if a transaction fails to commit,
+/// any parameters that were changed in that transaction (i.e., via `SET`)
+/// will be rolled back to their previous value.
 ///
 /// The Materialize configuration hierarchy at the moment is much simpler.
 /// Global defaults are hardcoded into the binary, and a select few parameters
@@ -259,17 +263,22 @@ impl Vars {
     /// Sets the configuration parameter named `name` to the value represented
     /// by `value`.
     ///
+    /// The new value may be either committed or rolled back by the next call to
+    /// [`Vars::end_transaction`]. If `local` is true, the new value is always
+    /// discarded by the next call to [`Vars::end_transaction`], even if the
+    /// transaction is marked to commit.
+    ///
     /// Like with [`Vars::get`], configuration parameters are matched case
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    pub fn set(&mut self, name: &str, value: &str) -> Result<(), CoordError> {
+    pub fn set(&mut self, name: &str, value: &str, local: bool) -> Result<(), CoordError> {
         if name == APPLICATION_NAME.name {
-            self.application_name.set(value)
+            self.application_name.set(value, local)
         } else if name == CLIENT_ENCODING.name {
             Err(CoordError::ReadOnlyParameter(&CLIENT_ENCODING))
         } else if name == DATABASE.name {
-            self.database.set(value)
+            self.database.set(value, local)
         } else if name == DATE_STYLE.name {
             for value in value.split(',') {
                 let value = UncasedStr::new(value.trim());
@@ -279,7 +288,7 @@ impl Vars {
             }
             Ok(())
         } else if name == EXTRA_FLOAT_DIGITS.name {
-            self.extra_float_digits.set(value)
+            self.extra_float_digits.set(value, local)
         } else if name == FAILPOINTS.name {
             for mut cfg in value.trim().split(';') {
                 cfg = cfg.trim();
@@ -317,7 +326,7 @@ impl Vars {
         } else if name == SERVER_VERSION_NUM.name {
             Err(CoordError::ReadOnlyParameter(&SERVER_VERSION_NUM))
         } else if name == SQL_SAFE_UPDATES.name {
-            self.sql_safe_updates.set(value)
+            self.sql_safe_updates.set(value, local)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
             Err(CoordError::ReadOnlyParameter(&STANDARD_CONFORMING_STRINGS))
         } else if name == TIMEZONE.name {
@@ -331,6 +340,33 @@ impl Vars {
         } else {
             Err(CoordError::UnknownParameter(name.into()))
         }
+    }
+
+    /// Commits or rolls back configuration parameter updates made via
+    /// [`Vars::set`] since the last call to `end_transaction`.
+    pub fn end_transaction(&mut self, action: EndTransactionAction) {
+        // IMPORTANT: if you've added a new `SessionVar`, add a corresponding
+        // call to `end_transaction` below.
+        let Vars {
+            application_name,
+            client_encoding: _,
+            database,
+            date_style: _,
+            extra_float_digits,
+            failpoints: _,
+            integer_datetimes: _,
+            search_path: _,
+            server_version: _,
+            server_version_num: _,
+            sql_safe_updates,
+            standard_conforming_strings: _,
+            timezone: _,
+            transaction_isolation: _,
+        } = self;
+        application_name.end_transaction(action);
+        database.end_transaction(action);
+        extra_float_digits.end_transaction(action);
+        sql_safe_updates.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
@@ -420,13 +456,13 @@ pub trait Var: fmt::Debug {
 
 /// A `ServerVar` is the default value for a configuration parameter.
 #[derive(Debug)]
-pub struct ServerVar<V>
+struct ServerVar<V>
 where
     V: fmt::Debug + ?Sized + 'static,
 {
-    pub name: &'static UncasedStr,
-    pub value: &'static V,
-    pub description: &'static str,
+    name: &'static UncasedStr,
+    value: &'static V,
+    description: &'static str,
 }
 
 impl<V> Var for ServerVar<V>
@@ -453,11 +489,13 @@ where
 /// A `SessionVar` is the session value for a configuration parameter. If unset,
 /// the server default is used instead.
 #[derive(Debug)]
-pub struct SessionVar<V>
+struct SessionVar<V>
 where
     V: Value + fmt::Debug + ?Sized + 'static,
 {
-    value: Option<V::Owned>,
+    local_value: Option<V::Owned>,
+    staged_value: Option<V::Owned>,
+    session_value: Option<V::Owned>,
     parent: &'static ServerVar<V>,
 }
 
@@ -465,27 +503,46 @@ impl<V> SessionVar<V>
 where
     V: Value + fmt::Debug + ?Sized + 'static,
 {
-    pub fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
+    fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
-            value: None,
+            local_value: None,
+            staged_value: None,
+            session_value: None,
             parent,
         }
     }
 
-    pub fn set(&mut self, s: &str) -> Result<(), CoordError> {
+    fn set(&mut self, s: &str, local: bool) -> Result<(), CoordError> {
         match V::parse(s) {
             Ok(v) => {
-                self.value = Some(v);
+                if local {
+                    self.local_value = Some(v);
+                } else {
+                    self.local_value = None;
+                    self.staged_value = Some(v);
+                }
                 Ok(())
             }
             Err(()) => Err(CoordError::InvalidParameterType(self.parent)),
         }
     }
 
-    pub fn value(&self) -> &V {
-        self.value
+    fn end_transaction(&mut self, action: EndTransactionAction) {
+        self.local_value = None;
+        match action {
+            EndTransactionAction::Commit if self.staged_value.is_some() => {
+                self.session_value = self.staged_value.take()
+            }
+            _ => self.staged_value = None,
+        }
+    }
+
+    fn value(&self) -> &V {
+        self.local_value
             .as_ref()
             .map(|v| v.borrow())
+            .or_else(|| self.staged_value.as_ref().map(|v| v.borrow()))
+            .or_else(|| self.session_value.as_ref().map(|v| v.borrow()))
             .unwrap_or(self.parent.value)
     }
 }
