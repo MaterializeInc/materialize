@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="581" height="211">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="118" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="118"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">DELETE FROM</text>
+   <rect x="169" y="3" width="96" height="32"/>
+   <rect x="167" y="1" width="96" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="177" y="21">table_name</text>
+   <rect x="325" y="67" width="40" height="32" rx="10"/>
+   <rect x="323"
+         y="65"
+         width="40"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="333" y="85">AS</text>
+   <rect x="405" y="35" width="50" height="32"/>
+   <rect x="403" y="33" width="50" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="413" y="53">alias</text>
+   <rect x="495" y="3" width="64" height="32" rx="10"/>
+   <rect x="493"
+         y="1"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="503" y="21">USING</text>
+   <rect x="257" y="177" width="86" height="32"/>
+   <rect x="255" y="175" width="86" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="265" y="195">from_item</text>
+   <rect x="257" y="133" width="24" height="32" rx="10"/>
+   <rect x="255"
+         y="131"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="265" y="151">,</text>
+   <rect x="383" y="177" width="70" height="32" rx="10"/>
+   <rect x="381"
+         y="175"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="391" y="195">WHERE</text>
+   <rect x="473" y="177" width="80" height="32"/>
+   <rect x="471" y="175" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="481" y="195">condition</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m118 0 h10 m0 0 h10 m96 0 h10 m20 0 h10 m0 0 h160 m-190 0 h20 m170 0 h20 m-210 0 q10 0 10 10 m190 0 q0 -10 10 -10 m-200 10 v12 m190 0 v-12 m-190 12 q0 10 10 10 m170 0 q10 0 10 -10 m-160 10 h10 m0 0 h50 m-80 0 h20 m60 0 h20 m-100 0 q10 0 10 10 m80 0 q0 -10 10 -10 m-90 10 v12 m80 0 v-12 m-80 12 q0 10 10 10 m60 0 q10 0 10 -10 m-70 10 h10 m40 0 h10 m20 -32 h10 m50 0 h10 m20 -32 h10 m64 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-366 174 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m86 0 h10 m-126 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m106 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-106 0 h10 m24 0 h10 m0 0 h62 m20 44 h10 m70 0 h10 m0 0 h10 m80 0 h10 m3 0 h-3"/>
+   <polygon points="571 191 579 187 579 195"/>
+   <polygon points="571 191 563 187 563 195"/>
+</svg>

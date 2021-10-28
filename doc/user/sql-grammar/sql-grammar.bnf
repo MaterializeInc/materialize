@@ -243,6 +243,10 @@ declare ::=
 insert ::=
   'INSERT' 'INTO' table_name 'VALUES'
   ( ('(' (col_value) ( ( ',' col_value ) )* ')') ( ( ',' ('(' (col_value) ( ( ',' col_value ) )* ')') )* ) )
+delete_stmt ::=
+  'DELETE FROM' table_name ('AS'? alias)?
+  'USING' (from_item) ( ( ',' from_item ) )*
+  'WHERE' condition
 discard ::=
   'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
 drop_database ::=
