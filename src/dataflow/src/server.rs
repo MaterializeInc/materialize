@@ -173,6 +173,50 @@ pub enum Command {
     Shutdown,
 }
 
+impl Command {
+    /// Produces a copy of the command suitable for the indicated worker.
+    ///
+    /// Primarily this is used to subdivide `Constant` plan stages, so that
+    /// each worker can manage a balanced volume of rows. In principle this
+    /// could also be used to route keyed peeks into arrangements.
+    /// Creates an appropriately sharded copy of `Self`.
+    pub fn clone_for_worker(&self, index: usize, peers: usize) -> Self {
+        if let Command::CreateDataflows(dataflows) = self {
+            Command::CreateDataflows(
+                dataflows
+                    .iter()
+                    .map(|dataflow| {
+                        // We do this here, because it is hard to have `dataflow_types::Dataflow` know about
+                        // `dataflow::Plan`.
+                        // Each dataflow we construct should shard its `Constant` collections.
+                        let objects_to_build = dataflow
+                            .objects_to_build
+                            .iter()
+                            .map(|description| dataflow_types::BuildDesc {
+                                id: description.id,
+                                view: description.view.clone_for_worker(index, peers),
+                            })
+                            .collect::<Vec<_>>();
+                        // Clone all fields, other than `objects_to_build` defined above.
+                        DataflowDescription {
+                            source_imports: dataflow.source_imports.clone(),
+                            index_imports: dataflow.index_imports.clone(),
+                            objects_to_build,
+                            index_exports: dataflow.index_exports.clone(),
+                            sink_exports: dataflow.sink_exports.clone(),
+                            dependent_objects: dataflow.dependent_objects.clone(),
+                            as_of: dataflow.as_of.clone(),
+                            debug_name: dataflow.debug_name.clone(),
+                        }
+                    })
+                    .collect(),
+            )
+        } else {
+            self.clone()
+        }
+    }
+}
+
 impl CommandKind {
     /// Returns the name of the command kind.
     fn name(self) -> &'static str {
