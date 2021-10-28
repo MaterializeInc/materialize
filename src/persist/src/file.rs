@@ -15,6 +15,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use fail::fail_point;
 
 use ore::cast::CastFrom;
@@ -312,8 +313,9 @@ impl FileBlob {
     }
 }
 
+#[async_trait]
 impl Blob for FileBlob {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         let file_path = self.blob_path(key)?;
         let mut file = match File::open(file_path) {
             Ok(file) => file,
@@ -325,7 +327,7 @@ impl Blob for FileBlob {
         Ok(Some(buf))
     }
 
-    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
         let file_path = self.blob_path(key)?;
         if allow_overwrite {
             // allow_overwrite=true requires atomic writes, so write to a temp
@@ -370,7 +372,7 @@ impl Blob for FileBlob {
         Ok(())
     }
 
-    fn delete(&mut self, key: &str) -> Result<(), Error> {
+    async fn delete(&mut self, key: &str) -> Result<(), Error> {
         let file_path = self.blob_path(key)?;
         // TODO: strict correctness requires that we fsync the parent directory
         // as well after file removal.
@@ -384,7 +386,7 @@ impl Blob for FileBlob {
         Ok(())
     }
 
-    fn list_keys(&self) -> Result<Vec<String>, Error> {
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
         let base_dir = match &self.base_dir {
             Some(base_dir) => base_dir.canonicalize()?,
             None => return Err(Error::from("FileBlob unexpectedly closed")),
@@ -424,7 +426,7 @@ impl Blob for FileBlob {
         Ok(ret)
     }
 
-    fn close(&mut self) -> Result<bool, Error> {
+    async fn close(&mut self) -> Result<bool, Error> {
         if let Some(base_dir) = self.base_dir.as_ref() {
             let lockfile_path = Self::lockfile_path(&base_dir);
             fs::remove_file(lockfile_path)?;
@@ -464,13 +466,14 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn file_blob() -> Result<(), Error> {
+    #[tokio::test]
+    async fn file_blob() -> Result<(), Error> {
         let temp_dir = tempfile::tempdir()?;
         blob_impl_test(move |t| {
             let instance_dir = temp_dir.path().join(t.path);
             FileBlob::new(instance_dir, (t.reentrance_id, "file_blob_test").into())
         })
+        .await
     }
 
     #[test]

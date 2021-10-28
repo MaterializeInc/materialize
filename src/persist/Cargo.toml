@@ -22,6 +22,7 @@ harness = false
 [dependencies]
 abomonation = "0.7"
 abomonation_derive = "0.5"
+async-trait = "0.1"
 aws-util = { path = "../aws-util" }
 crossbeam-channel = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }

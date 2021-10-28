@@ -2985,6 +2985,7 @@ version = "0.0.0"
 dependencies = [
  "abomonation",
  "abomonation_derive",
+ "async-trait",
  "aws-util",
  "criterion",
  "crossbeam-channel",

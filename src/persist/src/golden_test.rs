@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
 use ore::metrics::MetricsRegistry;
 use ore::test::init_logging;
 use serde::{Deserialize, Serialize};
@@ -132,8 +134,9 @@ fn golden() -> Result<(), Error> {
 }
 
 fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
+    let runtime = Arc::new(tokio::runtime::Runtime::new()?);
     let mut blob = MemBlob::new_no_reentrance("");
-    if let Err(err) = Blobs::deserialize_to(blob_json, &mut blob) {
+    if let Err(err) = runtime.block_on(Blobs::deserialize_to(blob_json, &mut blob)) {
         log::error!("error deserializing golden: {}", err);
     }
     let mut persist = runtime::start(
@@ -141,7 +144,7 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
         ErrorLog,
         blob,
         &MetricsRegistry::new(),
-        None,
+        Some(runtime),
     )?;
     let state = PersistState::slurp_from(&persist)?;
     persist.stop()?;
@@ -149,8 +152,10 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
 }
 
 fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
+    let runtime = Arc::new(tokio::runtime::Runtime::new()?);
     let reg = MemRegistry::new();
     let runtime_reg = reg.clone();
+    let runtime_closure = Arc::clone(&runtime);
     let mut persist = Direct::new(move |unreliable| {
         let blob = runtime_reg.blob_no_reentrance()?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
@@ -159,7 +164,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
             ErrorLog,
             blob,
             &MetricsRegistry::new(),
-            None,
+            Some(Arc::clone(&runtime_closure)),
         )
     })?;
     for req in reqs.iter() {
@@ -170,7 +175,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
 
     let mut blob = reg.blob_no_reentrance()?;
     let raw_blobs = Blobs::serialize_from(&blob)?;
-    blob.close()?;
+    runtime.block_on(blob.close())?;
     Ok((persist_state, raw_blobs))
 }
 
@@ -180,11 +185,11 @@ struct Blobs {
 }
 
 impl Blobs {
-    fn deserialize_to<B: Blob>(blob_json: &str, blob: &mut B) -> Result<(), Error> {
+    async fn deserialize_to<B: Blob>(blob_json: &str, blob: &mut B) -> Result<(), Error> {
         let blobs: Blobs =
             serde_json::from_str(blob_json).map_err(|err| Error::from(err.to_string()))?;
         for (key, val) in blobs.blobs.iter() {
-            blob.set(&key, val.to_owned(), false)?;
+            blob.set(&key, val.to_owned(), false).await?;
         }
         Ok(())
     }

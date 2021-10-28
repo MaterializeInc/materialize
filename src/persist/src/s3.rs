@@ -11,7 +11,9 @@
 
 use std::fmt;
 
+use async_trait::async_trait;
 use aws_util::aws::ConnectInfo;
+use futures_executor::block_on;
 use rusoto_core::{ByteStream, Region, RusotoError};
 use rusoto_s3::{
     DeleteObjectRequest, GetObjectError, GetObjectRequest, ListObjectsV2Request, PutObjectRequest,
@@ -161,64 +163,7 @@ impl Config {
 //   this in s3. (The best I can imagine is the "Legal Hold" feature and
 //   enforcing that the bucket has versioning turned off.)
 // - Resolve what to do with LOCK, this impl is race-y.
-// - Everything on the s3 client is async, but the persist runtime is not. Make
-//   the Log and Blob traits async and figure out how to deal with the fallout.
-#[derive(Debug)]
 pub struct S3Blob {
-    blob_async: S3BlobAsync,
-}
-
-impl S3Blob {
-    /// Returns a new [S3Blob] which stores objects under the given bucket and
-    /// prefix.
-    ///
-    /// All calls to methods on [S3Blob] must be from a thread with a tokio
-    /// runtime guard.
-    //
-    // TODO: Figure out how to make this tokio runtime guard stuff more
-    // explicit.
-    pub fn new(config: Config, lock_info: LockInfo) -> Result<Self, Error> {
-        let blob_async = futures_executor::block_on(S3BlobAsync::new(config, lock_info))?;
-        let blob = S3Blob { blob_async };
-        Ok(blob)
-    }
-
-    /// Override the maximum number of keys we get information about per list
-    /// objects request to `max_keys`
-    #[cfg(test)]
-    fn set_max_keys(&mut self, max_keys: i64) {
-        self.blob_async.set_max_keys(max_keys)
-    }
-}
-
-impl Blob for S3Blob {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
-        // TODO: Make Blob async. See the productionize comment on [S3Blob].
-        futures_executor::block_on(self.blob_async.get(key))
-    }
-
-    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
-        // TODO: Make Blob async. See the productionize comment on [S3Blob].
-        futures_executor::block_on(self.blob_async.set(key, value, allow_overwrite))
-    }
-
-    fn delete(&mut self, key: &str) -> Result<(), Error> {
-        // TODO: Make Blob async. See the productionize comment on [S3Blob].
-        futures_executor::block_on(self.blob_async.delete(key))
-    }
-
-    fn list_keys(&self) -> Result<Vec<String>, Error> {
-        // TODO: Make Blob async. See the productionize comment on [S3Blob].
-        futures_executor::block_on(self.blob_async.list_keys())
-    }
-
-    fn close(&mut self) -> Result<bool, Error> {
-        // TODO: Make Blob async. See the productionize comment on [S3Blob].
-        futures_executor::block_on(self.blob_async.close())
-    }
-}
-
-struct S3BlobAsync {
     client: Option<S3Client>,
     bucket: String,
     prefix: String,
@@ -228,9 +173,9 @@ struct S3BlobAsync {
     max_keys: i64,
 }
 
-impl fmt::Debug for S3BlobAsync {
+impl fmt::Debug for S3Blob {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("S3BlobAsync")
+        f.debug_struct("S3Blob")
             .field("client", &"...")
             .field("bucket", &self.bucket)
             .field("prefix", &self.prefix)
@@ -238,18 +183,28 @@ impl fmt::Debug for S3BlobAsync {
     }
 }
 
-impl S3BlobAsync {
+impl S3Blob {
     const LOCKFILE_KEY: &'static str = "LOCK";
 
-    async fn new(config: Config, lock_info: LockInfo) -> Result<Self, Error> {
-        let blob = S3BlobAsync {
-            client: Some(config.client),
-            bucket: config.bucket,
-            prefix: config.prefix,
-            max_keys: 1_000,
-        };
-        let _ = blob.lock(lock_info).await?;
-        Ok(blob)
+    /// Returns a new [S3Blob] which stores objects under the given bucket and
+    /// prefix.
+    ///
+    /// All calls to methods on [S3Blob] must be from a thread with a tokio
+    /// runtime guard.
+    //
+    // TODO: Figure out how to make this tokio runtime guard stuff more
+    // explicit.
+    pub fn new(config: Config, lock_info: LockInfo) -> Result<Self, Error> {
+        block_on(async {
+            let mut blob = S3Blob {
+                client: Some(config.client),
+                bucket: config.bucket,
+                prefix: config.prefix,
+                max_keys: 1_000,
+            };
+            let _ = blob.lock(lock_info).await?;
+            Ok(blob)
+        })
     }
 
     fn get_path(&self, key: &str) -> String {
@@ -261,7 +216,7 @@ impl S3BlobAsync {
         self.max_keys = max_keys;
     }
 
-    async fn lock(&self, new_lock: LockInfo) -> Result<(), Error> {
+    async fn lock(&mut self, new_lock: LockInfo) -> Result<(), Error> {
         let lockfile_path = self.get_path(Self::LOCKFILE_KEY);
         // TODO: This is race-y. See the productionize comment on [S3Blob].
         if let Some(existing) = self.get(Self::LOCKFILE_KEY).await? {
@@ -272,6 +227,15 @@ impl S3BlobAsync {
         Ok(())
     }
 
+    fn ensure_open(&self) -> Result<&S3Client, Error> {
+        self.client
+            .as_ref()
+            .ok_or_else(|| Error::from("S3Blob unexpectedly closed"))
+    }
+}
+
+#[async_trait]
+impl Blob for S3Blob {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         let client = self.ensure_open()?;
         let path = self.get_path(key);
@@ -298,7 +262,7 @@ impl S3BlobAsync {
         Ok(Some(val))
     }
 
-    async fn set(&self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
         let client = self.ensure_open()?;
         let path = self.get_path(key);
 
@@ -377,7 +341,7 @@ impl S3BlobAsync {
         Ok(ret)
     }
 
-    async fn delete(&self, key: &str) -> Result<(), Error> {
+    async fn delete(&mut self, key: &str) -> Result<(), Error> {
         let client = self.ensure_open()?;
         let path = self.get_path(key);
         client
@@ -394,25 +358,17 @@ impl S3BlobAsync {
     async fn close(&mut self) -> Result<bool, Error> {
         Ok(self.client.take().is_some())
     }
-
-    fn ensure_open(&self) -> Result<&S3Client, Error> {
-        self.client
-            .as_ref()
-            .ok_or_else(|| Error::from("S3Blob unexpectedly closed"))
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use tokio::runtime::Runtime;
-
     use crate::error::Error;
     use crate::storage::tests::blob_impl_test;
 
     use super::*;
 
-    #[test]
-    fn s3_blob() -> Result<(), Error> {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn s3_blob() -> Result<(), Error> {
         ore::test::init_logging();
         let config = match Config::new_for_test()? {
             Some(client) => client,
@@ -425,8 +381,6 @@ mod tests {
             }
         };
 
-        let rt = Runtime::new().unwrap();
-        let guard = rt.enter();
         blob_impl_test(move |t| {
             let lock_info = (t.reentrance_id, "s3_blob_test").into();
             let config = Config {
@@ -437,8 +391,8 @@ mod tests {
             let mut blob = S3Blob::new(config, lock_info)?;
             blob.set_max_keys(2);
             Ok(blob)
-        })?;
-        drop(guard);
+        })
+        .await?;
         Ok(())
     }
 }

@@ -15,6 +15,7 @@ use std::thread;
 use std::time::Instant;
 
 use abomonation::abomonated::Abomonated;
+use futures_executor::block_on;
 use ore::cast::CastFrom;
 use persist_types::Codec;
 
@@ -81,15 +82,13 @@ impl<B: Blob> BlobCache<B> {
     /// This method is idempotent. Returns true if the blob had not
     /// previously been closed.
     pub fn close(&mut self) -> Result<bool, Error> {
-        self.blob.lock()?.close()
+        block_on(self.blob.lock()?.close())
     }
 
     /// Synchronously fetches the batch for the given key.
     fn fetch_unsealed_batch_sync(&self, key: &str) -> Result<Arc<BlobUnsealedBatch>, Error> {
-        let bytes =
-            self.blob.lock()?.get(key)?.ok_or_else(|| {
-                Error::from(format!("no blob for unsealed batch at key: {}", key))
-            })?;
+        let bytes = block_on(self.blob.lock()?.get(key))?
+            .ok_or_else(|| Error::from(format!("no blob for unsealed batch at key: {}", key)))?;
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
@@ -162,9 +161,7 @@ impl<B: Blob> BlobCache<B> {
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
-        self.blob
-            .lock()?
-            .set(&key, val, false)
+        block_on(self.blob.lock()?.set(&key, val, false))
             .map_err(|err| self.metric_set_error(err))?;
         self.metrics
             .unsealed
@@ -181,7 +178,7 @@ impl<B: Blob> BlobCache<B> {
     pub fn delete_unsealed_batch(&mut self, batch: &UnsealedBatchMeta) -> Result<(), Error> {
         let delete_start = Instant::now();
         self.unsealed.lock()?.remove(&batch.key);
-        self.blob.lock()?.delete(&batch.key)?;
+        block_on(self.blob.lock()?.delete(&batch.key))?;
         self.metrics
             .unsealed
             .blob_delete_ms
@@ -197,10 +194,7 @@ impl<B: Blob> BlobCache<B> {
 
     /// Synchronously fetches the batch for the given key.
     fn fetch_trace_batch_sync(&self, key: &str) -> Result<Arc<BlobTraceBatch>, Error> {
-        let bytes = self
-            .blob
-            .lock()?
-            .get(key)?
+        let bytes = block_on(self.blob.lock()?.get(key))?
             .ok_or_else(|| Error::from(format!("no blob for trace batch at key: {}", key)))?;
         self.metrics
             .blob_read_cache_fetch_bytes
@@ -266,9 +260,7 @@ impl<B: Blob> BlobCache<B> {
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
-        self.blob
-            .lock()?
-            .set(&key, val, false)
+        block_on(self.blob.lock()?.set(&key, val, false))
             .map_err(|err| self.metric_set_error(err))?;
         self.metrics
             .trace
@@ -285,7 +277,7 @@ impl<B: Blob> BlobCache<B> {
     pub fn delete_trace_batch(&mut self, batch: &TraceBatchMeta) -> Result<(), Error> {
         let delete_start = Instant::now();
         self.trace.lock()?.remove(&batch.key);
-        self.blob.lock()?.delete(&batch.key)?;
+        block_on(self.blob.lock()?.delete(&batch.key))?;
         self.metrics
             .trace
             .blob_delete_ms
@@ -302,7 +294,7 @@ impl<B: Blob> BlobCache<B> {
     /// Fetches metadata about what batches are in [Blob] storage.
     pub fn get_meta(&self) -> Result<Option<BlobMeta>, Error> {
         let blob = self.blob.lock()?;
-        let bytes = match blob.get(Self::META_KEY)? {
+        let bytes = match block_on(blob.get(Self::META_KEY))? {
             Some(bytes) => bytes,
             None => return Ok(None),
         };
@@ -323,9 +315,7 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.meta_size_bytes.set(val_len);
 
         let write_start = Instant::now();
-        self.blob
-            .lock()?
-            .set(Self::META_KEY, val, true)
+        block_on(self.blob.lock()?.set(Self::META_KEY, val, true))
             .map_err(|err| self.metric_set_error(err))?;
         self.metrics
             .meta

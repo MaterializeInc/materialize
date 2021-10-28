@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use async_trait::async_trait;
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use tokio::runtime::Runtime;
@@ -295,7 +296,8 @@ impl MemBlob {
 
 impl Drop for MemBlob {
     fn drop(&mut self) {
-        let did_work = self.close().expect("closing MemBlob cannot fail");
+        let did_work =
+            futures_executor::block_on(self.close()).expect("closing MemBlob cannot fail");
         // MemLog should have been closed gracefully; this drop is only here
         // as a failsafe. If it actually did anything, that's surprising.
         if did_work {
@@ -304,24 +306,25 @@ impl Drop for MemBlob {
     }
 }
 
+#[async_trait]
 impl Blob for MemBlob {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         self.core_lock()?.get(key)
     }
 
-    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
         self.core_lock()?.set(key, value, allow_overwrite)
     }
 
-    fn delete(&mut self, key: &str) -> Result<(), Error> {
+    async fn delete(&mut self, key: &str) -> Result<(), Error> {
         self.core_lock()?.delete(key)
     }
 
-    fn list_keys(&self) -> Result<Vec<String>, Error> {
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
         self.core_lock()?.list_keys()
     }
 
-    fn close(&mut self) -> Result<bool, Error> {
+    async fn close(&mut self) -> Result<bool, Error> {
         match self.core.take() {
             None => Ok(false), // Someone already called close.
             Some(core) => core.lock()?.close(),
@@ -482,10 +485,11 @@ mod tests {
         log_impl_test(move |t| registry.log(t.path, (t.reentrance_id, "log_impl_test").into()))
     }
 
-    #[test]
-    fn mem_blob() -> Result<(), Error> {
+    #[tokio::test]
+    async fn mem_blob() -> Result<(), Error> {
         let mut registry = MemMultiRegistry::new();
         blob_impl_test(move |t| registry.blob(t.path, (t.reentrance_id, "blob_impl_test").into()))
+            .await
     }
 
     // This test covers a regression that was affecting the nemesis tests where
@@ -495,8 +499,8 @@ mod tests {
     //
     // This is really only a problem for tests, but it's a common pattern in
     // tests to model restarts, so it's worth getting right.
-    #[test]
-    fn regression_delayed_close() -> Result<(), Error> {
+    #[tokio::test]
+    async fn regression_delayed_close() -> Result<(), Error> {
         let registry = MemRegistry::new();
 
         // Put a blob in an Arc<Mutex<..>> and copy it (like we do to in
@@ -506,30 +510,33 @@ mod tests {
 
         // Close one of them because the runtime is shutting down, but keep the
         // other around (to simulate an async fetch in maintenance).
-        assert_eq!(blob_gen1_1.lock()?.close()?, true);
+        assert_eq!(blob_gen1_1.lock()?.close().await?, true);
         drop(blob_gen1_1);
 
         // Now "restart" everything and reuse this blob like nemesis does.
         let blob_gen2 = Arc::new(Mutex::new(registry.blob_no_reentrance()?));
 
         // Write some data with the new handle.
-        blob_gen2.lock()?.set("a", "1".into(), true)?;
+        blob_gen2.lock()?.set("a", "1".into(), true).await?;
 
         // The old handle should not be usable anymore. Writes and reads using
         // it should fail and the value set by blob_gen2 should not be affected.
         assert_eq!(
-            blob_gen1_2.lock()?.get("a"),
+            blob_gen1_2.lock()?.get("a").await,
             Err(Error::from("MemBlob has been closed"))
         );
         assert_eq!(
-            blob_gen1_2.lock()?.set("a", "2".as_bytes().to_vec(), true),
+            blob_gen1_2
+                .lock()?
+                .set("a", "2".as_bytes().to_vec(), true)
+                .await,
             Err(Error::from("MemBlob has been closed"))
         );
         assert_eq!(
-            blob_gen1_2.lock()?.delete("a"),
+            blob_gen1_2.lock()?.delete("a").await,
             Err(Error::from("MemBlob has been closed"))
         );
-        assert_eq!(blob_gen2.lock()?.get("a")?, Some("1".into()));
+        assert_eq!(blob_gen2.lock()?.get("a").await?, Some("1".into()));
 
         // The async fetch finishes. This causes the Arc to run the MemBlob Drop
         // impl because it's the last copy of the original Arc.
@@ -540,6 +547,7 @@ mod tests {
         blob_gen2
             .lock()?
             .set("b", "3".into(), true)
+            .await
             .expect("blob_take2 should still be open");
 
         Ok(())
