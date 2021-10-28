@@ -21,12 +21,12 @@ skip = [
     { name = "strsim", version = "0.8.0" },
 ]
 
-skip-tree = [
-    # tiberius, the SQL Server driver, depends on an outdated version of a bunch of
-    # random-related crates. However, they are only compiled under Windows, so
-    # should not be increasing the compilation times on Linux
-    { name = "winauth", version = "0.0.4" },
-]
+# The `md5` and `sha1` crates are not part of the RustCrypto project. Use
+# `md-5` and `sha-1` instead, despite their somewhat suspicious names.
+[[bans.deny]]
+name = "md5"
+[[bans.deny]]
+name = "sha1"
 
 # Strum has suspect code quality and includes many unneeded features. Use
 # more targeted enum macro crates, e.g. `enum-kinds`.
@@ -86,4 +86,6 @@ allow-git = [
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",
+    # Waiting for a new release that includes the latest dependency bumps.
+    "https://github.com/tikv/fail-rs.git",
 ]

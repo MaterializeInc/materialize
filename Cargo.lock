@@ -40,7 +40,7 @@ version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43bb833f0bf979d8475d38fbf09ed3b8a55e1885fe93ad3f93239fc6a4f17b98"
 dependencies = [
- "getrandom 0.2.1",
+ "getrandom",
  "once_cell",
  "version_check",
 ]
@@ -358,7 +358,7 @@ dependencies = [
  "postgres-types",
  "protobuf",
  "protoc",
- "rand 0.8.4",
+ "rand",
  "rand_distr",
  "repr",
  "structopt",
@@ -506,7 +506,7 @@ dependencies = [
  "log",
  "md-5",
  "ore",
- "rand 0.8.4",
+ "rand",
  "structopt",
  "test-util",
  "tokio",
@@ -656,7 +656,7 @@ dependencies = [
  "postgres-types",
  "postgres-util",
  "prometheus",
- "rand 0.8.4",
+ "rand",
  "rdkafka",
  "regex",
  "repr",
@@ -952,7 +952,7 @@ dependencies = [
  "postgres-util",
  "prometheus",
  "pubnub-hyper",
- "rand 0.8.4",
+ "rand",
  "rdkafka",
  "regex",
  "repr",
@@ -1371,12 +1371,11 @@ dependencies = [
 [[package]]
 name = "fail"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3be3c61c59fdc91f5dbc3ea31ee8623122ce80057058be560654c5d410d181a6"
+source = "git+https://github.com/tikv/fail-rs#6cd91d5597be7c5518b9d1c7067320cbe4e30cfa"
 dependencies = [
  "lazy_static",
  "log",
- "rand 0.7.3",
+ "rand",
 ]
 
 [[package]]
@@ -1619,24 +1618,13 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.1.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fc3cb4d91f53b50155bdcfd23f6a4c39ae1969c2ae85982b135750cccaf5fce"
-dependencies = [
- "cfg-if",
- "libc",
- "wasi 0.9.0+wasi-snapshot-preview1",
-]
-
-[[package]]
-name = "getrandom"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4060f4657be78b8e766215b02b18a2e862d83745545de804638e2b545e81aee6"
 dependencies = [
  "cfg-if",
  "libc",
- "wasi 0.10.0+wasi-snapshot-preview1",
+ "wasi",
 ]
 
 [[package]]
@@ -2108,7 +2096,7 @@ dependencies = [
  "futures",
  "mz-avro",
  "ore",
- "rand 0.8.4",
+ "rand",
  "rdkafka",
  "serde",
  "serde_json",
@@ -2311,7 +2299,7 @@ dependencies = [
  "predicates",
  "prof",
  "prometheus",
- "rand 0.8.4",
+ "rand",
  "rdkafka-sys",
  "repr",
  "reqwest",
@@ -2370,18 +2358,6 @@ dependencies = [
  "digest",
  "opaque-debug",
 ]
-
-[[package]]
-name = "md5"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e6bcd6433cff03a4bfc3d9834d504467db1f1cf6d0ea765d37d330249ed629d"
-
-[[package]]
-name = "md5"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "memchr"
@@ -2492,7 +2468,7 @@ dependencies = [
  "lazy_static",
  "log",
  "md-5",
- "rand 0.8.4",
+ "rand",
  "regex",
  "serde",
  "serde_json",
@@ -2948,7 +2924,7 @@ dependencies = [
  "futures-channel",
  "log",
  "ore",
- "rand 0.8.4",
+ "rand",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kinesis",
@@ -2971,7 +2947,7 @@ dependencies = [
  "hex",
  "log",
  "postgres-types",
- "rand 0.8.4",
+ "rand",
  "rand_distr",
  "structopt",
  "test-util",
@@ -2996,7 +2972,7 @@ dependencies = [
  "log",
  "ore",
  "persist-types",
- "rand 0.8.4",
+ "rand",
  "rusoto_core",
  "rusoto_s3",
  "serde",
@@ -3097,7 +3073,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d5285893bb5eb82e6aaf5d59ee909a06a16737a8970984dd7746ba9283498d6"
 dependencies = [
  "phf_shared",
- "rand 0.8.4",
+ "rand",
 ]
 
 [[package]]
@@ -3223,7 +3199,7 @@ dependencies = [
  "hmac",
  "md-5",
  "memchr",
- "rand 0.8.4",
+ "rand",
  "sha2",
  "stringprep",
 ]
@@ -3432,8 +3408,8 @@ dependencies = [
  "lazy_static",
  "num-traits",
  "quick-error",
- "rand 0.8.4",
- "rand_chacha 0.3.0",
+ "rand",
+ "rand_chacha",
  "rand_xorshift",
  "regex-syntax",
 ]
@@ -3561,37 +3537,14 @@ checksum = "941ba9d78d8e2f7ce474c015eea4d9c6d25b6a3327f9832ee29a4de27f91bbb8"
 
 [[package]]
 name = "rand"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a6b1679d49b24bbfe0c803429aa1874472f50d9b363131f0e89fc356b544d03"
-dependencies = [
- "getrandom 0.1.16",
- "libc",
- "rand_chacha 0.2.2",
- "rand_core 0.5.1",
- "rand_hc 0.2.0",
-]
-
-[[package]]
-name = "rand"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e7573632e6454cf6b99d7aac4ccca54be06da05aca2ef7423d22d27d4d4bcd8"
 dependencies = [
  "libc",
- "rand_chacha 0.3.0",
- "rand_core 0.6.2",
- "rand_hc 0.3.0",
-]
-
-[[package]]
-name = "rand_chacha"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4c8ed856279c9737206bf725bf36935d8666ead7aa69b52be55af369d193402"
-dependencies = [
- "ppv-lite86",
- "rand_core 0.5.1",
+ "rand_chacha",
+ "rand_core",
+ "rand_hc",
 ]
 
 [[package]]
@@ -3601,16 +3554,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e12735cf05c9e10bf21534da50a147b924d555dc7a547c42e6bb2d5b6017ae0d"
 dependencies = [
  "ppv-lite86",
- "rand_core 0.6.2",
-]
-
-[[package]]
-name = "rand_core"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90bde5296fc891b0cef12a6d03ddccc162ce7b2aff54160af9338f8d40df6d19"
-dependencies = [
- "getrandom 0.1.16",
+ "rand_core",
 ]
 
 [[package]]
@@ -3619,7 +3563,7 @@ version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34cf66eb183df1c5876e2dcf6b13d57340741e8dc255b48e40a26de954d06ae7"
 dependencies = [
- "getrandom 0.2.1",
+ "getrandom",
 ]
 
 [[package]]
@@ -3629,16 +3573,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "964d548f8e7d12e102ef183a0de7e98180c9f8729f555897a857b96e48122d2f"
 dependencies = [
  "num-traits",
- "rand 0.8.4",
-]
-
-[[package]]
-name = "rand_hc"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca3129af7b92a17112d59ad498c6f81eaf463253766b90396d39ea7a39d6613c"
-dependencies = [
- "rand_core 0.5.1",
+ "rand",
 ]
 
 [[package]]
@@ -3647,7 +3582,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3190ef7066a446f2e7f42e239d161e905420ccab01eb967c9eb27d21b2322a73"
 dependencies = [
- "rand_core 0.6.2",
+ "rand_core",
 ]
 
 [[package]]
@@ -3656,7 +3591,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d25bf25ec5ae4a3f1b92f929810509a2f53d7dca2f50b794ff57e3face536c8f"
 dependencies = [
- "rand_core 0.6.2",
+ "rand_core",
 ]
 
 [[package]]
@@ -3730,7 +3665,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "528532f3d801c87aec9def2add9ca802fe569e44a544afe633765267840abe64"
 dependencies = [
- "getrandom 0.2.1",
+ "getrandom",
  "redox_syscall",
 ]
 
@@ -3791,7 +3726,7 @@ dependencies = [
  "ore",
  "persist-types",
  "proptest",
- "rand 0.8.4",
+ "rand",
  "regex",
  "ryu",
  "serde",
@@ -4587,7 +4522,7 @@ checksum = "dac1c663cfc93810f88aed9b8941d48cabf856a1b111c29a40439018d870eb22"
 dependencies = [
  "cfg-if",
  "libc",
- "rand 0.8.4",
+ "rand",
  "redox_syscall",
  "remove_dir_all",
  "winapi",
@@ -4655,7 +4590,7 @@ dependencies = [
  "kafka-util",
  "log",
  "ore",
- "rand 0.8.4",
+ "rand",
  "rdkafka",
  "tokio",
  "tokio-postgres",
@@ -4690,7 +4625,7 @@ dependencies = [
  "predicates",
  "protobuf",
  "protoc",
- "rand 0.8.4",
+ "rand",
  "rdkafka",
  "regex",
  "repr",
@@ -4758,9 +4693,9 @@ dependencies = [
 
 [[package]]
 name = "tiberius"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa12e58f1ede91b897b3e6d399f09dd5ee1f6d44d8162b61e1b53032b9976fb6"
+checksum = "83f17d6e77966667eb6ddd40a9596af9de9169d88b813cb3c902a0e4b2dc3ace"
 dependencies = [
  "async-native-tls",
  "async-stream",
@@ -4782,7 +4717,6 @@ dependencies = [
  "thiserror",
  "tracing",
  "uuid",
- "winauth",
 ]
 
 [[package]]
@@ -5172,8 +5106,7 @@ version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
 dependencies = [
- "getrandom 0.2.1",
- "md5 0.7.0",
+ "getrandom",
  "serde",
 ]
 
@@ -5238,12 +5171,6 @@ dependencies = [
  "log",
  "try-lock",
 ]
-
-[[package]]
-name = "wasi"
-version = "0.9.0+wasi-snapshot-preview1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cccddf32554fecc6acb585f82a32a72e28b48f8c4c1883ddfeeeaa96f7d8e519"
 
 [[package]]
 name = "wasi"
@@ -5367,19 +5294,6 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
-
-[[package]]
-name = "winauth"
-version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f820cd208ce9c6b050812dc2d724ba98c6c1e9db5ce9b3f58d925ae5723a5e6"
-dependencies = [
- "bitflags",
- "byteorder",
- "md5 0.6.1",
- "rand 0.7.3",
- "winapi",
-]
 
 [[package]]
 name = "winreg"

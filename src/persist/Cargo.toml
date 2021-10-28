@@ -26,7 +26,7 @@ async-trait = "0.1"
 aws-util = { path = "../aws-util" }
 crossbeam-channel = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-fail = { version = "0.4", features = ["failpoints"] }
+fail = { git = "https://github.com/tikv/fail-rs", features = ["failpoints"] }
 futures-util = "0.3.16"
 futures-executor = "0.3.16"
 log = "0.4.13"
