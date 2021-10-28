@@ -183,10 +183,12 @@ impl JemallocProfCtl {
         Ok(f.into_file())
     }
 
-    pub fn dump_stats(&mut self) -> anyhow::Result<String> {
+    pub fn dump_stats(&mut self, json_format: bool) -> anyhow::Result<String> {
         // Try to avoid allocations within `stats_print`
-        let mut buf = Vec::with_capacity(1 << 20);
-        tikv_jemalloc_ctl::stats_print::stats_print(&mut buf, Default::default())?;
+        let mut buf = Vec::with_capacity(1 << 22);
+        let mut options = tikv_jemalloc_ctl::stats_print::Options::default();
+        options.json_format = json_format;
+        tikv_jemalloc_ctl::stats_print::stats_print(&mut buf, options)?;
         Ok(String::from_utf8(buf)?)
     }
 
