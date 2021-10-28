@@ -19,7 +19,7 @@ rand = "0.8.4"
 rusoto_core = "0.47.0"
 rusoto_credential = "0.47.0"
 rusoto_kinesis = "0.47.0"
-structopt = "0.3.23"
+structopt = "0.3.25"
 test-util = { path = "../../test-util" }
 tokio = "1.12.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
