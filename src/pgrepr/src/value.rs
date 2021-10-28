@@ -476,7 +476,24 @@ impl Value {
     pub fn decode_text(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
         let s = str::from_utf8(raw)?;
         Ok(match ty {
-            Type::Array(_) => return Err("input of array types is not implemented".into()),
+            Type::Array(elem_type) => {
+                let elements = strconv::parse_array(
+                    s,
+                    || None,
+                    |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
+                )?;
+                // At the moment, we only support one dimensional arrays. Note
+                // that empty arrays are represented as zero dimensional arrays,
+                // per PostgreSQL.
+                let mut dims = vec![];
+                if !elements.is_empty() {
+                    dims.push(ArrayDimension {
+                        lower_bound: 1,
+                        length: elements.len(),
+                    })
+                }
+                Value::Array { dims, elements }
+            }
             Type::Int2Vector { .. } => {
                 return Err("input of Int2Vector types is not implemented".into())
             }
