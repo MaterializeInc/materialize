@@ -11,6 +11,7 @@
 
 use std::fmt;
 
+use async_trait::async_trait;
 use aws_util::aws::ConnectInfo;
 use rusoto_core::{ByteStream, Region, RusotoError};
 use rusoto_s3::{
@@ -191,28 +192,29 @@ impl S3Blob {
     }
 }
 
+#[async_trait]
 impl Blob for S3Blob {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         // TODO: Make Blob async. See the productionize comment on [S3Blob].
         futures_executor::block_on(self.blob_async.get(key))
     }
 
-    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
         // TODO: Make Blob async. See the productionize comment on [S3Blob].
         futures_executor::block_on(self.blob_async.set(key, value, allow_overwrite))
     }
 
-    fn delete(&mut self, key: &str) -> Result<(), Error> {
+    async fn delete(&mut self, key: &str) -> Result<(), Error> {
         // TODO: Make Blob async. See the productionize comment on [S3Blob].
         futures_executor::block_on(self.blob_async.delete(key))
     }
 
-    fn list_keys(&self) -> Result<Vec<String>, Error> {
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
         // TODO: Make Blob async. See the productionize comment on [S3Blob].
         futures_executor::block_on(self.blob_async.list_keys())
     }
 
-    fn close(&mut self) -> Result<bool, Error> {
+    async fn close(&mut self) -> Result<bool, Error> {
         // TODO: Make Blob async. See the productionize comment on [S3Blob].
         futures_executor::block_on(self.blob_async.close())
     }
@@ -411,8 +413,8 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn s3_blob() -> Result<(), Error> {
+    #[tokio::test]
+    async fn s3_blob() -> Result<(), Error> {
         ore::test::init_logging();
         let config = match Config::new_for_test()? {
             Some(client) => client,
@@ -437,7 +439,8 @@ mod tests {
             let mut blob = S3Blob::new(config, lock_info)?;
             blob.set_max_keys(2);
             Ok(blob)
-        })?;
+        })
+        .await?;
         drop(guard);
         Ok(())
     }

@@ -15,6 +15,7 @@ use std::ops::Range;
 use std::str::FromStr;
 
 use abomonation_derive::Abomonation;
+use async_trait::async_trait;
 
 use crate::error::Error;
 
@@ -67,30 +68,31 @@ pub trait Log {
 ///
 /// - Invariant: Implementations are responsible for ensuring that they are
 ///   exclusive writers to this location.
+#[async_trait]
 pub trait Blob: Send + 'static {
     /// Returns a reference to the value corresponding to the key.
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error>;
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error>;
 
     /// Inserts a key-value pair into the map.
     ///
     /// When allow_overwrite is true, writes must be atomic and either succeed
     /// or leave the previous value intact.
-    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error>;
+    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error>;
 
     /// Remove a key from the map.
     ///
     /// Succeeds if the key does not exist.
-    fn delete(&mut self, key: &str) -> Result<(), Error>;
+    async fn delete(&mut self, key: &str) -> Result<(), Error>;
 
     /// List all of the keys in the map.
-    fn list_keys(&self) -> Result<Vec<String>, Error>;
+    async fn list_keys(&self) -> Result<Vec<String>, Error>;
 
     /// Synchronously closes the blob, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
     /// Implementations must be idempotent. Returns true if the blob had not
     /// previously been closed.
-    fn close(&mut self) -> Result<bool, Error>;
+    async fn close(&mut self) -> Result<bool, Error>;
 }
 
 /// The partially structured information stored in an exclusive-writer lock.
@@ -337,7 +339,7 @@ pub mod tests {
         ret
     }
 
-    pub fn blob_impl_test<B: Blob, F: FnMut(PathAndReentranceId<'_>) -> Result<B, Error>>(
+    pub async fn blob_impl_test<B: Blob, F: FnMut(PathAndReentranceId<'_>) -> Result<B, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
         let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
@@ -370,77 +372,77 @@ pub mod tests {
         .is_err());
 
         // Empty key is empty.
-        assert_eq!(blob0.get("k0")?, None);
+        assert_eq!(blob0.get("k0").await?, None);
 
         // Blob might create one or more keys on startup (e.g. lock files)
-        let mut empty_keys: Vec<String> = blob0.list_keys()?;
+        let mut empty_keys: Vec<String> = blob0.list_keys().await?;
         empty_keys.sort();
 
         // List keys is idempotent
-        let mut blob_keys = blob0.list_keys()?;
+        let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
 
         // Set a key and get it back.
-        blob0.set("k0", values[0].clone(), false)?;
-        assert_eq!(blob0.get("k0")?, Some(values[0].clone()));
+        blob0.set("k0", values[0].clone(), false).await?;
+        assert_eq!(blob0.get("k0").await?, Some(values[0].clone()));
 
         // Blob contains the key we just inserted.
-        let mut blob_keys = blob0.list_keys()?;
+        let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&empty_keys, "k0"));
 
         // Can only overwrite a key without allow_overwrite.
-        assert!(blob0.set("k0", values[1].clone(), false).is_err());
-        assert_eq!(blob0.get("k0")?, Some(values[0].clone()));
-        blob0.set("k0", values[1].clone(), true)?;
-        assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
+        assert!(blob0.set("k0", values[1].clone(), false).await.is_err());
+        assert_eq!(blob0.get("k0").await?, Some(values[0].clone()));
+        blob0.set("k0", values[1].clone(), true).await?;
+        assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
 
         // Can delete a key.
-        blob0.delete("k0")?;
+        blob0.delete("k0").await?;
         // Can no longer get a deleted key.
-        assert_eq!(blob0.get("k0")?, None);
+        assert_eq!(blob0.get("k0").await?, None);
         // Double deleting a key succeeds.
-        assert_eq!(blob0.delete("k0"), Ok(()));
+        assert_eq!(blob0.delete("k0").await, Ok(()));
         // Deleting a key that does not exist succeeds.
-        assert_eq!(blob0.delete("nope"), Ok(()));
+        assert_eq!(blob0.delete("nope").await, Ok(()));
 
         // Empty blob contains no keys.
-        let mut blob_keys = blob0.list_keys()?;
+        let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
-        blob0.set("k0", values[1].clone(), false)?;
-        assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
+        blob0.set("k0", values[1].clone(), false).await?;
+        assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
 
         // Insert multiple keys back to back and validate that we can list
         // them all out.
         let mut expected_keys = empty_keys;
         for i in 1..=5 {
             let key = format!("k{}", i);
-            blob0.set(&key, values[0].clone(), false)?;
+            blob0.set(&key, values[0].clone(), false).await?;
             expected_keys.push(key);
         }
 
         // Blob contains the key we just inserted.
-        let mut blob_keys = blob0.list_keys()?;
+        let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&expected_keys, "k0"));
 
         // Cannot reuse a blob once it is closed.
-        assert_eq!(blob0.close(), Ok(true));
-        assert!(blob0.get("k0").is_err());
-        assert!(blob0.set("k1", values[0].clone(), true).is_err());
+        assert_eq!(blob0.close().await, Ok(true));
+        assert!(blob0.get("k0").await.is_err());
+        assert!(blob0.set("k1", values[0].clone(), true).await.is_err());
 
         // Close must be idempotent and must return false if it did no work.
-        assert_eq!(blob0.close(), Ok(false));
+        assert_eq!(blob0.close().await, Ok(false));
 
         // But we can reopen it and use it.
         let blob0 = new_fn(PathAndReentranceId {
             path: "path0",
             reentrance_id: "reentrance0",
         })?;
-        assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
+        assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
 
         Ok(())
     }

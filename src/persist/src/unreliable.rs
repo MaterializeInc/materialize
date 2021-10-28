@@ -12,6 +12,8 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+
 use crate::error::Error;
 use crate::storage::{Blob, Log, SeqNo};
 
@@ -141,34 +143,35 @@ impl<B: Blob> UnreliableBlob<B> {
     }
 }
 
-impl<B: Blob> Blob for UnreliableBlob<B> {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+#[async_trait]
+impl<B: Blob + Sync> Blob for UnreliableBlob<B> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         self.handle.check_unavailable("blob get")?;
-        self.blob.get(key)
+        self.blob.get(key).await
     }
 
-    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
         self.handle.check_unavailable("blob set")?;
-        self.blob.set(key, value, allow_overwrite)
+        self.blob.set(key, value, allow_overwrite).await
     }
 
-    fn list_keys(&self) -> Result<Vec<String>, Error> {
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
         self.handle.check_unavailable("blob list keys")?;
-        self.blob.list_keys()
+        self.blob.list_keys().await
     }
 
-    fn delete(&mut self, key: &str) -> Result<(), Error> {
+    async fn delete(&mut self, key: &str) -> Result<(), Error> {
         self.handle.check_unavailable("blob delete")?;
-        self.blob.delete(key)
+        self.blob.delete(key).await
     }
 
-    fn close(&mut self) -> Result<bool, Error> {
+    async fn close(&mut self) -> Result<bool, Error> {
         // TODO: This check_unavailable is a different order from the others
         // mostly for convenience in the nemesis tests. While we do want to
         // prevent a normal read/write from going though when the storage is
         // unavailable, it makes for a very uninteresting test if we can't clean
         // up LOCK files. OTOH this feels like a smell, revisit.
-        let did_work = self.blob.close()?;
+        let did_work = self.blob.close().await?;
         self.handle.check_unavailable("blob close")?;
         Ok(did_work)
     }
@@ -202,22 +205,22 @@ mod tests {
         assert!(log.truncate(SeqNo(2)).is_ok());
     }
 
-    #[test]
-    fn blob() {
+    #[tokio::test]
+    async fn blob() {
         let (mut blob, mut handle) = UnreliableBlob::new(MemBlob::new_no_reentrance("unreliable"));
 
         // Initially starts reliable.
-        assert!(blob.set("a", b"1".to_vec(), true).is_ok());
-        assert!(blob.get("a").is_ok());
+        assert!(blob.set("a", b"1".to_vec(), true).await.is_ok());
+        assert!(blob.get("a").await.is_ok());
 
         // Setting it to unavailable causes all operations to fail.
         handle.make_unavailable();
-        assert!(blob.set("a", b"2".to_vec(), true).is_err());
-        assert!(blob.get("a").is_err());
+        assert!(blob.set("a", b"2".to_vec(), true).await.is_err());
+        assert!(blob.get("a").await.is_err());
 
         // Can be set back to working.
         handle.make_available();
-        assert!(blob.set("a", b"3".to_vec(), true).is_ok());
-        assert!(blob.get("a").is_ok());
+        assert!(blob.set("a", b"3".to_vec(), true).await.is_ok());
+        assert!(blob.get("a").await.is_ok());
     }
 }
