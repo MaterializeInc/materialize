@@ -237,29 +237,44 @@ pub fn build_dataflow<A: Allocate>(
                 context.import_index(render_state, &mut tokens, scope, region, *idx_id, &idx.0);
             }
 
+            // We first determine indexes and sinks to export, then build the declared object, and
+            // finally export indexes and sinks. The reason for this is that we want to avoid
+            // cloning the dataflow plan for `build_object`, which can be expensive.
+
+            // Determine indexes to export
+            let indexes = dataflow
+                .index_exports
+                .iter()
+                .cloned()
+                .map(|(idx_id, idx, _typ)| (idx_id, dataflow.get_imports(&idx.on_id), idx))
+                .collect::<Vec<_>>();
+
+            // Determine sinks to export
+            let sinks = dataflow
+                .sink_exports
+                .iter()
+                .cloned()
+                .map(|(sink_id, sink)| (sink_id, dataflow.get_imports(&sink.from), sink))
+                .collect::<Vec<_>>();
+
             // Build declared objects.
-            for object in &dataflow.objects_to_build {
-                // We clone because we cannot deconstruct `object` for its members due
-                // to subsequent use of `dataflow.get_imports`.
-                // TODO: fix that and avoid the clones.
-                context.build_object(region, object.clone());
+            for object in dataflow.objects_to_build {
+                context.build_object(region, object);
             }
 
             // Export declared indexes.
-            for (idx_id, idx, _typ) in &dataflow.index_exports {
-                let imports = dataflow.get_imports(&idx.on_id);
-                context.export_index(render_state, &mut tokens, imports, *idx_id, idx);
+            for (idx_id, imports, idx) in indexes {
+                context.export_index(render_state, &mut tokens, imports, idx_id, &idx);
             }
 
             // Export declared sinks.
-            for (sink_id, sink) in &dataflow.sink_exports {
-                let imports = dataflow.get_imports(&sink.from);
+            for (sink_id, imports, sink) in sinks {
                 context.export_sink(
                     render_state,
                     &mut tokens,
                     imports,
-                    *sink_id,
-                    sink,
+                    sink_id,
+                    &sink,
                     sink_metrics,
                 );
             }
