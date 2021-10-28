@@ -37,7 +37,10 @@ use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SinkEnvelope, SourceConnector};
 use repr::{ColumnName, Diff, RelationDesc, Row, ScalarType, Timestamp};
 
-use crate::ast::{ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement};
+use crate::ast::{
+    ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement,
+    TransactionAccessMode,
+};
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 
 pub(crate) mod error;
@@ -85,7 +88,7 @@ pub enum Plan {
     ShowAllVariables,
     ShowVariable(ShowVariablePlan),
     SetVariable(SetVariablePlan),
-    StartTransaction,
+    StartTransaction(StartTransactionPlan),
     CommitTransaction,
     AbortTransaction,
     Peek(PeekPlan),
@@ -107,6 +110,11 @@ pub enum Plan {
     Prepare(PreparePlan),
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
+}
+
+#[derive(Debug)]
+pub struct StartTransactionPlan {
+    pub access: Option<TransactionAccessMode>,
 }
 
 #[derive(Debug)]

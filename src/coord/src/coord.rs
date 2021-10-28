@@ -1236,7 +1236,7 @@ impl Coordinator {
             } => {
                 let now = self.now_datetime();
                 let session = match implicit {
-                    None => session.start_transaction(now),
+                    None => session.start_transaction(now, None),
                     Some(stmts) => session.start_transaction_implicit(now, stmts),
                 };
                 let _ = tx.send(Response {
@@ -1790,10 +1790,10 @@ impl Coordinator {
             Plan::SetVariable(plan) => {
                 tx.send(self.sequence_set_variable(&mut session, plan), session);
             }
-            Plan::StartTransaction => {
+            Plan::StartTransaction(plan) => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
-                let session = session.start_transaction(self.now_datetime());
+                let session = session.start_transaction(self.now_datetime(), plan.access);
                 tx.send(
                     Ok(ExecuteResponse::StartedTransaction { duplicated }),
                     session,

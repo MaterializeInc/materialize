@@ -106,6 +106,8 @@ List new features before bug fixes.
 - Disallow `UPDATE` and `DELETE` operations on tables when boot in
   `--disable-user-indexes` mode.
 
+- Support the `READ ONLY` transaction mode.
+
 {{% version-header v0.9.10 %}}
 
 - Evaluate TopK operators on constant inputs at query compile time.
