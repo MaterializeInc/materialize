@@ -141,7 +141,6 @@ impl Transform for Fixpoint {
                 break;
             }
         }
-        let original = relation.clone();
         for transform in self.transforms.iter() {
             transform.transform(
                 relation,
@@ -152,9 +151,8 @@ impl Transform for Fixpoint {
             )?;
         }
         Err(TransformError::Internal(format!(
-            "fixpoint looped too many times {:#?} {}\n{}",
+            "fixpoint looped too many times {:#?}; transformed relation: {}",
             self,
-            original.pretty(),
             relation.pretty()
         )))
     }
