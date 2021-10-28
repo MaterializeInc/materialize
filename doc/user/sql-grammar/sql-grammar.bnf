@@ -440,4 +440,8 @@ type_timestamp ::=
   "'" date_str
     ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
   "'"
+update_stmt ::=
+  'UPDATE' table_name ('AS'? alias)?
+  'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
+  'WHERE' condition
 with_options ::= 'WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
