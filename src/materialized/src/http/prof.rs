@@ -177,6 +177,7 @@ mod enabled {
     use std::io::{BufReader, Read};
     use std::sync::Arc;
 
+    use hyper::http::HeaderValue;
     use hyper::{header, Body, Method, Request, Response, StatusCode};
     use prof::symbolicate;
     use tokio::sync::Mutex;
@@ -205,10 +206,11 @@ mod enabled {
     }
 
     pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
+        let accept = req.headers().get("Accept").cloned();
         match (req.method(), &*PROF_CTL) {
-            (&Method::GET, Some(prof_ctl)) => handle_get(req.uri().query(), prof_ctl).await,
+            (&Method::GET, Some(prof_ctl)) => handle_get(req.uri().query(), accept, prof_ctl).await,
 
-            (&Method::POST, Some(prof_ctl)) => handle_post(req, prof_ctl).await,
+            (&Method::POST, Some(prof_ctl)) => handle_post(req, accept, prof_ctl).await,
 
             _ => super::disabled::handle(req).await,
         }
@@ -216,6 +218,7 @@ mod enabled {
 
     pub async fn handle_post(
         body: Request<Body>,
+        accept: Option<HeaderValue>,
         prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
     ) -> Result<Response<Body>, anyhow::Error> {
         let query = body.uri().query().map(str::to_string);
@@ -236,14 +239,14 @@ mod enabled {
                     let mut borrow = prof_ctl.lock().await;
                     borrow.activate()?;
                 };
-                handle_get(query.as_ref().map(String::as_str), prof_ctl).await
+                handle_get(query.as_ref().map(String::as_str), accept, prof_ctl).await
             }
             "deactivate" => {
                 {
                     let mut borrow = prof_ctl.lock().await;
                     borrow.deactivate()?;
                 };
-                handle_get(query.as_ref().map(String::as_str), prof_ctl).await
+                handle_get(query.as_ref().map(String::as_str), accept, prof_ctl).await
             }
             "dump_file" => {
                 let mut borrow = prof_ctl.lock().await;
@@ -258,14 +261,7 @@ mod enabled {
                     .body(Body::from(s))
                     .unwrap())
             }
-            "dump_stats" => {
-                let mut borrow = prof_ctl.lock().await;
-                let s = borrow.dump_stats()?;
-                Ok(Response::builder()
-                    .header(header::CONTENT_TYPE, "text/plain")
-                    .body(Body::from(s))
-                    .unwrap())
-            }
+            "dump_stats" => handle_get(query.as_ref().map(String::as_str), accept, prof_ctl).await,
             "dump_symbolicated_file" => {
                 let mut borrow = prof_ctl.lock().await;
                 let f = borrow.dump()?;
@@ -338,12 +334,14 @@ mod enabled {
 
     pub async fn handle_get(
         query: Option<&str>,
+        accept: Option<HeaderValue>,
         prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
     ) -> anyhow::Result<Response<Body>> {
         match query {
             Some("dump_stats") => {
+                let json = accept.map_or(false, |accept| accept.as_bytes() == b"application/json");
                 let mut borrow = prof_ctl.lock().await;
-                let s = borrow.dump_stats()?;
+                let s = borrow.dump_stats(json)?;
                 Ok(Response::builder()
                     .header(header::CONTENT_TYPE, "text/plain")
                     .body(Body::from(s))
