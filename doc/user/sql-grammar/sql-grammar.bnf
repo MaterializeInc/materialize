@@ -241,8 +241,12 @@ create_table ::=
 declare ::=
   'DECLARE' cursor_name 'CURSOR' ('WITHOUT' 'HOLD')? 'FOR' query
 insert ::=
-  'INSERT' 'INTO' table_name 'VALUES'
-  ( ('(' (col_value) ( ( ',' col_value ) )* ')') ( ( ',' ('(' (col_value) ( ( ',' col_value ) )* ')') )* ) )
+  'INSERT' 'INTO' table_name ('AS'? alias)
+  ( '(' (col_name) ( ',' col_name )* ')' )?
+  (
+    'VALUES' ( ('(' (expr) ( ( ',' expr ) )* ')') ( ( ',' ('(' (expr) ( ( ',' expr ) )* ')') )* ) )
+    | query
+  )
 delete_stmt ::=
   'DELETE FROM' table_name ('AS'? alias)?
   'USING' (from_item) ( ( ',' from_item ) )*
