@@ -1013,7 +1013,7 @@ impl Row {
     /// The intent is that `self`'s allocation can be used to pack additional
     /// rows, to reduce the amount of interaction with the allocator.
     pub fn finish_and_reuse(&mut self) -> Row {
-        let data = SmallVec::from(&self.data[..]);
+        let data = SmallVec::from_slice(&self.data[..]);
         self.data.clear();
         Row { data }
     }
