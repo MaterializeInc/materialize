@@ -3747,6 +3747,13 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
+    /// Perform a catalog transaction. The closure is passed a [`DataflowBuilder`]
+    /// made from the prospective [`CatalogState`] (i.e., the `Catalog` with `ops`
+    /// applied but before the transaction is committed). The closure can return
+    /// an error to abort the transaction, or otherwise return a value that is
+    /// returned by this function. This allows callers to error while building
+    /// [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called after this
+    /// function successfully returns on any built `DataflowDesc`.
     fn catalog_transact<F, T>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<T, CoordError>
     where
         F: FnOnce(DataflowBuilder) -> Result<T, CoordError>,
