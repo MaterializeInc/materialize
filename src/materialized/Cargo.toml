@@ -45,7 +45,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 fail = { version = "0.4", features = ["failpoints"] }
 futures = "0.3.17"
 hex = "0.4.3"
-hyper = { version = "0.14.13", features = ["http1", "server"] }
+hyper = { version = "0.14.14", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"
 include_dir = "0.6.2"
 itertools = "0.10.1"
