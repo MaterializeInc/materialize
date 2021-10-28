@@ -415,10 +415,8 @@ where
         use plan::Plan;
         match plan {
             Plan::Constant { rows } => {
-                // Determine what this worker will contribute.
-                let locally = if worker_index == 0 { rows } else { Ok(vec![]) };
                 // Produce both rows and errs to avoid conditional dataflow construction.
-                let (mut rows, errs) = match locally {
+                let (mut rows, errs) = match rows {
                     Ok(rows) => (rows, Vec::new()),
                     Err(e) => (Vec::new(), vec![e]),
                 };
