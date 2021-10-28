@@ -151,7 +151,7 @@ impl Action for VerifyAction {
         while let Some(Ok(message)) = message_stream.next().await {
             let message = message.map_err_to_string()?;
             consumer
-                .store_offset(&message)
+                .store_offset_from_message(&message)
                 .map_err(|e| format!("storing message offset: {:#}", e))?;
             actual_bytes.push((
                 message.key().and_then(|bytes| Some(bytes.to_owned())),
