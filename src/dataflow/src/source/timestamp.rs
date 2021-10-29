@@ -334,14 +334,16 @@ impl TimestampBindingBox {
     }
 
     fn add_partition(&mut self, partition: PartitionId, restored_offset: Option<MzOffset>) {
+        // Let sources know of the new partition, when calling partitions(). We allow overwriting
+        // existing bindings, so that partitions that are restored from persistence can overwrite
+        // initially added partitions, because we read from persistence last.
+        self.known_partitions
+            .insert(partition.clone(), restored_offset);
+
         if self.partitions.contains_key(&partition) {
             debug!("already inserted partition {:?}, ignoring", partition);
             return;
         }
-
-        // Let sources know of the new partition, when calling partitions().
-        self.known_partitions
-            .insert(partition.clone(), restored_offset);
 
         // Update our internal state to also keep track of the new partition.
         self.partitions
