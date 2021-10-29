@@ -218,15 +218,15 @@ pub fn build_dataflow<A: Allocate>(
             );
 
             // Import declared sources into the rendering context.
-            for (src_id, (src, orig_id)) in dataflow.source_imports.clone() {
+            for (src_id, (src, orig_id)) in &dataflow.source_imports {
                 context.import_source(
                     render_state,
                     &mut tokens,
                     region,
                     materialized_logging.clone(),
-                    src_id,
-                    src,
-                    orig_id,
+                    src_id.clone(),
+                    src.clone(),
+                    orig_id.clone(),
                     now,
                     source_metrics,
                 );
