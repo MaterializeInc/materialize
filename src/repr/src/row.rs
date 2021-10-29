@@ -28,6 +28,7 @@ use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
 use crate::Datum;
 use fmt::Debug;
+use std::ops::{Deref, DerefMut};
 
 mod encoding;
 
@@ -1048,6 +1049,83 @@ impl Row {
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+}
+
+/// A smart allocator for rows.
+///
+/// The allocator remembers the length of previously produced rows and once borrowed, it creates
+/// a row with sufficient capacity.
+///
+/// In contrast to [Row::finish_and_reuse], this setup does not eagerly allocate an empty row
+/// and avoids copying the row's contents.
+///
+/// # Example
+/// ```rust
+/// # use repr::{Datum, RowAllocator};
+/// let mut allocator = RowAllocator::default();
+/// let mut borrow = allocator.borrow();
+/// borrow.push(Datum::Null);
+/// let row = borrow.finish();
+/// ```
+#[derive(Debug)]
+pub struct RowAllocator {
+    /// The maximum size of past allocations
+    len: usize,
+}
+
+impl RowAllocator {
+    /// Construct a new [RowAllocator].
+    pub fn new() -> Self {
+        Self { len: Row::SIZE }
+    }
+
+    /// Borrow self. This will construct a new row of the maximum capacity encountered for `self`
+    /// up to this point.
+    pub fn borrow(&mut self) -> RowAllocatorBorrow {
+        RowAllocatorBorrow {
+            row: Row::with_capacity(self.len),
+            buffer: self,
+        }
+    }
+}
+
+impl Default for RowAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A borrow of a [RowAllocator].
+///
+/// The borrow contains an allocated row. It can be deferefenced to a row to assist working with
+/// the actual row. Call [RowAllocatorBorrow::finish] to extract an owned row and release the
+/// borrow.
+#[derive(Debug)]
+pub struct RowAllocatorBorrow<'a> {
+    buffer: &'a mut RowAllocator,
+    row: Row,
+}
+
+impl<'a> RowAllocatorBorrow<'a> {
+    /// Extract the finished row and return the borrow.
+    pub fn finish(self) -> Row {
+        self.buffer.len = ::std::cmp::max(self.row.data.capacity(), self.buffer.len);
+        self.row
+    }
+}
+
+impl<'a> Deref for RowAllocatorBorrow<'a> {
+    type Target = Row;
+
+    fn deref(&self) -> &Self::Target {
+        &self.row
+    }
+}
+
+impl<'a> DerefMut for RowAllocatorBorrow<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.row
     }
 }
 

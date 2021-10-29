@@ -27,7 +27,7 @@ use crate::logging::ConsolidateBuffer;
 use crate::render::datum_vec::DatumVec;
 use crate::replay::MzReplay;
 use dataflow_types::logging::LoggingConfig;
-use repr::{datum_list_size, datum_size, Datum, Row, Timestamp};
+use repr::{datum_list_size, datum_size, Datum, Row, RowAllocator, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
@@ -451,13 +451,14 @@ pub fn construct<A: Allocate>(
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
-                        let mut row_packer = Row::default();
+                        let mut row_allocator = RowAllocator::default();
                         let mut datums = DatumVec::new();
                         move |row| {
                             let datums = datums.borrow_with(&row);
-                            row_packer.extend(key.iter().map(|k| datums[*k]));
+                            let mut row_borrow = row_allocator.borrow();
+                            row_borrow.extend(key.iter().map(|k| datums[*k]));
                             ::std::mem::drop(datums);
-                            (row_packer.finish_and_reuse(), row)
+                            (row_borrow.finish(), row)
                         }
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
