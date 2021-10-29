@@ -693,11 +693,11 @@ impl Coordinator {
                 // guaranteed by persist that writes and seals happen in order,
                 // but only if we synchronously wait for the (fast) registration
                 // of that work to return.
-                let seal_res = persist_multi
+                let seal_fut = persist_multi
                     .write_handle
                     .seal(&persist_multi.all_table_ids, next_ts);
                 let _ = tokio::spawn(async move {
-                    if let Err(err) = seal_res.into_future().await {
+                    if let Err(err) = seal_fut.await {
                         // TODO: Linearizability relies on this, bubble up the
                         // error instead.
                         //
@@ -1421,11 +1421,11 @@ impl Coordinator {
                 }
             };
 
-            let compaction_res = persist_multi
+            let compaction_fut = persist_multi
                 .write_handle
                 .allow_compaction(&table_since_updates);
             let _ = tokio::spawn(async move {
-                if let Err(err) = compaction_res.into_future().await {
+                if let Err(err) = compaction_fut.await {
                     // TODO: Do something smarter here
                     log::error!("failed to compact persisted tables: {}", err);
                 }
@@ -2767,13 +2767,14 @@ impl Coordinator {
                             // writes and seals happen in order, but only if we
                             // synchronously wait for the (fast) registration of
                             // that work to return.
-                            let write_res =
-                                persist_multi.write_handle.write_atomic(persist_updates);
-                            let write_res = write_res.into_future().map(|res| match res {
-                                Ok(_) => Ok(()),
-                                Err(err) => Err(CoordError::Unstructured(anyhow!("{}", err))),
-                            });
-                            return Ok(Some(write_res));
+                            let write_fut = persist_multi
+                                .write_handle
+                                .write_atomic(persist_updates)
+                                .map(|res| match res {
+                                    Ok(_) => Ok(()),
+                                    Err(err) => Err(CoordError::Unstructured(anyhow!("{}", err))),
+                                });
+                            return Ok(Some(write_fut));
                         } else {
                             for (id, updates) in volatile_updates {
                                 self.broadcast(dataflow::Command::Insert { id, updates });
@@ -3892,8 +3893,8 @@ impl Coordinator {
                 // guaranteed by persist that writes and seals happen in order,
                 // but only if we synchronously wait for the (fast) registration
                 // of that work to return.
-                let write_res = persist.write_handle.write(&updates);
-                let _ = tokio::spawn(async move { write_res.into_future().await });
+                let write_fut = persist.write_handle.write(&updates);
+                let _ = tokio::spawn(write_fut);
             } else {
                 self.broadcast(dataflow::Command::Insert { id, updates })
             }

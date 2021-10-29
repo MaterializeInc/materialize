@@ -9,7 +9,10 @@
 
 //! Public concrete implementation of [std::future::Future].
 
-use futures_util::FutureExt;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use futures_util::ready;
 use tokio::sync::oneshot;
 
 use crate::error::Error;
@@ -29,31 +32,24 @@ impl<T> Future<T> {
         (FutureHandle(tx), Future(rx))
     }
 
-    fn flatten_err(res: Result<Result<T, Error>, oneshot::error::RecvError>) -> Result<T, Error> {
-        match res {
-            Ok(x) => x,
-            // The sender will only hang up if the runtime is no longer running.
-            Err(oneshot::error::RecvError { .. }) => Err(Error::RuntimeShutdown),
-        }
-    }
-
     /// Blocks and synchronously receives the result.
     //
     // TODO: Make this cfg(test) or behind a feature gate.
     pub fn recv(self) -> Result<T, Error> {
-        futures_executor::block_on(self.into_future())
+        futures_executor::block_on(self)
     }
+}
 
-    /// Convert this into a [std::future::Future].
-    ///
-    /// The computation represented by self will complete regardless of whether
-    /// the returned Future is polled to completion, but anything derived from
-    /// the returned [std::future::Future] (map, etc) is subject to the normal
-    /// rules.
-    //
-    // TODO: Is it possible for this to impl [std::future::Future] directly?
-    pub fn into_future(self) -> impl std::future::Future<Output = Result<T, Error>> {
-        self.0.map(Self::flatten_err)
+impl<T> std::future::Future for Future<T> {
+    type Output = Result<T, Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let res = match ready!(Pin::new(&mut self.0).poll(cx)) {
+            Ok(x) => x,
+            // The sender will only hang up if the runtime is no longer running.
+            Err(oneshot::error::RecvError { .. }) => Err(Error::RuntimeShutdown),
+        };
+        Poll::Ready(res)
     }
 }
 
