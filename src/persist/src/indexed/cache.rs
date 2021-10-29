@@ -346,4 +346,9 @@ impl<B: Blob> BlobCache<B> {
         };
         err
     }
+
+    /// Returns the list of keys known to the underlying [Blob].
+    pub fn list_keys(&self) -> Result<Vec<String>, Error> {
+        block_on(self.blob.lock()?.list_keys())
+    }
 }

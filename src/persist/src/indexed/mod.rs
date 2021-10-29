@@ -19,7 +19,7 @@ pub mod runtime;
 pub mod trace;
 pub mod unsealed;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -487,6 +487,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ///
     /// - The meta we might roll back to must be equal to the durably
     ///   persisted meta.
+    /// - All of the referenced blob keys in all unsealeds and traces actually exist
+    ///   in blob's key-val map.
     #[cfg(any(debug_assertions, test))]
     fn validate_drain_pending_preconditions(&self) -> Result<(), Error> {
         // We can only check this invariant when blob is available, as otherwise
@@ -500,6 +502,34 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                         "different prev {:?} and persisted metadata {:?}",
                         self.prev_meta, persisted_meta
                     )));
+                }
+            }
+            Err(e) => {
+                log::error!("unable to read back persisted metadata: {:?}", e);
+            }
+        }
+
+        match self.blob.list_keys() {
+            // Same as above, we can only check this invariant if blob is available.
+            Ok(list) => {
+                let mut keys = HashSet::new();
+                keys.extend(list);
+                let meta = self.serialize_meta();
+
+                for unsealed in meta.unsealeds.iter() {
+                    for batch in unsealed.batches.iter() {
+                        if !keys.contains(&batch.key) {
+                            return Err(Error::from("key missing in unsealed batch"));
+                        }
+                    }
+                }
+
+                for trace in meta.traces.iter() {
+                    for batch in trace.batches.iter() {
+                        if !keys.contains(&batch.key) {
+                            return Err(Error::from("key missing in trace batch"));
+                        }
+                    }
                 }
             }
             Err(e) => {
