@@ -84,7 +84,12 @@ pub trait Blob: Send + 'static {
     /// Succeeds if the key does not exist.
     async fn delete(&mut self, key: &str) -> Result<(), Error>;
 
-    /// List all of the keys in the map.
+    /// List all of the user inserted keys in the map.
+    ///
+    /// This returns the set of keys present due to an external user's
+    /// [Blob::set] calls. Internally, the implemetor is allowed to set keys,
+    /// for example, to track metadata, but those must remain invisible to the
+    /// user.
     async fn list_keys(&self) -> Result<Vec<String>, Error>;
 
     /// Synchronously closes the blob, releasing exclusive-writer locks and
@@ -332,13 +337,6 @@ pub mod tests {
         Ok(())
     }
 
-    fn keys(baseline: &[String], new: &str) -> Vec<String> {
-        let mut ret = baseline.to_vec();
-        ret.push(new.into());
-        ret.sort();
-        ret
-    }
-
     pub async fn blob_impl_test<B: Blob, F: FnMut(PathAndReentranceId<'_>) -> Result<B, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
@@ -374,14 +372,9 @@ pub mod tests {
         // Empty key is empty.
         assert_eq!(blob0.get("k0").await?, None);
 
-        // Blob might create one or more keys on startup (e.g. lock files)
-        let mut empty_keys: Vec<String> = blob0.list_keys().await?;
-        empty_keys.sort();
-
-        // List keys is idempotent
-        let mut blob_keys = blob0.list_keys().await?;
-        blob_keys.sort();
-        assert_eq!(blob_keys, empty_keys);
+        let blob_keys = blob0.list_keys().await?;
+        let empty: Vec<String> = vec![];
+        assert_eq!(blob_keys, empty);
 
         // Set a key and get it back.
         blob0.set("k0", values[0].clone(), false).await?;
@@ -390,7 +383,7 @@ pub mod tests {
         // Blob contains the key we just inserted.
         let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
-        assert_eq!(blob_keys, keys(&empty_keys, "k0"));
+        assert_eq!(blob_keys, vec!["k0".to_string()]);
 
         // Can only overwrite a key without allow_overwrite.
         assert!(blob0.set("k0", values[1].clone(), false).await.is_err());
@@ -410,14 +403,15 @@ pub mod tests {
         // Empty blob contains no keys.
         let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
-        assert_eq!(blob_keys, empty_keys);
+        assert_eq!(blob_keys, empty);
+
         // Can reset a deleted key to some other value.
         blob0.set("k0", values[1].clone(), false).await?;
         assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
 
         // Insert multiple keys back to back and validate that we can list
         // them all out.
-        let mut expected_keys = empty_keys;
+        let mut expected_keys = vec!["k0".to_string()];
         for i in 1..=5 {
             let key = format!("k{}", i);
             blob0.set(&key, values[0].clone(), false).await?;
@@ -427,7 +421,7 @@ pub mod tests {
         // Blob contains the key we just inserted.
         let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
-        assert_eq!(blob_keys, keys(&expected_keys, "k0"));
+        assert_eq!(blob_keys, expected_keys);
 
         // Cannot reuse a blob once it is closed.
         assert_eq!(blob0.close().await, Ok(true));

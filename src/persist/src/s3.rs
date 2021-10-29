@@ -315,6 +315,11 @@ impl Blob for S3Blob {
                 for object in contents.iter() {
                     if let Some(key) = object.key.as_ref() {
                         if let Some(key) = key.strip_prefix(&prefix) {
+                            // Exclude the system generated lock key from the user's
+                            // list of keys.
+                            if key == Self::LOCKFILE_KEY {
+                                continue;
+                            }
                             ret.push(key.to_string());
                         } else {
                             return Err(Error::from(format!(

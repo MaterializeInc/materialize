@@ -419,6 +419,10 @@ impl Blob for FileBlob {
             if let Some(name) = file_name {
                 let name = name.to_str();
                 if let Some(name) = name {
+                    // Exclude the lockfile from the user's list of keys.
+                    if name == Self::LOCKFILE_PATH {
+                        continue;
+                    }
                     ret.push(name.to_owned());
                 }
             }
