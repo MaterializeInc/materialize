@@ -59,9 +59,28 @@ After a successful push, the script will update stable.stamp with the new tag of
 the image. Commit the resulting diff, *including* the changes to the Dockerfile
 that were incorporated into the built image, and open a PR!
 
+## Acquiring root within the image
+
+When debugging issues with the image, it is occasionally useful to acquire root.
+You can't run `sudo` because the image does not have `sudo` installed.
+
+Instead, you can use the `root-shell` command. While running the image in one
+shell, open a new shell and run:
+
+```shell
+$ bin/ci-builder root-shell stable
+```
+
+That command will open a new root shell into the most recently launched
+ci-builder image. It will also run `apt-get update` so that you can use `apt
+install` to install any additional software you might need.
+
+When using the root shell, beware that if you create files as root on any
+shared volumes, those files will be owned by root *on your host machine*.
+
 ## Upgrading the Rust version
 
-1. Update the [`rust-toolchain.toml`] file with the desired version.
+1. Update the [rust-toolchain.toml] file with the desired version.
 
 2. Run:
 
@@ -100,7 +119,7 @@ $ bin/ci-builder push nightly-2001-02-03
 ```
 
 [bin/ci-builder]: /bin/ci-builder
-[rust-toolchain]: /rust-toolchain.toml
+[rust-toolchain.toml]: /rust-toolchain.toml
 [stable.stamp]: stable.stamp
 [nightly.stamp]: nightly.stamp
 [rust-toolstate]: https://rust-lang.github.io/rustup-components-history/

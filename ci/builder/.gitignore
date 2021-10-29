@@ -1,3 +1,4 @@
 /requirements.txt
 /requirements-dev.txt
 /requirements-ci.txt
+/*.cidfile

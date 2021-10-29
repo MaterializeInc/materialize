@@ -23,9 +23,10 @@ Manages the ci-builder Docker image, which contains the dependencies required
 to build, test, and deploy the code in this repository.
 
 Commands:
-    run      run a command in the ci-builder image
-    build    build and tag new version of the ci-builder image
-    push     push a new version of the ci-builder image to Docker Hub
+    run         run a command in the ci-builder image
+    build       build and tag new version of the ci-builder image
+    push        push a new version of the ci-builder image to Docker Hub
+    root-shell  open a root shell to the most recently started ci-builder container
 
 For details, consult ci/builder/README.md."
     exit 1
@@ -49,6 +50,7 @@ case "$channel" in
 esac
 
 tag_file=ci/builder/${channel%%-*}.stamp
+cid_file=ci/builder/.${channel%%-*}.cidfile
 
 rust_components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
 if [[ $rust_version = nightly ]]; then
@@ -85,6 +87,7 @@ case "$cmd" in
         ;;
     run)
         args=(
+            --cidfile "$cid_file"
             --rm --interactive
             --init
             --volume "$(pwd):$(pwd)"
@@ -148,7 +151,11 @@ case "$cmd" in
         else
             args+=(--user "$(id -u):1001")
         fi
+        rm -f "$cid_file"
         docker run "${args[@]}" "materialize/ci-builder:$(<"$tag_file")" "$@"
+        ;;
+    root-shell)
+        docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" ci/builder/root-shell.sh
         ;;
     *)
         printf "unknown command %q\n" "$cmd"
