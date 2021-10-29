@@ -724,7 +724,149 @@ class UnionsNested(Generator):
         print("1")
 
 
-servers = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized(memory="2G")]
+#
+# Column width
+#
+
+
+class Column(Generator):
+    COUNT = 100_000_000
+
+    @classmethod
+    def body(cls):
+        print("> CREATE TABLE t1 (f1 STRING);")
+        print(f"> INSERT INTO t1 VALUES (REPEAT('x', {cls.COUNT}));")
+
+        print("> SELECT COUNT(DISTINCT f1) FROM t1;")
+        print("1")
+
+        print("> SELECT LENGTH(f1) FROM t1;")
+        print(f"{cls.COUNT}")
+
+
+#
+# Table size
+#
+
+
+class Rows(Generator):
+    COUNT = 10_000_000
+
+    @classmethod
+    def body(cls):
+        print("> CREATE TABLE t1 (f1 INTEGER);")
+        print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT})")
+
+        print("> SELECT COUNT(*) FROM t1;")
+        print(f"{cls.COUNT}")
+
+
+class RowsAggregate(Generator):
+    COUNT = 1_000_000
+
+    @classmethod
+    def body(cls):
+        print(
+            f"> SELECT COUNT(*), MIN(generate_series), MAX(generate_series), COUNT(DISTINCT generate_series) FROM generate_series(1, {cls.COUNT});"
+        )
+        print(f"{cls.COUNT} 1 {cls.COUNT} {cls.COUNT}")
+
+
+class RowsOrderByLimit(Generator):
+    COUNT = 10_000_000
+
+    @classmethod
+    def body(cls):
+        print(
+            f"> SELECT * FROM generate_series(1, {cls.COUNT}) ORDER BY generate_series DESC LIMIT 1;"
+        )
+        print(f"{cls.COUNT}")
+
+
+class RowsJoinOneToOne(Generator):
+    COUNT = 10_000_000
+
+    @classmethod
+    def body(cls):
+        print(
+            f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
+        )
+        print(
+            f"> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.generate_series = a2.generate_series;"
+        )
+        print(f"{cls.COUNT}")
+
+
+class RowsJoinOneToMany(Generator):
+    COUNT = 10_000_000
+
+    @classmethod
+    def body(cls):
+        print(
+            f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
+        )
+        print(f"> SELECT COUNT(*) FROM v1 AS a1, (SELECT 1) AS a2;")
+        print(f"{cls.COUNT}")
+
+
+class RowsJoinCross(Generator):
+    COUNT = 1_000_000
+
+    @classmethod
+    def body(cls):
+        print(
+            f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
+        )
+        print(f"> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2;")
+        print(f"{cls.COUNT**2}")
+
+
+class RowsJoinLargeRetraction(Generator):
+    COUNT = 10_000_000
+
+    @classmethod
+    def body(cls):
+        print("> CREATE TABLE t1 (f1 INTEGER);")
+        print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT});")
+
+        print(
+            "> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = a2.f1;"
+        )
+
+        print("> SELECT COUNT(*) > 0 FROM v1;")
+        print("true")
+
+        print("> DELETE FROM t1")
+
+        print("> SELECT COUNT(*) FROM v1;")
+        print("0")
+
+
+class RowsJoinDifferential(Generator):
+    COUNT = 10_000_000
+
+    @classmethod
+    def body(cls):
+        print(
+            f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
+        )
+        print(f"> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.f1 = a2.f1;")
+        print(f"{cls.COUNT}")
+
+
+class RowsJoinOuter(Generator):
+    COUNT = 10_000_000
+
+    @classmethod
+    def body(cls):
+        print(
+            f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
+        )
+        print(f"> SELECT COUNT(*) FROM v1 AS a1 LEFT JOIN v1 AS a2 USING (f1);")
+        print(f"{cls.COUNT}")
+
+
+servers = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized(memory="8G")]
 
 services = [*servers, Testdrive()]
 
