@@ -241,21 +241,32 @@ where
                 } else {
                     let is_connector_delimited = connector.is_delimited();
 
-                    let ((ok_source, err_source), capability) = match connector {
-                        ExternalSourceConnector::Kafka(_) => {
-                            source::create_source::<_, KafkaSourceReader>(source_config, &connector)
-                        }
-                        ExternalSourceConnector::Kinesis(_) => {
-                            source::create_source::<_, KinesisSourceReader>(
+                    let ((ok_source, _ts_bindings, err_source), capability) = match connector {
+                        ExternalSourceConnector::Kafka(_) => source::create_source::<
+                            _,
+                            KafkaSourceReader,
+                        >(
+                            source_config, &connector, None
+                        ),
+                        ExternalSourceConnector::Kinesis(_) => source::create_source::<
+                            _,
+                            KinesisSourceReader,
+                        >(
+                            source_config, &connector, None
+                        ),
+                        ExternalSourceConnector::S3(_) => {
+                            source::create_source::<_, S3SourceReader>(
                                 source_config,
                                 &connector,
+                                None,
                             )
                         }
-                        ExternalSourceConnector::S3(_) => {
-                            source::create_source::<_, S3SourceReader>(source_config, &connector)
-                        }
                         ExternalSourceConnector::File(_) | ExternalSourceConnector::AvroOcf(_) => {
-                            source::create_source::<_, FileSourceReader>(source_config, &connector)
+                            source::create_source::<_, FileSourceReader>(
+                                source_config,
+                                &connector,
+                                None,
+                            )
                         }
                         ExternalSourceConnector::Postgres(_) => unreachable!(),
                         ExternalSourceConnector::PubNub(_) => unreachable!(),
