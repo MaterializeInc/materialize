@@ -147,3 +147,16 @@ query T
 SELECT LIST(WITH usps AS (SELECT 42) SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id::text]] FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2)::text
 ----
 {{{alice,lasta},{10003},{1}},{{charlie,lastc},{11217},{3}}}
+
+statement ok
+CREATE TABLE qs (q int not null)
+
+query T
+SELECT LIST(SELECT TRUE FROM(SELECT AVG(0) FROM qs))::text;
+----
+{t}
+
+query T
+SELECT LIST(SELECT TRUE FROM(SELECT AVG(0) FROM (SELECT FROM qs)))::text;
+----
+{t}
