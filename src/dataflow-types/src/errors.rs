@@ -10,6 +10,7 @@
 use std::fmt::Display;
 
 use expr::EvalError;
+use persist_types::error::CodecError;
 use persist_types::Codec;
 
 use serde::{Deserialize, Serialize};
@@ -40,8 +41,9 @@ impl Codec for DecodeError {
         buf.extend(encoded.iter());
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let decoded = serde_json::from_slice(buf).map_err(|e| format!("Decoding error: {}", e))?;
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
+        let decoded = serde_json::from_slice(buf)
+            .map_err(|e| CodecError::from(format!("Decoding error: {}", e)))?;
         Ok(decoded)
     }
 }
@@ -132,12 +134,13 @@ impl From<SourceError> for DataflowError {
 
 #[cfg(test)]
 mod tests {
+    use persist_types::error::CodecError;
     use persist_types::Codec;
 
     use super::DecodeError;
 
     #[test]
-    fn test_decode_error_codec_roundtrip() -> Result<(), String> {
+    fn test_decode_error_codec_roundtrip() -> Result<(), CodecError> {
         let original = DecodeError::Text("ciao".to_string());
         let mut encoded = Vec::new();
         original.encode(&mut encoded);

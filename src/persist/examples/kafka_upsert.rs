@@ -431,6 +431,7 @@ struct AssignedTimestamp(u64);
 struct SourceTimestamp<P, O>(P, O);
 
 mod kafka_offset_impls {
+    use persist_types::error::CodecError;
     use persist_types::Codec;
 
     use crate::AssignedTimestamp;
@@ -451,9 +452,9 @@ mod kafka_offset_impls {
             buf.extend(&self.0.to_le_bytes())
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
             Ok(KafkaPartition(u64::from_le_bytes(
-                <[u8; 8]>::try_from(buf).map_err(|err| err.to_string())?,
+                <[u8; 8]>::try_from(buf).map_err(|err| CodecError::from(err.to_string()))?,
             )))
         }
     }
@@ -471,9 +472,9 @@ mod kafka_offset_impls {
             buf.extend(&self.0.to_le_bytes())
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
             Ok(KafkaOffset(u64::from_le_bytes(
-                <[u8; 8]>::try_from(buf).map_err(|err| err.to_string())?,
+                <[u8; 8]>::try_from(buf).map_err(|err| CodecError::from(err.to_string()))?,
             )))
         }
     }
@@ -491,9 +492,9 @@ mod kafka_offset_impls {
             buf.extend(&self.0.to_le_bytes())
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
             Ok(AssignedTimestamp(u64::from_le_bytes(
-                <[u8; 8]>::try_from(buf).map_err(|err| err.to_string())?,
+                <[u8; 8]>::try_from(buf).map_err(|err| CodecError::from(err.to_string()))?,
             )))
         }
     }
@@ -519,17 +520,17 @@ mod kafka_offset_impls {
             buf.extend(&inner_buf);
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
             let partition_len_bytes = &buf[0..8];
-            let partition_len_bytes =
-                <[u8; 8]>::try_from(partition_len_bytes).map_err(|err| err.to_string())?;
+            let partition_len_bytes = <[u8; 8]>::try_from(partition_len_bytes)
+                .map_err(|err| CodecError::from(err.to_string()))?;
             let partition_end: usize = 8 + usize::from_le_bytes(partition_len_bytes);
             let partition_slice = &buf[8..partition_end];
             let partition = P::decode(partition_slice)?;
 
             let offset_len_bytes = &buf[(partition_end)..(partition_end + 8)];
-            let offset_len_bytes =
-                <[u8; 8]>::try_from(offset_len_bytes).map_err(|err| err.to_string())?;
+            let offset_len_bytes = <[u8; 8]>::try_from(offset_len_bytes)
+                .map_err(|err| CodecError::from(err.to_string()))?;
             let offset_end: usize = partition_end + 8 + usize::from_le_bytes(offset_len_bytes);
             let offset_slice = &buf[(partition_end + 8)..offset_end];
             let offset = O::decode(offset_slice)?;

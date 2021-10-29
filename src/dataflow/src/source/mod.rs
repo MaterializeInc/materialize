@@ -11,6 +11,7 @@
 
 use dataflow_types::{DataflowError, SourceErrorDetails};
 use mz_avro::types::Value;
+use persist_types::error::CodecError;
 use persist_types::Codec;
 use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
@@ -405,20 +406,28 @@ impl Codec for SourceTimestamp {
         buf.extend(&self.offset.offset.to_le_bytes());
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
         let typ = buf[0];
         let (partition, offset_start) = match typ {
             SOURCE_TIMESTAMP_PARTITION_KAFKA => {
                 let slice = &buf[1..(1 + 4)];
-                let pid =
-                    i32::from_le_bytes(<[u8; 4]>::try_from(slice).map_err(|err| err.to_string())?);
+                let pid = i32::from_le_bytes(
+                    <[u8; 4]>::try_from(slice).map_err(|err| CodecError::from(err.to_string()))?,
+                );
                 (PartitionId::Kafka(pid), 1 + 4)
             }
             SOURCE_TIMESTAMP_PARTITION_NONE => (PartitionId::None, 1),
-            partition_typ => return Err(format!("Unexpected partition type: {}.", partition_typ)),
+            partition_typ => {
+                return Err(CodecError::from(format!(
+                    "Unexpected partition type: {}.",
+                    partition_typ
+                )))
+            }
         };
         let slice = &buf[offset_start..(offset_start + 8)];
-        let offset = i64::from_le_bytes(<[u8; 8]>::try_from(slice).map_err(|err| err.to_string())?);
+        let offset = i64::from_le_bytes(
+            <[u8; 8]>::try_from(slice).map_err(|err| CodecError::from(err.to_string()))?,
+        );
         let offset = MzOffset { offset };
         Ok(SourceTimestamp { partition, offset })
     }
@@ -438,9 +447,9 @@ impl Codec for AssignedTimestamp {
         buf.extend(&self.0.to_le_bytes())
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
         Ok(AssignedTimestamp(u64::from_le_bytes(
-            <[u8; 8]>::try_from(buf).map_err(|err| err.to_string())?,
+            <[u8; 8]>::try_from(buf).map_err(|err| CodecError::from(err.to_string()))?,
         )))
     }
 }
@@ -1565,13 +1574,14 @@ where
 mod tests {
     use dataflow_types::MzOffset;
     use expr::PartitionId;
+    use persist_types::error::CodecError;
     use persist_types::Codec;
 
     use super::AssignedTimestamp;
     use super::SourceTimestamp;
 
     #[test]
-    fn test_source_timestamp_roundtrip() -> Result<(), String> {
+    fn test_source_timestamp_roundtrip() -> Result<(), CodecError> {
         let partition = PartitionId::Kafka(42);
         let offset = MzOffset { offset: 17 };
         let original = SourceTimestamp { partition, offset };
@@ -1585,17 +1595,20 @@ mod tests {
     }
 
     #[test]
-    fn test_source_timestamp_decoding_error() -> Result<(), String> {
+    fn test_source_timestamp_decoding_error() -> Result<(), CodecError> {
         let encoded = vec![42];
         let decoded = SourceTimestamp::decode(&encoded);
 
-        assert_eq!(decoded, Err("Unexpected partition type: 42.".to_string()));
+        assert_eq!(
+            decoded,
+            Err(CodecError::from("Unexpected partition type: 42."))
+        );
 
         Ok(())
     }
 
     #[test]
-    fn test_assigned_timestamp_roundtrip() -> Result<(), String> {
+    fn test_assigned_timestamp_roundtrip() -> Result<(), CodecError> {
         let original = AssignedTimestamp(3);
         let mut encoded = Vec::new();
         original.encode(&mut encoded);

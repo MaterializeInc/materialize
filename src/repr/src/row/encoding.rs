@@ -51,6 +51,7 @@
 use std::io::Read;
 
 use ore::cast::CastFrom;
+use persist_types::error::CodecError;
 use persist_types::Codec;
 
 use crate::Row;
@@ -86,30 +87,36 @@ impl Codec for Row {
     /// our policy).
     //
     // TODO: Return a RowRef instead?
-    fn decode(buf: &[u8]) -> Result<Row, String> {
+    fn decode(buf: &[u8]) -> Result<Row, CodecError> {
         let mut buf = buf;
 
         let mut version_raw = [0u8; 1];
         buf.read_exact(&mut version_raw[..])
-            .map_err(|_| "missing version")?;
+            .map_err(|_| CodecError::InvalidEncodingVersion(None))?;
         // Only one version supported at the moment. This will get more
         // complicated once we change the format and have to migrate old formats
         // to the current one.
         if version_raw[0] != CURRENT_VERSION {
-            return Err("unknown version".into());
+            return Err(CodecError::InvalidEncodingVersion(Some(
+                version_raw[0] as usize,
+            )));
         }
 
         let mut len_raw = [0u8; 8];
         buf.read_exact(&mut len_raw[..])
-            .map_err(|_| "missing len")?;
+            .map_err(|_| CodecError::from("missing len"))?;
         let len = usize::cast_from(u64::from_le_bytes(len_raw));
 
         // NB: The read calls modify buf to truncate off what they read, so
         // index 0 now corresponds to the part of the original buf immediately
         // after the encoded len.
-        let row_data = buf
-            .get(0..len)
-            .ok_or_else(|| format!("wanted {} row data bytes but had {}", len, buf.len()))?;
+        let row_data = buf.get(0..len).ok_or_else(|| {
+            CodecError::from(format!(
+                "wanted {} row data bytes but had {}",
+                len,
+                buf.len()
+            ))
+        })?;
 
         // SAFETY: This was serialized with Row::encode at the same version.
         let row = unsafe { Row::from_bytes_unchecked(row_data.to_owned()) };
@@ -119,6 +126,7 @@ impl Codec for Row {
 
 #[cfg(test)]
 mod tests {
+    use persist_types::error::CodecError;
     use persist_types::Codec;
 
     use crate::{Datum, Row};
@@ -140,5 +148,12 @@ mod tests {
 
         // Sanity check that we don't just always return errors.
         assert_eq!(Row::decode(&encoded), Ok(row));
+
+        // Check that an invalid encoding version returns the appropriate error.
+        encoded[0] = u8::MAX;
+        assert_eq!(
+            Row::decode(&encoded),
+            Err(CodecError::InvalidEncodingVersion(Some(u8::MAX as usize)))
+        );
     }
 }

@@ -21,6 +21,7 @@ use abomonation::abomonated::Abomonated;
 use abomonation_derive::Abomonation;
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
+use persist_types::error::CodecError;
 use persist_types::Codec;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -318,7 +319,7 @@ impl Codec for BlobMeta {
         buf.extend(BlobMeta::MAGIC);
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
         let version_pos = 0..1;
         let begin_magic_pos = version_pos.end..version_pos.end + BlobMeta::MAGIC.len();
         // Avoid panicking when buf is short.
@@ -330,8 +331,8 @@ impl Codec for BlobMeta {
         let end_magic_pos = end_magic_start..buf.len();
         match buf.get(version_pos.start) {
             Some(&BlobMeta::CURRENT_VERSION) => {}
-            Some(x) => return Err(format!("unsupported version: {}", x)),
-            None => return Err("unknown version".into()),
+            Some(x) => return Err(CodecError::InvalidEncodingVersion(Some(*x as usize))),
+            None => return Err(CodecError::InvalidEncodingVersion(None)),
         }
         match buf.get(begin_magic_pos.clone()) {
             Some(BlobMeta::MAGIC) => {}
@@ -1534,5 +1535,12 @@ mod tests {
         for i in 0..encoded.len() {
             assert!(BlobMeta::decode(&encoded[0..i]).is_err());
         }
+
+        // Set the version number to an invalid, high value.
+        encoded[0] = u8::MAX;
+        assert_eq!(
+            BlobMeta::decode(&encoded),
+            Err(CodecError::InvalidEncodingVersion(Some(u8::MAX as usize)))
+        );
     }
 }

@@ -17,6 +17,9 @@
 )]
 
 mod codec_impls;
+pub mod error;
+
+use crate::error::CodecError;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.
@@ -51,5 +54,5 @@ pub trait Codec: Sized + 'static {
     //
     // TODO: Mechanically, this could return a ref to the original bytes
     // without any copies, see if we can make the types work out for that.
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String>;
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError>;
 }

@@ -13,6 +13,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::{error, fmt, io, sync};
 
+use persist_types::error::CodecError;
+
 use crate::storage::{Log, SeqNo};
 
 /// A persistence related error.
@@ -24,6 +26,8 @@ pub enum Error {
     OutOfQuota(String),
     /// An unstructured persistence related error.
     String(String),
+    /// An error returned when encoding or decoding data
+    Codec(CodecError),
     /// An error returned when a command is sent to a persistence runtime that
     /// was previously stopped.
     RuntimeShutdown,
@@ -37,6 +41,7 @@ impl fmt::Display for Error {
             Error::IO(e) => fmt::Display::fmt(e, f),
             Error::OutOfQuota(e) => f.write_str(e),
             Error::String(e) => f.write_str(e),
+            Error::Codec(e) => fmt::Display::fmt(e, f),
             Error::RuntimeShutdown => f.write_str("runtime shutdown"),
         }
     }
@@ -67,6 +72,12 @@ impl From<io::Error> for Error {
 impl From<String> for Error {
     fn from(e: String) -> Self {
         Error::String(e)
+    }
+}
+
+impl From<CodecError> for Error {
+    fn from(e: CodecError) -> Self {
+        Error::Codec(e)
     }
 }
 

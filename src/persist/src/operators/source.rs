@@ -114,8 +114,8 @@ where
                             if worker_index == 0 {
                                 for record in records.drain(..) {
                                     let ((k, v), ts, diff) = record;
-                                    let k = K::decode(&k);
-                                    let v = V::decode(&v);
+                                    let k = K::decode(&k).map_err(|e| e.to_string());
+                                    let v = V::decode(&v).map_err(|e| e.to_string());
                                     session.give(((k, v), ts, diff));
                                 }
                             }

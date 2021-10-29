@@ -9,6 +9,7 @@
 
 //! Implementations of [Codec] for stdlib types.
 
+use crate::error::CodecError;
 use crate::Codec;
 
 impl Codec for () {
@@ -24,9 +25,12 @@ impl Codec for () {
         // No-op.
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
         if !buf.is_empty() {
-            return Err(format!("decode expected empty buf got {} bytes", buf.len()));
+            return Err(CodecError::from(format!(
+                "decode expected empty buf got {} bytes",
+                buf.len()
+            )));
         }
         Ok(())
     }
@@ -45,8 +49,8 @@ impl Codec for String {
         buf.extend(self.as_bytes())
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
+        String::from_utf8(buf.to_owned()).map_err(|err| CodecError::from(err.to_string()))
     }
 }
 
@@ -63,7 +67,7 @@ impl Codec for Vec<u8> {
         buf.extend(self)
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
         Ok(buf.to_owned())
     }
 }
@@ -95,7 +99,7 @@ impl<T: Codec, E: Codec> Codec for Result<T, E> {
         }
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
         let typ = buf[0];
         let result = match typ {
             RESULT_OK => {
@@ -106,7 +110,12 @@ impl<T: Codec, E: Codec> Codec for Result<T, E> {
                 let err_slice = &buf[1..(buf.len())];
                 Err(E::decode(err_slice)?)
             }
-            typ => return Err(format!("Unexpected Result variant: {}.", typ)),
+            typ => {
+                return Err(CodecError::from(format!(
+                    "Unexpected Result variant: {}.",
+                    typ
+                )))
+            }
         };
         Ok(result)
     }
@@ -114,10 +123,11 @@ impl<T: Codec, E: Codec> Codec for Result<T, E> {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::CodecError;
     use crate::Codec;
 
     #[test]
-    fn test_result_ok_roundtrip() -> Result<(), String> {
+    fn test_result_ok_roundtrip() -> Result<(), CodecError> {
         let original: Result<String, String> = Ok("ciao!".to_string());
         let mut encoded = Vec::new();
         original.encode(&mut encoded);
@@ -129,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn test_result_err_roundtrip() -> Result<(), String> {
+    fn test_result_err_roundtrip() -> Result<(), CodecError> {
         let original: Result<String, String> = Err("ciao!".to_string());
         let mut encoded = Vec::new();
         original.encode(&mut encoded);
@@ -141,11 +151,16 @@ mod tests {
     }
 
     #[test]
-    fn test_result_decoding_error() -> Result<(), String> {
+    fn test_result_decoding_error() -> Result<(), CodecError> {
         let encoded = vec![42];
-        let decoded: Result<Result<String, String>, String> = Result::decode(&encoded);
+        let decoded: Result<Result<String, String>, CodecError> = Result::decode(&encoded);
 
-        assert_eq!(decoded, Err("Unexpected Result variant: 42.".to_string()));
+        assert_eq!(
+            decoded,
+            Err(CodecError::from(
+                "Unexpected Result variant: 42.".to_string()
+            ))
+        );
 
         Ok(())
     }
