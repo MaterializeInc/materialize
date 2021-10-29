@@ -2668,46 +2668,46 @@ impl Coordinator {
             tag: action.tag(),
             was_implicit: session.transaction().is_implicit(),
         };
+
+        // Synchronously do tasks that must be serialized in the coordinator.
         let rx = self.sequence_end_transaction_inner(&mut session, action);
-        match rx {
-            Ok(Some(rx)) => {
-                tokio::spawn(async move {
-                    // The rx returns a Result<(), CoordError>, so we can map the Ok(()) output to
-                    // `response`, which will also pass through whatever error we see to tx.
-                    let result = rx.await.map(|_| response);
-                    match result {
-                        Ok(_) => session.vars_mut().end_transaction(action),
-                        Err(_) => session
-                            .vars_mut()
-                            .end_transaction(EndTransactionAction::Rollback),
-                    };
-                    tx.send(result, session);
-                });
+
+        // We can now wait for responses or errors and do any session/transaction
+        // finalization in a separate task.
+        tokio::spawn(async move {
+            let result = match rx {
+                // If we have more work to do, do it
+                Ok(fut) => fut.await,
+                Err(e) => Err(e),
+            };
+
+            match result {
+                Ok(()) => {
+                    session.vars_mut().end_transaction(action);
+                    tx.send(Ok(response), session)
+                }
+                Err(err) => {
+                    session
+                        .vars_mut()
+                        .end_transaction(EndTransactionAction::Rollback);
+                    tx.send(Err(err), session)
+                }
             }
-            Ok(None) => {
-                session.vars_mut().end_transaction(action);
-                tx.send(Ok(response), session);
-            }
-            Err(err) => {
-                session
-                    .vars_mut()
-                    .end_transaction(EndTransactionAction::Rollback);
-                tx.send(Err(err), session);
-            }
-        }
+        });
     }
 
     fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<Option<impl Future<Output = Result<(), CoordError>>>, CoordError> {
+    ) -> Result<impl Future<Output = Result<(), CoordError>>, CoordError> {
         let txn = self.clear_transaction(session);
 
         // Although the compaction frontier may have advanced, we do not need to
         // call `maintenance` here because it will soon be called after the next
         // `update_upper`.
 
+        let mut write_fut = None;
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
                 match ops {
@@ -2782,14 +2782,17 @@ impl Coordinator {
                             // writes and seals happen in order, but only if we
                             // synchronously wait for the (fast) registration of
                             // that work to return.
-                            let write_fut = persist_multi
-                                .write_handle
-                                .write_atomic(persist_updates)
-                                .map(|res| match res {
-                                    Ok(_) => Ok(()),
-                                    Err(err) => Err(CoordError::Unstructured(anyhow!("{}", err))),
-                                });
-                            return Ok(Some(write_fut));
+                            write_fut = Some(
+                                persist_multi
+                                    .write_handle
+                                    .write_atomic(persist_updates)
+                                    .map(|res| match res {
+                                        Ok(_) => Ok(()),
+                                        Err(err) => {
+                                            Err(CoordError::Unstructured(anyhow!("{}", err)))
+                                        }
+                                    }),
+                            );
                         } else {
                             for (id, updates) in volatile_updates {
                                 self.broadcast(dataflow::Command::Insert { id, updates });
@@ -2800,7 +2803,16 @@ impl Coordinator {
                 }
             }
         }
-        Ok(None)
+        Ok(async move {
+            if let Some(fut) = write_fut {
+                // Because we return an async block here, this await is not executed until
+                // the containing async block is executed, so this await doesn't block the
+                // coordinator task.
+                fut.await
+            } else {
+                Ok(())
+            }
+        })
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
