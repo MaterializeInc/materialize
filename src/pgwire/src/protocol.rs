@@ -158,7 +158,8 @@ where
     // Construct session.
     let mut session = Session::new(conn.id(), user);
     for (name, value) in params {
-        let _ = session.vars_mut().set(&name, &value);
+        let local = false;
+        let _ = session.vars_mut().set(&name, &value, local);
     }
 
     // Register session with coordinator.

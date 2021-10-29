@@ -108,6 +108,9 @@ List new features before bug fixes.
 
 - Support the `READ ONLY` transaction mode.
 
+- Support `SET` in transactions, as well as `SET LOCAL`. This unblocks
+a problem with PostgreSQL JDBC 42.3.0.
+
 {{% version-header v0.9.10 %}}
 
 - Evaluate TopK operators on constant inputs at query compile time.

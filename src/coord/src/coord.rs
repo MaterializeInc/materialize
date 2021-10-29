@@ -1096,6 +1096,7 @@ impl Coordinator {
                                 | Statement::ShowIndexes(_)
                                 | Statement::ShowObjects(_)
                                 | Statement::ShowVariable(_)
+                                | Statement::SetVariable(_)
                                 | Statement::StartTransaction(_)
                                 | Statement::Tail(_) => {
                                     // Always safe.
@@ -1131,7 +1132,6 @@ impl Coordinator {
                                 | Statement::DropDatabase(_)
                                 | Statement::DropObjects(_)
                                 | Statement::Insert(_)
-                                | Statement::SetVariable(_)
                                 | Statement::Update(_) => {
                                     let _ = tx.send(Response {
                                         result: Err(CoordError::OperationProhibitsTransaction(
@@ -2632,7 +2632,9 @@ impl Coordinator {
         session: &mut Session,
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        session.vars_mut().set(&plan.name, &plan.value)?;
+        session
+            .vars_mut()
+            .set(&plan.name, &plan.value, plan.local)?;
         Ok(ExecuteResponse::SetVariable { name: plan.name })
     }
 
@@ -2666,20 +2668,30 @@ impl Coordinator {
             tag: action.tag(),
             was_implicit: session.transaction().is_implicit(),
         };
-        let rx = self.sequence_end_transaction_inner(&mut session, &action);
+        let rx = self.sequence_end_transaction_inner(&mut session, action);
         match rx {
             Ok(Some(rx)) => {
                 tokio::spawn(async move {
                     // The rx returns a Result<(), CoordError>, so we can map the Ok(()) output to
                     // `response`, which will also pass through whatever error we see to tx.
                     let result = rx.await.map(|_| response);
+                    match result {
+                        Ok(_) => session.vars_mut().end_transaction(action),
+                        Err(_) => session
+                            .vars_mut()
+                            .end_transaction(EndTransactionAction::Rollback),
+                    };
                     tx.send(result, session);
                 });
             }
             Ok(None) => {
+                session.vars_mut().end_transaction(action);
                 tx.send(Ok(response), session);
             }
             Err(err) => {
+                session
+                    .vars_mut()
+                    .end_transaction(EndTransactionAction::Rollback);
                 tx.send(Err(err), session);
             }
         }
@@ -2688,7 +2700,7 @@ impl Coordinator {
     fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
-        action: &EndTransactionAction,
+        action: EndTransactionAction,
     ) -> Result<Option<impl Future<Output = Result<(), CoordError>>>, CoordError> {
         let txn = self.clear_transaction(session);
 

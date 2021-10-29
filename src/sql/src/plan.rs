@@ -220,6 +220,7 @@ pub struct ShowVariablePlan {
 pub struct SetVariablePlan {
     pub name: String,
     pub value: String,
+    pub local: bool,
 }
 
 #[derive(Debug)]
