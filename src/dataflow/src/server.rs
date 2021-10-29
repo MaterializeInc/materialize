@@ -176,43 +176,52 @@ pub enum Command {
 impl Command {
     /// Produces a copy of the command suitable for the indicated worker.
     ///
-    /// Primarily this is used to subdivide `Constant` plan stages, so that
-    /// each worker can manage a balanced volume of rows. In principle this
-    /// could also be used to route keyed peeks into arrangements.
-    /// Creates an appropriately sharded copy of `Self`.
+    /// This is used to subdivide commands that can be sharded across workers,
+    /// for example the `plan::Constant` stages of dataflow plans, and the
+    /// `Command::Insert` commands that may contain multiple updates.
     pub fn clone_for_worker(&self, index: usize, peers: usize) -> Self {
-        if let Command::CreateDataflows(dataflows) = self {
-            Command::CreateDataflows(
-                dataflows
+        match self {
+            Command::CreateDataflows(dataflows) => {
+                Command::CreateDataflows(
+                    dataflows
+                        .iter()
+                        .map(|dataflow| {
+                            // We do this here, because it is hard to have `dataflow_types::Dataflow` know about
+                            // `dataflow::Plan`.
+                            // Each dataflow we construct should shard its `Constant` collections.
+                            let objects_to_build = dataflow
+                                .objects_to_build
+                                .iter()
+                                .map(|description| dataflow_types::BuildDesc {
+                                    id: description.id,
+                                    view: description.view.clone_for_worker(index, peers),
+                                })
+                                .collect::<Vec<_>>();
+                            // Clone all fields, other than `objects_to_build` defined above.
+                            DataflowDescription {
+                                source_imports: dataflow.source_imports.clone(),
+                                index_imports: dataflow.index_imports.clone(),
+                                objects_to_build,
+                                index_exports: dataflow.index_exports.clone(),
+                                sink_exports: dataflow.sink_exports.clone(),
+                                dependent_objects: dataflow.dependent_objects.clone(),
+                                as_of: dataflow.as_of.clone(),
+                                debug_name: dataflow.debug_name.clone(),
+                            }
+                        })
+                        .collect(),
+                )
+            }
+            Command::Insert { id, updates } => Command::Insert {
+                id: *id,
+                updates: updates
                     .iter()
-                    .map(|dataflow| {
-                        // We do this here, because it is hard to have `dataflow_types::Dataflow` know about
-                        // `dataflow::Plan`.
-                        // Each dataflow we construct should shard its `Constant` collections.
-                        let objects_to_build = dataflow
-                            .objects_to_build
-                            .iter()
-                            .map(|description| dataflow_types::BuildDesc {
-                                id: description.id,
-                                view: description.view.clone_for_worker(index, peers),
-                            })
-                            .collect::<Vec<_>>();
-                        // Clone all fields, other than `objects_to_build` defined above.
-                        DataflowDescription {
-                            source_imports: dataflow.source_imports.clone(),
-                            index_imports: dataflow.index_imports.clone(),
-                            objects_to_build,
-                            index_exports: dataflow.index_exports.clone(),
-                            sink_exports: dataflow.sink_exports.clone(),
-                            dependent_objects: dataflow.dependent_objects.clone(),
-                            as_of: dataflow.as_of.clone(),
-                            debug_name: dataflow.debug_name.clone(),
-                        }
-                    })
+                    .enumerate()
+                    .filter(|(i, _)| i % peers == index)
+                    .map(|(_, update)| update.clone())
                     .collect(),
-            )
-        } else {
-            self.clone()
+            },
+            command => command.clone(),
         }
     }
 }
@@ -973,16 +982,18 @@ where
             }
 
             Command::Insert { id, updates } => {
-                if self.timely_worker.index() == 0 {
-                    let input = match self.render_state.local_inputs.get_mut(&id) {
-                        Some(input) => input,
-                        None => panic!("local input {} missing for insert", id),
-                    };
-                    let mut session = input.handle.session(input.capability.clone());
-                    for update in updates {
-                        assert!(update.timestamp >= *input.capability.time());
-                        session.give((update.row, update.timestamp, update.diff));
-                    }
+                let input = match self.render_state.local_inputs.get_mut(&id) {
+                    Some(input) => input,
+                    None => panic!(
+                        "local input {} missing for insert at worker {}",
+                        id,
+                        self.timely_worker.index()
+                    ),
+                };
+                let mut session = input.handle.session(input.capability.clone());
+                for update in updates {
+                    assert!(update.timestamp >= *input.capability.time());
+                    session.give((update.row, update.timestamp, update.diff));
                 }
             }
 
