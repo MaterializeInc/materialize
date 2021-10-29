@@ -1533,4 +1533,40 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn clear_indexed_on_invalid_encoding() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+
+        // Create a new [Indexed], register a stream, and write to it.
+        let mut i = registry.indexed_no_reentrance()?;
+        let id = block_on(|res| i.register("0", "", "", res))?;
+        block_on_drain(&mut i, |i, res| {
+            i.write(vec![(id, vec![(("1".into(), "".into()), 1, 1)])], res)
+        })?;
+        block_on_drain(&mut i, |i, res| i.seal(vec![id], 2, res))?;
+        i.close()?;
+
+        // Reach into the underlying [Blob] and make the meta struct's version be
+        // greater than the version used to write data.
+        let mut blob = registry.blob_no_reentrance()?;
+        let mut encoded_meta = match futures_executor::block_on(blob.get("META"))? {
+            Some(meta) => meta,
+            None => return Err(Error::from("missing Meta")),
+        };
+
+        encoded_meta[0] = u8::MAX;
+        futures_executor::block_on(blob.set("META", encoded_meta, true))?;
+        drop(blob);
+
+        // Restart the indexed, and check that all previously persisted data has
+        // been removed.
+        let mut i = registry.indexed_no_reentrance()?;
+        assert_eq!(
+            block_on(|res| i.snapshot(id, res)).expect_err("snapshot must fail"),
+            Error::from("never registered: Id(0)")
+        );
+
+        Ok(())
+    }
 }

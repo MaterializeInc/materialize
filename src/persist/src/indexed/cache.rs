@@ -17,6 +17,7 @@ use std::time::Instant;
 use abomonation::abomonated::Abomonated;
 use futures_executor::block_on;
 use ore::cast::CastFrom;
+use persist_types::error::CodecError;
 use persist_types::Codec;
 
 use crate::error::Error;
@@ -293,14 +294,30 @@ impl<B: Blob> BlobCache<B> {
 
     /// Fetches metadata about what batches are in [Blob] storage.
     pub fn get_meta(&self) -> Result<Option<BlobMeta>, Error> {
-        let blob = self.blob.lock()?;
+        let mut blob = self.blob.lock()?;
         let bytes = match block_on(blob.get(Self::META_KEY))? {
             Some(bytes) => bytes,
             None => return Ok(None),
         };
-        let meta = BlobMeta::decode(&bytes).map_err(|err| {
-            Error::from(format!("invalid meta at key {}: {}", Self::META_KEY, err))
-        })?;
+
+        let meta = match BlobMeta::decode(&bytes) {
+            Ok(meta) => meta,
+            Err(CodecError::InvalidEncodingVersion(_)) => {
+                let keys = block_on(blob.list_keys())?;
+                for key in keys {
+                    block_on(blob.delete(&key))?;
+                }
+
+                return Ok(None);
+            }
+            Err(err) => {
+                return Err(Error::from(format!(
+                    "invalid meta at key {}: {}",
+                    Self::META_KEY,
+                    err
+                )))
+            }
+        };
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
         Ok(Some(meta))
     }
