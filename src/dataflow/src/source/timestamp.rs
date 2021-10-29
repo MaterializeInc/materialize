@@ -24,10 +24,12 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::mem::size_of;
 use std::rc::Rc;
 use std::time::Instant;
 
 use log::{debug, error};
+use persist_types::Codec;
 use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -626,5 +628,134 @@ impl Drop for TimestampBindingRc {
         self.wrapper.borrow_mut().compact();
 
         self.compaction_frontier = Antichain::new();
+    }
+}
+
+/// Source-agnostic timestamp for [`SourceMessages`](crate::source::SourceMessage). Admittedly,
+/// this is quite Kafka-centric.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceTimestamp {
+    /// Partition from which this message originates
+    pub partition: PartitionId,
+    /// Materialize offset of the message (1-indexed)
+    pub offset: MzOffset,
+}
+
+/// Timestamp that was assigned to a source message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct AssignedTimestamp(pub(crate) u64);
+
+// TODO: This `Codec` impl and the one for `AssignedTimestamp` are alpha-quality at best. They
+// don't reflect what we will use for production-grade persistence but are here to allow us to get
+// a first version of the persistent Kafka source up and running.
+//
+// These implementations:
+//  - are not defensive about checking expected data lengths
+//  - don't use a future-proof encoding format
+const SOURCE_TIMESTAMP_PARTITION_KAFKA: u8 = 0;
+const SOURCE_TIMESTAMP_PARTITION_NONE: u8 = 1;
+impl Codec for SourceTimestamp {
+    fn codec_name() -> &'static str {
+        "SourceTimestamp"
+    }
+
+    fn size_hint(&self) -> usize {
+        size_of::<u8>() + size_of::<i32>() + size_of::<i64>() // PartitionId + MzOffset
+    }
+
+    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+        match self.partition {
+            PartitionId::Kafka(pid) => {
+                buf.extend(&[SOURCE_TIMESTAMP_PARTITION_KAFKA]);
+                buf.extend(&pid.to_le_bytes());
+            }
+            PartitionId::None => buf.extend(&[SOURCE_TIMESTAMP_PARTITION_NONE]),
+        }
+        buf.extend(&self.offset.offset.to_le_bytes());
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        let typ = buf[0];
+        let (partition, offset_start) = match typ {
+            SOURCE_TIMESTAMP_PARTITION_KAFKA => {
+                let slice = &buf[1..(1 + 4)];
+                let pid =
+                    i32::from_le_bytes(<[u8; 4]>::try_from(slice).map_err(|err| err.to_string())?);
+                (PartitionId::Kafka(pid), 1 + 4)
+            }
+            SOURCE_TIMESTAMP_PARTITION_NONE => (PartitionId::None, 1),
+            partition_typ => return Err(format!("Unexpected partition type: {}.", partition_typ)),
+        };
+        let slice = &buf[offset_start..(offset_start + 8)];
+        let offset = i64::from_le_bytes(<[u8; 8]>::try_from(slice).map_err(|err| err.to_string())?);
+        let offset = MzOffset { offset };
+        Ok(SourceTimestamp { partition, offset })
+    }
+}
+
+// TODO: see comment on Codec for SourceTimestamp
+impl Codec for AssignedTimestamp {
+    fn codec_name() -> &'static str {
+        "AssignedTimestamp"
+    }
+
+    fn size_hint(&self) -> usize {
+        size_of::<u64>()
+    }
+
+    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+        buf.extend(&self.0.to_le_bytes())
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        Ok(AssignedTimestamp(u64::from_le_bytes(
+            <[u8; 8]>::try_from(buf).map_err(|err| err.to_string())?,
+        )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dataflow_types::MzOffset;
+    use expr::PartitionId;
+    use persist_types::Codec;
+
+    use super::AssignedTimestamp;
+    use super::SourceTimestamp;
+
+    #[test]
+    fn source_timestamp_roundtrip() -> Result<(), String> {
+        let partition = PartitionId::Kafka(42);
+        let offset = MzOffset { offset: 17 };
+        let original = SourceTimestamp { partition, offset };
+        let mut encoded = Vec::new();
+        original.encode(&mut encoded);
+        let decoded = SourceTimestamp::decode(&encoded)?;
+
+        assert_eq!(decoded, original);
+
+        Ok(())
+    }
+
+    #[test]
+    fn source_timestamp_decoding_error() -> Result<(), String> {
+        let encoded = vec![42];
+        let decoded = SourceTimestamp::decode(&encoded);
+
+        assert_eq!(decoded, Err("Unexpected partition type: 42.".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn assigned_timestamp_roundtrip() -> Result<(), String> {
+        let original = AssignedTimestamp(3);
+        let mut encoded = Vec::new();
+        original.encode(&mut encoded);
+        let decoded = AssignedTimestamp::decode(&encoded)?;
+
+        assert_eq!(decoded, original);
+
+        Ok(())
     }
 }
