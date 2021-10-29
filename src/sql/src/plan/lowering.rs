@@ -114,14 +114,30 @@ impl ColumnMap {
 impl HirRelationExpr {
     /// Rewrite `self` into a `expr::MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
-    pub fn lower(mut self) -> expr::MirRelationExpr {
-        let mut id_gen = expr::IdGen::default();
-        transform_expr::split_subquery_predicates(&mut self);
-        transform_expr::try_simplify_quantified_comparisons(&mut self);
-        expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
-            .let_in(&mut id_gen, |id_gen, get_outer| {
-                self.applied_to(id_gen, get_outer, &ColumnMap::empty())
-            })
+    pub fn lower(self) -> expr::MirRelationExpr {
+        match self {
+            // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`
+            // to ensure that the downstream optimizer can easily bypass most
+            // irrelevant optimizations (e.g. reduce folding) for this expression
+            // without having to re-learn the fact that it is just a constant,
+            // as it would if the constant were wrapped in a Let-Get pair.
+            HirRelationExpr::Constant { rows, typ } => {
+                let rows: Vec<_> = rows.into_iter().map(|row| (row, 1)).collect();
+                expr::MirRelationExpr::Constant {
+                    rows: Ok(rows),
+                    typ,
+                }
+            }
+            mut other => {
+                let mut id_gen = expr::IdGen::default();
+                transform_expr::split_subquery_predicates(&mut other);
+                transform_expr::try_simplify_quantified_comparisons(&mut other);
+                expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+                    .let_in(&mut id_gen, |id_gen, get_outer| {
+                        other.applied_to(id_gen, get_outer, &ColumnMap::empty())
+                    })
+            }
+        }
     }
 
     /// Return a `expr::MirRelationExpr` which evaluates `self` once for each row of `get_outer`.

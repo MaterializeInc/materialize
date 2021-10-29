@@ -3966,7 +3966,7 @@ impl Coordinator {
         mut expr: MirRelationExpr,
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
-        if let ExprPrepStyle::Static = style {
+        if let ExprPrepStyle::Static = &style {
             let mut opt_expr = self.view_optimizer.optimize(expr)?;
             opt_expr.0.try_visit_mut(&mut |e| {
                 // Carefully test filter expressions, which may represent temporal filters.
@@ -3984,11 +3984,19 @@ impl Coordinator {
             Ok(opt_expr)
         } else {
             expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
-            // TODO (wangandi): Is there anything that optimizes to a
-            // constant expression that originally contains a global get? Is
-            // there anything not containing a global get that cannot be
-            // optimized to a constant expression?
-            Ok(self.view_optimizer.optimize(expr)?)
+
+            if let (ExprPrepStyle::Write, expr::MirRelationExpr::Constant { .. }) = (&style, &expr)
+            {
+                // We don't perform any optimizations on an expression that is already
+                // a constant for writes, as we want to maximize bulk-insert throughput.
+                Ok(OptimizedMirRelationExpr(expr))
+            } else {
+                // TODO (wangandi): Is there anything that optimizes to a
+                // constant expression that originally contains a global get? Is
+                // there anything not containing a global get that cannot be
+                // optimized to a constant expression?
+                Ok(self.view_optimizer.optimize(expr)?)
+            }
         }
     }
 
