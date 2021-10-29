@@ -858,10 +858,9 @@ pub fn plan_create_source(
 
     // TODO(brennan): They should not depend on the envelope either. Figure out a way to
     // make all of this more tasteful.
-    if !matches!(
-        envelope,
-        SourceEnvelope::Debezium(_, _) | SourceEnvelope::CdcV2
-    ) {
+    if !matches!(encoding.value_ref(), DataEncoding::Avro { .. })
+        && !matches!(envelope, SourceEnvelope::Debezium(_, _))
+    {
         for (name, ty) in external_connector.metadata_columns() {
             bare_desc = bare_desc.with_named_column(name, ty);
         }

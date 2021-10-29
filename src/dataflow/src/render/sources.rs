@@ -335,6 +335,10 @@ where
                             SourceDataEncoding::Single(value) => (None, value),
                         };
 
+                        // TODO(petrosagg): remove this inconsistency once INCLUDE (offset)
+                        // syntax is implemented
+                        let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_));
+
                         // CDCv2 can't quite be slotted in to the below code, since it determines its own diffs/timestamps as part of decoding.
                         if let SourceEnvelope::CdcV2 = &envelope {
                             let AvroEncoding {
@@ -482,12 +486,16 @@ where
                                     let upsert_operator_name = format!("{}-upsert", source_name);
 
                                     // append position metadata to the output row
-                                    let results = results.map(|mut d| {
-                                        if let Some(Ok(ref mut row)) = d.value {
-                                            row.push(Datum::from(d.position));
-                                        }
-                                        d
-                                    });
+                                    let results = if push_metadata {
+                                        results.map(|mut d| {
+                                            if let Some(Ok(ref mut row)) = d.value {
+                                                row.push(Datum::from(d.position));
+                                            }
+                                            d
+                                        })
+                                    } else {
+                                        results
+                                    };
 
                                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                                         &upsert_operator_name,
@@ -534,7 +542,8 @@ where
                                     (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                                 }
                                 _ => {
-                                    let (stream, errors) = flatten_results(key_envelope, results);
+                                    let (stream, errors) =
+                                        flatten_results(key_envelope, push_metadata, results);
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
                                         errors.pass_through("decode-errors").as_collection();
@@ -722,6 +731,7 @@ fn get_persist_config(
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results<G>(
     key_envelope: KeyEnvelope,
+    push_metadata: bool,
     results: timely::dataflow::Stream<G, DecodeResult>,
 ) -> (
     timely::dataflow::Stream<G, Row>,
@@ -732,31 +742,33 @@ where
 {
     match key_envelope {
         KeyEnvelope::None => results
-            .flat_map(
-                |DecodeResult {
-                     value, position, ..
-                 }| {
-                    value.map(|result| {
+            .flat_map(move |res| {
+                if push_metadata {
+                    res.value.map(|result| {
                         let mut row = result?;
-                        row.push(Datum::from(position));
+                        row.push(Datum::from(res.position));
                         Ok(row)
                     })
-                },
-            )
+                } else {
+                    res.value
+                }
+            })
             .ok_err(std::convert::identity),
         KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
             .flat_map(flatten_key_value)
-            .map(|maybe_kv| {
+            .map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value, position)| {
                     key.extend_by_row(&value);
-                    key.push(Datum::from(position));
+                    if push_metadata {
+                        key.push(Datum::from(position));
+                    }
                     key
                 })
             })
             .ok_err(std::convert::identity),
         KeyEnvelope::Named(_) => results
             .flat_map(flatten_key_value)
-            .map(|maybe_kv| {
+            .map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value, position)| {
                     // Named semantics rename a key that is a single column, and encode a
                     // multi-column field as a struct with that name
@@ -769,7 +781,9 @@ where
                         new_row.extend_by_row(&value);
                         new_row
                     };
-                    row.push(Datum::from(position));
+                    if push_metadata {
+                        row.push(Datum::from(position));
+                    }
                     row
                 })
             })
