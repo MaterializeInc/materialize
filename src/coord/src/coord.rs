@@ -320,15 +320,18 @@ impl DataflowClient {
     /// Broadcasts a command to all dataflow workers.
     fn broadcast(&self, cmd: dataflow::Command) {
         log::trace!("Broadcasting dataflow command: {:?}", cmd);
-        for index in 1..self.worker_txs.len() {
-            self.worker_txs[index - 1]
-                .send(cmd.clone())
-                .expect("worker command receiver should not drop first")
-        }
-        if self.worker_txs.len() > 0 {
-            self.worker_txs[self.worker_txs.len() - 1]
+        let num_workers = self.num_workers();
+        if num_workers == 1 {
+            // This special case avoids a clone of the whole plan.
+            self.worker_txs[0]
                 .send(cmd)
-                .expect("worker command receiver should not drop first")
+                .expect("worker command receiver should not drop first");
+        } else {
+            for (index, sendpoint) in self.worker_txs.iter().enumerate() {
+                sendpoint
+                    .send(cmd.clone_for_worker(index, self.num_workers()))
+                    .expect("worker command receiver should not drop first")
+            }
         }
         for handle in self.worker_guards.guards() {
             handle.thread().unpark()

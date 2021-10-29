@@ -415,10 +415,8 @@ where
         use plan::Plan;
         match plan {
             Plan::Constant { rows } => {
-                // Determine what this worker will contribute.
-                let locally = if worker_index == 0 { rows } else { Ok(vec![]) };
                 // Produce both rows and errs to avoid conditional dataflow construction.
-                let (mut rows, errs) = match locally {
+                let (mut rows, errs) = match rows {
                     Ok(rows) => (rows, Vec::new()),
                     Err(e) => (Vec::new(), vec![e]),
                 };
@@ -1174,6 +1172,109 @@ pub mod plan {
                 as_of: desc.as_of,
                 debug_name: desc.debug_name,
             })
+        }
+
+        /// Shards the plan across workers, partitioning responsibility for the `Constant` elements.
+        pub fn clone_for_worker(&self, index: usize, peers: usize) -> Self {
+            match self {
+                // For constants, balance the rows across the workers.
+                Plan::Constant { rows } => Plan::Constant {
+                    rows: match rows {
+                        Ok(rows) => Ok(rows
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| i % peers == index)
+                            .map(|(_, rows)| rows.clone())
+                            .collect()),
+                        Err(err) => {
+                            if index == 0 {
+                                Err(err.clone())
+                            } else {
+                                Ok(Vec::new())
+                            }
+                        }
+                    },
+                },
+
+                // For all other variants, just replace inputs with appropriately sharded versions.
+                // This is surprisingly verbose, but that is all it is doing.
+                Plan::Get {
+                    id,
+                    keys,
+                    mfp,
+                    key_val,
+                } => Plan::Get {
+                    id: *id,
+                    keys: keys.clone(),
+                    mfp: mfp.clone(),
+                    key_val: key_val.clone(),
+                },
+                Plan::Let { value, body, id } => Plan::Let {
+                    value: Box::new(value.clone_for_worker(index, peers)),
+                    body: Box::new(body.clone_for_worker(index, peers)),
+                    id: *id,
+                },
+                Plan::Mfp {
+                    input,
+                    mfp,
+                    key_val,
+                } => Plan::Mfp {
+                    input: Box::new(input.clone_for_worker(index, peers)),
+                    mfp: mfp.clone(),
+                    key_val: key_val.clone(),
+                },
+                Plan::FlatMap {
+                    input,
+                    func,
+                    exprs,
+                    mfp,
+                } => Plan::FlatMap {
+                    input: Box::new(input.clone_for_worker(index, peers)),
+                    func: func.clone(),
+                    exprs: exprs.clone(),
+                    mfp: mfp.clone(),
+                },
+                Plan::Join { inputs, plan } => Plan::Join {
+                    inputs: inputs
+                        .iter()
+                        .map(|input| input.clone_for_worker(index, peers))
+                        .collect(),
+                    plan: plan.clone(),
+                },
+                Plan::Reduce {
+                    input,
+                    key_val_plan,
+                    plan,
+                } => Plan::Reduce {
+                    input: Box::new(input.clone_for_worker(index, peers)),
+                    key_val_plan: key_val_plan.clone(),
+                    plan: plan.clone(),
+                },
+                Plan::TopK { input, top_k_plan } => Plan::TopK {
+                    input: Box::new(input.clone_for_worker(index, peers)),
+                    top_k_plan: top_k_plan.clone(),
+                },
+                Plan::Negate { input } => Plan::Negate {
+                    input: Box::new(input.clone_for_worker(index, peers)),
+                },
+                Plan::Threshold {
+                    input,
+                    threshold_plan,
+                } => Plan::Threshold {
+                    input: Box::new(input.clone_for_worker(index, peers)),
+                    threshold_plan: threshold_plan.clone(),
+                },
+                Plan::Union { inputs } => Plan::Union {
+                    inputs: inputs
+                        .iter()
+                        .map(|input| input.clone_for_worker(index, peers))
+                        .collect(),
+                },
+                Plan::ArrangeBy { input, keys } => Plan::ArrangeBy {
+                    input: Box::new(input.clone_for_worker(index, peers)),
+                    keys: keys.clone(),
+                },
+            }
         }
     }
 
