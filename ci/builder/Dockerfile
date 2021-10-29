@@ -10,12 +10,13 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:focal-20210921 AS crosstool
+FROM ubuntu:focal-20211006 AS crosstool
 
 WORKDIR /scratch
 
 # The environment variables are necessary to convince `tzdata`'s install scripts
-# not to hang -- see https://serverfault.com/questions/949991/how-to-install-tzdata-on-a-ubuntu-docker-image
+# not to hang.
+# See: https://serverfault.com/questions/949991/how-to-install-tzdata-on-a-ubuntu-docker-image
 RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     autoconf \
     automake \
@@ -59,7 +60,7 @@ RUN DEFCONFIG=crosstool.defconfig ct-ng defconfig \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:focal-20210921
+FROM ubuntu:focal-20211006
 
 WORKDIR /workdir
 
@@ -138,8 +139,8 @@ RUN mkdir rust \
         ;; \
     esac \
     && rm -rf rust \
-    && cargo install --root /usr/local --version "=1.32.0" cargo-deb \
-    && cargo install --root /usr/local --version "=0.8.4" cargo-deny
+    && cargo install --root /usr/local --version "=1.33.1" cargo-deb \
+    && cargo install --root /usr/local --version "=0.9.1" cargo-deny
 
 # Link Rust's internal lld into the cross-compiling sysroot. This avoids
 # bringing in an extra copy of LLVM via `apt install lld`.
@@ -150,11 +151,6 @@ RUN ln -s /usr/local/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld /opt/x-to
 # Install the Antithesis stub instrumentation library.
 
 COPY libvoidstar.so /usr/local/lib/
-
-# Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become unnecessary when
-# we upgrade to Python 3.7+. See: https://www.python.org/dev/peps/pep-0538/
-
-ENV LC_CTYPE=C.UTF-8
 
 # Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
