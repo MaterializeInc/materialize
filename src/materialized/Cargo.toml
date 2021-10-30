@@ -55,7 +55,7 @@ libc = "0.2.105"
 log = "0.4.13"
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
 mz-process-collector = { path = "../mz-process-collector" }
-nix = "0.20.2"
+nix = "0.23.0"
 num_cpus = "1.0.0"
 openssl = { version = "0.10.37", features = ["vendored"] }
 openssl-sys = { version = "0.9.68", features = ["vendored"] }
