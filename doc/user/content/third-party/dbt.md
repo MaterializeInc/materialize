@@ -8,7 +8,7 @@ weight: 2
 ---
 
 You can use [dbt] to easily create views and materialized views in your `materialized`
-instance. All you need is to install the [`dbt-materialize`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/README.md)
+instance. All you need to do is install the [`dbt-materialize`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/README.md)
 adapter.
 
 To get started, check out our [dbt and Materialize](/guides/dbt/) guide.

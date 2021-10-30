@@ -1,19 +1,19 @@
 ---
 title: "dbt and Materialize"
-description: "How to use dbt and Materialize to transform streaming data in (near) real-time."
+description: "How to use dbt and Materialize to transform streaming data in real time."
 weight: 10
 menu:
   main:
     parent: guides
 ---
 
-{{< warning >}}
+{{< note >}}
 The `dbt-materialize` adapter can only be used with dbt Core. We are working with the dbt community to bring native Materialize support to dbt Cloud!
-{{</ warning >}}
+{{</ note >}}
 
 [dbt](https://docs.getdbt.com/docs/introduction) (data build tool) has become the standard for data transformation ("the T in ELT"). It combines the accessibility of SQL with software engineering best practices, allowing you to not only build reliable data pipelines, but also document, test and version-control them.
 
-While dbt is a great fit for **batch** transformations, it can only **approximate** transforming streaming data (officially through [incremental models](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/configuring-incremental-models), and unofficially through [lambda views](https://discourse.getdbt.com/t/how-to-create-near-real-time-models-with-just-dbt-sql/1457)). In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in (near) real-time.
+While dbt is a great fit for **batch** transformations, it can only **approximate** transforming streaming data (officially through [incremental models](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/configuring-incremental-models), and unofficially through [lambda views](https://discourse.getdbt.com/t/how-to-create-near-real-time-models-with-just-dbt-sql/1457)). In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in real time.
 
 ## Setup
 
@@ -39,7 +39,7 @@ Setting up a dbt project with Materialize is similar to setting it up with any o
     dbt --version
     ```
 
-    `materialize` should be listed under "Plugins". If this is not the case, double check that the virtual environment is activated!
+    `materialize` should be listed under "Plugins". If this is not the case, double-check that the virtual environment is activated!
 
 1. Last but not least, make sure you have Materialize [installed and running](/install/). You can also use the `dbt-materialize` adapter with [Materialize Cloud](/cloud/get-started-with-cloud/#sign-up).
 
@@ -114,11 +114,11 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
 ## Build and run dbt models
 
-In dbt, a [model](https://docs.getdbt.com/docs/building-a-dbt-project/building-models#getting-started) is a `SELECT` statement that encapsulates some data transformation you want to run on top of your database. For dbt to know how to persist (or not) these transformations, each model needs to be associated with a [materialization](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/materializations) strategy.
+In dbt, a [model](https://docs.getdbt.com/docs/building-a-dbt-project/building-models#getting-started) is a `SELECT` statement that encapsulates a data transformation you want to run on top of your database. For dbt to know how to persist (or not) a transformation, the model needs to be associated with a [materialization](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/materializations) strategy.
 
 ### dbt models
 
-An important difference in using dbt with Materialize is that **your models stay up-to-date** without the need for manual or configured refreshes. This allows you to efficiently transform streaming data using the same mental model you'd use for batch transformations on top of any other database.
+When you use dbt with Materialize, **your models stay up-to-date** without manual or configured refreshes. This allows you to efficiently transform streaming data using the same thought process you'd use for batch transformations on top of any other database.
 
 1. Create a model for each SQL statement you're planning to deploy. Each individual model should be stored as a `.sql` file under the directory defined by `source-paths` in `dbt_project.yml`.
 
@@ -161,7 +161,7 @@ An important difference in using dbt with Materialize is that **your models stay
 
     <h5>Creating a materialized view</h5>
 
-    This is where Materialize goes beyond dbt's incremental models (and traditional databases), with [materialized views](/sql/create-materialized-view) that **continually update** as the underlying data changes:
+    This is where Materialize goes beyond dbt's incremental models (and traditional databases), with [materialized views](/sql/create-materialized-view) that **continuously update** as the underlying data changes:
 
     ```sql
     {{ config(materialized='materializedview') }}
@@ -180,9 +180,9 @@ An important difference in using dbt with Materialize is that **your models stay
     dbt run
     ```
 
-    This command generates **executable SQL code** from any model files under the specified directory and runs it in the target environment. You can find the compiled statements under `/target/run` and `target/compiled`, in the dbt project folder.
+    This command generates **executable SQL code** from any model files under the specified directory and runs it in the target environment. You can find the compiled statements under `/target/run` and `target/compiled` in the dbt project folder.
 
-1. Using a new terminal window, [connect](/connect/cli/) to Materialize to double check that all the objects were created:
+1. Using a new terminal window, [connect](/connect/cli/) to Materialize to double-check that all objects have been created:
 
     ```bash
     psql -U materialize -h localhost -p 6875 materialize
@@ -207,13 +207,13 @@ That's it! From here on, Materialize makes sure that your models are **increment
 
 ### Materializations
 
-dbt models are materialized as `views` by default, but can be configured to use a different materialization type through the `materialized` configuration parameter. This parameter can be set directly in the model file, using:
+dbt models are materialized as `views` by default, but can be configured to use a different materialization type through the `materialized` configuration parameter. This parameter can be set directly in the model file using:
 
 ```sql
 {{ config(materialized='materializedview') }}
 ```
 
-Because Materialize is optimized for (near) real-time transformations of streaming data and the core of dbt is built around batch, the `dbt-materialize` adapter implements a few custom materialization types:
+Because Materialize is optimized for real-time transformations of streaming data and the core of dbt is built around batch, the `dbt-materialize` adapter implements a few custom materialization types:
 
 {{% dbt-materializations %}}
 
@@ -255,13 +255,13 @@ dbt can automatically generate [documentation](https://docs.getdbt.com/docs/buil
 
     dbt will grab any additional project information and Materialize catalog metadata, then compile it into `.json` files (`manifest.json` and `catalog.json`, respectively) that can be used to feed the documentation website. You can find the compiled files under `/target`, in the dbt project folder.
 
-1. Launch the documentation website (by default, this command starts a web server on port 8000):
+1. Launch the documentation website. By default, this command starts a web server on port 8000:
 
     ```bash
-    dbt docs serve #--port 8001
+    dbt docs serve #--port <port>
     ```
 
-    There, you can find an overview of your dbt project, browse existing models and metadata, and in general keep track of what's going on with your data pipelines.
+1. In a browser, navigate to `localhost:8000`. There, you can find an overview of your dbt project, browse existing models and metadata, and in general keep track of what's going on.
 
     If you click **View Lineage Graph** in the lower right corner, you can even inspect the lineage of your streaming pipelines!
 
