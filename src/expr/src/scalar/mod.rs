@@ -998,6 +998,7 @@ impl fmt::Display for MirScalarExpr {
 )]
 pub enum EvalError {
     DivisionByZero,
+    FeatureNotSupported(String),
     FloatOverflow,
     FloatUnderflow,
     NumericFieldOverflow,
@@ -1056,6 +1057,9 @@ impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             EvalError::DivisionByZero => f.write_str("division by zero"),
+            EvalError::FeatureNotSupported(feature) => {
+                write!(f, "{}", feature)
+            }
             EvalError::FloatOverflow => f.write_str("value out of range: overflow"),
             EvalError::FloatUnderflow => f.write_str("value out of range: underflow"),
             EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),

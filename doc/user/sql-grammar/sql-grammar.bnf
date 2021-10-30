@@ -316,6 +316,10 @@ func_coalesce ::=
   'coalesce' '(' val ( ',' val )* ')'
 func_csv_extract ::=
   'csv_extract' '(' num_csv_col ',' col_name ')'
+func_date_bin ::=
+  'date_bin' '(' stride ',' source ',' origin ')'
+func_date_bin_experimental ::=
+  'date_bin' '(' stride ',' source (',' origin)? ')'
 func_date_trunc ::=
   'date_trunc' '(' "'" ( 'microseconds' | 'milliseconds' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year' | 'decade' | 'century' | 'millenium' ) "'" ',' ts_val ')'
 func_extract ::=

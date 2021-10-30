@@ -2021,7 +2021,16 @@ fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
 
 /// A timestamp with both a date and a time component, but not necessarily a
 /// timezone component.
-pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datum<'a>> {
+pub trait TimestampLike:
+    Clone
+    + PartialOrd
+    + chrono::Datelike
+    + chrono::Timelike
+    + std::ops::Add<Duration, Output = Self>
+    + std::ops::Sub<Duration, Output = Self>
+    + std::ops::Sub<Output = Duration>
+    + for<'a> Into<Datum<'a>>
+{
     fn new(date: NaiveDate, time: NaiveTime) -> Self;
 
     /// Returns the weekday as a `usize` between 0 and 6, where 0 represents
@@ -2409,6 +2418,45 @@ where
     }
 }
 
+fn date_bin<'a, T>(stride: Interval, source: T, origin: T) -> Result<Datum<'a>, EvalError>
+where
+    T: TimestampLike,
+{
+    let stride_ns = if stride.months != 0 {
+        Err(EvalError::FeatureNotSupported(
+            "timestamps cannot be binned into intervals containing months or years".to_string(),
+        ))
+    } else if stride.duration <= 0 {
+        Err(EvalError::FeatureNotSupported(
+            "stride must be greater than zero".to_string(),
+        ))
+    } else {
+        i64::try_from(stride.duration).map_err(|_| {
+            EvalError::FeatureNotSupported("stride cannot exceed 2^63 nanoseconds".to_string())
+        })
+    }?;
+
+    // Make sure the returned timestamp is at the start of the bin, even if the
+    // origin is in the future. We do this here because `T` is not `Copy` and
+    // gets moved by its subtraction operation.
+    let sub_stride = origin > source;
+
+    let tm_diff = (source - origin.clone()).num_nanoseconds().ok_or_else(|| {
+        EvalError::FeatureNotSupported(
+            "source and origin must not differ more than 2^63 nanoseconds".to_string(),
+        )
+    })?;
+
+    let mut tm_delta = tm_diff - tm_diff % stride_ns;
+
+    if sub_stride {
+        tm_delta -= stride_ns;
+    }
+
+    let res = origin + Duration::nanoseconds(tm_delta);
+    Ok(res.into())
+}
+
 fn date_trunc<'a, T>(a: Datum<'a>, ts: T) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
@@ -2669,6 +2717,8 @@ pub enum BinaryFunc {
     IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
+    DateBinTimestamp,
+    DateBinTimestampTz,
     DatePartInterval,
     DatePartTimestamp,
     DatePartTimestampTz,
@@ -2822,6 +2872,20 @@ impl BinaryFunc {
             }
             BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
             BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
+            BinaryFunc::DateBinTimestamp => {
+                eager!(|a: Datum, b: Datum| date_bin(
+                    a.unwrap_interval(),
+                    b.unwrap_timestamp(),
+                    NaiveDateTime::from_timestamp(0, 0)
+                ))
+            }
+            BinaryFunc::DateBinTimestampTz => {
+                eager!(|a: Datum, b: Datum| date_bin(
+                    a.unwrap_interval(),
+                    b.unwrap_timestamptz(),
+                    DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
+                ))
+            }
             BinaryFunc::DatePartInterval => {
                 eager!(|a, b: Datum| date_part_interval(a, b.unwrap_interval()))
             }
@@ -2981,9 +3045,8 @@ impl BinaryFunc {
             | AddTimeInterval
             | SubTimeInterval => input1_type,
 
-            AddDateInterval | SubDateInterval | AddDateTime | DateTruncTimestamp => {
-                ScalarType::Timestamp.nullable(true)
-            }
+            AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
+            | DateTruncTimestamp => ScalarType::Timestamp.nullable(true),
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
                 ScalarType::Timestamp.nullable(in_nullable)
@@ -2993,7 +3056,7 @@ impl BinaryFunc {
                 ScalarType::Float64.nullable(true)
             }
 
-            DateTruncTimestampTz => ScalarType::TimestampTz.nullable(true),
+            DateBinTimestampTz | DateTruncTimestampTz => ScalarType::TimestampTz.nullable(true),
 
             TimezoneTimestamp | TimezoneIntervalTimestamp => {
                 ScalarType::TimestampTz.nullable(in_nullable)
@@ -3263,6 +3326,8 @@ impl BinaryFunc {
             IsLikePatternMatch { .. }
             | ToCharTimestamp
             | ToCharTimestampTz
+            | DateBinTimestamp
+            | DateBinTimestampTz
             | DatePartInterval
             | DatePartTimestamp
             | DatePartTimestampTz
@@ -3397,6 +3462,8 @@ impl fmt::Display for BinaryFunc {
             } => f.write_str("~*"),
             BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
             BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
+            BinaryFunc::DateBinTimestamp => f.write_str("bin_unix_epoch_timestamp"),
+            BinaryFunc::DateBinTimestampTz => f.write_str("bin_unix_epoch_timestamptz"),
             BinaryFunc::DatePartInterval => f.write_str("date_partiv"),
             BinaryFunc::DatePartTimestamp => f.write_str("date_partts"),
             BinaryFunc::DatePartTimestampTz => f.write_str("date_parttstz"),
@@ -5591,6 +5658,8 @@ pub enum VariadicFunc {
     HmacString,
     HmacBytes,
     ErrorIfNull,
+    DateBinTimestamp,
+    DateBinTimestampTz,
 }
 
 impl VariadicFunc {
@@ -5601,7 +5670,7 @@ impl VariadicFunc {
         exprs: &'a [MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
         macro_rules! eager {
-            ($func:ident $(, $args:expr)*) => {{
+            ($func:expr $(, $args:expr)*) => {{
                 let ds = exprs.iter()
                     .map(|e| e.eval(datums, temp_storage))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -5637,6 +5706,16 @@ impl VariadicFunc {
             VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
             VariadicFunc::HmacBytes => eager!(hmac_bytes, temp_storage),
             VariadicFunc::ErrorIfNull => error_if_null(datums, temp_storage, exprs),
+            VariadicFunc::DateBinTimestamp => eager!(|d: &[Datum]| date_bin(
+                d[0].unwrap_interval(),
+                d[1].unwrap_timestamp(),
+                d[2].unwrap_timestamp(),
+            )),
+            VariadicFunc::DateBinTimestampTz => eager!(|d: &[Datum]| date_bin(
+                d[0].unwrap_interval(),
+                d[1].unwrap_timestamptz(),
+                d[2].unwrap_timestamptz(),
+            )),
         }
     }
 
@@ -5697,6 +5776,8 @@ impl VariadicFunc {
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
             HmacString | HmacBytes => ScalarType::Bytes.nullable(true),
             ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),
+            DateBinTimestamp => ScalarType::Timestamp.nullable(true),
+            DateBinTimestampTz => ScalarType::TimestampTz.nullable(true),
         }
     }
 
@@ -5736,6 +5817,8 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::RegexpMatch => f.write_str("regexp_match"),
             VariadicFunc::HmacString | VariadicFunc::HmacBytes => f.write_str("hmac"),
             VariadicFunc::ErrorIfNull => f.write_str("error_if_null"),
+            VariadicFunc::DateBinTimestamp => f.write_str("timestamp_bin"),
+            VariadicFunc::DateBinTimestampTz => f.write_str("timestamptz_bin"),
         }
     }
 }
