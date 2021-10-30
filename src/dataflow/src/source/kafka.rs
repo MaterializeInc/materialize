@@ -103,7 +103,7 @@ impl PartitionStats {
             hi_offset: stats.hi_offset - self.hi_offset,
             ls_offset: stats.ls_offset - self.ls_offset,
             app_offset: stats.app_offset - self.app_offset,
-            consumer_lag: stats.consumer_lag - self.consumer_lag,
+            consumer_lag: stats.consumer_lag_stored - self.consumer_lag,
             initial_high_offset: reported_initial_high_offset,
         };
 
@@ -115,7 +115,11 @@ impl PartitionStats {
         self.hi_offset = stats.hi_offset;
         self.ls_offset = stats.ls_offset;
         self.app_offset = stats.app_offset;
-        self.consumer_lag = stats.consumer_lag;
+        // NOTE(benesch): the underlying librdkafka library renamed the
+        // `consumer_lag` field to `consumer_lag_stored` in v1.7.0. We use the
+        // historical name for backwards compatibility. See also #7172 for an
+        // alternative design that would have avoided this problem entirely.
+        self.consumer_lag = stats.consumer_lag_stored;
 
         event
     }
