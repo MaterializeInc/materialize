@@ -83,9 +83,7 @@ tokio = { version = "1.12.0", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-stream = { version = "0.1.7", features = ["net"] }
 tracing = "0.1.29"
-# TODO(benesch): we can use the default features here once tracing-subscriber
-# does not enable chrono's "oldtime" feature.
-tracing-subscriber = { version = "0.2.25", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
+tracing-subscriber = "0.3.1"
 url = "2.2.2"
 uuid = "0.8.2"
 

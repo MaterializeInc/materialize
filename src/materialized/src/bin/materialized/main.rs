@@ -468,10 +468,8 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     {
         use tracing_subscriber::filter::{EnvFilter, LevelFilter};
         use tracing_subscriber::fmt;
-        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::layer::{Layer, SubscriberExt};
         use tracing_subscriber::util::SubscriberInitExt;
-
-        use crate::tracing::FilterLayer;
 
         let env_filter = EnvFilter::try_new(args.log_filter)
             .context("parsing --log-filter option")?
@@ -529,12 +527,12 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                             file.try_clone().expect("failed to clone log file")
                         })
                     })
-                    .with(FilterLayer::new(
+                    .with(
                         fmt::layer()
                             .with_writer(io::stderr)
-                            .with_ansi(atty::is(atty::Stream::Stderr)),
-                        stderr_level,
-                    ))
+                            .with_ansi(atty::is(atty::Stream::Stderr))
+                            .with_filter(stderr_level),
+                    )
                     .init()
             }
         }
