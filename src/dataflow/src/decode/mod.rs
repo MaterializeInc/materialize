@@ -40,6 +40,7 @@ use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::protobuf::ProtobufDecoderState;
 use crate::metrics::Metrics;
+use crate::operator::StreamExt;
 use crate::source::DecodeResult;
 use crate::source::SourceOutput;
 
@@ -258,7 +259,7 @@ struct DataDecoder {
 }
 
 impl DataDecoder {
-    pub fn next(
+    pub async fn next(
         &mut self,
         bytes: &mut &[u8],
         upstream_coord: Option<i64>,
@@ -278,6 +279,7 @@ impl DataDecoder {
             }
             DataDecoderInner::Avro(avro) => {
                 avro.decode(bytes, upstream_coord, upstream_time_millis, push_metadata)
+                    .await
             }
             DataDecoderInner::Csv(csv) => csv.decode(bytes, upstream_coord, push_metadata),
             DataDecoderInner::PreDelimited(format) => {
@@ -508,7 +510,7 @@ where
     // Other decoders don't care; so we distribute things round-robin (i.e., by "position"), and
     // fall back to arbitrarily hashing by value if the upstream didn't give us a position.
     let use_key_contract = matches!(envelope, SourceEnvelope::Debezium(..));
-    let results = stream.unary_frontier(
+    let results = stream.unary_async(
         Exchange::new(move |x: &SourceOutput<Vec<u8>, MessagePayload>| {
             if use_key_contract {
                 x.key.hashed()
@@ -519,12 +521,20 @@ where
             }
         }),
         &op_name,
-        move |_, _| {
-            move |input, output| {
+        move |_, _, mut bundles| async move {
+            loop {
+                let (input, mut output) = bundles.next().await;
+
                 let mut n_errors = 0;
                 let mut n_successes = 0;
-                input.for_each(|cap, data| {
+
+                while let Some((cap, data)) = input.next() {
+                    // We must retain the capability in case we hit an await point. This is
+                    // because CapabilityRefs aren't enough to ensure the frontier doesn't move
+                    // past us
+                    // let cap = cap.retain();
                     let mut session = output.session(&cap);
+
                     for SourceOutput {
                         key,
                         value,
@@ -538,6 +548,7 @@ where
                         {
                             let mut key = key_decoder
                                 .next(key_cursor, None, *upstream_time_millis, false)
+                                .await
                                 .transpose();
                             if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
                                 key = Some(Err(DecodeError::Text(format!(
@@ -568,6 +579,7 @@ where
                                             *upstream_time_millis,
                                             push_metadata,
                                         )
+                                        .await
                                         .transpose();
                                     if let (Some(Ok(_)), false) =
                                         (&value, value_bytes_remaining.is_empty())
@@ -602,7 +614,8 @@ where
                             });
                         }
                     }
-                });
+                }
+
                 // Matching historical practice, we only log metrics on the value decoder.
                 if n_errors > 0 {
                     value_decoder.log_errors(n_errors);
@@ -683,15 +696,19 @@ where
     );
 
     let mut value_buf = vec![];
-
     // The `position` value from `SourceOutput` is meaningless here -- it's just the index of a chunk.
     // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
     let mut n_seen = 0;
-    let results = stream.unary_frontier(Pipeline, &op_name, move |_, _| {
-        move |input, output| {
+    let results = stream.unary_async(Pipeline, &op_name, move |_, _, mut bundles| async move {
+        loop {
+            let (input, mut output) = bundles.next().await;
+
             let mut n_errors = 0;
             let mut n_successes = 0;
-            input.for_each(|cap, data| {
+            while let Some((cap, data)) = input.next() {
+                // We must retain the capability in case we hit an await point. This is because
+                // CapabilityRef aren't enough to ensure the frontier doesn't move past us
+                // let cap = cap.retain();
                 let mut session = output.session(&cap);
                 for SourceOutput {
                     key,
@@ -706,6 +723,7 @@ where
                     {
                         let mut key = key_decoder
                             .next(key_cursor, None, *upstream_time_millis, false)
+                            .await
                             .transpose();
                         if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
                             // Perhaps someday we'll assign semantics to multiple keys in one message, but for now it doesn't make sense.
@@ -780,12 +798,15 @@ where
                         // and break manually.
                         loop {
                             let old_value_cursor = *value_bytes_remaining;
-                            let value = match value_decoder.next(
-                                value_bytes_remaining,
-                                Some(n_seen + 1), // Match historical practice - files start at 1, not 0.
-                                *upstream_time_millis,
-                                push_metadata,
-                            ) {
+                            let value = match value_decoder
+                                .next(
+                                    value_bytes_remaining,
+                                    Some(n_seen + 1), // Match historical practice - files start at 1, not 0.
+                                    *upstream_time_millis,
+                                    push_metadata,
+                                )
+                                .await
+                            {
                                 Err(e) => Err(e),
                                 Ok(None) => {
                                     let leftover = value_bytes_remaining.to_vec();
@@ -829,7 +850,7 @@ where
                         }
                     }
                 }
-            });
+            }
             // Matching historical practice, we only log metrics on the value decoder.
             if n_errors > 0 {
                 value_decoder.log_errors(n_errors);
