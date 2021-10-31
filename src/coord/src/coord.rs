@@ -2681,17 +2681,14 @@ impl Coordinator {
                 Err(e) => Err(e),
             };
 
+            if result.is_err() {
+                action = EndTransactionAction::Rollback;
+            }
+            session.vars_mut().end_transaction(action);
+
             match result {
-                Ok(()) => {
-                    session.vars_mut().end_transaction(action);
-                    tx.send(Ok(response), session)
-                }
-                Err(err) => {
-                    session
-                        .vars_mut()
-                        .end_transaction(EndTransactionAction::Rollback);
-                    tx.send(Err(err), session)
-                }
+                Ok(()) => tx.send(Ok(response), session),
+                Err(err) => tx.send(Err(err), session),
             }
         });
     }
