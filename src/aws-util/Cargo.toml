@@ -16,4 +16,4 @@ rusoto_s3 = "0.47.0"
 rusoto_sqs = "0.47.0"
 rusoto_sts = "0.47.0"
 serde = { version = "1.0.130", features = ["derive"] }
-tokio = "1.12.0"
+tokio = "1.13.0"
