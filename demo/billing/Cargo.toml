@@ -9,6 +9,7 @@ publish = false
 anyhow = "1.0.52"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
+clap = { version = "3.0.0", features = ["derive"] }
 csv = "1.1.6"
 env_logger = "0.9.0"
 futures = "0.3.19"
@@ -20,7 +21,6 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 rand = "0.8.4"
 rand_distr = "0.4.2"
-structopt = "0.3.25"
 test-util = { path = "../../test/test-util" }
 tokio = "1.15.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

@@ -10,6 +10,7 @@ anyhow = "1.0.52"
 aws-sdk-kinesis = { version = "0.3.0", default-features = false }
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+clap = { version = "3.0.0", features = ["derive"] }
 env_logger = "0.9.0"
 futures = "0.3.19"
 futures-channel = "0.3.16"
@@ -17,7 +18,6 @@ log = "0.4.13"
 mz-aws-util = { path = "../../src/aws-util", features = ["kinesis"] }
 ore = { path = "../../src/ore" }
 rand = "0.8.4"
-structopt = "0.3.25"
 test-util = { path = "../test-util" }
 tokio = "1.15.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

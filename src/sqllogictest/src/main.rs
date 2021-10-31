@@ -15,42 +15,41 @@ use std::path::PathBuf;
 use std::process;
 
 use chrono::Utc;
-use structopt::StructOpt;
 use walkdir::WalkDir;
 
 use sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
 use sqllogictest::util;
 
 /// Runs sqllogictest scripts to verify database engine correctness.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct Args {
     /// Increase verbosity.
     ///
     /// If specified once, print summary for each source file.
     /// If specified twice, also show descriptions of each error.
     /// If specified thrice, also print each query before it is executed.
-    #[structopt(short = "v", long = "verbose", parse(from_occurrences))]
+    #[clap(short = 'v', long = "verbose", parse(from_occurrences))]
     verbosity: usize,
     /// Don't exit with a failing code if not all queries are successful.
-    #[structopt(long)]
+    #[clap(long)]
     no_fail: bool,
     /// Prefix every line of output with the current time.
-    #[structopt(long)]
+    #[clap(long)]
     timestamps: bool,
     /// Rewrite expected output based on actual output.
-    #[structopt(long)]
+    #[clap(long)]
     rewrite_results: bool,
     /// Save a JSON-formatted summary to FILE.
-    #[structopt(long, value_name = "FILE")]
+    #[clap(long, value_name = "FILE")]
     json_summary_file: Option<PathBuf>,
     /// Run with N materialized workers.
-    #[structopt(long, value_name = "N", default_value = "3")]
+    #[clap(long, value_name = "N", default_value = "3")]
     workers: usize,
     /// Path to sqllogictest script to run.
-    #[structopt(value_name = "PATH", required = true)]
+    #[clap(value_name = "PATH", required = true)]
     paths: Vec<String>,
     /// Stop on first failure.
-    #[structopt(long)]
+    #[clap(long)]
     fail_fast: bool,
 }
 

@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use protobuf::Message;
-use structopt::StructOpt;
 use tokio::time::{self, Duration};
 
 use test_util::kafka::kafka_client;
@@ -45,7 +44,7 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    let config = Args::from_args();
+    let config: Args = ore::cli::parse_args();
     env_logger::init();
 
     let k_config = config.kafka_config();

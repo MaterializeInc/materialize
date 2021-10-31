@@ -11,8 +11,6 @@ use chrono::format::ParseResult;
 use chrono::prelude::*;
 use chrono::DateTime;
 
-use structopt::StructOpt;
-
 pub static KAFKA_SOURCE_NAME: &str = "billing_source";
 pub static CSV_SOURCE_NAME: &str = "price_source";
 pub static KAFKA_SINK_NAME: &str = "billing_sink";
@@ -30,79 +28,79 @@ fn parse_seed(s: &str) -> u64 {
     s.parse().unwrap_or_else(|_| rand::random())
 }
 
-#[derive(Clone, Debug, StructOpt)]
+#[derive(Clone, Debug, clap::Parser)]
 pub struct Args {
     /// The materialized host
-    #[structopt(long, default_value = "localhost")]
+    #[clap(long, default_value = "localhost")]
     pub materialized_host: String,
 
-    #[structopt(long, default_value = "6875")]
+    #[clap(long, default_value = "6875")]
     pub materialized_port: u16,
 
     /// The total number of messages to create
-    #[structopt(long, default_value = "1000000")]
+    #[clap(long, default_value = "1000000")]
     pub message_count: usize,
 
     /// Number of messages to send per second
-    #[structopt(long, default_value = "8000")]
+    #[clap(long, default_value = "8000")]
     pub messages_per_second: usize,
 
     /// The kafka host
-    #[structopt(long, default_value = "localhost")]
+    #[clap(long, default_value = "localhost")]
     pub kafka_host: String,
 
     /// The kafka port
-    #[structopt(long, default_value = "9092")]
+    #[clap(long, default_value = "9092")]
     pub kafka_port: u16,
 
-    #[structopt(long, default_value = "billing")]
+    #[clap(long, default_value = "billing")]
     pub kafka_topic: String,
 
-    #[structopt(long, default_value = "prices.csv")]
+    #[clap(long, default_value = "prices.csv")]
     pub csv_file_name: String,
 
     /// The schema-registry URL
-    #[structopt(long, default_value = "http://localhost:8081")]
+    #[clap(long, default_value = "http://localhost:8081")]
     pub schema_registry_url: String,
 
     /// Whether or not to delete the sources and views before starting
-    #[structopt(long)]
+    #[clap(long)]
     pub preserve_source: bool,
 
     /// Whether or not to run the billing-demo in a low memory mode
-    #[structopt(long)]
+    #[clap(long)]
     pub low_memory: bool,
 
     /// A random seed for generating the records and prices
-    #[structopt(long, default_value = "", parse(from_str = parse_seed))]
+    #[clap(long, default_value = "", parse(from_str = parse_seed))]
     pub seed: u64,
 
     /// A date to start generating records from. Default is a week before now.
     /// The input time format should be "%Y-%m-%dT%H:%M:%S"
-    #[structopt(long, parse(try_from_str = parse_utc_datetime_from_str))]
+    #[clap(long, parse(try_from_str = parse_utc_datetime_from_str))]
     pub start_time: Option<DateTime<Utc>>,
 
     /// Whether or not to validate the sink matches its input view
-    #[structopt(long)]
+    #[clap(long)]
     pub check_sink: bool,
 
     /// Whether or not the billing demo should create a new source topic.
-    #[structopt(
+    #[clap(
         long,
         requires_all(&["replication-factor", "partitions"])
     )]
     pub create_topic: bool,
 
     /// Number of partitions for the source topic. Has to be specified if --create-topic is true.
-    #[structopt(long, requires("create-topic"))]
+    #[clap(long, requires("create-topic"))]
     partitions: Option<i32>,
 
     /// Replication factor for the source topic. Has to be specified if --create-topic is true.
-    #[structopt(long, requires("create-topic"))]
+    #[clap(long, requires("create-topic"))]
     replication_factor: Option<i32>,
 
     // Whether or not to enable persistence for input Kafka sources
-    #[structopt(long)]
+    #[clap(long)]
     enable_persistence: bool,
 }
 

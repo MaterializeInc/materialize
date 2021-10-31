@@ -13,7 +13,6 @@ use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use log::info;
-use structopt::StructOpt;
 use tokio::net::TcpListener;
 use tokio::select;
 use tracing_subscriber::EnvFilter;
@@ -23,10 +22,10 @@ use ore::metrics::MetricsRegistry;
 use ore::now::SYSTEM_TIME;
 
 /// Independent dataflow server for Materialize.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct Args {
     /// The address on which to listen for a connection from the coordinator.
-    #[structopt(
+    #[clap(
         long,
         env = "DATAFLOWD_LISTEN_ADDR",
         value_name = "HOST:PORT",
@@ -34,7 +33,7 @@ struct Args {
     )]
     listen_addr: String,
     /// Number of dataflow worker threads.
-    #[structopt(
+    #[clap(
         short,
         long,
         env = "DATAFLOWD_WORKERS",
@@ -42,26 +41,26 @@ struct Args {
         default_value = "1"
     )]
     workers: usize,
-    /// Number of this dataflow process
-    #[structopt(
-        short = "p",
+    /// Number of this dataflowd process.
+    #[clap(
+        short = 'p',
         long,
         env = "DATAFLOWD_PROCESS",
         value_name = "P",
         default_value = "0"
     )]
     process: usize,
-    /// Number of dataflow processes.
-    #[structopt(
-        short = "n",
+    /// Total number of dataflowd processes.
+    #[clap(
+        short = 'n',
         long,
         env = "DATAFLOWD_PROCESSES",
         value_name = "N",
         default_value = "1"
     )]
     processes: usize,
-    /// Dataflowd hosts
-    #[structopt(short, long, env = "DATAFLOWD_HOSTS", value_name = "H")]
+    /// The hostnames of all dataflowd processes in the cluster.
+    #[clap()]
     hosts: Vec<String>,
 }
 

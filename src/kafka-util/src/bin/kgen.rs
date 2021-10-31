@@ -16,7 +16,6 @@ use std::time::Duration;
 
 use anyhow::bail;
 use chrono::{NaiveDate, NaiveDateTime};
-use clap::arg_enum;
 use crossbeam::thread;
 use rand::distributions::{
     uniform::SampleUniform, Alphanumeric, Bernoulli, Uniform, WeightedIndex,
@@ -29,7 +28,6 @@ use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::util::Timeout;
 use rdkafka::ClientConfig;
 use serde_json::Map;
-use structopt::StructOpt;
 use url::Url;
 
 use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
@@ -475,37 +473,35 @@ impl<'a> ValueGenerator<'a> {
     }
 }
 
-arg_enum! {
-    pub enum KeyFormat {
-        Avro,
-        Random,
-        Sequential,
-    }
+#[derive(clap::ArgEnum, PartialEq, Debug, Clone)]
+pub enum KeyFormat {
+    Avro,
+    Random,
+    Sequential,
 }
 
-arg_enum! {
-    pub enum ValueFormat {
-        Bytes,
-        Avro,
-    }
+#[derive(clap::ArgEnum, PartialEq, Debug, Clone)]
+pub enum ValueFormat {
+    Bytes,
+    Avro,
 }
 
 /// Write random data to Kafka.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct Args {
     // == Kafka configuration arguments. ==
     /// Address of one or more Kafka nodes, comma separated, in the Kafka
     /// cluster to connect to.
-    #[structopt(short = "b", long, default_value = "localhost:9092")]
+    #[clap(short = 'b', long, default_value = "localhost:9092")]
     bootstrap_server: String,
     /// URL of the schema registry to connect to, if using Avro keys or values.
-    #[structopt(short = "s", long, default_value = "http://localhost:8081")]
+    #[clap(short = 's', long, default_value = "http://localhost:8081")]
     schema_registry_url: Url,
     /// Topic into which to write records.
-    #[structopt(short = "t", long = "topic")]
+    #[clap(short = 't', long = "topic")]
     topic: String,
     /// Number of records to write.
-    #[structopt(short = "n", long = "num-records")]
+    #[clap(short = 'n', long = "num-records")]
     num_records: usize,
     /// Number of partitions over which records should be distributed in a
     /// round-robin fashion, regardless of the value of the keys of these
@@ -514,7 +510,7 @@ struct Args {
     /// The default value, 0, indicates that Kafka's default strategy of
     /// distributing writes based upon the hash of their keys should be used
     /// instead.
-    #[structopt(long, default_value = "0")]
+    #[clap(long, default_value = "0")]
     partitions_round_robin: usize,
     /// The number of threads to use.
     ///
@@ -524,59 +520,65 @@ struct Args {
 
     // == Key arguments. ==
     /// Format in which to generate keys.
-    #[structopt(
-        short = "k", long = "keys", case_insensitive = true,
-        possible_values = &KeyFormat::variants(), default_value = "sequential"
+    #[clap(
+        short = 'k',
+        long = "keys",
+        ignore_case = true,
+        arg_enum,
+        default_value = "sequential"
     )]
     key_format: KeyFormat,
     /// Minimum key value to generate, if using random-formatted keys.
-    #[structopt(long, required_if("keys", "random"))]
+    #[clap(long, required_if_eq("keys", "random"))]
     key_min: Option<u64>,
     /// Maximum key value to generate, if using random-formatted keys.
-    #[structopt(long, required_if("keys", "random"))]
+    #[clap(long, required_if_eq("keys", "random"))]
     key_max: Option<u64>,
     /// Schema describing Avro key data to randomly generate, if using
     /// Avro-formatted keys.
-    #[structopt(long, required_if("keys", "avro"))]
+    #[clap(long, required_if_eq("keys", "avro"))]
     avro_key_schema: Option<Schema>,
     /// JSON object describing the distribution parameters for each field of
     /// the Avro key object, if using Avro-formatted keys.
-    #[structopt(long, required_if("keys", "avro"))]
+    #[clap(long, required_if_eq("keys", "avro"))]
     avro_key_distribution: Option<serde_json::Value>,
 
     // == Value arguments. ==
     /// Format in which to generate values.
-    #[structopt(
-        short = "v", long = "values", case_insensitive = true,
-        possible_values = &ValueFormat::variants(), default_value = "bytes"
+    #[clap(
+        short = 'v',
+        long = "values",
+        ignore_case = true,
+        arg_enum,
+        default_value = "bytes"
     )]
     value_format: ValueFormat,
     /// Minimum value size to generate, if using bytes-formatted values.
-    #[structopt(
-        short = "m",
+    #[clap(
+        short = 'm',
         long = "min-message-size",
-        required_if("value-format", "bytes")
+        required_if_eq("value-format", "bytes")
     )]
     min_value_size: Option<usize>,
     /// Maximum value size to generate, if using bytes-formatted values.
-    #[structopt(
-        short = "M",
+    #[clap(
+        short = 'M',
         long = "max-message-size",
-        required_if("value-format", "bytes")
+        required_if_eq("value-format", "bytes")
     )]
     max_value_size: Option<usize>,
     /// Schema describing Avro value data to randomly generate, if using
     /// Avro-formatted values.
-    #[structopt(long = "avro-schema", required_if("value-format", "avro"))]
+    #[clap(long = "avro-schema", required_if_eq("value-format", "avro"))]
     avro_value_schema: Option<Schema>,
     /// JSON object describing the distribution parameters for each field of
     /// the Avro value object, if using Avro-formatted keys.
-    #[structopt(long = "avro-distribution", required_if("value-format", "avro"))]
+    #[clap(long = "avro-distribution", required_if_eq("value-format", "avro"))]
     avro_value_distribution: Option<serde_json::Value>,
 
     // == Output control. ==
     /// Suppress printing progress messages.
-    #[structopt(short = "q", long)]
+    #[clap(short = 'q', long)]
     quiet: bool,
 }
 

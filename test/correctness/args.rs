@@ -11,37 +11,36 @@ use std::result::Result as StdResult;
 use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
-use structopt::StructOpt;
 
 use crate::Error;
 
 static DEFAULT_CONFIG: &str = include_str!("chbench-config.toml");
 
 /// Verifies CH-benCHmark correctness.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, clap::Parser)]
 pub struct Args {
     /// URL of the materialized instance to collect metrics from.
-    #[structopt(
+    #[clap(
         long,
         default_value = "postgres://materialize@materialized:6875/materialize"
     )]
     pub materialized_url: String,
     /// If set, initialize sources.
-    #[structopt(long = "mz-sources")]
+    #[clap(long = "mz-sources")]
     pub initialize_sources: bool,
     /// Config file to use.
     ///
     /// If unspecified, uses the default, built-in checks.
-    #[structopt(short = "c", long, value_name = "FILE")]
+    #[clap(short = 'c', long, value_name = "FILE")]
     pub config_file: Option<String>,
     /// Limit to these correctness checks from config file.
-    #[structopt(short = "i", long, value_name = "CHECKS")]
+    #[clap(short = 'i', long, value_name = "CHECKS")]
     pub checks: Option<String>,
     /// Print the names of the available checks in the config file.
-    #[structopt(long)]
+    #[clap(long)]
     pub help_config: bool,
     /// Duration for which to run checker.
-    #[structopt(long, parse(try_from_str = repr::util::parse_duration), default_value = "10m")]
+    #[clap(long, parse(try_from_str = repr::util::parse_duration), default_value = "10m")]
     pub duration: Duration,
 }
 

@@ -37,7 +37,7 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use chrono::Utc;
-use clap::AppSettings;
+use clap::{AppSettings, Parser};
 use coord::{PersistConfig, PersistFileStorage, PersistStorage};
 use fail::FailScenario;
 use itertools::Itertools;
@@ -47,7 +47,6 @@ use ore::cgroup::{detect_memory_limit, MemoryLimit};
 use ore::metric;
 use ore::metrics::ThirdPartyMetric;
 use ore::metrics::{raw::IntCounterVec, MetricsRegistry};
-use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
 
 use self::tracing::MetricsRecorderLayer;
@@ -66,24 +65,22 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
 }
 
 /// The streaming SQL materialized view engine.
-#[derive(StructOpt)]
-#[structopt(settings = &[AppSettings::NextLineHelp, AppSettings::UnifiedHelpMessage], usage = "materialized [OPTION]...")]
+#[derive(Parser)]
+#[clap(global_setting = AppSettings::NextLineHelp)]
 struct Args {
     // === Special modes. ===
     /// Print version information and exit.
     ///
     /// Specify twice to additionally print version information for selected
     /// dependencies.
-    #[structopt(short, long, parse(from_occurrences))]
+    #[clap(short, long, parse(from_occurrences))]
     version: usize,
     /// Allow running this dev (unoptimized) build.
     #[cfg(debug_assertions)]
-    #[structopt(long)]
+    #[clap(long, env = "MZ_DEV")]
     dev: bool,
-    // TODO(benesch): add an environment variable once we upgrade to clap v3.
-    // Doesn't presently work in clap v2. See: clap-rs/clap#1476.
     /// [DANGEROUS] Enable experimental features.
-    #[structopt(long)]
+    #[clap(long, env = "MZ_EXPERIMENTAL")]
     experimental: bool,
     /// Whether to run in safe mode.
     ///
@@ -92,10 +89,10 @@ struct Args {
     ///
     /// This option is intended for use by the cloud product
     /// (cloud.materialize.com), but may be useful in other contexts as well.
-    #[structopt(long, hidden = true)]
+    #[clap(long, hide = true)]
     safe: bool,
 
-    #[structopt(long)]
+    #[clap(long, env = "MZ_DISABLE_USER_INDEXES")]
     disable_user_indexes: bool,
 
     /// The address on which metrics visible to "third parties" get exposed.
@@ -106,16 +103,16 @@ struct Args {
     /// This address is never served TLS-encrypted or authenticated, and while only "non-sensitive"
     /// metrics are served from it, care should be taken to not expose the listen address to the
     /// public internet or other unauthorized parties.
-    #[structopt(
+    #[clap(
         long,
-        hidden = true,
+        hide = true,
         value_name = "HOST:PORT",
         env = "MZ_THIRD_PARTY_METRICS_ADDR"
     )]
     third_party_metrics_listen_addr: Option<SocketAddr>,
 
     /// Enable persistent user tables. Has to be used with --experimental.
-    #[structopt(long, hidden = true)]
+    #[clap(long, hide = true)]
     persistent_user_tables: bool,
 
     /// Disable persistence of all system tables.
@@ -125,7 +122,7 @@ struct Args {
     /// This test is enabled by default to allow us to collect data from a
     /// variety of deployments, but setting this flag to true to opt out of the
     /// test is always safe.
-    #[structopt(long)]
+    #[clap(long)]
     disable_persistent_system_tables_test: bool,
 
     /// An S3 location used to persist data, specified as s3://<bucket>/<path>.
@@ -147,26 +144,26 @@ struct Args {
     /// set, S3 credentials and region must be available in the process or
     /// environment: for details see
     /// https://github.com/rusoto/rusoto/blob/rusoto-v0.47.0/AWS-CREDENTIALS.md.
-    #[structopt(long, hidden = true, default_value)]
+    #[clap(long, hide = true, default_value_t)]
     persist_storage: String,
 
     /// Enable the --persist_storage flag. Has to be used with --experimental.
-    #[structopt(long, hidden = true)]
+    #[structopt(long, hide = true)]
     persist_storage_enabled: bool,
 
     /// Enable persistent Kafka UPSERT source. Has to be used with --experimental.
-    #[structopt(long, hidden = true)]
+    #[structopt(long, hide = true)]
     persistent_kafka_upsert_source: bool,
 
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
-    #[structopt(short, long, env = "MZ_WORKERS", value_name = "N", default_value)]
+    #[clap(short, long, env = "MZ_WORKERS", value_name = "N", default_value_t)]
     workers: WorkerCount,
     /// Log Timely logging itself.
-    #[structopt(long, hidden = true)]
+    #[clap(long, hide = true)]
     debug_introspection: bool,
     /// Retain prometheus metrics for this amount of time.
-    #[structopt(short, long, hidden = true, parse(try_from_str = repr::util::parse_duration), default_value = "5min")]
+    #[clap(short, long, hide = true, parse(try_from_str = repr::util::parse_duration), default_value = "5min")]
     retain_prometheus_metrics: Duration,
 
     // === Performance tuning parameters. ===
@@ -177,25 +174,25 @@ struct Args {
     /// Materialize's dataflow engine.
     ///
     /// Set to "off" to disable introspection.
-    #[structopt(long, env = "MZ_INTROSPECTION_FREQUENCY", parse(try_from_str = parse_optional_duration), value_name = "FREQUENCY", default_value = "1s")]
+    #[clap(long, env = "MZ_INTROSPECTION_FREQUENCY", parse(try_from_str = parse_optional_duration), value_name = "FREQUENCY", default_value = "1s")]
     introspection_frequency: OptionalDuration,
     /// How much historical detail to maintain in arrangements.
     ///
     /// Set to "off" to disable logical compaction.
-    #[structopt(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
+    #[clap(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
     logical_compaction_window: OptionalDuration,
     /// Default frequency with which to advance timestamps
-    #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str =repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
+    #[clap(long, env = "MZ_TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str =repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
     /// Default frequency with which to scrape prometheus metrics
-    #[structopt(long, env = "MZ_METRICS_SCRAPING_INTERVAL", hidden = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "30s")]
+    #[clap(long, env = "MZ_METRICS_SCRAPING_INTERVAL", hide = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "30s")]
     metrics_scraping_interval: OptionalDuration,
 
     /// [ADVANCED] Timely progress tracking mode.
-    #[structopt(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
+    #[clap(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
     timely_progress_mode: timely::worker::ProgressMode,
     /// [ADVANCED] Amount of compaction to perform when idle.
-    #[structopt(long, env = "MZ_DIFFERENTIAL_IDLE_MERGE_EFFORT", value_name = "N")]
+    #[clap(long, env = "MZ_DIFFERENTIAL_IDLE_MERGE_EFFORT", value_name = "N")]
     differential_idle_merge_effort: Option<isize>,
 
     // === Logging options. ===
@@ -203,7 +200,7 @@ struct Args {
     ///
     /// The special value "stderr" will emit messages to the standard error
     /// stream. All other values are taken as file paths.
-    #[structopt(long, env = "MZ_LOG_FILE", value_name = "PATH")]
+    #[clap(long, env = "MZ_LOG_FILE", value_name = "PATH")]
     log_file: Option<String>,
     /// Which log messages to emit.
     ///
@@ -228,7 +225,7 @@ struct Args {
     /// in a directive to suppress all log messages, even errors.
     ///
     /// The default value for this option is "info".
-    #[structopt(
+    #[clap(
         long,
         env = "MZ_LOG_FILTER",
         value_name = "FILTER",
@@ -238,7 +235,7 @@ struct Args {
 
     // == Connection options.
     /// The address on which to listen for connections.
-    #[structopt(
+    #[clap(
         long,
         env = "MZ_LISTEN_ADDR",
         value_name = "HOST:PORT",
@@ -268,45 +265,45 @@ struct Args {
     ///
     /// The most secure mode is "verify-full". This is the default mode when
     /// the --tls-cert option is specified. Otherwise the default is "disable".
-    #[structopt(
+    #[clap(
         long, env = "MZ_TLS_MODE",
         possible_values = &["disable", "require", "verify-ca", "verify-full"],
         default_value = "disable",
-        default_value_if("tls-cert", None, "verify-full"),
+        default_value_if("tls-cert", None, Some("verify-full")),
         value_name = "MODE",
     )]
     tls_mode: String,
-    #[structopt(
+    #[clap(
         long,
         env = "MZ_TLS_CA",
-        required_if("tls-mode", "verify-ca"),
-        required_if("tls-mode", "verify-full"),
+        required_if_eq("tls-mode", "verify-ca"),
+        required_if_eq("tls-mode", "verify-full"),
         value_name = "PATH"
     )]
     tls_ca: Option<PathBuf>,
     /// Certificate file for TLS connections.
-    #[structopt(
+    #[clap(
         long,
         env = "MZ_TLS_CERT",
         requires = "tls-key",
-        required_ifs(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
+        required_if_eq_any(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
         value_name = "PATH"
     )]
     tls_cert: Option<PathBuf>,
     /// Private key file for TLS connections.
-    #[structopt(
+    #[clap(
         long,
         env = "MZ_TLS_KEY",
         requires = "tls-cert",
-        required_ifs(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
+        required_if_eq_any(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
         value_name = "PATH"
     )]
     tls_key: Option<PathBuf>,
 
     // === Storage options. ===
     /// Where to store data.
-    #[structopt(
-        short = "D",
+    #[clap(
+        short = 'D',
         long,
         env = "MZ_DATA_DIRECTORY",
         value_name = "PATH",
@@ -315,21 +312,23 @@ struct Args {
     data_directory: PathBuf,
 
     // === Telemetry options. ===
-    // TODO(benesch): add an environment variable once we upgrade to clap v3.
-    // Doesn't presently work in clap v2. See: clap-rs/clap#1476.
     /// Disable telemetry reporting.
-    #[structopt(long, conflicts_with_all = &["telemetry-domain", "telemetry-interval"])]
+    #[clap(
+        long,
+        conflicts_with_all = &["telemetry-domain", "telemetry-interval"],
+        env = "MZ_DISABLE_TELEMETRY",
+    )]
     disable_telemetry: bool,
     /// The domain hosting the telemetry server.
-    #[structopt(long, env = "MZ_TELEMETRY_DOMAIN", hidden = true)]
+    #[clap(long, env = "MZ_TELEMETRY_DOMAIN", hide = true)]
     telemetry_domain: Option<String>,
     /// The interval at which to report telemetry data.
-    #[structopt(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = repr::util::parse_duration), hidden = true)]
+    #[clap(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = repr::util::parse_duration), hide = true)]
     telemetry_interval: Option<Duration>,
 }
 
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
-/// which depends on the number of available CPUs. Ideally structopt would
+/// which depends on the number of available CPUs. Ideally clap would
 /// expose a `default_fn` rather than accepting only string literals.
 struct WorkerCount(usize);
 
@@ -362,7 +361,7 @@ impl fmt::Display for WorkerCount {
 }
 
 fn main() {
-    if let Err(err) = run(Args::from_args()) {
+    if let Err(err) = run(Args::parse()) {
         eprintln!("materialized: {:#}", err);
         process::exit(1);
     }
@@ -387,11 +386,8 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     }
 
     // Prevent accidental usage of development builds.
-    //
-    // TODO(benesch): offload environment variable check to clap once we upgrade
-    // to clap v3. Doesn't presently work in clap v2. See: clap-rs/clap#1476.
     #[cfg(debug_assertions)]
-    if !args.dev && !ore::env::is_var_truthy("MZ_DEV") {
+    if !args.dev {
         bail!(
             "refusing to run dev (unoptimized) binary without explicit opt-in\n\
              hint: Pass the '--dev' option or set MZ_DEV=1 in your environment to opt in.\n\

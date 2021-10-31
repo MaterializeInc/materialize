@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
+clap = { version = "3.0.0", features = ["derive"] }
 env_logger = "0.9.0"
 hyper = { version = "0.14.16", features = ["http1", "server", "tcp"] }
 lazy_static = "1.4.0"
@@ -18,6 +19,5 @@ prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", de
 regex = "1.5.4"
 repr = { path = "../repr" }
 serde = { version = "1.0.133", features = ["derive"] }
-structopt = "0.3.25"
 tokio = { version = "1.15.0", features = ["rt-multi-thread"] }
 toml = "0.5.8"

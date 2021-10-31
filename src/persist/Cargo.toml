@@ -47,7 +47,7 @@ uuid = { version = "0.8.2", features = ["v4"] }
 mz-protoc = { path = "../protoc" }
 
 [dev-dependencies]
-criterion = "0.3.5"
+criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 ore = { path = "../ore", default-features = false, features = ["test"] }
 rand = { version = "0.8.4", features = [ "small_rng" ] }
 tempfile = "3.2.0"

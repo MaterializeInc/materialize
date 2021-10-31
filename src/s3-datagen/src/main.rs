@@ -13,8 +13,8 @@ use std::iter;
 use aws_sdk_s3::error::{CreateBucketError, CreateBucketErrorKind};
 use aws_sdk_s3::model::{BucketLocationConstraint, CreateBucketConfiguration};
 use aws_sdk_s3::SdkError;
+use clap::Parser;
 use futures::stream::{self, StreamExt, TryStreamExt};
-use structopt::StructOpt;
 use tracing::{error, info, Level};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
@@ -25,34 +25,38 @@ use mz_aws_util::config::AwsConfig;
 use ore::cast::CastFrom;
 
 /// Generate meaningless data in S3 to test download speeds
-#[derive(StructOpt)]
+#[derive(Parser)]
 struct Args {
     /// How large to make each line (record) in Bytes
-    #[structopt(short = "l", long)]
+    #[clap(short = 'l', long)]
     line_bytes: usize,
 
     /// How large to make each object, e.g. `1 KiB`
-    #[structopt(
-        short = "s",
+    #[clap(
+        short = 's',
         long,
         parse(try_from_str = parse_object_size)
     )]
     object_size: usize,
 
     /// How many objects to create
-    #[structopt(short = "c", long)]
+    #[clap(short = 'c', long)]
     object_count: usize,
 
     /// All objects will be inserted into this prefix
-    #[structopt(short = "p", long)]
+    #[clap(short = 'p', long)]
     key_prefix: String,
 
     /// All objects will be inserted into this bucket
-    #[structopt(short = "b", long)]
+    #[clap(short = 'b', long)]
     bucket: String,
 
+    /// Which region to operate in
+    #[clap(short = 'r', long, default_value = "us-east-2")]
+    region: String,
+
     /// Number of copy operations to run concurrently
-    #[structopt(long, default_value = "50")]
+    #[clap(long, default_value = "50")]
     concurrent_copies: usize,
 }
 
@@ -166,6 +170,6 @@ async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_object_size(s: &str) -> Result<usize, &str> {
+fn parse_object_size(s: &str) -> Result<usize, &'static str> {
     bytefmt::parse(s).map(usize::cast_from)
 }

@@ -14,47 +14,50 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{self, Duration};
 
-use structopt::StructOpt;
-
 use test_util::kafka::kafka_client::KafkaClient;
 
 /// Converts MBTA streams to Kafka streams to use in Materialize.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct Args {
     /// Kafka bootstrap address.
-    #[structopt(long, default_value = "localhost:9092", value_name = "HOST:PORT")]
+    #[clap(long, default_value = "localhost:9092", value_name = "HOST:PORT")]
     kafka_addr: String,
     /// Path to file listing all logs to tail.
-    #[structopt(short = "c", long, value_name = "PATH")]
+    #[clap(short = 'c', long, value_name = "PATH")]
     config_file: Option<PathBuf>,
     /// Path to file where information is being logged.
-    #[structopt(short = "f", long, value_name = "PATH", required_unless("config-file"))]
+    #[clap(
+        short = 'f',
+        long,
+        value_name = "PATH",
+        required_unless_present("config-file")
+    )]
     file_name: Option<PathBuf>,
     /// Name of topic to write to.
-    #[structopt(
-        short = "t",
+    #[clap(
+        short = 't',
         long,
         value_name = "TOPIC",
-        required_unless("config-file")
+        required_unless_present("config-file")
     )]
     topic_name: Option<String>,
     /// Wait time before checking logs for updates.
-    #[structopt(long, default_value = "250ms", parse(try_from_str = repr::util::parse_duration), value_name = "DURATION")]
+    #[clap(long, default_value = "250ms", parse(try_from_str = repr::util::parse_duration), value_name = "DURATION")]
     heartbeat: Duration,
     /// Number of partitions to write to.
-    #[structopt(short = "p", long, default_value = "1", value_name = "N")]
+    #[clap(short = 'p', long, default_value = "1", value_name = "N")]
     partitions: i32,
     /// Replication factor of topic.
-    #[structopt(short = "r", long, default_value = "1", value_name = "N")]
+    #[clap(short = 'r', long, default_value = "1", value_name = "N")]
     replication: i32,
     /// Topic-level Kafka property.
-    #[structopt(long, value_name = "NAME=PROPERTY")]
+    #[clap(long, value_name = "NAME=PROPERTY")]
     topic_property: Vec<String>,
     /// Disable topic creation.
-    #[structopt(short = "d", long)]
+    #[clap(short = 'd', long)]
     disable_topic_create: bool,
     /// Automatically exit when the end of the file is reached.
-    #[structopt(short = "e", long)]
+    #[clap(short = 'e', long)]
     exit_at_end: bool,
 }
 

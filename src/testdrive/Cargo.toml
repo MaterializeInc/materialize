@@ -19,6 +19,7 @@ byteorder = "1.4.3"
 bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+clap = { version = "3.0.0", features = ["derive"] }
 coord = { path = "../coord" }
 flate2 = "1.0.22"
 futures = "0.3.19"
@@ -31,7 +32,7 @@ lazy_static = "1.4.0"
 maplit = "1.0.2"
 md-5 = "0.10.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
-mz-aws-util = { path = "../aws-util", features = ["s3", "sqs", "sts"] }
+mz-aws-util = { path = "../aws-util", features = ["kinesis", "s3", "sqs", "sts"] }
 mz-protoc = { path = "../protoc" }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
@@ -47,7 +48,6 @@ serde_json = { version = "1.0.74", features = ["raw_value"] }
 similar = "2.1.0"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
-structopt = "0.3.25"
 tempfile = "3.2.0"
 termcolor = "1.1.2"
 tiberius = { version = "0.6.5", default-features = false }

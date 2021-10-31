@@ -13,7 +13,6 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use structopt::StructOpt;
 use timely::dataflow::operators::capture::EventReader;
 use timely::dataflow::operators::capture::Replay;
 use timely::dataflow::operators::Inspect;
@@ -24,19 +23,19 @@ use timely::logging::{TimelyEvent, WorkerIdentifier};
 /// Listens for incoming log connections from a Timely/Differential program running
 /// with NUM-TIMELY-WORKERS workers. Point that program at this one by running it
 /// with the environment variable TIMELY_WORKER_LOG_ADDR set to ADDR:PORT.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct Args {
     /// Address to listen on.
-    #[structopt(short = "l", long, value_name = "ADDR", default_value = "127.0.0.1")]
+    #[clap(short = 'l', long, value_name = "ADDR", default_value = "127.0.0.1")]
     listen_addr: String,
     /// Port to listen on.
-    #[structopt(short = "p", long, value_name = "PORT", default_value = "51371")]
+    #[clap(short = 'p', long, value_name = "PORT", default_value = "51371")]
     port: u16,
     /// The number of Timely workers that the dataflow server is running with.
-    #[structopt(value_name = "NUM-TIMELY-WORKERS")]
+    #[clap(value_name = "NUM-TIMELY-WORKERS")]
     num_timely_workers: usize,
     /// Arguments to use to configure this program's Timely computation.
-    #[structopt(last = true)]
+    #[clap(last = true)]
     timely_args: Vec<String>,
 }
 

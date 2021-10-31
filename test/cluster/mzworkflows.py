@@ -22,19 +22,19 @@ prerequisites = [Zookeeper(), Kafka(), SchemaRegistry()]
 mz_daemons = [
     Dataflowd(
         name="dataflowd_1",
-        options="--workers 2 --processes 2 --process 0 --hosts dataflowd_1:2101 dataflowd_2:2101",
+        options="--workers 2 --processes 2 --process 0 dataflowd_1:2101 dataflowd_2:2101",
         hostname="dataflowd_1",
         ports=[6876, 2101],
     ),
     Dataflowd(
         name="dataflowd_2",
-        options="--workers 2 --processes 2 --process 1 --hosts dataflowd_1:2101 dataflowd_2:2101",
+        options="--workers 2 --processes 2 --process 1 dataflowd_1:2101 dataflowd_2:2101",
         hostname="dataflowd_2",
         ports=[6876, 2101],
     ),
     Coordd(
         name="materialized",
-        options="--workers 4 --dataflowd-addr dataflowd_1:6876 dataflowd_2:6876",
+        options="--workers 4 dataflowd_1:6876 dataflowd_2:6876",
     ),
 ]
 
