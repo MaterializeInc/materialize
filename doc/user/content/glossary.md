@@ -4,7 +4,7 @@ description: "Glossary of terms for Materialize"
 menu: "main"
 weight: 3
 ---
-Useful Terms for understanding Materialize.
+Useful terms for understanding Materialize.
 
 ### Apache Kafka
 
@@ -207,7 +207,7 @@ collecting [events](#streaming-stream) and continuously presenting them for proc
 
 ### View
 
-in SQL, a pre-defined, reusable [query](#query). Queries can be executed against views and the [RDBMS](#rdbms) will then
+in SQL, a pre-defined, reusable [query](#query). Queries can be run against views and the [RDBMS](#rdbms) will then
 optimize the resulting query by requesting only the necessary data. Nevertheless, because views only store queries, not
 data, each time a query is run against a view, the data retrieval has to be re-executed, in contrast
 to [materialized views](#materialized-view).
