@@ -14,15 +14,16 @@ Foundation. -->
 
 ### API
 
-<!--- TODO -->
+*Application Programming Interface*: an interface that allows a computer program to connect to and interact with another
+computer program.
 
 ### Arrangement
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### AVRO
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Batch processing
 
@@ -30,39 +31,39 @@ here: a periodical processing of a collection of [events](#event). See also [ETL
 
 ### Casting
 
-<!--- TODO (types of data) -->
+<!-- TODO (types of data) -->
 
 ### Catalog
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### CDC
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Collection
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Confluent
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Contention
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Coordinator
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### CTE
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Dataflow
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Daemon
 
@@ -70,7 +71,7 @@ here: a computer program or software running unattendedly without user interface
 
 ### DBT
 
-<!--- TODO https://materialize.com/docs/guides/dbt/ -->
+<!-- TODO https://materialize.com/docs/guides/dbt/ -->
 
 ### Debezium
 
@@ -80,7 +81,7 @@ the [Apache Kafka](#apache-kafka) [stream](#streaming-stream) processor.
 
 ### Differential dataflow
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Engine
 
@@ -88,7 +89,7 @@ here: a core software component or system.
 
 ### ETL
 
-<!--- TODO  ETL stands for “extract, transform, load”, and that’s exactly what’s going on. -->
+<!-- TODO  ETL stands for “extract, transform, load”, and that’s exactly what’s going on. -->
 
 ### Event
 
@@ -96,103 +97,104 @@ here: a change in data.
 
 ### Functional programming
 
-<!--- TODO -->
+<!-- a way of writing computer programs that relies on *functions*, --> 
+<!-- stateless, -->
 
 ### Incremental view maintenance
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Index
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Join
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### JSON
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Kinesis
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Key
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### LSM
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Materialize
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Materialize Cloud
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### materialized ([daemon](#daemon))
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Materialized view
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Metrics
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Multiset
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### OLAP
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### OLTP
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### OLVM
 
-<!--- TODO (online view maintenance https://materialize.com/blog-cmudb/) -->
+<!-- TODO (online view maintenance https://materialize.com/blog-cmudb/) -->
 
 ### Package
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Partition
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Persistence
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Pipeline
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Plan
 
-<!--- TODO (dataflow) -->
+<!-- TODO (dataflow) -->
 
 ### PostgreSQL
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Prometheus
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### PubNub
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Query
 
@@ -205,23 +207,23 @@ Relational Database Management System
 
 ### S3
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Schema
 
-<!--- TODO (Confluent) -->
+<!-- TODO (Confluent) -->
 
 ### Seeding
 
-<!--- TODO (union) -->
+<!-- TODO (union) -->
 
 ### Shell
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Sink
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Source
 
@@ -235,7 +237,7 @@ in [RDBMS/relational databases](#rdbms) or [streams](#streaming-stream) derived 
 
 ### State
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Streaming (Stream)
 
@@ -243,25 +245,25 @@ collecting [events](#streaming-stream) and continuously presenting them for proc
 
 ### Timely dataflow
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### View
 
-in SQL, a pre-defined, reusable [query](#query). Queries can be run against views and the [RDBMS](#rdbms) will then
-optimize the resulting query by requesting only the necessary data. Nevertheless, because views only store queries, not
-data, each time a query is run against a view, the data retrieval has to be re-executed, in contrast
+in [SQL](#sql), a pre-defined, reusable [query](#query). Queries can be run against views and the [RDBMS](#rdbms) will
+then optimize the resulting query by requesting only the necessary data. Nevertheless, because views only store queries,
+not data, each time a query is run against a view, the data retrieval has to be re-executed, in contrast
 to [materialized views](#materialized-view).
 
 ### Volatility
 
-<!--- TODO  (see also State) -->
+<!-- TODO  (see also State) -->
 
 ### Worker
 
-<!--- TODO -->
+<!-- TODO -->
 
 ### Working set
 
-<!--- TODO -->
+<!-- TODO -->
 
 
