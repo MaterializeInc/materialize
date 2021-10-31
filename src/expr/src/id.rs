@@ -130,10 +130,12 @@ impl fmt::Display for SourceInstanceId {
 
 /// Unique identifier for each part of a whole source.
 ///     Kafka -> partition
+///     S3 -> Globally unique object ID
 ///     None -> sources that have no notion of partitioning (e.g file sources)
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
+    S3(u128),
     None,
 }
 
@@ -141,6 +143,7 @@ impl fmt::Display for PartitionId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
+            PartitionId::S3(id) => write!(f, "s3:{}", id.to_string()),
             PartitionId::None => write!(f, "none"),
         }
     }
@@ -159,12 +162,14 @@ impl FromStr for PartitionId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "none" => Ok(PartitionId::None),
-            s => {
-                let val: i32 = s.parse()?;
-                Ok(PartitionId::Kafka(val))
-            }
+        if s == "none" {
+            Ok(PartitionId::None)
+        } else if let Some(val) = s.strip_prefix("s3:") {
+            let id: u128 = val.parse()?;
+            Ok(PartitionId::S3(id))
+        } else {
+            let val: i32 = s.parse()?;
+            Ok(PartitionId::Kafka(val))
         }
     }
 }
@@ -173,6 +178,13 @@ impl PartitionId {
     pub fn kafka_id(&self) -> Option<i32> {
         match self {
             PartitionId::Kafka(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    pub fn s3_id(&self) -> Option<u128> {
+        match self {
+            PartitionId::S3(id) => Some(*id),
             _ => None,
         }
     }

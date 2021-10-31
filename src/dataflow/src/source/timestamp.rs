@@ -350,6 +350,16 @@ impl TimestampBindingBox {
             .insert(partition.clone(), PartitionTimestamps::new(partition));
     }
 
+    fn remove_partition(&mut self, partition: &PartitionId) {
+        if !self.partitions.contains_key(partition) {
+            debug!("already removed partition {:?}, ignoring", partition);
+            return;
+        }
+
+        self.known_partitions.remove(partition);
+        self.partitions.remove(partition);
+    }
+
     fn add_binding(
         &mut self,
         partition: PartitionId,
@@ -432,6 +442,10 @@ impl TimestampBindingBox {
             .iter()
             .map(|(pid, offset)| (pid.clone(), offset.clone()))
             .collect()
+    }
+
+    fn knows_of(&self, pid: &PartitionId) -> bool {
+        self.known_partitions.contains_key(pid)
     }
 
     fn update_timestamp(&mut self) {
@@ -533,6 +547,11 @@ impl TimestampBindingRc {
             .add_partition(partition, restored_offset);
     }
 
+    /// Tell timestamping machinery to forget about `partition`
+    pub fn remove_partition(&self, partition: &PartitionId) {
+        self.wrapper.borrow_mut().remove_partition(partition);
+    }
+
     /// Get the timestamp assignment for `(partition, offset)` if it is known.
     ///
     /// This function returns the timestamp and the maximum offset for which it is
@@ -561,6 +580,11 @@ impl TimestampBindingRc {
     /// a vector to answer that question.
     pub fn partitions(&self) -> Vec<(PartitionId, Option<MzOffset>)> {
         self.wrapper.borrow().partitions()
+    }
+
+    /// Returns true if this TimestampBindingRc knows about the given partition id
+    pub fn knows_of(&self, pid: &PartitionId) -> bool {
+        self.wrapper.borrow().knows_of(pid)
     }
 
     /// Instructs RT sources to try and move forward to the next timestamp if

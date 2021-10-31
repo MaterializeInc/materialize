@@ -35,6 +35,7 @@ use std::ops::AddAssign;
 
 use anyhow::anyhow;
 use async_compression::tokio::bufread::GzipDecoder;
+use byteorder::{LittleEndian, ReadBytesExt};
 use futures::{FutureExt, StreamExt};
 use globset::GlobMatcher;
 use rusoto_core::RusotoError;
@@ -43,6 +44,7 @@ use rusoto_sqs::{
     ChangeMessageVisibilityBatchRequest, ChangeMessageVisibilityBatchRequestEntry,
     DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs,
 };
+use sha2::{Digest, Sha256};
 use timely::scheduling::SyncActivator;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -71,8 +73,16 @@ mod metrics;
 mod notifications;
 
 type Out = MessagePayload;
-struct InternalMessage {
-    record: Out,
+enum InternalMessage {
+    ObjectStart(u128),
+    ObjectData {
+        /// This is the sha256(bucket_name + "/" + object_path) truncated to 128bit. It is used so that
+        /// downstream consumers can distinguish the multiple object streams and potentially decode in
+        /// parallel.
+        object_id: u128,
+        record: Out,
+    },
+    ObjectEnd(u128),
 }
 /// Size of data chunks we send to dataflow
 const CHUNK_SIZE: usize = 4096;
@@ -153,6 +163,7 @@ async fn download_objects_task(
     }
     let mut seen_buckets: HashMap<String, BucketInfo> = HashMap::new();
 
+    let mut hasher = Sha256::new();
     loop {
         let msg = tokio::select! {
             msg = rx.recv() => {
@@ -197,6 +208,12 @@ async fn download_objects_task(
                 let (tx, activator, client, msg_ref, sid) =
                     (&tx, &activator, &client, &msg, &source_id);
 
+                hasher.update(&msg_ref.bucket);
+                hasher.update("/");
+                hasher.update(&msg_ref.key);
+                let hash = hasher.finalize_reset();
+                let object_id = hash.as_slice().read_u128::<LittleEndian>().unwrap();
+
                 let (status, update) = download_object(
                     tx,
                     &activator,
@@ -205,6 +222,7 @@ async fn download_objects_task(
                     &msg_ref.key,
                     compression,
                     sid,
+                    object_id,
                 )
                 .await;
 
@@ -700,6 +718,7 @@ async fn download_object(
     key: &str,
     compression: Compression,
     source_id: &str,
+    object_id: u128,
 ) -> (DownloadStatus, Option<DownloadMetricUpdate>) {
     let retry_reader = RetryReader::new(|state, offset| async move {
         let range = if offset == 0 {
@@ -769,11 +788,18 @@ async fn download_object(
         }
     };
 
+    if tx
+        .send(Ok(InternalMessage::ObjectStart(object_id)))
+        .await
+        .is_err()
+    {
+        return (DownloadStatus::SendFailed, None);
+    }
     let (mut download_status, metric_update) = match compression {
-        Compression::None => read_object_chunked(source_id, reader, tx).await,
+        Compression::None => read_object_chunked(source_id, object_id, reader, tx).await,
         Compression::Gzip => {
             let decoder = GzipDecoder::new(reader);
-            read_object_chunked(source_id, decoder, tx).await
+            read_object_chunked(source_id, object_id, decoder, tx).await
         }
     };
 
@@ -786,10 +812,21 @@ async fn download_object(
     );
 
     if matches!(download_status, DownloadStatus::Ok) {
-        let sent = tx.send(Ok(InternalMessage {
-            record: MessagePayload::EOF,
-        }));
-        if sent.await.is_err() {
+        if tx
+            .send(Ok(InternalMessage::ObjectData {
+                object_id,
+                record: MessagePayload::EOF,
+            }))
+            .await
+            .is_err()
+        {
+            download_status = DownloadStatus::SendFailed;
+        }
+        if tx
+            .send(Ok(InternalMessage::ObjectEnd(object_id)))
+            .await
+            .is_err()
+        {
             download_status = DownloadStatus::SendFailed;
         }
     };
@@ -799,6 +836,7 @@ async fn download_object(
 
 async fn read_object_chunked<R>(
     source_id: &str,
+    object_id: u128,
     reader: R,
     tx: &Sender<Result<InternalMessage, S3Error>>,
 ) -> (DownloadStatus, Option<DownloadMetricUpdate>)
@@ -815,7 +853,8 @@ where
                 bytes_read += chunk.len();
                 chunks += 1;
                 if tx
-                    .send(Ok(InternalMessage {
+                    .send(Ok(InternalMessage::ObjectData {
+                        object_id,
                         record: MessagePayload::Data(chunk.to_vec()),
                     }))
                     .await
@@ -942,17 +981,25 @@ impl SourceReader for S3SourceReader {
         ))
     }
 
+    fn add_partition(&mut self, _pid: PartitionId, _restored_offset: Option<MzOffset>) {}
+
     fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
         match self.receiver_stream.recv().now_or_never() {
-            Some(Some(Ok(InternalMessage { record }))) => {
+            Some(Some(Ok(InternalMessage::ObjectStart(object_id)))) => {
+                Ok(NextMessage::AddPartition(PartitionId::S3(object_id)))
+            }
+            Some(Some(Ok(InternalMessage::ObjectData { object_id, record }))) => {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
-                    partition: PartitionId::None,
+                    partition: PartitionId::S3(object_id),
                     offset: self.offset.into(),
                     upstream_time_millis: None,
                     key: None,
                     payload: Some(record),
                 }))
+            }
+            Some(Some(Ok(InternalMessage::ObjectEnd(object_id)))) => {
+                Ok(NextMessage::RemovePartition(PartitionId::S3(object_id)))
             }
             Some(Some(Err(e))) => {
                 log::warn!(

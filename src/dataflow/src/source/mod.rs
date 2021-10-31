@@ -332,6 +332,8 @@ pub(crate) trait SourceReader {
 #[derive(Debug)]
 pub(crate) enum NextMessage {
     Ready(SourceMessage),
+    AddPartition(PartitionId),
+    RemovePartition(PartitionId),
     Pending,
     TransientDelay,
     Finished,
@@ -570,6 +572,10 @@ impl ConsistencyInfo {
                 let hash = (self.source_id.source_id.hashed() >> 32) + *p as u64;
                 (hash % self.worker_count as u64) == self.worker_id as u64
             }
+            // The S3 source discovers partitions on its own and the same worker that discovers
+            // them also reads them. When the S3 source becomes parallel this should be a
+            // randomized selection like above
+            PartitionId::S3(_) => self.active,
         }
     }
 
@@ -600,6 +606,21 @@ impl ConsistencyInfo {
         self.source_metrics.add_partition(pid);
     }
 
+    /// Stop tracking consistency information and metrics for `pid`.
+    fn remove_partition(&mut self, pid: &PartitionId) {
+        if !self.partition_metadata.contains_key(pid) {
+            error!("Incorrectly attempting to remove a non existent partition for source: {} partition: {}. Ignoring",
+                   self.source_id,
+                   pid
+            );
+
+            return;
+        }
+
+        self.partition_metadata.remove(pid);
+        self.source_metrics.remove_partition(pid);
+    }
+
     /// Refreshes the source instance's knowledge of timestamp bindings.
     ///
     /// This function needs to be called at the start of every source operator
@@ -628,6 +649,14 @@ impl ConsistencyInfo {
                 timestamp_bindings.get_binding(&pid, cons_info.offset() + 1)
             {
                 cons_info.update_timestamp(timestamp, max);
+            }
+        }
+
+        // Remove any old partitions that we don't care about anymore
+        let partition_ids: Vec<_> = self.partition_metadata.keys().cloned().collect();
+        for pid in partition_ids {
+            if !timestamp_bindings.knows_of(&pid) {
+                self.remove_partition(&pid);
             }
         }
     }
@@ -809,6 +838,19 @@ impl SourceMetrics {
             partition_id,
         );
         self.partition_metrics.insert(partition_id.clone(), metric);
+    }
+
+    /// Remove metrics for `partition_id`
+    pub fn remove_partition(&mut self, partition_id: &PartitionId) {
+        if !self.partition_metrics.contains_key(partition_id) {
+            error!(
+                "incorrectly removing a non-existent partition metric in source: {} partition: {}",
+                self.source_id, partition_id
+            );
+            return;
+        }
+
+        self.partition_metrics.remove(partition_id);
     }
 
     /// Log updates to which offsets / timestamps read up to.
@@ -1438,6 +1480,16 @@ where
                             &mut buffer,
                             &timestamp_histories,
                         ),
+                        Ok(NextMessage::AddPartition(pid)) => {
+                            timestamp_histories.add_partition(pid, None);
+                            consistency_info.refresh(source_reader, &mut timestamp_histories);
+                            (SourceStatus::Alive, MessageProcessing::Active)
+                        }
+                        Ok(NextMessage::RemovePartition(pid)) => {
+                            timestamp_histories.remove_partition(&pid);
+                            consistency_info.refresh(source_reader, &mut timestamp_histories);
+                            (SourceStatus::Alive, MessageProcessing::Active)
+                        }
                         Ok(NextMessage::TransientDelay) => {
                             // There was a temporary hiccup in getting messages, check again asap.
                             (SourceStatus::Alive, MessageProcessing::Yielded)
