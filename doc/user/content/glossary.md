@@ -97,7 +97,7 @@ here: a change in data.
 
 ### Functional programming
 
-<!-- a way of writing computer programs that relies on *functions*, --> 
+<!-- a way of writing computer programs that relies on *functions*, -->
 <!-- stateless, -->
 
 ### Incremental view maintenance
@@ -202,7 +202,7 @@ in [SQL](#sql), a definition of criteria for data retrieval
 
 ### RDBMS
 
-Relational Database Management System
+*Relational Database Management System*
 <!-- TODO: expand -->
 
 ### S3
@@ -232,8 +232,8 @@ the origin of the data being processed: can be static (e.g., a file) or dynamic
 
 ### SQL
 
-(pronounced like ‘sequel’); the Structured Query Language, one of the most widely used computer languages to manage data
-in [RDBMS/relational databases](#rdbms) or [streams](#streaming-stream) derived from such data.
+(pronounced like ‘sequel’); the *Structured Query Language*, one of the most widely used computer languages to manage
+data in [RDBMS/relational databases](#rdbms) or [streams](#streaming-stream) derived from such data.
 
 ### State
 
@@ -265,5 +265,3 @@ to [materialized views](#materialized-view).
 ### Working set
 
 <!-- TODO -->
-
-
