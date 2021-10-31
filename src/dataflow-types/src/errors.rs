@@ -42,8 +42,7 @@ impl Codec for DecodeError {
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
-        let decoded = serde_json::from_slice(buf)
-            .map_err(|e| CodecError::from(format!("Decoding error: {}", e)))?;
+        let decoded = serde_json::from_slice(buf)?;
         Ok(decoded)
     }
 }

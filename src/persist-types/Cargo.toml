@@ -8,3 +8,4 @@ publish = false
 # NB: This is meant to be a strong, independent abstraction boundary, please
 # don't leak in deps on other Materialize packages.
 [dependencies]
+serde_json = "1.0.68"

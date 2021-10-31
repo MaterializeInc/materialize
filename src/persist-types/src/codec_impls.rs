@@ -50,7 +50,7 @@ impl Codec for String {
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
-        String::from_utf8(buf.to_owned()).map_err(|err| CodecError::from(err.to_string()))
+        Ok(String::from_utf8(buf.to_owned())?)
     }
 }
 

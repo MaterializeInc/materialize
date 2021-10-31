@@ -12,7 +12,7 @@
 use std::{error, fmt};
 
 /// A Codec related error.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CodecError {
     /// An unstructured codec related error.
     String(String),
@@ -45,15 +45,20 @@ impl<'a> From<&'a str> for CodecError {
     }
 }
 
-// Hack so we can debug_assert_eq against Result<(), CodecError>.
-impl PartialEq for CodecError {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (CodecError::String(a), CodecError::String(b)) => a == b,
-            (CodecError::InvalidEncodingVersion(a), CodecError::InvalidEncodingVersion(b)) => {
-                a == b
-            }
-            _ => false,
-        }
+impl From<serde_json::Error> for CodecError {
+    fn from(e: serde_json::Error) -> Self {
+        CodecError::String(format!("decoding error: {}", e))
+    }
+}
+
+impl From<std::array::TryFromSliceError> for CodecError {
+    fn from(e: std::array::TryFromSliceError) -> Self {
+        CodecError::String(e.to_string())
+    }
+}
+
+impl From<std::string::FromUtf8Error> for CodecError {
+    fn from(e: std::string::FromUtf8Error) -> Self {
+        CodecError::String(e.to_string())
     }
 }

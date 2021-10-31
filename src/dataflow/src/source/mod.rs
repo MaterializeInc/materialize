@@ -411,9 +411,7 @@ impl Codec for SourceTimestamp {
         let (partition, offset_start) = match typ {
             SOURCE_TIMESTAMP_PARTITION_KAFKA => {
                 let slice = &buf[1..(1 + 4)];
-                let pid = i32::from_le_bytes(
-                    <[u8; 4]>::try_from(slice).map_err(|err| CodecError::from(err.to_string()))?,
-                );
+                let pid = i32::from_le_bytes(<[u8; 4]>::try_from(slice)?);
                 (PartitionId::Kafka(pid), 1 + 4)
             }
             SOURCE_TIMESTAMP_PARTITION_NONE => (PartitionId::None, 1),
@@ -425,9 +423,7 @@ impl Codec for SourceTimestamp {
             }
         };
         let slice = &buf[offset_start..(offset_start + 8)];
-        let offset = i64::from_le_bytes(
-            <[u8; 8]>::try_from(slice).map_err(|err| CodecError::from(err.to_string()))?,
-        );
+        let offset = i64::from_le_bytes(<[u8; 8]>::try_from(slice)?);
         let offset = MzOffset { offset };
         Ok(SourceTimestamp { partition, offset })
     }
@@ -448,9 +444,9 @@ impl Codec for AssignedTimestamp {
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, CodecError> {
-        Ok(AssignedTimestamp(u64::from_le_bytes(
-            <[u8; 8]>::try_from(buf).map_err(|err| CodecError::from(err.to_string()))?,
-        )))
+        Ok(AssignedTimestamp(u64::from_le_bytes(<[u8; 8]>::try_from(
+            buf,
+        )?)))
     }
 }
 

@@ -12,6 +12,7 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
+use ore::result::ResultExt;
 use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map};
@@ -114,8 +115,8 @@ where
                             if worker_index == 0 {
                                 for record in records.drain(..) {
                                     let ((k, v), ts, diff) = record;
-                                    let k = K::decode(&k).map_err(|e| e.to_string());
-                                    let v = V::decode(&v).map_err(|e| e.to_string());
+                                    let k = K::decode(&k).map_err_to_string();
+                                    let v = V::decode(&v).map_err_to_string();
                                     session.give(((k, v), ts, diff));
                                 }
                             }
