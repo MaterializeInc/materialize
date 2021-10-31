@@ -8,7 +8,7 @@ Useful terms for understanding Materialize.
 
 ### Apache Kafka
 
-is an [event](#event) [streaming](#streaming-stream) system. (See [their website](http://kafka.apache.org/).) 
+is an [event](#event) [streaming](#streaming-stream) system. (See [their website](http://kafka.apache.org/).)
 <!-- KAFKA is a registered trademark of The Apache Software
 Foundation. -->
 
@@ -20,7 +20,11 @@ Foundation. -->
 
 <!--- TODO -->
 
-### Batch Processing
+### AVRO
+
+<!--- TODO -->
+
+### Batch processing
 
 here: a periodical processing of a collection of [events](#event). See also [ETL](#etl).
 
@@ -64,13 +68,17 @@ here: a periodical processing of a collection of [events](#event). See also [ETL
 
 here: a computer program or software running unattendedly without user interface
 
+### DBT
+
+<!--- TODO https://materialize.com/docs/guides/dbt/ -->
+
 ### Debezium
 
 a software for [change data capture](#cdc), built on top of
 the [Apache Kafka](#apache-kafka) [stream](#streaming-stream) processor.
 (See [their website](https://debezium.io/).)
 
-### Differential
+### Differential dataflow
 
 <!--- TODO -->
 
@@ -86,7 +94,11 @@ here: a core software component or system.
 
 here: a change in data.
 
-### Functional Programming
+### Functional programming
+
+<!--- TODO -->
+
+### Incremental view maintenance
 
 <!--- TODO -->
 
@@ -95,6 +107,10 @@ here: a change in data.
 <!--- TODO -->
 
 ### Join
+
+<!--- TODO -->
+
+### JSON
 
 <!--- TODO -->
 
@@ -114,19 +130,23 @@ here: a change in data.
 
 <!--- TODO -->
 
+### Materialize Cloud
+
+<!--- TODO -->
+
 ### materialized ([daemon](#daemon))
 
 <!--- TODO -->
 
-### Materialized View
+### Materialized view
+
+<!--- TODO -->
+
+### Metrics
 
 <!--- TODO -->
 
 ### Multiset
-
-<!--- TODO -->
-
-### Package
 
 <!--- TODO -->
 
@@ -142,6 +162,10 @@ here: a change in data.
 
 <!--- TODO (online view maintenance https://materialize.com/blog-cmudb/) -->
 
+### Package
+
+<!--- TODO -->
+
 ### Partition
 
 <!--- TODO -->
@@ -150,11 +174,23 @@ here: a change in data.
 
 <!--- TODO -->
 
+### Pipeline
+
+<!--- TODO -->
+
 ### Plan
 
 <!--- TODO (dataflow) -->
 
 ### PostgreSQL
+
+<!--- TODO -->
+
+### Prometheus
+
+<!--- TODO -->
+
+### PubNub
 
 <!--- TODO -->
 
@@ -180,6 +216,10 @@ Relational Database Management System
 <!--- TODO (union) -->
 
 ### Shell
+
+<!--- TODO -->
+
+### Sink
 
 <!--- TODO -->
 
@@ -220,7 +260,7 @@ to [materialized views](#materialized-view).
 
 <!--- TODO -->
 
-### Working Set
+### Working set
 
 <!--- TODO -->
 
