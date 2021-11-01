@@ -35,7 +35,7 @@ persist-types = { path = "../persist-types" }
 rusoto_core = "0.47.0"
 rusoto_s3 = "0.47.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.12.0", default-features = false, features = ["macros", "sync", "rt"] }
+tokio = { version = "1.13.0", default-features = false, features = ["macros", "sync", "rt"] }
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [dev-dependencies]
