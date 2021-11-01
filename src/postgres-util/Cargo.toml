@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.44"
-openssl = { version = "0.10.37", features = ["vendored"] }
+openssl = { version = "0.10.38", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 sql-parser = { path = "../sql-parser" }
 repr = { path = "../repr" }

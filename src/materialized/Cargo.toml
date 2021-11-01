@@ -57,7 +57,7 @@ mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
 mz-process-collector = { path = "../mz-process-collector" }
 nix = "0.23.0"
 num_cpus = "1.0.0"
-openssl = { version = "0.10.37", features = ["vendored"] }
+openssl = { version = "0.10.38", features = ["vendored"] }
 openssl-sys = { version = "0.9.68", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.7"
