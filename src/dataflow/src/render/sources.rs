@@ -21,7 +21,7 @@ use timely::dataflow::operators::{Map, UnorderedInput};
 use timely::dataflow::Scope;
 
 use persist::operators::source::PersistedSource;
-use persist::operators::stream::Seal;
+use persist::operators::stream::{AwaitFrontier, Seal};
 use persist::operators::upsert::PersistentUpsertConfig;
 
 use dataflow_types::*;
@@ -455,6 +455,16 @@ where
                                                 source_persist_config.upsert_config.write_handle,
                                                 source_persist_config.bindings_config.write_handle,
                                             );
+
+                                        // Don't send data forward to "dataflow" until the frontier
+                                        // tells us that we both persisted and sealed it.
+                                        //
+                                        // This is the most pessimistic style of concurrency
+                                        // control, an alternatie would be to not hold data but
+                                        // only hold the frontier (which is what the persist/seal
+                                        // operators do).
+                                        let sealed_upsert_ok =
+                                            sealed_upsert_ok.await_frontier(&source_name);
 
                                         upsert_seal_err.inspect(|e| log::error!("{:?}", e));
 
