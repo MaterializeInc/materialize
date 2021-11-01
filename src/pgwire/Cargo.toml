@@ -27,5 +27,5 @@ repr = { path = "../repr" }
 sql = { path = "../sql" }
 tokio = "1.13.0"
 tokio-openssl = "0.6.3"
-tokio-stream = "0.1.7"
+tokio-stream = "0.1.8"
 tokio-util = { version = "0.6.9", features = ["codec"] }
