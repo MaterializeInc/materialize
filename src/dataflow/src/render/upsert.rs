@@ -302,6 +302,7 @@ where
                         key,
                         value: new_value,
                         position: new_position,
+                        metadata: _,
                     } in vector.drain(..)
                     {
                         let mut time = cap.time().clone();

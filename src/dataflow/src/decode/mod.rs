@@ -15,6 +15,7 @@ use ::regex::Regex;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
+use expr::PartitionId;
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use prometheus::UIntGauge;
@@ -38,8 +39,7 @@ use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::protobuf::ProtobufDecoderState;
 use crate::metrics::Metrics;
-use crate::source::DecodeResult;
-use crate::source::SourceOutput;
+use crate::source::{DecodeResult, KafkaMetadata, SourceOutput};
 
 mod avro;
 mod csv;
@@ -507,6 +507,7 @@ where
                         value,
                         position,
                         upstream_time_millis: upstream_time,
+                        partition,
                     } in data.iter()
                     {
                         let key = key_decoder
@@ -520,10 +521,16 @@ where
                         } else if matches!(&value, Some(Ok(_))) {
                             n_successes += 1;
                         }
+
                         session.give(DecodeResult {
                             key,
                             value,
                             position: *position,
+                            metadata: to_kafka_metadata(
+                                partition.clone(),
+                                *position,
+                                *upstream_time,
+                            ),
                         });
                     }
                 });
@@ -593,12 +600,17 @@ where
             let mut n_errors = 0;
             let mut n_successes = 0;
             input.for_each(|cap, data| {
+                // Currently Kafka is the only kind of source that can have metadata, and it is
+                // always delimited, so we will never have metadata in `render_decode`
+                let metadata = None;
+
                 let mut session = output.session(&cap);
                 for SourceOutput {
                     key: _,
                     value,
                     position: _,
                     upstream_time_millis,
+                    partition: _,
                 } in data.iter()
                 {
                     let value = match value {
@@ -626,6 +638,7 @@ where
                                         key: None,
                                         value: Some(value),
                                         position: n_seen.next(),
+                                        metadata: metadata.clone(),
                                     });
                                 }
                             }
@@ -647,6 +660,7 @@ where
                             key: None,
                             value: None,
                             position: None,
+                            metadata: metadata.clone(),
                         });
                     } else {
                         let value_bytes_remaining = &mut value.as_slice();
@@ -684,6 +698,7 @@ where
                                     key: None,
                                     value: Some(value),
                                     position: n_seen.next(),
+                                    metadata: metadata.clone(),
                                 });
                                 value_buf = vec![];
                                 break;
@@ -692,6 +707,7 @@ where
                                     key: None,
                                     value: Some(value),
                                     position: n_seen.next(),
+                                    metadata: metadata.clone(),
                                 });
                             }
                             if is_err {
@@ -713,4 +729,20 @@ where
         }
     });
     (results, None)
+}
+
+fn to_kafka_metadata(
+    partition: PartitionId,
+    position: Option<i64>,
+    upstream_time_millis: Option<i64>,
+) -> Option<KafkaMetadata> {
+    if let PartitionId::Kafka(partition) = partition {
+        Some(KafkaMetadata {
+            offset: position.expect("kafka sources always have position"),
+            timestamp: upstream_time_millis.expect("kafka sources always have upstream_time"),
+            partition,
+        })
+    } else {
+        None
+    }
 }

@@ -12,12 +12,13 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use chrono::NaiveDateTime;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
 use persist_types::Codec;
-use timely::dataflow::operators::{Concat, OkErr, ToStream};
-use timely::dataflow::operators::{Map, UnorderedInput};
+use smallvec::SmallVec;
+use timely::dataflow::operators::{Concat, Map, OkErr, ToStream, UnorderedInput};
 use timely::dataflow::Scope;
 
 use persist::operators::source::PersistedSource;
@@ -41,12 +42,12 @@ use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
 use crate::server::LocalInput;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
-use crate::source::SourceConfig;
 use crate::source::{
     self, metrics::SourceBaseMetrics, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
     PostgresSourceReader, PubNubSourceReader, S3SourceReader,
 };
 use crate::source::{DecodeResult, PersistentTimestampBindingsConfig};
+use crate::source::{KafkaMetadata, SourceConfig};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -355,7 +356,11 @@ where
 
                         // TODO(petrosagg): remove this inconsistency once INCLUDE (offset)
                         // syntax is implemented
-                        let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_));
+                        //
+                        // Default metadata is mostly configured in planning, but we need it here for upsert
+                        let default_metadata = provide_default_metadata(&envelope, &value_encoding);
+
+                        let metadata_columns = connector.metadata_column_types(default_metadata);
 
                         // CDCv2 can't quite be slotted in to the below code, since it determines
                         // its own diffs/timestamps as part of decoding.
@@ -485,7 +490,7 @@ where
                                     let upsert_operator_name = format!("{}-upsert", source_name);
 
                                     // append position metadata to the output row
-                                    let results = if push_metadata {
+                                    let results = if default_metadata {
                                         results.map(|mut d| {
                                             if let Some(Ok(ref mut row)) = d.value {
                                                 row.push(Datum::from(d.position));
@@ -553,7 +558,7 @@ where
                                 }
                                 SourceEnvelope::None(key_envelope) => {
                                     let (stream, errors) =
-                                        flatten_results(key_envelope, push_metadata, results)
+                                        flatten_results(key_envelope, metadata_columns, results)
                                             .ok_err(ResultExt::err_into);
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
@@ -743,7 +748,7 @@ fn get_persist_config(
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results<G>(
     key_envelope: &KeyEnvelope,
-    push_metadata: bool,
+    included_columns: SmallVec<[IncludedColumnSource; 4]>,
     results: timely::dataflow::Stream<G, DecodeResult>,
 ) -> timely::dataflow::Stream<G, Result<Row, DecodeError>>
 where
@@ -751,61 +756,96 @@ where
 {
     match key_envelope {
         KeyEnvelope::None => results.flat_map(move |res| {
-            if push_metadata {
-                res.value.map(|result| {
-                    let mut row = result?;
-                    row.push(Datum::from(res.position));
-                    Ok(row)
-                })
-            } else {
-                res.value
-            }
+            res.value.map(|result| {
+                let mut row = result?;
+                include_metadata(
+                    included_columns.clone(),
+                    res.position,
+                    res.metadata,
+                    &mut row,
+                );
+                Ok(row)
+            })
         }),
         KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => {
             results.flat_map(flatten_key_value).map(move |maybe_kv| {
-                maybe_kv.map(|(mut key, value, position)| {
+                maybe_kv.map(|(mut key, value, position, metadata)| {
                     key.extend_by_row(&value);
-                    if push_metadata {
-                        key.push(Datum::from(position));
-                    }
+                    include_metadata(included_columns.clone(), position, metadata, &mut key);
                     key
                 })
             })
         }
-        KeyEnvelope::Named(_) => {
-            results.flat_map(flatten_key_value).map(move |maybe_kv| {
-                maybe_kv.map(|(mut key, value, position)| {
-                    // Named semantics rename a key that is a single column, and encode a
-                    // multi-column field as a struct with that name
-                    let mut row = if key.iter().nth(1).is_none() {
-                        key.extend_by_row(&value);
-                        key
-                    } else {
-                        let mut new_row = Row::default();
-                        new_row.push_list(key.iter());
-                        new_row.extend_by_row(&value);
-                        new_row
-                    };
-                    if push_metadata {
-                        row.push(Datum::from(position));
-                    }
-                    row
-                })
+        KeyEnvelope::Named(_) => results.flat_map(flatten_key_value).map(move |maybe_kv| {
+            maybe_kv.map(|(mut key, value, position, metadata)| {
+                // Named semantics rename a key that is a single column, and encode a
+                // multi-column field as a struct with that name
+                let mut row = if key.iter().nth(1).is_none() {
+                    key.extend_by_row(&value);
+                    key
+                } else {
+                    let mut new_row = Row::default();
+                    new_row.push_list(key.iter());
+                    new_row.extend_by_row(&value);
+                    new_row
+                };
+                include_metadata(included_columns.clone(), position, metadata, &mut row);
+                row
             })
+        }),
+    }
+}
+
+fn include_metadata(
+    included_columns: SmallVec<[IncludedColumnSource; 4]>,
+    position: Option<i64>,
+    metadata: Option<KafkaMetadata>,
+    row: &mut Row,
+) {
+    if !included_columns.is_empty() {
+        let m = metadata.as_ref();
+        for col in included_columns {
+            match col {
+                IncludedColumnSource::Partition => {
+                    row.push(Datum::from(m.map(|m| m.partition).unwrap()))
+                }
+                IncludedColumnSource::Offset => row.push(Datum::from(m.map(|m| m.offset).unwrap())),
+                IncludedColumnSource::Timestamp => {
+                    let ts = m.map(|m| m.timestamp).unwrap();
+                    let (secs, mut millis) = (ts / 1000, (ts.abs() % 1000) as u32);
+                    if secs < 0 {
+                        millis = 1000 - millis;
+                    }
+
+                    row.push(Datum::from(NaiveDateTime::from_timestamp(
+                        secs.into(),
+                        millis * 1_000_000,
+                    )))
+                }
+                IncludedColumnSource::Topic => {
+                    panic!("TOPIC not yet supported")
+                }
+                IncludedColumnSource::DefaultPosition => {
+                    row.push(Datum::from(position.expect("prevalidated")))
+                }
+            }
         }
     }
 }
 
 /// Handle possibly missing key or value portions of messages
-fn flatten_key_value(result: DecodeResult) -> Option<Result<(Row, Row, Option<i64>), DecodeError>> {
+fn flatten_key_value(
+    result: DecodeResult,
+) -> Option<Result<(Row, Row, Option<i64>, Option<KafkaMetadata>), DecodeError>> {
     let DecodeResult {
         key,
         value,
         position,
+        metadata,
     } = result;
     match (key, value) {
         (Some(key), Some(value)) => match (key, value) {
-            (Ok(key), Ok(value)) => Some(Ok((key, value, position))),
+            (Ok(key), Ok(value)) => Some(Ok((key, value, position, metadata))),
             // always prioritize the value error if either or both have an error
             (_, Err(e)) => Some(Err(e)),
             (Err(e), _) => Some(Err(e)),

@@ -24,6 +24,7 @@ use globset::Glob;
 use http::Uri;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use timely::progress::frontier::Antichain;
 use url::Url;
 use uuid::Uuid;
@@ -32,7 +33,7 @@ use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, P
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{self, NormalizedProtobufMessageName};
 use kafka_util::KafkaAddrs;
-use repr::{ColumnName, ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
+use repr::{ColumnDesc, ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
 
 /// The response from a `Peek`.
 ///
@@ -349,6 +350,14 @@ impl SourceDataEncoding {
             SourceDataEncoding::KeyValue { key, value } => (Some(key.desc()?), value.desc()?),
         })
     }
+}
+
+pub fn included_column_desc(included_columns: Vec<ColumnDesc>) -> RelationDesc {
+    let mut desc = RelationDesc::empty();
+    for ColumnDesc { name, ty } in included_columns {
+        desc = desc.with_named_column(name, ty);
+    }
+    desc
 }
 
 impl DataEncoding {
@@ -683,6 +692,16 @@ impl SourceEnvelope {
     }
 }
 
+/// Legacy logic included something like an offset into almost data streams
+///
+/// Eventually we will require `INCLUDE <metadata>` for everything.
+pub fn provide_default_metadata(envelope: &SourceEnvelope, encoding: &DataEncoding) -> bool {
+    let is_avro = matches!(encoding, DataEncoding::Avro(_));
+    let is_stateless_dbz = matches!(envelope, SourceEnvelope::Debezium(_, DebeziumMode::Plain));
+
+    !is_avro && !is_stateless_dbz
+}
+
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DebeziumMode {
     Plain,
@@ -825,16 +844,134 @@ impl ExternalSourceConnector {
     ///
     /// The columns declared here must be kept in sync with the actual source
     /// implementations that produce these columns.
-    pub fn metadata_columns(&self) -> Vec<(ColumnName, ColumnType)> {
+    pub fn metadata_columns<'a>(&'a self, include_defaults: bool) -> Vec<ColumnDesc<'a>> {
+        let mut columns = Vec::new();
+        let default_col = |name| ColumnDesc {
+            name,
+            ty: ScalarType::Int64.nullable(false),
+        };
         match self {
-            Self::Kafka(_) => vec![("mz_offset".into(), ScalarType::Int64.nullable(false))],
-            Self::File(_) => vec![("mz_line_no".into(), ScalarType::Int64.nullable(false))],
-            Self::Kinesis(_) => vec![("mz_offset".into(), ScalarType::Int64.nullable(false))],
-            Self::AvroOcf(_) => vec![("mz_obj_no".into(), ScalarType::Int64.nullable(false))],
+            Self::Kafka(KafkaSourceConnector {
+                include_partition: part,
+                include_timestamp: time,
+                include_topic: topic,
+                include_offset: offset,
+                ..
+            }) => {
+                let mut items = BTreeMap::new();
+                // put the offset at the end if necessary
+                if include_defaults && offset.is_none() {
+                    items.insert(4, default_col("mz_offset"));
+                }
+
+                for (include, ty) in [
+                    (offset, ScalarType::Int64),
+                    (part, ScalarType::Int32),
+                    (time, ScalarType::Timestamp),
+                    (topic, ScalarType::String),
+                ] {
+                    if let Some(include) = include {
+                        items.insert(
+                            include.pos + 1,
+                            ColumnDesc {
+                                name: &include.name,
+                                ty: ty.nullable(false),
+                            },
+                        );
+                    }
+                }
+
+                items.into_values().collect()
+            }
+            Self::File(_) => {
+                if include_defaults {
+                    columns.push(default_col("mz_line_no"));
+                }
+                columns
+            }
+            Self::Kinesis(_) => {
+                if include_defaults {
+                    columns.push(default_col("mz_offset"))
+                };
+                columns
+            }
+            Self::AvroOcf(_) => {
+                if include_defaults {
+                    columns.push(default_col("mz_obj_no"))
+                };
+                columns
+            }
             // TODO: should we include object key and possibly object-internal offset here?
-            Self::S3(_) => vec![("mz_record".into(), ScalarType::Int64.nullable(false))],
+            Self::S3(_) => {
+                if include_defaults {
+                    columns.push(default_col("mz_record"))
+                };
+                columns
+            }
             Self::Postgres(_) => vec![],
             Self::PubNub(_) => vec![],
+        }
+    }
+
+    // TODO(bwm): get rid of this when we no longer have the notion of default metadata
+    pub fn default_metadata_column_name(&self) -> Option<&str> {
+        match self {
+            ExternalSourceConnector::Kafka(_) => Some("mz_offset"),
+            ExternalSourceConnector::Kinesis(_) => Some("mz_offset"),
+            ExternalSourceConnector::File(_) => Some("mz_line_no"),
+            ExternalSourceConnector::AvroOcf(_) => Some("mz_obj_no"),
+            ExternalSourceConnector::S3(_) => Some("mz_record"),
+            ExternalSourceConnector::Postgres(_) => None,
+            ExternalSourceConnector::PubNub(_) => None,
+        }
+    }
+
+    pub fn metadata_column_types(
+        &self,
+        default_metadata: bool,
+    ) -> SmallVec<[IncludedColumnSource; 4]> {
+        match self {
+            ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                include_partition: part,
+                include_timestamp: time,
+                include_topic: topic,
+                include_offset: offset,
+                ..
+            }) => {
+                // create a sorted list of column types based on the order they were declared in sql
+                // TODO: should key be included in the sorted list? Breaking change, and it's
+                // already special (it commonly multiple columns embedded in it).
+                let mut items = BTreeMap::new();
+                if default_metadata {
+                    items.insert(4, IncludedColumnSource::DefaultPosition);
+                }
+                for (include, ty) in [
+                    (offset, IncludedColumnSource::Offset),
+                    (part, IncludedColumnSource::Partition),
+                    (time, IncludedColumnSource::Timestamp),
+                    (topic, IncludedColumnSource::Topic),
+                ] {
+                    if let Some(include) = include {
+                        items.insert(include.pos, ty);
+                    }
+                }
+
+                items.into_values().collect()
+            }
+
+            ExternalSourceConnector::Kinesis(_)
+            | ExternalSourceConnector::File(_)
+            | ExternalSourceConnector::AvroOcf(_)
+            | ExternalSourceConnector::S3(_) => {
+                let mut items = SmallVec::new();
+                if default_metadata {
+                    items.push(IncludedColumnSource::DefaultPosition);
+                }
+                items
+            }
+            ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => {
+                SmallVec::new()
+            }
         }
     }
 
@@ -952,11 +1089,26 @@ pub struct KafkaSourceConnector {
     pub group_id_prefix: Option<String>,
     pub cluster_id: Uuid,
     /// If present, include the timestamp as an output column of the source with the given name
-    pub include_timestamp: Option<String>,
+    pub include_timestamp: Option<IncludedColumnPos>,
     /// If present, include the partition as an output column of the source with the given name.
-    pub include_partition: Option<String>,
+    pub include_partition: Option<IncludedColumnPos>,
     /// If present, include the topic as an output column of the source with the given name.
-    pub include_topic: Option<String>,
+    pub include_topic: Option<IncludedColumnPos>,
+    /// If present, include the offset as an output column of the source with the given name.
+    pub include_offset: Option<IncludedColumnPos>,
+}
+
+/// Which piece of metadata a column corresponds to
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum IncludedColumnSource {
+    /// The materialize-specific notion of "position"
+    ///
+    /// This is legacy, and should be removed when default metadata is no longer included
+    DefaultPosition,
+    Partition,
+    Offset,
+    Timestamp,
+    Topic,
 }
 
 /// Whether and how to include the decoded key of a stream in dataflows
@@ -974,6 +1126,13 @@ pub enum KeyEnvelope {
     /// * For a multi-column key, the columns will get packed into a [`ScalarType::Record`], and
     ///   that Record will get the given name.
     Named(String),
+}
+
+/// A column that was created via an `INCLUDE` expression
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IncludedColumnPos {
+    pub name: String,
+    pub pos: usize,
 }
 
 /// AWS configuration overrides for a source or sink.

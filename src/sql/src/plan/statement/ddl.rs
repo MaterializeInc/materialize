@@ -27,13 +27,13 @@ use regex::Regex;
 use reqwest::Url;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, ColumnSpec,
-    Consistency, CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat,
-    KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
-    ProtobufEncoding, PubNubSourceConnector, RegexEncoding, S3SourceConnector,
-    SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceDataEncoding, SourceEnvelope,
-    Timeline,
+    included_column_desc, provide_default_metadata, AvroEncoding, AvroOcfEncoding,
+    AvroOcfSinkConnectorBuilder, BringYourOwn, ColumnSpec, Consistency, CsvEncoding, DataEncoding,
+    DebeziumMode, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
+    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat, KafkaSourceConnector,
+    KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
+    PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
+    SourceConnector, SourceDataEncoding, SourceEnvelope, Timeline,
 };
 use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
@@ -414,6 +414,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
+    let mut key_envelope = None;
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
@@ -464,7 +465,7 @@ pub fn plan_create_source(
 
             let encoding = get_encoding(format, envelope, with_options_original)?;
 
-            let connector = KafkaSourceConnector {
+            let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
                 topic: topic.clone(),
                 config_options,
@@ -474,7 +475,43 @@ pub fn plan_create_source(
                 include_timestamp: None,
                 include_partition: None,
                 include_topic: None,
+                include_offset: None,
             };
+
+            let unwrap_name = |alias: Option<Ident>, default, pos| {
+                Some(IncludedColumnPos {
+                    name: alias
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| String::from(default)),
+                    pos,
+                })
+            };
+
+            for (pos, item) in include_metadata.iter().cloned().enumerate() {
+                match item.ty {
+                    SourceIncludeMetadataType::Timestamp => {
+                        connector.include_timestamp = unwrap_name(item.alias, "timestamp", pos);
+                    }
+                    SourceIncludeMetadataType::Partition => {
+                        connector.include_partition = unwrap_name(item.alias, "partition", pos);
+                    }
+                    SourceIncludeMetadataType::Topic => {
+                        // TODO(bwm): This requires deeper thought, the current structure of the
+                        // code requires us to clone the topic name around all over the place
+                        // whether or not anyone ever uses it. Considering we expect the
+                        // overwhelming majority of people will *not* want topics in dataflows that
+                        // is an unnacceptable cost.
+                        bail_unsupported!("INCLUDE TOPIC");
+                    }
+                    SourceIncludeMetadataType::Offset => {
+                        connector.include_offset = unwrap_name(item.alias, "offset", pos);
+                    }
+                    SourceIncludeMetadataType::Key => {
+                        key_envelope =
+                            Some(get_key_envelope(item.alias.clone(), envelope, &encoding)?);
+                    }
+                }
+            }
 
             let connector = ExternalSourceConnector::Kafka(connector);
 
@@ -783,16 +820,48 @@ pub fn plan_create_source(
         }
     };
 
+    // TODO(petrosagg): remove this inconsistency once INCLUDE (offset)
+    // syntax is implemented
+    let default_metadata = provide_default_metadata(&envelope, encoding.value_ref());
+    let metadata_columns = external_connector.metadata_columns(default_metadata);
     let (key_desc, value_desc) = encoding.desc()?;
-    let mut bare_desc = envelope.desc(key_desc.clone(), value_desc)?;
+    let metadata_desc = included_column_desc(metadata_columns.clone());
+    let mut bare_desc = envelope.desc(key_desc.clone(), value_desc)?.clone();
+
+    // Append default metadata columns if column aliases were provided but do not include them.
+    //
+    // This is a confusing hack due to two combined facts:
+    //
+    // * we used to not allow users to refer to/alias the metadata columns because they were
+    //   specified in render, instead of here in plan
+    // * we don't follow postgres semantics and allow a shorter rename list than total column list
+    //
+    // TODO: probably we should just migrate to pg semantics and allow specifying fewer columns than
+    // actually exist?
+    let tmp_col;
+    let col_names = if default_metadata
+        && !col_names.is_empty()
+        && metadata_columns.len() + col_names.len() == bare_desc.arity()
+    {
+        let mut tmp = Vec::with_capacity(bare_desc.arity());
+        tmp.extend(col_names.iter().cloned());
+        tmp.push(Ident::from(
+            external_connector.default_metadata_column_name().unwrap(),
+        ));
+        tmp_col = tmp;
+        &tmp_col
+    } else {
+        col_names
+    };
 
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
         Some(Value::Boolean(b)) => b,
         Some(_) => bail!("ignore_source_keys must be a boolean"),
     };
+
     if ignore_source_keys {
-        bare_desc = bare_desc.without_keys();
+        bare_desc.clear_keys();
     }
 
     let post_transform_key = if let SourceEnvelope::Debezium(_, _) = &envelope {
@@ -859,16 +928,6 @@ pub fn plan_create_source(
             return Err(key_constraint_err(&bare_desc, &key_columns));
         } else {
             bare_desc = bare_desc.with_key(key_indices);
-        }
-    }
-
-    // TODO(brennan): They should not depend on the envelope either. Figure out a way to
-    // make all of this more tasteful.
-    if !matches!(encoding.value_ref(), DataEncoding::Avro { .. })
-        && !matches!(envelope, SourceEnvelope::Debezium(_, _))
-    {
-        for (name, ty) in external_connector.metadata_columns() {
-            bare_desc = bare_desc.with_named_column(name, ty);
         }
     }
 

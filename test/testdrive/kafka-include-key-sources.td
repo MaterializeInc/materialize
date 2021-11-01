@@ -28,73 +28,78 @@ $ kafka-create-topic topic=avro-data
 $ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflictkeyschema} schema=${schema} timestamp=1
 {"id": 1} {"id": 2, "b": 3}
 
-! CREATE SOURCE missing_key_format
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE KEY
-INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
+# ! CREATE SOURCE missing_key_format
+#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+#   FORMAT AVRO USING SCHEMA '${schema}'
+#   INCLUDE KEY
+# INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
-! CREATE SOURCE missing_key_format
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE KEY AS key_col
-INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
+# ! CREATE SOURCE missing_key_format
+#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+#   FORMAT AVRO USING SCHEMA '${schema}'
+#   INCLUDE KEY AS key_col
+# INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
-! CREATE SOURCE not_supported
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE TIMESTAMP
-INCLUDE TIMESTAMP not yet supported
 
-! CREATE SOURCE not_supported
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE TOPIC
-INCLUDE TOPIC not yet supported
+# ! CREATE SOURCE not_supported
+#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+#   FORMAT AVRO USING SCHEMA '${schema}'
+#   INCLUDE TOPIC
+# INCLUDE TOPIC not yet supported
 
-! CREATE SOURCE not_supported
+# ! CREATE SOURCE not_supported
+#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+#   FORMAT AVRO USING SCHEMA '${schema}'
+#   INCLUDE PARTITION
+# INCLUDE PARTITION not yet supported
+
+# ! CREATE SOURCE not_supported
+#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+#   KEY FORMAT AVRO USING SCHEMA '${schema}'
+#   VALUE FORMAT AVRO USING SCHEMA '${schema}'
+#   INCLUDE KEY, TIMESTAMP, PARTITION, TOPIC
+# INCLUDE TIMESTAMP not yet supported
+
+# ! CREATE SOURCE not_supported
+#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+#   FORMAT AVRO USING SCHEMA '${schema}'
+#   INCLUDE TIMESTAMP as myts, PARTITION, TOPIC
+# INCLUDE TIMESTAMP not yet supported
+
+# > CREATE MATERIALIZED SOURCE avro_data_conflict
+#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+#   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
+#   VALUE FORMAT AVRO USING SCHEMA '${schema}'
+#   INCLUDE KEY
+
+# ! SELECT id, b FROM avro_data_conflict
+# column name "id" is ambiguous
+
+# > SELECT * FROM avro_data_conflict
+# id id b
+# -------
+# 1 2 3
+
+# > CREATE MATERIALIZED SOURCE avro_data_explicit (key_id, id, b)
+#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+#   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
+#   VALUE FORMAT AVRO USING SCHEMA '${schema}'
+#   INCLUDE KEY
+
+# > SELECT key_id, id, b FROM avro_data_explicit
+# key_id id b
+# ------------
+# 1 2 3
+
+> CREATE MATERIALIZED SOURCE include_partition
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE PARTITION
-INCLUDE PARTITION not yet supported
 
-! CREATE SOURCE not_supported
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  KEY FORMAT AVRO USING SCHEMA '${schema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE KEY, TIMESTAMP, PARTITION, TOPIC
-INCLUDE TIMESTAMP not yet supported
-
-! CREATE SOURCE not_supported
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE TIMESTAMP as myts, PARTITION, TOPIC
-INCLUDE TIMESTAMP not yet supported
-
-> CREATE MATERIALIZED SOURCE avro_data_conflict
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE KEY
-
-! SELECT id, b FROM avro_data_conflict
-column name "id" is ambiguous
-
-> SELECT * FROM avro_data_conflict
-id id b
--------
-1 2 3
-
-> CREATE MATERIALIZED SOURCE avro_data_explicit (key_id, id, b)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE KEY
-
-> SELECT key_id, id, b FROM avro_data_explicit
-key_id id b
-------------
-1 2 3
+> SELECT * FROM include_partition
+id b partition
+--------------
+2 3 0
 
 > CREATE MATERIALIZED SOURCE avro_data_as
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
