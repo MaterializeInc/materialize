@@ -11,18 +11,24 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::Context;
 
 use persist_types::Codec;
 
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::{Data as TimelyData, PartialOrder};
 
+use crate::error::Error;
 use crate::indexed::runtime::StreamWriteHandle;
 
 /// Extension trait for [`Stream`].
@@ -343,6 +349,7 @@ where
         K2: TimelyData + Codec,
         V2: TimelyData + Codec,
     {
+        let scope = self.scope();
         let operator_name = format!("conditional_seal({})", name);
         let mut seal_op = OperatorBuilder::new(operator_name.clone(), self.scope());
 
@@ -370,13 +377,26 @@ where
         // capabilities.
         let active_seal_operator = self.scope().index() == 0;
 
+        // An activator that allows futures to re-schedule this operator when ready.
+        let activator = Arc::new(scope.sync_activator_for(&seal_op.operator_info().address[..]));
+
+        // Keep two Vecs around, so that we don't have to keep re-allocating new ones.
+        //
+        // Newly created futures are added to `pending_futures`, which is the place where futures
+        // that are not yet ready will be kept until they are done.
+        //
+        // We use `new_pending` when iterating (and polling) through the list of pending futures to
+        // keep track of the futures that are still pending at the end of one operator invocation.
+        //
+        // We have two invariants that hold at the start and end of an operator invocation:
+        //  - `pending_futures` contains any futures that are not ready.
+        //  - `new_pending` is empty
+        let mut pending_futures = Vec::new();
+        let mut new_pending = Vec::new();
+
         seal_op.build(move |mut capabilities| {
-            let mut cap = if active_seal_operator {
-                let cap = capabilities.pop().expect("missing capability");
-                Some(cap)
-            } else {
-                None
-            };
+            let mut cap_set =
+                CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
 
             move |frontiers| {
                 let mut data_output = data_output.activate();
@@ -420,91 +440,108 @@ where
                     if input_frontier.less_than(&frontier_element) {
                         // First, seal up the condition input.
                         log::trace!(
-                            "In {}, sealing condition input up to {}...",
+                            "In {}, sealing condition collection up to {}...",
                             &operator_name,
                             frontier_element,
                         );
 
-                        // TODO: Don't block on the seal. Instead, we should yield from the
-                        // operator and/or find some other way to wait for the seal to succeed.
-                        let result = condition_write.seal(*frontier_element).recv();
+                        let future = condition_write.seal(*frontier_element);
 
-                        log::trace!(
-                            "In {}, finished sealing condition input up to {}",
-                            &operator_name,
-                            frontier_element,
-                        );
+                        pending_futures.push(PendingSealFuture::ConditionSeal(SealFuture {
+                            cap: cap_set.delayed(frontier_element),
+                            future,
+                        }));
+                    }
+                }
 
-                        if let Err(e) = result {
-                            let cap = cap.as_mut().expect("missing capability");
-                            let mut session = data_output.session(cap);
-                            log::error!(
-                                "Error sealing {} (condition) up to {}: {:?}",
-                                &operator_name,
-                                frontier_element,
-                                e
-                            );
-                            // TODO: make error retractable? Probably not...
-                            session.give(Err((e.to_string(), *cap.time(), 1)));
+                // Swing through all pending futures and see if they're ready. Ready futures will
+                // invoke the Activator, which will make sure that we arrive here, even when there
+                // are no changes in the input frontier or new input.
+                let waker = futures_util::task::waker_ref(&activator);
+                let mut context = Context::from_waker(&waker);
 
-                            // Don't seal the primary collection if sealing the condition
-                            // collection failed.
-                            continue;
+                while let Some(pending_future) = pending_futures.pop() {
+                    match pending_future {
+                        PendingSealFuture::ConditionSeal(mut pending_future) => {
+                            match Pin::new(&mut pending_future.future).poll(&mut context) {
+                                std::task::Poll::Ready(Ok(())) => {
+                                    log::trace!(
+                                        "In {}, finished sealing condition collection up to {}",
+                                        &operator_name,
+                                        pending_future.cap.time(),
+                                    );
+
+                                    log::trace!(
+                                        "In {}, sealing primary collection up to {}...",
+                                        &operator_name,
+                                        pending_future.cap.time(),
+                                    );
+
+                                    let future = primary_write.seal(*pending_future.cap.time());
+
+                                    // It's very important to add this to `pending_futures` and not
+                                    // `new_pending` to ensure that we poll from it at least once,
+                                    // so that it has a reference to the waker/activator.
+                                    pending_futures.push(PendingSealFuture::PrimarySeal(
+                                        SealFuture {
+                                            cap: pending_future.cap,
+                                            future,
+                                        },
+                                    ));
+                                }
+                                std::task::Poll::Ready(Err(e)) => {
+                                    let mut session = data_output.session(&pending_future.cap);
+                                    let error = format!(
+                                        "Error sealing {} (condition) up to {}: {}",
+                                        &operator_name,
+                                        pending_future.cap.time(),
+                                        e
+                                    );
+                                    log::error!("{}", error);
+
+                                    // TODO: make error retractable? Probably not...
+                                    session.give(Err((error, *pending_future.cap.time(), 1)));
+                                }
+                                std::task::Poll::Pending => {
+                                    new_pending
+                                        .push(PendingSealFuture::ConditionSeal(pending_future));
+                                }
+                            }
                         }
+                        PendingSealFuture::PrimarySeal(mut pending_future) => {
+                            match Pin::new(&mut pending_future.future).poll(&mut context) {
+                                std::task::Poll::Ready(Ok(())) => {
+                                    log::trace!(
+                                        "In {}, finished sealing primary collection up to {}",
+                                        &operator_name,
+                                        pending_future.cap.time(),
+                                    );
+                                }
+                                std::task::Poll::Ready(Err(e)) => {
+                                    let mut session = data_output.session(&pending_future.cap);
+                                    let error = format!(
+                                        "Error sealing {} (primary) up to {}: {}",
+                                        &operator_name,
+                                        pending_future.cap.time(),
+                                        e
+                                    );
+                                    log::error!("{}", error);
 
-                        // Then, seal up the primary input.
-                        log::trace!(
-                            "In {}, sealing primary input up to {}...",
-                            &operator_name,
-                            frontier_element,
-                        );
-
-                        // TODO: Don't block on the seal. Instead, we should yield from the
-                        // operator and/or find some other way to wait for the seal to succeed.
-                        let result = primary_write.seal(*frontier_element).recv();
-
-                        log::trace!(
-                            "In {}, finished sealing primary input up to {}",
-                            &operator_name,
-                            frontier_element,
-                        );
-
-                        if let Err(e) = result {
-                            let cap = cap.as_mut().expect("missing capability");
-                            let mut session = data_output.session(cap);
-                            log::error!(
-                                "Error sealing {} (primary) up to {}: {:?}",
-                                &operator_name,
-                                frontier_element,
-                                e
-                            );
-                            // TODO: make error retractable? Probably not...
-                            session.give(Err((e.to_string(), *cap.time(), 1)));
+                                    // TODO: make error retractable? Probably not...
+                                    session.give(Err((error, *pending_future.cap.time(), 1)));
+                                }
+                                std::task::Poll::Pending => {
+                                    new_pending
+                                        .push(PendingSealFuture::PrimarySeal(pending_future));
+                                }
+                            }
                         }
                     }
                 }
+                pending_futures.append(&mut new_pending);
 
                 input_frontier.clone_from(&mut new_input_frontier);
-
-                for time in input_frontier.iter() {
-                    let cap = cap.as_mut().expect("missing capability");
-                    if let Err(e) = cap.try_downgrade(time) {
-                        // With Antichain<u64> as frontier, this is guaranteed to succeed. If we
-                        // have multi-dimensional capabilities in the future we have to get
-                        // slightly more clever about managing our capabilities.
-                        panic!(
-                            "In {}, error downgrading capability {:?} to {}: {:?}",
-                            operator_name, cap, time, e
-                        );
-                    }
-                }
-
-                // An empty input frontier signals that we will never receive any input again. We
-                // need to drop our capability to ensure that the empty frontier can propagate
-                // downstream.
-                if input_frontier.is_empty() && cap.is_some() {
-                    cap.take().expect("error dropping capability");
-                }
+                cap_set.downgrade(input_frontier.iter());
             }
         });
 
@@ -514,6 +551,16 @@ where
 
         (data_output_stream, error_output_stream)
     }
+}
+
+enum PendingSealFuture<F: std::future::Future<Output = Result<(), Error>>> {
+    PrimarySeal(SealFuture<F>),
+    ConditionSeal(SealFuture<F>),
+}
+
+struct SealFuture<F: std::future::Future<Output = Result<(), Error>>> {
+    cap: Capability<u64>,
+    future: F,
 }
 
 /// Extension trait for [`Stream`].
@@ -815,6 +862,7 @@ mod tests {
 
     #[test]
     fn conditional_seal() -> Result<(), Error> {
+        ore::test::init_logging_default("trace");
         let mut registry = MemRegistry::new();
 
         let p = registry.runtime_no_reentrance()?;
@@ -857,31 +905,25 @@ mod tests {
         };
 
         timely::execute_directly(move |worker| {
-            let (mut primary_input, mut condition_input, primary_probe, condition_probe) = worker
-                .dataflow(|scope| {
-                    let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
-                    let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
-                    let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
-                    let mut condition_input = Handle::new();
-                    let primary_stream = primary_input.to_stream(scope);
-                    let condition_stream = condition_input.to_stream(scope);
-                    let (_, _) = primary_stream.conditional_seal(
-                        "test",
-                        &condition_stream,
-                        primary_write,
-                        condition_write,
-                    );
+            let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
+                let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
+                let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
+                let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
+                let mut condition_input = Handle::new();
+                let primary_stream = primary_input.to_stream(scope);
+                let condition_stream = condition_input.to_stream(scope);
 
-                    let primary_probe = primary_stream.probe();
-                    let condition_probe = condition_stream.probe();
+                let (sealed_stream, _) = primary_stream.conditional_seal(
+                    "test",
+                    &condition_stream,
+                    primary_write,
+                    condition_write,
+                );
 
-                    (
-                        primary_input,
-                        condition_input,
-                        primary_probe,
-                        condition_probe,
-                    )
-                });
+                let seal_probe = sealed_stream.probe();
+
+                (primary_input, condition_input, seal_probe)
+            });
 
             // Only send data on the condition input, not on the primary input. This simulates the
             // case where our primary input never sees any data.
@@ -889,24 +931,21 @@ mod tests {
 
             primary_input.advance_to(1);
             condition_input.advance_to(1);
-            while primary_probe.less_than(&1) {
+            while seal_probe.less_than(&1) {
                 worker.step();
             }
 
             // Pull primary input to 3 already. We're still expecting a seal at 2 for primary,
             // though, when condition advances to 2.
             primary_input.advance_to(3);
-            while primary_probe.less_than(&3) {
-                worker.step();
-            }
 
             condition_input.advance_to(2);
-            while condition_probe.less_than(&2) {
+            while seal_probe.less_than(&2) {
                 worker.step();
             }
 
             condition_input.advance_to(3);
-            while condition_probe.less_than(&3) {
+            while seal_probe.less_than(&3) {
                 worker.step();
             }
         });
@@ -917,17 +956,25 @@ mod tests {
         //  a) We don't seal primary when condition has not sufficiently advanced.
         //  b) Condition is sealed before primary for the same timestamp.
         //  c) We seal up, even when never receiving any data.
-        assert_eq!(
-            vec![
-                Sealed::Condition(1),
-                Sealed::Primary(1),
-                Sealed::Condition(2),
-                Sealed::Primary(2),
-                Sealed::Condition(3),
-                Sealed::Primary(3)
-            ],
-            actual_seals
-        );
+        //  d) Seals happen in timestamp order.
+        //
+        // We cannot assert a specific seal ordering because the order is not deterministic.
+
+        let mut current_condition_seal = 0;
+        let mut current_primary_seal = 0;
+        for seal in actual_seals {
+            match seal {
+                Sealed::Condition(ts) => {
+                    assert!(ts >= current_condition_seal);
+                    current_condition_seal = ts;
+                }
+                Sealed::Primary(ts) => {
+                    assert!(ts <= current_condition_seal);
+                    assert!(ts >= current_primary_seal);
+                    current_primary_seal = ts;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -980,9 +1027,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         let expected = vec![(
-            "failed to commit metadata after appending to unsealed: unavailable: blob set"
-                .to_string(),
-            0,
+            "Error sealing conditional_seal(test) (condition) up to 1: failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
+            1,
             1,
         )];
         assert_eq!(actual, expected);
