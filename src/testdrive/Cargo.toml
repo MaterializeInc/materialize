@@ -49,7 +49,7 @@ termcolor = "1.1.2"
 tiberius = { version = "0.6.5", default-features = false }
 tokio = "1.13.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-serde_json-1"] }
-tokio-stream = "0.1.7"
+tokio-stream = "0.1.8"
 tokio-util = { version = "0.6.9", features = ['compat'] }
 url = "2.2.2"
 uuid = "0.8.2"
