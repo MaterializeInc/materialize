@@ -70,7 +70,7 @@ pub trait PersistentUpsert<G, K: Codec, V: Codec, T> {
 }
 
 /// Persist configuration for persistent upsert.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PersistentUpsertConfig<K: Codec, V: Codec> {
     /// The timestamp up to which which data should be read when restoring.
     upper_seal_ts: u64,

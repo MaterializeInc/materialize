@@ -1476,14 +1476,19 @@ where
                 let changes = timestamp_bindings_updater.update(timestamp_histories);
 
                 // Emit required changes downstream.
-                let to_emit = changes.into_iter().map(|(binding, diff)| {
-                    (
-                        binding,
-                        bindings_cap.time().clone(),
-                        diff.try_into()
-                            .expect("could not convert i64 diff to isize"),
-                    )
-                });
+                let to_emit = changes
+                    .into_iter()
+                    .filter(|((source_ts, _assigned_ts), _diff)| {
+                        consistency_info.responsible_for(&source_ts.partition)
+                    })
+                    .map(|(binding, diff)| {
+                        (
+                            binding,
+                            bindings_cap.time().clone(),
+                            diff.try_into()
+                                .expect("could not convert i64 diff to isize"),
+                        )
+                    });
 
                 // We're collecting into a Vec because we want to log and emit. This is a bit
                 // wasteful but we don't expect large numbers of bindings.

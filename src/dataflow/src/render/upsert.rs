@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, HashMap};
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection};
 
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Concat, Map, OkErr, Operator};
@@ -48,8 +47,8 @@ pub fn upsert<G>(
         PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
     >,
 ) -> (
-    Collection<G, Row, Diff>,
-    Option<Collection<G, dataflow_types::DataflowError, Diff>>,
+    Stream<G, (Row, Timestamp, Diff)>,
+    Stream<G, (dataflow_types::DataflowError, Timestamp, Diff)>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -239,7 +238,7 @@ where
         errs = errs.concat(&errs2);
     }
 
-    (oks.as_collection(), Some(errs.as_collection()))
+    (oks, errs)
 }
 
 /// Evaluates predicates and dummy column information.
