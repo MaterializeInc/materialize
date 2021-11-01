@@ -15,11 +15,17 @@ steps:
       queue: builder
     concurrency: 1
     concurrency_group: deploy/devsite
+    retry:
+      manual:
+        permit_on_passed: true
 
   - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.deploy.linux
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/linux
+    retry:
+      manual:
+        permit_on_passed: true
 
   - command: bin/pyactivate --dev -m ci.deploy.macos
     agents:
@@ -27,11 +33,17 @@ steps:
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/macos
+    retry:
+      manual:
+        permit_on_passed: true
 
   - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.deploy.pypi
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/pypi
+    retry:
+      manual:
+        permit_on_passed: true
 
   - label: ":bulb: Full SQL Logic Tests"
     trigger: sql-logic-tests
@@ -42,3 +54,6 @@ steps:
       branch: "$BUILDKITE_BRANCH"
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
+    retry:
+      manual:
+        permit_on_passed: true
