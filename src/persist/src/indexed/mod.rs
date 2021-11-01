@@ -46,27 +46,18 @@ use crate::storage::{Blob, Log, SeqNo};
 #[derive(Debug)]
 enum PendingResponse {
     SeqNo(PFutureHandle<SeqNo>, Result<SeqNo, Error>),
-    Unit(PFutureHandle<()>, Result<(), Error>),
 }
 
 impl PendingResponse {
     pub fn fill(self) {
         match self {
             PendingResponse::SeqNo(f, resp) => f.fill(resp),
-            PendingResponse::Unit(f, resp) => f.fill(resp),
         }
     }
 
     pub fn fill_err(self, err: Error) {
         match self {
             PendingResponse::SeqNo(f, resp) => {
-                if resp.is_err() {
-                    f.fill(resp);
-                } else {
-                    f.fill(Err(err));
-                }
-            }
-            PendingResponse::Unit(f, resp) => {
                 if resp.is_err() {
                     f.fill(resp);
                 } else {
@@ -194,7 +185,8 @@ impl Pending {
 #[derive(Debug)]
 pub struct Indexed<L: Log, B: Blob> {
     next_stream_id: Id,
-    unsealeds_seqno_upper: SeqNo,
+    saved_seqno: SeqNo,
+    highest_assigned_seqno: SeqNo,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
     // and this representation is optimized for the metadata serialization path,
     // which is less rare.
@@ -255,7 +247,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             .collect();
         let indexed = Indexed {
             next_stream_id: meta.next_stream_id,
-            unsealeds_seqno_upper: meta.unsealeds_seqno_upper,
+            saved_seqno: meta.unsealeds_seqno_upper,
+            highest_assigned_seqno: meta.unsealeds_seqno_upper,
             id_mapping: meta.id_mapping,
             graveyard: meta.graveyard,
             log,
@@ -284,7 +277,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         let meta = self.prev_meta.clone();
 
         self.next_stream_id = meta.next_stream_id;
-        self.unsealeds_seqno_upper = meta.unsealeds_seqno_upper;
+        debug_assert_eq!(self.saved_seqno, meta.unsealeds_seqno_upper);
+        self.highest_assigned_seqno = self.saved_seqno;
         self.id_mapping = meta.id_mapping;
         self.graveyard = meta.graveyard;
 
@@ -317,6 +311,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             self.restore();
             return Err(e);
         } else {
+            self.saved_seqno = new_meta.unsealeds_seqno_upper;
             self.prev_meta = new_meta;
         }
 
@@ -674,7 +669,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn validate_write(
         &mut self,
         updates: &[(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)],
-    ) -> Result<SeqNo, Error> {
+    ) -> Result<(), String> {
         for (id, updates) in updates.iter() {
             let sealed_frontier = self.sealed_frontier(*id)?;
             for update in updates.iter() {
@@ -682,12 +677,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                     return Err(format!(
                         "update for {:?} with time {} before sealed frontier: {:?}",
                         id, update.1, sealed_frontier,
-                    )
-                    .into());
+                    ));
                 }
             }
         }
-        Ok(self.unsealeds_seqno_upper)
+        Ok(())
     }
 
     /// Asynchronously persists (Key, Value, Time, Diff) updates for the stream
@@ -697,7 +691,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
         res: PFutureHandle<SeqNo>,
     ) {
-        let resp = self.validate_write(&updates);
+        let seqno = self.highest_assigned_seqno + 1;
+        self.highest_assigned_seqno = seqno;
+        let resp = self
+            .validate_write(&updates)
+            .map(|_| seqno)
+            .map_err(|err| Error::Noop(seqno, err));
 
         if resp.is_ok() {
             self.pending.add_writes(updates);
@@ -716,20 +715,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         if writes_by_id.is_empty() {
             return Ok(());
         }
-        // Give each write a unique, incrementing sequence number, and use
-        // unsealeds_seqno_upper to track the sequence number of the next write.
-        let write_seqno = self.unsealeds_seqno_upper;
-        self.unsealeds_seqno_upper = SeqNo(write_seqno.0 + 1);
-
         // This range represents the [lower, upper) of sequence numbers assigned
         // to this write.
-        //
-        // TODO: do we still need sequence numbers? This will make more sense
-        // when we send multiple writes to unsealed at once but I'm not sure if
-        // we need the concept of sequence numbers when we're not reading from
-        // a log. On the other hand, how would we distinguish unsealed batches
-        // from each other?
-        let desc = write_seqno..self.unsealeds_seqno_upper;
+        let desc = self.saved_seqno..self.highest_assigned_seqno;
         for (id, writes) in writes_by_id.drain() {
             let unsealed = self
                 .unsealeds
@@ -740,7 +728,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             // write is >= every unsealed's seqno_upper and that there is nothing
             // for that unsealed in [unsealed.seqno_upper, write_seqno).
             let seqno_upper = unsealed.seqno_upper()[0];
-            debug_assert!(seqno_upper <= write_seqno);
+            debug_assert!(seqno_upper <= desc.start);
 
             // We can artificially start the Unsealed batch at the unsealed's current
             // seqno_upper to make the batches be contiguous in terms of sequence
@@ -750,8 +738,6 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
             self.drain_pending_writes_inner(id, writes, &desc)?;
         }
-
-        self.unsealeds_seqno_upper = desc.end;
 
         Ok(())
     }
@@ -929,21 +915,21 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// `seal` method. Once a time has been sealed for an id, it becomes an
     /// error to later seal it at an time less than the sealed frontier. It is
     /// also an error to write new data with a time less than the sealed frontier.
-    fn sealed_frontier(&self, id: Id) -> Result<Antichain<u64>, Error> {
+    fn sealed_frontier(&self, id: Id) -> Result<Antichain<u64>, String> {
         let trace = self
             .traces
             .get(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            .ok_or_else(|| format!("never registered: {:?}", id))?;
         Ok(trace.get_seal())
     }
 
     /// Apply a seal command to in-memory state if it is valid.
-    fn do_seal(&mut self, ids: &[Id], seal_ts: u64) -> Result<(), Error> {
+    fn do_seal(&mut self, ids: &[Id], seal_ts: u64) -> Result<(), String> {
         for id in ids.iter() {
             let trace = self
                 .traces
                 .get(&id)
-                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+                .ok_or_else(|| format!("never registered: {:?}", id))?;
             trace.validate_seal(seal_ts)?;
         }
 
@@ -958,20 +944,25 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// Sealing a time advances the "sealed" frontier for an id, which restricts
     /// what times can later be sealed and written for that id. See
     /// `sealed_frontier` for details.
-    pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: PFutureHandle<()>) {
-        let resp = self.do_seal(&ids, seal_ts);
+    pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: PFutureHandle<SeqNo>) {
+        let seqno = self.highest_assigned_seqno + 1;
+        self.highest_assigned_seqno = seqno;
+        let resp = self
+            .do_seal(&ids, seal_ts)
+            .map(|_| seqno)
+            .map_err(|err| Error::Noop(seqno, err));
         if resp.is_ok() {
             self.pending.add_seals(ids, seal_ts);
         }
-        self.pending.add_response(PendingResponse::Unit(res, resp));
+        self.pending.add_response(PendingResponse::SeqNo(res, resp));
     }
 
-    fn do_allow_compaction(&mut self, id_sinces: Vec<(Id, Antichain<u64>)>) -> Result<(), Error> {
+    fn do_allow_compaction(&mut self, id_sinces: Vec<(Id, Antichain<u64>)>) -> Result<(), String> {
         for (id, since) in id_sinces.iter() {
             let trace = self
                 .traces
                 .get(&id)
-                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+                .ok_or_else(|| format!("never registered: {:?}", id))?;
             trace.validate_allow_compaction(since)?;
         }
 
@@ -992,11 +983,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     pub fn allow_compaction(
         &mut self,
         id_sinces: Vec<(Id, Antichain<u64>)>,
-        res: PFutureHandle<()>,
+        res: PFutureHandle<SeqNo>,
     ) {
-        let response = self.do_allow_compaction(id_sinces);
+        let seqno = self.highest_assigned_seqno + 1;
+        self.highest_assigned_seqno = seqno;
+        let response = self
+            .do_allow_compaction(id_sinces)
+            .map(|_| seqno)
+            .map_err(|err| Error::Noop(seqno, err));
         self.pending
-            .add_response(PendingResponse::Unit(res, response));
+            .add_response(PendingResponse::SeqNo(res, response));
     }
 
     /// Appends the given `batch` to the unsealed for `id`, writing the data into
@@ -1015,7 +1011,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn serialize_meta(&self) -> BlobMeta {
         BlobMeta {
             next_stream_id: self.next_stream_id,
-            unsealeds_seqno_upper: self.unsealeds_seqno_upper,
+            unsealeds_seqno_upper: self.highest_assigned_seqno,
             id_mapping: self.id_mapping.clone(),
             graveyard: self.graveyard.clone(),
             unsealeds: self
@@ -1047,12 +1043,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         let trace = trace.snapshot(&self.blob);
         let unsealed = unsealed.snapshot(trace.ts_upper.clone(), Antichain::new(), &self.blob)?;
 
-        Ok(IndexedSnapshot(
-            unsealed,
-            trace,
-            self.unsealeds_seqno_upper,
-            seal_frontier,
-        ))
+        let seqno = self.highest_assigned_seqno;
+        Ok(IndexedSnapshot(unsealed, trace, seqno, seal_frontier))
     }
 
     /// Registers a callback to be invoked on successful writes and seals.
@@ -1316,7 +1308,7 @@ mod tests {
             block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end()?, updates[1..]);
         assert_eq!(trace.read_to_end()?, updates[..1]);
-        assert_eq!(seqno.0, 1);
+        assert_eq!(seqno.0, 2);
         assert_eq!(seal_frontier.elements(), &[2]);
 
         // All the data has been sealed, so it's now all in the trace.
@@ -1327,7 +1319,7 @@ mod tests {
             block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, updates);
-        assert_eq!(seqno.0, 1);
+        assert_eq!(seqno.0, 3);
         assert_eq!(seal_frontier.elements(), &[3]);
 
         // Verify that the listener got a copy of the writes.

@@ -309,7 +309,7 @@ impl Validator {
         }
     }
 
-    fn step_seal(&mut self, meta: &StepMeta, req: SealReq, res: Result<(), Error>) {
+    fn step_seal(&mut self, meta: &StepMeta, req: SealReq, res: Result<SeqNo, Error>) {
         let req_ok = req.ts
             >= self
                 .seal_frontier
@@ -330,7 +330,7 @@ impl Validator {
         &mut self,
         meta: &StepMeta,
         req: AllowCompactionReq,
-        res: Result<(), Error>,
+        res: Result<SeqNo, Error>,
     ) {
         let req_ok = req.ts
             >= self
@@ -358,7 +358,7 @@ impl Validator {
         &mut self,
         meta: &StepMeta,
         req: TakeSnapshotReq,
-        res: Result<(), Error>,
+        res: Result<SeqNo, Error>,
     ) {
         let require_succeed = self.uptime.storage_available(meta.before, meta.after)
             && self.uptime.runtime_available(meta.before, meta.after);
@@ -387,7 +387,7 @@ impl Validator {
                     let mut actual = res.contents;
                     let mut expected: Vec<((String, ()), u64, isize)> = self
                         .writes_by_seqno
-                        .range((stream.clone(), SeqNo(0))..(stream, SeqNo(res.seqno)))
+                        .range((stream.clone(), SeqNo(0))..=(stream, SeqNo(res.seqno)))
                         .flat_map(|(_, v)| v)
                         .cloned()
                         .collect();

@@ -73,6 +73,8 @@ pub struct BlobMeta {
     /// Invariant: For each UnsealedMeta in `unsealeds`, this is >= the last
     /// batch's upper. If they are not equal, there is logically an empty batch
     /// between [last batch's upper, unsealeds_seqno_upper).
+    ///
+    /// TODO: Rename this to seqno.
     pub unsealeds_seqno_upper: SeqNo,
     /// Internal stream id indexed by external stream name.
     ///
@@ -460,7 +462,7 @@ impl BlobMeta {
             let unsealed_seqno_upper = unsealed.seqno_upper();
             if !unsealed_seqno_upper.less_equal(&self.unsealeds_seqno_upper) {
                 return Err(Error::from(format!(
-                    "id {:?} unsealed seqno_upper {:?} is not less than the blob's unsealed_seqno_upper {:?}",
+                    "id {:?} unsealed seqno_upper {:?} is not less or equal to the blob's unsealed_seqno_upper {:?}",
                     id, unsealed_seqno_upper, self.unsealeds_seqno_upper,
                 )));
             }
@@ -1452,7 +1454,7 @@ mod tests {
         assert_eq!(
             b.validate(),
             Err(Error::from(
-                "id Id(0) unsealed seqno_upper Antichain { elements: [SeqNo(3)] } is not less than the blob's unsealed_seqno_upper SeqNo(2)"
+                "id Id(0) unsealed seqno_upper Antichain { elements: [SeqNo(3)] } is not less or equal to the blob's unsealed_seqno_upper SeqNo(2)"
             ))
         );
 

@@ -42,8 +42,8 @@ enum Cmd {
         Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
         PFutureHandle<SeqNo>,
     ),
-    Seal(Vec<Id>, u64, PFutureHandle<()>),
-    AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<()>),
+    Seal(Vec<Id>, u64, PFutureHandle<SeqNo>),
+    AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
     Snapshot(Id, PFutureHandle<IndexedSnapshot>),
     Listen(
         Id,
@@ -317,7 +317,7 @@ impl RuntimeClient {
     /// for those ids.
     ///
     /// The ids must have previously been registered.
-    fn seal(&self, ids: &[Id], ts: u64, res: PFutureHandle<()>) {
+    fn seal(&self, ids: &[Id], ts: u64, res: PFutureHandle<SeqNo>) {
         self.core.send(Cmd::Seal(ids.to_vec(), ts, res))
     }
 
@@ -327,7 +327,7 @@ impl RuntimeClient {
     /// compaction frontier can later be advanced to for these ids.
     ///
     /// The ids must have previously been registered.
-    fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)], res: PFutureHandle<()>) {
+    fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)], res: PFutureHandle<SeqNo>) {
         self.core
             .send(Cmd::AllowCompaction(id_sinces.to_vec(), res))
     }
@@ -446,14 +446,14 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
 
     /// Closes the stream at the given timestamp, migrating data strictly less
     /// than it into the trace.
-    pub fn seal(&self, upper: u64) -> PFuture<()> {
+    pub fn seal(&self, upper: u64) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
         self.runtime.seal(&[self.id], upper, tx);
         rx
     }
 
     /// Unblocks compaction for updates at or before `since`.
-    pub fn allow_compaction(&self, since: Antichain<u64>) -> PFuture<()> {
+    pub fn allow_compaction(&self, since: Antichain<u64>) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
         self.runtime.allow_compaction(&[(self.id, since)], tx);
         rx
@@ -546,7 +546,7 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
     ///
     /// Ids may not be duplicated (this is equivalent to sealing the stream
     /// twice at the same timestamp, which we currently disallow).
-    pub fn seal(&self, ids: &[Id], upper: u64) -> PFuture<()> {
+    pub fn seal(&self, ids: &[Id], upper: u64) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
         for id in ids {
             if !self.ids.contains(id) {
@@ -566,7 +566,7 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
     ///
     /// Ids may not be duplicated (this is equivalent to allowing compaction on
     /// the stream twice at the same timestamp, which we currently disallow).
-    pub fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)]) -> PFuture<()> {
+    pub fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)]) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
         for (id, _) in id_sinces {
             if !self.ids.contains(id) {
@@ -1062,8 +1062,8 @@ mod tests {
         // We don't expose reading the seal directly, so hack it a bit here by
         // verifying that we can't re-seal at a prior timestamp (which is
         // disallowed).
-        assert_eq!(c1s1.seal(1).recv(), Err(Error::from("invalid seal for Id(0): 1 not at or in advance of current seal frontier Antichain { elements: [2] }")));
-        assert_eq!(c1s2.seal(1).recv(), Err(Error::from("invalid seal for Id(1): 1 not at or in advance of current seal frontier Antichain { elements: [2] }")));
+        assert_eq!(c1s1.seal(1).recv().map_err(|err| err.to_string()), Err("invalid seal for Id(0): 1 not at or in advance of current seal frontier Antichain { elements: [2] }".into()));
+        assert_eq!(c1s2.seal(1).recv().map_err(|err| err.to_string()), Err("invalid seal for Id(1): 1 not at or in advance of current seal frontier Antichain { elements: [2] }".into()));
 
         // Cannot write to streams not specified during construction.
         let (c1s3, _) = client1.create_or_load::<(), ()>("3")?;

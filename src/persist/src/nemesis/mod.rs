@@ -143,10 +143,10 @@ pub enum Req {
 #[derive(Debug)]
 pub enum Res {
     Write(WriteReq, Result<WriteRes, Error>),
-    Seal(SealReq, Result<(), Error>),
+    Seal(SealReq, Result<SeqNo, Error>),
     ReadOutput(ReadOutputReq, Result<ReadOutputRes, Error>),
-    AllowCompaction(AllowCompactionReq, Result<(), Error>),
-    TakeSnapshot(TakeSnapshotReq, Result<(), Error>),
+    AllowCompaction(AllowCompactionReq, Result<SeqNo, Error>),
+    TakeSnapshot(TakeSnapshotReq, Result<SeqNo, Error>),
     ReadSnapshot(ReadSnapshotReq, Result<ReadSnapshotRes, Error>),
     Start(Result<(), Error>),
     Stop(Result<(), Error>),
@@ -248,8 +248,8 @@ impl FutureStep {
 #[derive(Debug)]
 pub enum FutureRes {
     Write(WriteReq, Result<PFuture<SeqNo>, Error>),
-    Seal(SealReq, Result<PFuture<()>, Error>),
-    AllowCompaction(AllowCompactionReq, Result<PFuture<()>, Error>),
+    Seal(SealReq, Result<PFuture<SeqNo>, Error>),
+    AllowCompaction(AllowCompactionReq, Result<PFuture<SeqNo>, Error>),
     Ready(Res),
 }
 
