@@ -54,6 +54,3 @@ steps:
       branch: "$BUILDKITE_BRANCH"
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
-    retry:
-      manual:
-        permit_on_passed: true
