@@ -402,7 +402,15 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     for cmd in cmds {
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
-        let subst = |msg: &str| substitute_vars(msg, &vars).map_err(wrap_err);
+
+        // Substitute variables at startup except for the command-specific ones
+        // Those will be substituted at runtime
+        let ignore_prefix = match &cmd.command {
+            Command::Builtin(builtin) => Some(builtin.name.clone()),
+            _ => None,
+        };
+        let subst = |msg: &str| substitute_vars(msg, &vars, &ignore_prefix).map_err(wrap_err);
+
         let action: Box<dyn Action + Send + Sync> = match cmd.command {
             Command::Builtin(mut builtin) => {
                 for val in builtin.args.values_mut() {
@@ -546,18 +554,29 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
 }
 
 /// Substituted `${}`-delimited variables from `vars` into `msg`
-fn substitute_vars(msg: &str, vars: &HashMap<String, String>) -> Result<String, String> {
+fn substitute_vars(
+    msg: &str,
+    vars: &HashMap<String, String>,
+    ignore_prefix: &Option<String>,
+) -> Result<String, String> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"\$\{([^}]+)\}").unwrap();
     }
     let mut err = None;
     let out = RE.replace_all(msg, |caps: &Captures| {
         let name = &caps[1];
+        if let Some(ignore_prefix) = &ignore_prefix {
+            if name.starts_with(format!("{}.", ignore_prefix).as_str()) {
+                // Do not subsitute, leave original variable name in place
+                return caps.get(0).unwrap().as_str().to_string();
+            }
+        }
+
         if let Some(val) = vars.get(name) {
-            val
+            val.to_string()
         } else {
             err = Some(format!("unknown variable: {}", name));
-            "#VAR-MISSING#"
+            "#VAR-MISSING#".to_string()
         }
     });
     match err {
