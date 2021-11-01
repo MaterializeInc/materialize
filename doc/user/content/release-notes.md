@@ -101,6 +101,8 @@ List new features before bug fixes.
 
 {{< /comment >}}
 
+{{% version-header v0.9.12 %}}
+
 {{% version-header v0.9.11 %}}
 
 - Disallow `UPDATE` and `DELETE` operations on tables when boot in
