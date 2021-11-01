@@ -400,8 +400,11 @@ where
         let mut new_pending = Vec::new();
 
         seal_op.build(move |mut capabilities| {
-            let mut cap_set =
-                CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
+            let mut cap_set = if active_seal_operator {
+                CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
+            } else {
+                CapabilitySet::new()
+            };
 
             move |frontiers| {
                 let mut data_output = data_output.activate();
@@ -707,6 +710,7 @@ mod tests {
     use timely::dataflow::operators::input::Handle;
     use timely::dataflow::operators::probe::Probe;
     use timely::dataflow::operators::Capture;
+    use timely::Config;
 
     use crate::error::Error;
     use crate::indexed::{ListenEvent, ListenFn, SnapshotExt};
@@ -980,6 +984,50 @@ mod tests {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    // Test using multiple workers and ensure that `conditional_seal()` doesn't block the
+    // frontier for non-active seal operators.
+    //
+    // A failure in this test would manifest as indefinite hanging of the test, we never see the
+    // frontier advance as we expect to.
+    #[test]
+    fn conditional_seal_multiple_workers() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+        let p = registry.runtime_no_reentrance()?;
+
+        let guards = timely::execute(Config::process(3), move |worker| {
+            let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
+                let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
+                let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
+                let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
+                let mut condition_input: Handle<u64, ((), u64, isize)> = Handle::new();
+                let primary_stream = primary_input.to_stream(scope);
+                let condition_stream = condition_input.to_stream(scope);
+
+                let (sealed_stream, _) = primary_stream.conditional_seal(
+                    "test",
+                    &condition_stream,
+                    primary_write,
+                    condition_write,
+                );
+
+                let seal_probe = sealed_stream.probe();
+
+                (primary_input, condition_input, seal_probe)
+            });
+
+            primary_input.advance_to(42);
+            condition_input.advance_to(42);
+            while seal_probe.less_than(&42) {
+                worker.step();
+            }
+        })?;
+
+        let timely_result: Result<Vec<_>, _> = guards.join().into_iter().collect();
+        timely_result.expect("timely workers failed");
 
         Ok(())
     }
