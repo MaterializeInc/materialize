@@ -52,7 +52,7 @@ do
 		-CAcreateserial \
 		-passin pass:$SSL_SECRET \
 
-	# Generate key and cert p12 (i.e. non-Java keystore)
+	# Export key and certificate as a PKCS#12 archive for import into JKSs.
 	openssl pkcs12 \
 		-export \
 		-in secrets/$i.crt \
@@ -60,19 +60,30 @@ do
 		-inkey secrets/$i.key \
 		-passin pass:$SSL_SECRET \
 		-certfile secrets/ca.crt \
-		-caname "MZ RSA CA" \
+		-out tmp/$i.p12 \
+		-passout pass:$SSL_SECRET
+
+	# Export key and certificate as a PKCS#12 archive with newer cipher
+    # suites for use by OpenSSL v3+.
+	openssl pkcs12 \
+		-export \
+        -keypbe AES-256-CBC \
+        -certpbe AES-256-CBC \
+		-in secrets/$i.crt \
+		-name $i \
+		-inkey secrets/$i.key \
+		-passin pass:$SSL_SECRET \
+		-certfile secrets/ca.crt \
 		-out secrets/$i.p12 \
 		-passout pass:$SSL_SECRET
 
 	# Create JKS
 	keytool -importkeystore \
-		-alias $i \
 		-deststorepass $SSL_SECRET \
 		-destkeypass $SSL_SECRET \
 		-srcstorepass $SSL_SECRET \
-		-srckeypass $SSL_SECRET \
 		-destkeystore secrets/$i.keystore.jks \
-		-srckeystore secrets/$i.p12 \
+		-srckeystore tmp/$i.p12 \
 		-srcstoretype PKCS12
 
 	# Import CA
