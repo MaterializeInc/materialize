@@ -1384,6 +1384,18 @@ lazy_static! {
                     Ok(HirScalarExpr::literal(datum, ScalarType::String))
                 }), 746;
             },
+            "date_bin" => Scalar {
+                params!(Interval, Timestamp) => Operation::binary(|ecx, stride, source| {
+                    ecx.require_experimental_mode("binary date_bin")?;
+                    Ok(stride.call_binary(source, BinaryFunc::DateBinTimestamp))
+                }), oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TS_OID;
+                params!(Interval, TimestampTz) => Operation::binary(|ecx, stride, source| {
+                    ecx.require_experimental_mode("binary date_bin")?;
+                    Ok(stride.call_binary(source, BinaryFunc::DateBinTimestampTz))
+                }), oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TSTZ_OID;
+                params!(Interval, Timestamp, Timestamp) => VariadicFunc::DateBinTimestamp, 6177;
+                params!(Interval, TimestampTz, TimestampTz) => VariadicFunc::DateBinTimestampTz, 6178;
+            },
             "date_part" => Scalar {
                 params!(String, Interval) => BinaryFunc::DatePartInterval, 1172;
                 params!(String, Timestamp) => BinaryFunc::DatePartTimestamp, 2021;

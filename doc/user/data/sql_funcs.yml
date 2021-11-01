@@ -385,6 +385,14 @@
     description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
       Users cannot define views with queries containing `current_timestamp()`.'
 
+  - signature: 'date_bin(stride: interval, source: timestamp, origin: timestamp) -> timestamp'
+    description: Align `source` with `origin` along `stride`.
+    url: date-bin
+
+  - signature: 'date_bin(stride: interval, source: timestamp) -> timestamp'
+    description: '**Experimental**: Align `source` with the UNIX epoch along `stride`.'
+    url: date-bin
+
   - signature: 'date_trunc(time_component: str, val: timestamp) -> timestamp'
     description: Largest `time_component` <= `val`
     url: date-trunc
