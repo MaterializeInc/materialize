@@ -63,15 +63,14 @@
 // TODO
 // - Variant with S3Blob
 // - Impl of Runtime directly using Indexed
-// - Impl of Runtime with Timely workers running in threads
 // - Impl of Runtime with Timely workers running in processes
 // - Storage (log/blob) with variable latency/slow requests
 // - Vary key size
 // - Deleting streams
 
 use std::collections::VecDeque;
-use std::env;
 use std::time::Instant;
+use std::{env, thread};
 
 use ore::test::init_logging;
 use rand::rngs::OsRng;
@@ -142,7 +141,7 @@ pub enum Req {
 
 #[derive(Debug)]
 pub enum Res {
-    Write(WriteReq, Result<WriteRes, Error>),
+    Write(WriteReq, Result<SeqNo, Error>),
     Seal(SealReq, Result<SeqNo, Error>),
     ReadOutput(ReadOutputReq, Result<ReadOutputRes, Error>),
     AllowCompaction(AllowCompactionReq, Result<SeqNo, Error>),
@@ -169,11 +168,6 @@ pub struct WriteReqMulti {
 pub enum WriteReq {
     Single(WriteReqSingle),
     Multi(WriteReqMulti),
-}
-
-#[derive(Clone, Debug)]
-pub struct WriteRes {
-    seqno: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -235,7 +229,7 @@ impl FutureStep {
     pub fn recv(self) -> Step {
         let res = self.res.recv();
         let after = Instant::now();
-        log::info!("{:?} res: {:?}", self.req_id, &res);
+        log::debug!("{:?} res: {:?}", self.req_id, &res);
         let meta = StepMeta {
             req_id: self.req_id,
             before: self.before,
@@ -257,7 +251,7 @@ impl FutureRes {
     pub fn recv(self) -> Res {
         match self {
             FutureRes::Write(req, res) => {
-                let res = res.and_then(|res| res.recv().map(|seqno| WriteRes { seqno: seqno.0 }));
+                let res = res.and_then(|res| res.recv());
                 Res::Write(req, res)
             }
             FutureRes::Seal(req, res) => {
@@ -273,8 +267,14 @@ impl FutureRes {
     }
 }
 
-pub trait Runtime {
+pub trait RuntimeWorker: Send + 'static {
     fn run(&mut self, i: Input) -> FutureStep;
+}
+
+pub trait Runtime {
+    type Worker: RuntimeWorker;
+
+    fn add_worker(&mut self) -> Self::Worker;
     fn finish(self);
 }
 
@@ -284,6 +284,10 @@ pub struct Runner<R: Runtime> {
     runtime: R,
 }
 
+// TODO: Increase this to 3 once Validator can handle that.
+const NUM_INGEST_WORKER_THREADS: usize = 1;
+const NUM_DATAFLOW_WORKER_THREADS: usize = 2;
+
 impl<R: Runtime> Runner<R> {
     const MAX_OUTSTANDING: usize = 10;
 
@@ -292,51 +296,76 @@ impl<R: Runtime> Runner<R> {
     }
 
     pub fn run(mut self, num_steps: usize) -> Vec<Step> {
-        let mut outstanding = VecDeque::<FutureStep>::with_capacity(Self::MAX_OUTSTANDING);
-        let mut steps = Vec::with_capacity(num_steps);
+        let (tx, rx) = crossbeam_channel::bounded::<Input>(num_steps);
 
-        // Pipeline up to MAX_OUTSTANDING requests by filling up `outstanding`
-        // from the back with un-awaited requests and, once it hits our pipeline
-        // limit, popping them off the front (and blocking) before issuing any
-        // new ones. This helps keep the traffic more interesting by ensuring
-        // that we don't (for example) hit a StorageUnavailable or Stop and then
-        // immediately fill every in-flight request with an Error.
-        //
-        // Concretely: imagine if we issues every request simultaneously and
-        // then waited for them all to finish. What is likely to happen is that
-        // every write/seal/allow compaction request errors because either
-        // storage is unavailable or the runtime is restarting. Or, perhaps, the
-        // seal with the highest timestamp ends up executing first and every
-        // write and seal for a lower timestamp errors. These are valid
-        // histories, but they aren't interesting tests of the system. (Another
-        // example of a way we tune the traffic to make it interesting is in the
-        // generator, where we disable most request types when the runtime or
-        // storage are down, so that it becomes much more likely that we'll
-        // generate traffic to bring them back.)
-        //
-        // Additionally, this helps ensure that ReadOutput has an interesting
-        // amount of output to read (see the NB in Seal). The Runtime now, when
-        // a seal call is successful, blocks the returned Future until the
-        // dataflow has caught up to the seal. Combined with this, we're
-        // guaranteed that a ReadOutput that trails a Seal by MAX_OUTSTANDING
-        // will include dataflow output up to that seal.
+        let mut threads = Vec::new();
+        for idx in 0..NUM_INGEST_WORKER_THREADS {
+            let mut worker = self.runtime.add_worker();
+            let rx = rx.clone();
+            threads.push(
+                thread::Builder::new()
+                    .name(format!("nemesis:worker-{}", idx))
+                    .spawn(move || {
+                        let mut outstanding =
+                            VecDeque::<FutureStep>::with_capacity(Self::MAX_OUTSTANDING);
+                        let mut steps = Vec::with_capacity(num_steps);
+
+                        // Pipeline up to MAX_OUTSTANDING requests by filling up `outstanding`
+                        // from the back with un-awaited requests and, once it hits our pipeline
+                        // limit, popping them off the front (and blocking) before issuing any
+                        // new ones. This helps keep the traffic more interesting by ensuring
+                        // that we don't (for example) hit a StorageUnavailable or Stop and then
+                        // immediately fill every in-flight request with an Error.
+                        //
+                        // Concretely: imagine if we issues every request simultaneously and
+                        // then waited for them all to finish. What is likely to happen is that
+                        // every write/seal/allow compaction request errors because either
+                        // storage is unavailable or the runtime is restarting. Or, perhaps, the
+                        // seal with the highest timestamp ends up executing first and every
+                        // write and seal for a lower timestamp errors. These are valid
+                        // histories, but they aren't interesting tests of the system. (Another
+                        // example of a way we tune the traffic to make it interesting is in the
+                        // generator, where we disable most request types when the runtime or
+                        // storage are down, so that it becomes much more likely that we'll
+                        // generate traffic to bring them back.)
+                        //
+                        // Additionally, this helps ensure that ReadOutput has an interesting
+                        // amount of output to read (see the NB in Seal). The Runtime now, when
+                        // a seal call is successful, blocks the returned Future until the
+                        // dataflow has caught up to the seal. Combined with this, we're
+                        // guaranteed that a ReadOutput that trails a Seal by MAX_OUTSTANDING
+                        // will include dataflow output up to that seal.
+                        for input in rx {
+                            while outstanding.len() >= Self::MAX_OUTSTANDING {
+                                let step_fut = outstanding.pop_front().unwrap();
+                                let step = step_fut.recv();
+                                steps.push(step);
+                            }
+                            log::debug!("{:?} req: {:?}", input.req_id, &input.req);
+                            outstanding.push_back(worker.run(input));
+                        }
+
+                        // Don't forget to await the final few requests before cleaning up.
+                        while let Some(step_fut) = outstanding.pop_front() {
+                            let step = step_fut.recv();
+                            steps.push(step);
+                        }
+
+                        steps
+                    })
+                    .expect("thread name is valid"),
+            )
+        }
         for input in self.generator.take(num_steps) {
-            while outstanding.len() >= Self::MAX_OUTSTANDING {
-                let step_fut = outstanding.pop_front().unwrap();
-                let step = step_fut.recv();
-                steps.push(step);
-            }
-            log::info!("{:?} req: {:?}", input.req_id, &input.req);
-            outstanding.push_back(self.runtime.run(input));
+            tx.send(input).expect("worker threads don't exit");
         }
+        drop(tx);
 
-        // Don't forget to await the final few requests before cleaning up.
-        while let Some(step_fut) = outstanding.pop_front() {
-            let step = step_fut.recv();
-            steps.push(step);
-        }
+        let steps = threads
+            .into_iter()
+            .flat_map(|w| w.join().expect("thread didn't panic"))
+            .collect();
         self.runtime.finish();
-
         steps
     }
 }
