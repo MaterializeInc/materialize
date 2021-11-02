@@ -1,4 +1,4 @@
-click==8.0.1
+click==8.0.3
 pg8000==1.21.1
 PyMySQL==1.0.2
 pyyaml==5.4.1
