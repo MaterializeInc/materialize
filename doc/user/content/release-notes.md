@@ -103,6 +103,9 @@ List new features before bug fixes.
 
 {{% version-header v0.9.12 %}}
 
+- Add the [`date_bin`](/sql/functions/date-bin) function, which is similar to
+  `date_trunc` but supports "truncating" to arbitrary intervals.
+
 {{% version-header v0.9.11 %}}
 
 - Disallow `UPDATE` and `DELETE` operations on tables when boot in
@@ -112,9 +115,6 @@ List new features before bug fixes.
 
 - Support `SET` in transactions, as well as `SET LOCAL`. This unblocks
 a problem with PostgreSQL JDBC 42.3.0.
-
-- Add the [`date_bin`](/sql/functions/date-bin) function, which is similar to
-  `date_trunc` but supports "truncating" to arbitrary intervals.
 
 {{% version-header v0.9.10 %}}
 
