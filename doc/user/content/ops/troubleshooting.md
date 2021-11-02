@@ -5,7 +5,7 @@ menu:
   main:
     parent: operations
 aliases:
-  - diagnosing-using-sql
+  - /ops/diagnosing-using-sql
 ---
 
 You can use the queries below for spot debugging, but it may also be

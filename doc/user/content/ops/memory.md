@@ -5,7 +5,7 @@ menu:
   main:
     parent: operations
 aliases:
-  - deployment
+  - /ops/deployment
 ---
 
 Materialize stores the majority of its state in memory, and works best when the
