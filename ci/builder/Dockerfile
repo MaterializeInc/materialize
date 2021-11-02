@@ -182,8 +182,8 @@ RUN curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.12.1/htmlte
     && echo '04d4be5097b98cd28de469f8856b3fbe82669f57b482a4cf3092a55e9e8e9e0d  htmltest.tar.gz' | sha256sum --check \
     && tar -xzf htmltest.tar.gz -C /usr/local/bin htmltest \
     && rm htmltest.tar.gz \
-    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.68.3/hugo_extended_0.68.3_Linux-64bit.tar.gz > hugo.tar.gz \
-    && echo 'd93d0deac782a4dd8afc2bbc5d96b30590ce47e8afb9810bbe7551eb3acf9189  hugo.tar.gz' | sha256sum --check \
+    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.89.0/hugo_extended_0.89.0_Linux-64bit.tar.gz > hugo.tar.gz \
+    && echo 'bb00644cc6945ffc589645b0a9c8d4ad8580bc0fa61cdd9d204d86a5836be176  hugo.tar.gz' | sha256sum --check \
     && tar -xzf hugo.tar.gz -C /usr/local/bin hugo \
     && rm hugo.tar.gz
 
