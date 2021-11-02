@@ -20,10 +20,10 @@ use std::fmt;
 
 pub mod error;
 pub mod file;
-pub mod future;
 pub mod indexed;
 pub mod mem;
 pub mod operators;
+pub mod pfuture;
 pub mod s3;
 pub mod storage;
 pub mod unreliable;

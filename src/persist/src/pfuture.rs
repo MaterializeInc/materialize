@@ -22,14 +22,14 @@ use crate::error::Error;
 /// Unlike [std::future::Future], the computation will complete even if this is
 /// dropped.
 #[derive(Debug)]
-pub struct Future<T>(oneshot::Receiver<Result<T, Error>>);
+pub struct PFuture<T>(oneshot::Receiver<Result<T, Error>>);
 
-impl<T> Future<T> {
-    /// Create a new instance of [Future], and the corresponding [FutureHandle]
-    /// to fill it.
-    pub fn new() -> (FutureHandle<T>, Future<T>) {
+impl<T> PFuture<T> {
+    /// Create a new instance of [PFuture], and the corresponding
+    /// [PFutureHandle] to fill it.
+    pub fn new() -> (PFutureHandle<T>, PFuture<T>) {
         let (tx, rx) = oneshot::channel();
-        (FutureHandle(tx), Future(rx))
+        (PFutureHandle(tx), PFuture(rx))
     }
 
     /// Blocks and synchronously receives the result.
@@ -40,7 +40,7 @@ impl<T> Future<T> {
     }
 }
 
-impl<T> std::future::Future for Future<T> {
+impl<T> std::future::Future for PFuture<T> {
     type Output = Result<T, Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -55,9 +55,9 @@ impl<T> std::future::Future for Future<T> {
 
 /// A handle for filling the result of an asynchronous computation.
 #[derive(Debug)]
-pub struct FutureHandle<T>(oneshot::Sender<Result<T, Error>>);
+pub struct PFutureHandle<T>(oneshot::Sender<Result<T, Error>>);
 
-impl<T> FutureHandle<T> {
+impl<T> PFutureHandle<T> {
     pub(crate) fn fill(self, res: Result<T, Error>) {
         // Don't care if the receiver hung up.
         let _ = self.0.send(res);

@@ -22,11 +22,11 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::Error;
-use crate::future::Future;
 use crate::indexed::background::{CompactTraceReq, Maintainer};
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{TraceBatchMeta, TraceMeta};
 use crate::indexed::{BlobTraceBatch, Id, Snapshot};
+use crate::pfuture::PFuture;
 use crate::storage::Blob;
 
 /// A persistent, compacting data structure containing `(Key, Value, Time,
@@ -300,7 +300,7 @@ pub struct TraceSnapshot {
     /// All updates not at times greater than this frontier must be advanced
     /// to a time that is equivalent to this frontier.
     pub since: Antichain<u64>,
-    batches: Vec<Future<Arc<BlobTraceBatch>>>,
+    batches: Vec<PFuture<Arc<BlobTraceBatch>>>,
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
@@ -326,7 +326,7 @@ impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
 // important.
 pub struct TraceSnapshotIter {
     current_batch: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
-    batches: VecDeque<Future<Arc<BlobTraceBatch>>>,
+    batches: VecDeque<PFuture<Arc<BlobTraceBatch>>>,
 }
 
 impl Default for TraceSnapshotIter {

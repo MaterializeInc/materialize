@@ -27,30 +27,30 @@ use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 
 use crate::error::Error;
-use crate::future::{Future, FutureHandle};
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Snapshot};
+use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 
 enum Cmd {
-    Register(String, (&'static str, &'static str), FutureHandle<Id>),
-    Destroy(String, FutureHandle<bool>),
+    Register(String, (&'static str, &'static str), PFutureHandle<Id>),
+    Destroy(String, PFutureHandle<bool>),
     Write(
         Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-        FutureHandle<SeqNo>,
+        PFutureHandle<SeqNo>,
     ),
-    Seal(Vec<Id>, u64, FutureHandle<()>),
-    AllowCompaction(Vec<(Id, Antichain<u64>)>, FutureHandle<()>),
-    Snapshot(Id, FutureHandle<IndexedSnapshot>),
+    Seal(Vec<Id>, u64, PFutureHandle<()>),
+    AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<()>),
+    Snapshot(Id, PFutureHandle<IndexedSnapshot>),
     Listen(
         Id,
         ListenFn<Vec<u8>, Vec<u8>>,
-        FutureHandle<IndexedSnapshot>,
+        PFutureHandle<IndexedSnapshot>,
     ),
-    Stop(FutureHandle<()>),
+    Stop(PFutureHandle<()>),
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
     Tick,
@@ -209,7 +209,7 @@ impl RuntimeCore {
 
     fn stop(&self) -> Result<(), Error> {
         if let Some(handles) = self.handles.lock()?.take() {
-            let (tx, rx) = Future::new();
+            let (tx, rx) = PFuture::new();
             self.send(Cmd::Stop(tx));
             // NB: Make sure there are no early returns before this `join`,
             // otherwise the runtime thread might still be cleaning up when this
@@ -288,7 +288,7 @@ impl RuntimeClient {
         &self,
         id: &str,
     ) -> Result<(StreamWriteHandle<K, V>, StreamReadHandle<K, V>), Error> {
-        let (tx, rx) = Future::new();
+        let (tx, rx) = PFuture::new();
         self.core.send(Cmd::Register(
             id.to_owned(),
             (K::codec_name(), V::codec_name()),
@@ -307,7 +307,7 @@ impl RuntimeClient {
     fn write(
         &self,
         updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-        res: FutureHandle<SeqNo>,
+        res: PFutureHandle<SeqNo>,
     ) {
         self.core.send(Cmd::Write(updates, res))
     }
@@ -317,7 +317,7 @@ impl RuntimeClient {
     /// for those ids.
     ///
     /// The ids must have previously been registered.
-    fn seal(&self, ids: &[Id], ts: u64, res: FutureHandle<()>) {
+    fn seal(&self, ids: &[Id], ts: u64, res: PFutureHandle<()>) {
         self.core.send(Cmd::Seal(ids.to_vec(), ts, res))
     }
 
@@ -327,7 +327,7 @@ impl RuntimeClient {
     /// compaction frontier can later be advanced to for these ids.
     ///
     /// The ids must have previously been registered.
-    fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)], res: FutureHandle<()>) {
+    fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)], res: PFutureHandle<()>) {
         self.core
             .send(Cmd::AllowCompaction(id_sinces.to_vec(), res))
     }
@@ -338,7 +338,7 @@ impl RuntimeClient {
     /// This snapshot is guaranteed to include any previous writes.
     ///
     /// The id must have previously been registered.
-    fn snapshot(&self, id: Id, res: FutureHandle<IndexedSnapshot>) {
+    fn snapshot(&self, id: Id, res: PFutureHandle<IndexedSnapshot>) {
         self.core.send(Cmd::Snapshot(id, res))
     }
 
@@ -348,7 +348,7 @@ impl RuntimeClient {
         &self,
         id: Id,
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-        res: FutureHandle<IndexedSnapshot>,
+        res: PFutureHandle<IndexedSnapshot>,
     ) {
         self.core.send(Cmd::Listen(id, listen_fn, res))
     }
@@ -366,7 +366,7 @@ impl RuntimeClient {
     /// This method is idempotent and returns true if the stream was actually
     /// destroyed, false if the stream had already been destroyed previously.
     pub fn destroy(&mut self, id: &str) -> Result<bool, Error> {
-        let (tx, rx) = Future::new();
+        let (tx, rx) = PFuture::new();
         self.core.send(Cmd::Destroy(id.to_owned(), tx));
         rx.recv()
     }
@@ -434,27 +434,27 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     }
 
     /// Synchronously writes (Key, Value, Time, Diff) updates.
-    pub fn write<'a, I>(&self, updates: I) -> Future<SeqNo>
+    pub fn write<'a, I>(&self, updates: I) -> PFuture<SeqNo>
     where
         I: IntoIterator<Item = &'a ((K, V), u64, isize)>,
     {
         let updates = encode_updates(updates);
-        let (tx, rx) = Future::new();
+        let (tx, rx) = PFuture::new();
         self.runtime.write(vec![(self.id, updates)], tx);
         rx
     }
 
     /// Closes the stream at the given timestamp, migrating data strictly less
     /// than it into the trace.
-    pub fn seal(&self, upper: u64) -> Future<()> {
-        let (tx, rx) = Future::new();
+    pub fn seal(&self, upper: u64) -> PFuture<()> {
+        let (tx, rx) = PFuture::new();
         self.runtime.seal(&[self.id], upper, tx);
         rx
     }
 
     /// Unblocks compaction for updates at or before `since`.
-    pub fn allow_compaction(&self, since: Antichain<u64>) -> Future<()> {
-        let (tx, rx) = Future::new();
+    pub fn allow_compaction(&self, since: Antichain<u64>) -> PFuture<()> {
+        let (tx, rx) = PFuture::new();
         self.runtime.allow_compaction(&[(self.id, since)], tx);
         rx
     }
@@ -519,8 +519,8 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
     //
     // TODO: Make this take a two-layer IntoIterator to mirror how
     // StreamWriteHandle::write works.
-    pub fn write_atomic(&self, updates: Vec<(Id, Vec<((K, V), u64, isize)>)>) -> Future<SeqNo> {
-        let (tx, rx) = Future::new();
+    pub fn write_atomic(&self, updates: Vec<(Id, Vec<((K, V), u64, isize)>)>) -> PFuture<SeqNo> {
+        let (tx, rx) = PFuture::new();
         for (id, _) in updates.iter() {
             if !self.ids.contains(id) {
                 tx.fill(Err(Error::from(format!(
@@ -546,8 +546,8 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
     ///
     /// Ids may not be duplicated (this is equivalent to sealing the stream
     /// twice at the same timestamp, which we currently disallow).
-    pub fn seal(&self, ids: &[Id], upper: u64) -> Future<()> {
-        let (tx, rx) = Future::new();
+    pub fn seal(&self, ids: &[Id], upper: u64) -> PFuture<()> {
+        let (tx, rx) = PFuture::new();
         for id in ids {
             if !self.ids.contains(id) {
                 tx.fill(Err(Error::from(format!(
@@ -566,8 +566,8 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
     ///
     /// Ids may not be duplicated (this is equivalent to allowing compaction on
     /// the stream twice at the same timestamp, which we currently disallow).
-    pub fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)]) -> Future<()> {
-        let (tx, rx) = Future::new();
+    pub fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)]) -> PFuture<()> {
+        let (tx, rx) = PFuture::new();
         for (id, _) in id_sinces {
             if !self.ids.contains(id) {
                 tx.fill(Err(Error::from(format!(
@@ -687,7 +687,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     /// Returns a consistent snapshot of all previously persisted stream data.
     pub fn snapshot(&self) -> Result<DecodedSnapshot<K, V>, Error> {
         // TODO: Make snapshot signature non-blocking.
-        let (tx, rx) = Future::new();
+        let (tx, rx) = PFuture::new();
         self.runtime.snapshot(self.id, tx);
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))
@@ -703,7 +703,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
         &self,
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
     ) -> Result<DecodedSnapshot<K, V>, Error> {
-        let (tx, rx) = Future::new();
+        let (tx, rx) = PFuture::new();
         self.runtime.listen(self.id, listen_fn, tx);
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))

@@ -22,7 +22,6 @@ use timely::worker::Worker;
 use timely::WorkerConfig;
 
 use crate::error::Error;
-use crate::future::Future;
 use crate::indexed::runtime::{
     self, DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
@@ -33,6 +32,7 @@ use crate::nemesis::{
     TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle,
 };
 use crate::operators::source::PersistedSource;
+use crate::pfuture::PFuture;
 use crate::storage::SeqNo;
 use crate::unreliable::UnreliableHandle;
 
@@ -184,12 +184,12 @@ impl Direct {
         }
     }
 
-    fn write_single(&mut self, req: WriteReqSingle) -> Result<Future<SeqNo>, Error> {
+    fn write_single(&mut self, req: WriteReqSingle) -> Result<PFuture<SeqNo>, Error> {
         let (write, _, _) = self.stream(&req.stream)?;
         Ok(write.write(&[req.update]))
     }
 
-    fn write_multi(&mut self, req: WriteReqMulti) -> Result<Future<SeqNo>, Error> {
+    fn write_multi(&mut self, req: WriteReqMulti) -> Result<PFuture<SeqNo>, Error> {
         let mut write_handles = Vec::new();
         let mut updates = Vec::new();
         for req in req.writes {
@@ -226,7 +226,7 @@ impl Direct {
         Ok(ReadOutputRes { contents })
     }
 
-    fn seal(&mut self, req: SealReq) -> Result<Future<()>, Error> {
+    fn seal(&mut self, req: SealReq) -> Result<PFuture<()>, Error> {
         // NB: Once the caller resolves the returned future, it'd probably be
         // good to wait until the output corresponding to this stream catches up
         // to the sealed timestamp. Otherwise, we might end up testing the
@@ -235,7 +235,7 @@ impl Direct {
         Ok(write.seal(req.ts))
     }
 
-    fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<Future<()>, Error> {
+    fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<PFuture<()>, Error> {
         let (write, _, _) = self.stream(&req.stream)?;
         Ok(write.allow_compaction(Antichain::from_elem(req.ts)))
     }

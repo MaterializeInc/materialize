@@ -13,10 +13,10 @@ use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 
 use persist::error::Error;
 use persist::file::FileLog;
-use persist::future::{Future, FutureHandle};
 use persist::indexed::encoding::Id;
 use persist::indexed::Indexed;
 use persist::mem::MemRegistry;
+use persist::pfuture::{PFuture, PFutureHandle};
 use persist::storage::{Blob, LockInfo, Log};
 
 fn bench_write_sync<L: Log>(writer: &mut L, data: Vec<u8>, b: &mut Bencher) {
@@ -50,18 +50,18 @@ pub fn bench_writes_log(c: &mut Criterion) {
     });
 }
 
-fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, FutureHandle<T>), L: Log, B: Blob>(
+fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, PFutureHandle<T>), L: Log, B: Blob>(
     index: &mut Indexed<L, B>,
     f: F,
 ) -> Result<T, Error> {
-    let (tx, rx) = Future::new();
+    let (tx, rx) = PFuture::new();
     f(index, tx.into());
     index.step()?;
     rx.recv()
 }
 
-fn block_on<T, F: FnOnce(FutureHandle<T>)>(f: F) -> Result<T, Error> {
-    let (tx, rx) = Future::new();
+fn block_on<T, F: FnOnce(PFutureHandle<T>)>(f: F) -> Result<T, Error> {
+    let (tx, rx) = PFuture::new();
     f(tx.into());
     rx.recv()
 }
