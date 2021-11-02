@@ -162,12 +162,13 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 > SELECT COUNT(*) = 8 FROM kafka_ingest_no_partition;
 true
 
-> SELECT count(*) = 2
-  FROM mz_kafka_consumer_partitions, mz_sources
-  WHERE mz_kafka_consumer_partitions.source_id = mz_sources.id
-  AND name = 'kafka_ingest_no_partition'
-  AND rx_msgs > 0;
-true
+> SELECT count(*)
+  FROM
+      mz_sources s JOIN mz_kafka_source_statistics stats ON s.id = split_part(stats.source_id, '/', 1),
+      jsonb_each(statistics->'topics') _ (topic, topic_statistics),
+      jsonb_each(topic_statistics->'partitions') _ (partition, partition_statistics)
+  WHERE s.name = 'kafka_ingest_no_partition' AND (partition_statistics->'rxmsgs')::integer > 0
+2
 
 # kafka-verify with regexp (the set-regexp from above is used)
 

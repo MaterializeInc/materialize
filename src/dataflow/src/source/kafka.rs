@@ -17,7 +17,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
-use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
+use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use repr::MessagePayload;
 use timely::scheduling::activate::SyncActivator;
 
@@ -27,189 +27,13 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{error, info, log_enabled, warn};
+use repr::adt::jsonb::Jsonb;
 use uuid::Uuid;
 
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 use super::metrics::SourceBaseMetrics;
-
-/// Values recorded from the last rdkafka statistics callback, used to generate a
-/// diff of values for logging
-#[derive(Default)]
-pub struct PartitionStats {
-    rxmsgs: i64,
-    rxbytes: i64,
-    txmsgs: i64,
-    txbytes: i64,
-    lo_offset: i64,
-    hi_offset: i64,
-    ls_offset: i64,
-    app_offset: i64,
-    consumer_lag: i64,
-    initial_high_offset: Option<i64>,
-}
-
-impl PartitionStats {
-    /// Return the value required to negate the last value recorded for this partition
-    fn negate(
-        &self,
-        consumer_name: String,
-        source_id: SourceInstanceId,
-        partition_id: String,
-    ) -> MaterializedEvent {
-        MaterializedEvent::KafkaConsumerPartition {
-            consumer_name,
-            source_id,
-            partition_id,
-            rxmsgs: -self.rxmsgs,
-            rxbytes: -self.rxbytes,
-            txmsgs: -self.txmsgs,
-            txbytes: -self.txbytes,
-            lo_offset: -self.lo_offset,
-            hi_offset: -self.hi_offset,
-            ls_offset: -self.ls_offset,
-            app_offset: -self.app_offset,
-            consumer_lag: -self.consumer_lag,
-            initial_high_offset: -self.initial_high_offset.unwrap_or(0),
-        }
-    }
-    /// Update the value for this partition, returning a MaterializedEvent that represents the
-    /// difference between the previous values and the new values
-    fn update(
-        &mut self,
-        consumer_name: String,
-        source_id: SourceInstanceId,
-        partition_id: String,
-        stats: &rdkafka::statistics::Partition,
-    ) -> MaterializedEvent {
-        let reported_initial_high_offset =
-            if self.initial_high_offset.is_none() && stats.hi_offset > 0 {
-                self.initial_high_offset = Some(stats.hi_offset);
-                stats.hi_offset
-            } else {
-                0
-            };
-
-        let event = MaterializedEvent::KafkaConsumerPartition {
-            consumer_name,
-            source_id,
-            partition_id,
-            rxmsgs: stats.rxmsgs - self.rxmsgs,
-            rxbytes: stats.rxbytes - self.rxbytes,
-            txmsgs: stats.txmsgs - self.txmsgs,
-            txbytes: stats.txbytes - self.txbytes,
-            lo_offset: stats.lo_offset - self.lo_offset,
-            hi_offset: stats.hi_offset - self.hi_offset,
-            ls_offset: stats.ls_offset - self.ls_offset,
-            app_offset: stats.app_offset - self.app_offset,
-            consumer_lag: stats.consumer_lag_stored - self.consumer_lag,
-            initial_high_offset: reported_initial_high_offset,
-        };
-
-        self.rxmsgs = stats.rxmsgs;
-        self.rxbytes = stats.rxbytes;
-        self.txmsgs = stats.txmsgs;
-        self.txbytes = stats.txbytes;
-        self.lo_offset = stats.lo_offset;
-        self.hi_offset = stats.hi_offset;
-        self.ls_offset = stats.ls_offset;
-        self.app_offset = stats.app_offset;
-        // NOTE(benesch): the underlying librdkafka library renamed the
-        // `consumer_lag` field to `consumer_lag_stored` in v1.7.0. We use the
-        // historical name for backwards compatibility. See also #7172 for an
-        // alternative design that would have avoided this problem entirely.
-        self.consumer_lag = stats.consumer_lag_stored;
-
-        event
-    }
-}
-
-#[derive(Default)]
-pub struct BrokerRTTWindow {
-    min: i64,
-    max: i64,
-    avg: i64,
-    sum: i64,
-    cnt: i64,
-    stddev: i64,
-    p50: i64,
-    p75: i64,
-    p90: i64,
-    p95: i64,
-    p99: i64,
-    p99_99: i64,
-}
-
-impl BrokerRTTWindow {
-    /// Return the value required to negate the last value recorded for this window
-    fn negate(
-        &self,
-        consumer_name: String,
-        source_id: SourceInstanceId,
-        broker_name: String,
-    ) -> MaterializedEvent {
-        MaterializedEvent::KafkaBrokerRtt {
-            consumer_name: consumer_name,
-            source_id: source_id,
-            broker_name: broker_name,
-            min: -self.min,
-            max: -self.max,
-            avg: -self.avg,
-            sum: -self.sum,
-            cnt: -self.cnt,
-            stddev: -self.stddev,
-            p50: -self.p50,
-            p75: -self.p75,
-            p90: -self.p90,
-            p95: -self.p95,
-            p99: -self.p99,
-            p99_99: -self.p99_99,
-        }
-    }
-    /// Update the value for window, returning a MaterializedEvent that represents the
-    /// difference between the previous values and the new values
-    fn update(
-        &mut self,
-        consumer_name: String,
-        source_id: SourceInstanceId,
-        broker_name: String,
-        stats: &rdkafka::statistics::Window,
-    ) -> MaterializedEvent {
-        let event = MaterializedEvent::KafkaBrokerRtt {
-            consumer_name,
-            source_id,
-            broker_name,
-            min: stats.min - self.min,
-            max: stats.max - self.max,
-            avg: stats.avg - self.avg,
-            sum: stats.sum - self.sum,
-            cnt: stats.cnt - self.cnt,
-            stddev: stats.stddev - self.stddev,
-            p50: stats.p50 - self.p50,
-            p75: stats.p75 - self.p75,
-            p90: stats.p90 - self.p90,
-            p95: stats.p95 - self.p95,
-            p99: stats.p99 - self.p99,
-            p99_99: stats.p99_99 - self.p99_99,
-        };
-
-        self.min = stats.min;
-        self.max = stats.max;
-        self.avg = stats.avg;
-        self.sum = stats.sum;
-        self.cnt = stats.cnt;
-        self.stddev = stats.stddev;
-        self.p50 = stats.p50;
-        self.p75 = stats.p75;
-        self.p90 = stats.p90;
-        self.p95 = stats.p95;
-        self.p99 = stats.p99;
-        self.p99_99 = stats.p99_99;
-
-        event
-    }
-}
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceReader {
@@ -233,8 +57,10 @@ pub struct KafkaSourceReader {
     start_offsets: HashMap<i32, i64>,
     /// Timely worker logger for source events
     logger: Option<Logger>,
-    /// Channel to receive Kafka statistics objects from the stats callback
-    stats_rx: crossbeam_channel::Receiver<Statistics>,
+    /// Channel to receive Kafka statistics JSON blobs from the stats callback.
+    stats_rx: crossbeam_channel::Receiver<Jsonb>,
+    // The last statistics JSON blob received.
+    last_stats: Option<Jsonb>,
 }
 
 impl SourceReader for KafkaSourceReader {
@@ -340,49 +166,16 @@ impl SourceReader for KafkaSourceReader {
             }
         }
 
-        // Read any statistics objects generated via the GlueConsumerContext::stats callback
-        while let Ok(statistics) = self.stats_rx.try_recv() {
+        // Read any statistics JSON blobs generated via the rdkafka statistics
+        // callback.
+        while let Ok(stats) = self.stats_rx.try_recv() {
             if let Some(logger) = self.logger.as_mut() {
-                for part in self.partition_consumers.iter_mut() {
-                    for (broker, stats) in &statistics.brokers {
-                        match &stats.rtt {
-                            Some(rtt) => {
-                                let window = part
-                                    .broker_windows
-                                    .entry(broker.into())
-                                    .or_insert_with(BrokerRTTWindow::default);
-
-                                logger.log(window.update(
-                                    statistics.name.to_string(),
-                                    self.id,
-                                    broker.to_string(),
-                                    rtt,
-                                ));
-                            }
-                            None => (),
-                        }
-                    }
-
-                    let new_stats = match statistics.topics.get(self.topic_name.as_str()) {
-                        Some(t) => match t.partitions.get(&part.pid) {
-                            Some(p) => p,
-                            None => continue,
-                        },
-                        None => continue,
-                    };
-
-                    let (consumer_name, part_stats) =
-                        part.partition_stats.get_or_insert_with(|| {
-                            (statistics.name.clone(), PartitionStats::default())
-                        });
-
-                    logger.log(part_stats.update(
-                        consumer_name.to_string(),
-                        self.id,
-                        part.pid.to_string(),
-                        &new_stats,
-                    ));
-                }
+                logger.log(MaterializedEvent::KafkaSourceStatistics {
+                    source_id: self.id,
+                    old: self.last_stats.take(),
+                    new: Some(stats.clone()),
+                });
+                self.last_stats = Some(stats);
             }
         }
 
@@ -522,6 +315,7 @@ impl KafkaSourceReader {
             start_offsets,
             logger,
             stats_rx,
+            last_stats: None,
         }
     }
 
@@ -622,24 +416,13 @@ impl KafkaSourceReader {
 
 impl Drop for KafkaSourceReader {
     fn drop(&mut self) {
-        // Retract any metrics logged for this source
+        // Retract any metrics logged for this source.
         if let Some(logger) = self.logger.as_mut() {
-            for part in self.partition_consumers.iter_mut() {
-                if let Some((consumer_name, partition_stats)) = part.partition_stats.as_ref() {
-                    logger.log(partition_stats.negate(
-                        consumer_name.to_string(),
-                        self.id,
-                        part.pid.to_string(),
-                    ));
-                    for (broker, window) in part.broker_windows.iter() {
-                        logger.log(window.negate(
-                            consumer_name.to_string(),
-                            self.id,
-                            broker.to_string(),
-                        ));
-                    }
-                }
-            }
+            logger.log(MaterializedEvent::KafkaSourceStatistics {
+                source_id: self.id,
+                old: self.last_stats.take(),
+                new: None,
+            });
         }
     }
 }
@@ -738,10 +521,6 @@ struct PartitionConsumer {
     pid: i32,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<GlueConsumerContext>,
-    /// Memoized Consumer Name and Statistics for a partition consumer
-    partition_stats: Option<(String, PartitionStats)>,
-    /// Memoized Statistics for brokers
-    broker_windows: HashMap<String, BrokerRTTWindow>,
 }
 
 impl PartitionConsumer {
@@ -750,8 +529,6 @@ impl PartitionConsumer {
         PartitionConsumer {
             pid,
             partition_queue,
-            partition_stats: None,
-            broker_windows: HashMap::new(),
         }
     }
 
@@ -778,15 +555,20 @@ impl PartitionConsumer {
 /// when the message queue switches from nonempty to empty.
 struct GlueConsumerContext {
     activator: SyncActivator,
-    stats_tx: crossbeam_channel::Sender<Statistics>,
+    stats_tx: crossbeam_channel::Sender<Jsonb>,
 }
 
 impl ClientContext for GlueConsumerContext {
-    fn stats(&self, statistics: Statistics) {
-        self.stats_tx
-            .send(statistics)
-            .expect("timely operator hung up while Kafka source active");
-        self.activate();
+    fn stats_raw(&self, statistics: &[u8]) {
+        match Jsonb::from_slice(statistics) {
+            Ok(statistics) => {
+                self.stats_tx
+                    .send(statistics)
+                    .expect("timely operator hung up while Kafka source active");
+                self.activate();
+            }
+            Err(e) => error!("failed decoding librdkafka statistics JSON: {}", e),
+        };
     }
 }
 

@@ -120,6 +120,11 @@ List new features before bug fixes.
 - When using [`COPY FROM`], allow extra data after the end of copy marker
   (`\.`), but discard it. Previously, MZ would error in this case.
 
+- Replace the `mz_kafka_broker_rtt` and `mz_kafka_consumer_partitions`
+  system catalog tables with a new table,
+  [`mz_kafka_source_statistics`](/sql/system-catalog#mz_kafka_source_statistics),
+  containing raw statistics from the underlying librdkafka library.
+
 {{% version-header v0.9.11 %}}
 
 - Disallow `UPDATE` and `DELETE` operations on tables when boot in

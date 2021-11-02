@@ -594,22 +594,6 @@ pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3037),
 };
 
-pub const MZ_KAFKA_CONSUMER_PARTITIONS: BuiltinLog = BuiltinLog {
-    name: "mz_kafka_consumer_partitions",
-    schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo),
-    id: GlobalId::System(3030),
-    index_id: GlobalId::System(3031),
-};
-
-pub const MZ_KAFKA_BROKER_RTT: BuiltinLog = BuiltinLog {
-    name: "mz_kafka_broker_rtt",
-    schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt),
-    id: GlobalId::System(3032),
-    index_id: GlobalId::System(3033),
-};
-
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operator_reachability_internal",
     schema: MZ_CATALOG_SCHEMA,
@@ -626,7 +610,15 @@ pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3039),
 };
 
-// Next id BuiltinLog: 3040
+pub const MZ_KAFKA_SOURCE_STATISTICS: BuiltinLog = BuiltinLog {
+    name: "mz_kafka_source_statistics",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics),
+    id: GlobalId::System(3040),
+    index_id: GlobalId::System(3041),
+};
+
+// Next id BuiltinLog: 3042
 
 lazy_static! {
     pub static ref MZ_VIEW_KEYS: BuiltinTable = BuiltinTable {
@@ -1616,8 +1608,7 @@ lazy_static! {
             Builtin::Log(&MZ_DATAFLOW_OPERATORS),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
             Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
-            Builtin::Log(&MZ_KAFKA_BROKER_RTT),
-            Builtin::Log(&MZ_KAFKA_CONSUMER_PARTITIONS),
+            Builtin::Log(&MZ_KAFKA_SOURCE_STATISTICS),
             Builtin::Log(&MZ_MATERIALIZATIONS),
             Builtin::Log(&MZ_MATERIALIZATION_DEPENDENCIES),
             Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
