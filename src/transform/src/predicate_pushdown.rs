@@ -226,7 +226,7 @@ impl PredicatePushdown {
                             pred_not_translated.push(predicate)
                         }
 
-                        expr::canonicalize::canonicalize_equivalences(equivalences);
+                        expr::canonicalize::canonicalize_equivalences(equivalences, &[input_type]);
 
                         // // Predicates to push at each input, and to retain.
                         let mut push_downs = vec![Vec::new(); inputs.len()];
@@ -468,10 +468,10 @@ impl PredicatePushdown {
                 //      comes from a single input.
                 //   2) equivalences of the form `expr1 = expr2`, where both
                 //      expressions come from the same single input.
+                let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+                expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
 
-                expr::canonicalize::canonicalize_equivalences(equivalences);
-
-                let input_mapper = expr::JoinInputMapper::new(inputs);
+                let input_mapper = expr::JoinInputMapper::new_from_input_types(&input_types);
                 // Predicates to push at each input, and to lift out the join.
                 let mut push_downs = vec![Vec::new(); inputs.len()];
 
@@ -670,7 +670,7 @@ impl PredicatePushdown {
                     };
                 }
 
-                expr::canonicalize::canonicalize_equivalences(equivalences);
+                expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
 
                 let new_inputs = inputs
                     .drain(..)

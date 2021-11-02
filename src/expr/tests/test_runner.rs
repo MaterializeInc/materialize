@@ -71,13 +71,12 @@ mod test {
 
     fn test_canonicalize_equiv(s: &str) -> Result<Vec<Vec<MirScalarExpr>>, String> {
         let mut input_stream = tokenize(&s)?.into_iter();
-        let mut equivalences: Vec<Vec<MirScalarExpr>> = deserialize(
-            &mut input_stream,
-            "Vec<Vec<MirScalarExpr>>",
-            &RTI,
-            &mut MirScalarExprDeserializeContext::default(),
-        )?;
-        canonicalize_equivalences(&mut equivalences);
+        let mut ctx = MirScalarExprDeserializeContext::default();
+        let mut equivalences: Vec<Vec<MirScalarExpr>> =
+            deserialize(&mut input_stream, "Vec<Vec<MirScalarExpr>>", &RTI, &mut ctx)?;
+        let input_type: RelationType =
+            deserialize(&mut input_stream, "RelationType", &RTI, &mut ctx)?;
+        canonicalize_equivalences(&mut equivalences, &[input_type]);
         Ok(equivalences)
     }
 
