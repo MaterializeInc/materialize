@@ -1,10 +1,10 @@
 # Introduction
 
-Failpoints are a way to force instrumented code to take a particular action if a given code line is reached while the failpoint is enabled. This is useful when writing tests -- for example, Materialize can be forced to panic or I/O calls can be made to return an error.
+Failpoints force instrumented code to take a particular action if a given code line is reached while the failpoint is enabled. When writing tests, you can use failpoints to force Materialize to panic or to make I/O calls return an error.
 
-Materializes uses the [fail create](https://docs.rs/crate/fail) to enable this functionality.
+Materialize uses the [fail crate](https://docs.rs/crate/fail) to enable this functionality.
 
-# Intrumenting the code
+# Instrumenting the code
 
 ## Panic-only failpoints
 
@@ -16,7 +16,7 @@ fail_point!("read-dir");
 
 ## Failpoints that can return an error
 
-If a failpoint needs to be able to cause an error to be returned, the following syntax can be used to supply the error:
+If you need the failpoint to return an error, use the following:
 
 ```
 fail_point!("fileblob_set_sync", |_| {
@@ -52,13 +52,13 @@ A failpoint can also be disabled dynamically:
 
 # Failpoint actions
 
-In addition to panicking or returning an error, a failpoint can perform other actions when reached, incuding:
+In addition to panicking or returning an error, a failpoint can perform other actions when reached, including:
 - sleep for a specified number of milliseconds
 - print a message
 - sleep until unblocked
 
-A probabiltiy can also be specified to determine how frequently a given action will trigger. The complete documentation on the actions is available from the [crate documentation](https://docs.rs/fail/0.4.0/fail/fn.cfg.html)
+You can also specify a probability that determines how frequently a given action will trigger. For more information, see the [documentation of the crate](https://docs.rs/fail/0.4.0/fail/fn.cfg.html)
 
 # Handling panics
 
-If a failpoint is used to trigger a panic, a [mzworkflows.md](mzworkflows.md) based test can be used to restart Materialize and perform additional testing or validation.
+If a failpoint triggers a panic, you can use a test based on [mzworkflows.md](mzworkflows.md) to restart Materialize and perform additional testing or validation.
