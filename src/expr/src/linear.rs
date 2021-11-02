@@ -1210,7 +1210,7 @@ pub mod plan {
                 while self.mfp.input_arity + expression < *support {
                     let datum = self.mfp.expressions[expression].eval(&datums[..], &arena)?;
                     // Copy the `datum` to decouple its lifetime from `self`
-                    let datum = arena.make_datum(|row| row.push(datum));
+                    let datum = arena.clone_datum(datum);
                     datums.push(datum);
                     expression += 1;
                 }
@@ -1221,7 +1221,7 @@ pub mod plan {
             while expression < self.mfp.expressions.len() {
                 let datum = self.mfp.expressions[expression].eval(&datums[..], &arena)?;
                 // Copy the `datum` to decouple its lifetime from `self`
-                let datum = arena.make_datum(|row| row.push(datum));
+                let datum = arena.clone_datum(datum);
                 datums.push(datum);
                 expression += 1;
             }
