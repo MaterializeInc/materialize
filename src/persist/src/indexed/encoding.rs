@@ -350,7 +350,7 @@ impl Codec for BlobMeta {
 
 impl BlobMeta {
     const MAGIC: &'static [u8] = b"mz";
-    const CURRENT_VERSION: u8 = 0;
+    const CURRENT_VERSION: u8 = 1;
 
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
@@ -475,6 +475,22 @@ impl BlobMeta {
             }
         }
         Ok(())
+    }
+
+    /// Current encoding version that BlobMeta can be read and written as.
+    pub fn version() -> u8 {
+        BlobMeta::CURRENT_VERSION
+    }
+
+    /// Hint for the encoded version of this previously encoded BlobMeta.
+    ///
+    /// Returns an error if it is not possible to determine the encoding version.
+    pub fn encoded_version(buf: &[u8]) -> Result<u8, Error> {
+        // TODO: should we do further validation here (e.g. check magic, check
+        // that length is some minimum amount).
+        buf.get(0).map(|v| v.to_owned()).ok_or_else(|| {
+            Error::from("unable to determine previously persisted encoding version.")
+        })
     }
 }
 

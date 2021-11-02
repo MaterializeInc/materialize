@@ -139,7 +139,8 @@ impl PersistConfig {
             let log = ErrorLog;
             let persister = match &self.storage {
                 PersistStorage::File(s) => {
-                    let blob = FileBlob::new(&s.blob_path, lock_info)?;
+                    let mut blob = FileBlob::new(&s.blob_path, lock_info)?;
+                    persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
                         RuntimeConfig::with_min_step_interval(self.min_step_interval),
                         log,
@@ -150,7 +151,8 @@ impl PersistConfig {
                 }
                 PersistStorage::S3(s) => {
                     let config = S3Config::new(s.bucket.clone(), s.prefix.clone())?;
-                    let blob = S3Blob::new(config, lock_info)?;
+                    let mut blob = S3Blob::new(config, lock_info)?;
+                    persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
                         RuntimeConfig::with_min_step_interval(self.min_step_interval),
                         log,
