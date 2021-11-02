@@ -31,6 +31,7 @@ use timely::{Data as TimelyData, PartialOrder};
 
 use crate::error::Error;
 use crate::indexed::runtime::StreamWriteHandle;
+use crate::operators::async_ext::OperatorBuilderExt;
 
 /// Extension trait for [`Stream`].
 pub trait Persist<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
@@ -249,8 +250,11 @@ where
         // capabilities.
         let active_seal_operator = self.scope().index() == 0;
 
-        seal_op.build(move |_capabilities| {
-            move |frontiers| {
+        seal_op.build_async(
+            self.scope(),
+            async_op!(|initial_capabilities, frontiers| {
+                // Drop initial capabilities
+                initial_capabilities.clear();
                 let mut data_output = data_output.activate();
                 let mut error_output = error_output.activate();
 
@@ -273,7 +277,8 @@ where
                 }
 
                 // Seal if/when the frontier advances.
-                let new_input_frontier = frontiers[0].frontier();
+                let frontiers = frontiers.borrow();
+                let new_input_frontier = frontiers[0].borrow();
                 let progress =
                     !PartialOrder::less_equal(&new_input_frontier, &input_frontier.borrow());
 
@@ -296,9 +301,7 @@ where
 
                         log::trace!("Sealing {} up to {}", &operator_name, frontier_element);
 
-                        // TODO: Don't block on the seal. Instead, we should yield from the
-                        // operator and/or find some other way to wait for the seal to succeed.
-                        let result = write.seal(*frontier_element).recv();
+                        let result = write.seal(*frontier_element).await;
                         if let Err(e) = result {
                             log::error!(
                                 "Error sealing {} up to {}: {:?}",
@@ -341,8 +344,8 @@ where
 
                     capabilities = new_capabilities;
                 }
-            }
-        });
+            }),
+        );
 
         (data_output_stream, error_output_stream)
     }
@@ -674,12 +677,18 @@ where
 
         let mut buffer = Vec::new();
 
-        persist_op.build(move |_capabilities| {
-            move |_frontiers| {
+        persist_op.build_async(
+            self.scope(),
+            async_op!(|capabilities, _frontiers| {
+                // Drop initial capabilities
+                capabilities.clear();
                 let mut data_output = data_output.activate();
 
                 // Write out everything and forward, keeping the write futures.
-                input.for_each(|cap, data| {
+                while let Some((cap, data)) = input.next() {
+                    // TODO(petrosagg): remove this unconditional retain once this is released:
+                    //     https://github.com/TimelyDataflow/timely-dataflow/pull/429
+                    let cap = cap.retain();
                     data.swap(&mut buffer);
 
                     let mut session = data_output.session(&cap);
@@ -694,15 +703,15 @@ where
                             let anti_update = (data, ts, -diff);
                             write
                                 .write(&[anti_update])
-                                .recv()
+                                .await
                                 .expect("error persisting retraction");
                             continue;
                         }
                         session.give(update);
                     }
-                });
-            }
-        });
+                }
+            }),
+        );
 
         data_output_stream
     }
