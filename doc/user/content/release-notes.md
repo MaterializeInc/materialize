@@ -113,6 +113,9 @@ List new features before bug fixes.
 
 - Add the `type_oid` column to [`mz_columns`](/sql/system-catalog#mz_columns).
 
+- When using [`COPY FROM`], allow extra data after the end of copy marker
+  (`\.`), but discard it. Previously, MZ would error in this case.
+
 {{% version-header v0.9.11 %}}
 
 - Disallow `UPDATE` and `DELETE` operations on tables when boot in
@@ -351,7 +354,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 {{% version-header v0.8.0 %}}
 
-- Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a
+- Add the [`COPY FROM`] statement, which allows populating a
   table via the PostgreSQL [`COPY` protocol][pg-copy].
 
 - Stabilize the [`ARRAY`](/sql/types/array/#construction) constructor.
@@ -1447,6 +1450,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`array`]: /sql/types/array/
 [`bytea`]: /sql/types/bytea
 [`ALTER INDEX`]: /sql/alter-index
+[`COPY FROM`]: /sql/copy-from
 [`CREATE INDEX`]: /sql/create-index
 [`CREATE MATERIALIZED VIEW`]: /sql/create-materialized-view
 [`CREATE SOURCE`]: /sql/create-source
