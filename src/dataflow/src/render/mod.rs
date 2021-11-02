@@ -566,7 +566,6 @@ where
 /// It uses `ore::vec::repurpose_allocation` to accomplish this, which contains
 /// unsafe code.
 pub mod datum_vec {
-
     use repr::{Datum, Row};
 
     /// A re-useable vector of `Datum` with no particular lifetime.
@@ -598,10 +597,13 @@ pub mod datum_vec {
 
         /// Borrow an instance with a specific lifetime, and pre-populate with `Row`s, for example
         /// first adding a key followed by its values.
-        pub fn borrow_with_many<'a>(&'a mut self, rows: &[&'a Row]) -> DatumVecBorrow<'a> {
+        pub fn borrow_with_many<'a, 'b, D: ::std::borrow::Borrow<Row> + 'a>(
+            &'a mut self,
+            rows: &'b [&'a D],
+        ) -> DatumVecBorrow<'a> {
             let mut borrow = self.borrow();
             for row in rows {
-                borrow.extend(row.iter());
+                borrow.extend(row.borrow().iter());
             }
             borrow
         }

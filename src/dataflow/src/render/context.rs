@@ -29,7 +29,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use crate::operator::CollectionExt;
-use crate::render::datum_vec::{DatumVec, DatumVecBorrow};
+use crate::render::datum_vec::DatumVec;
 use crate::render::Permutation;
 use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
@@ -206,10 +206,10 @@ where
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
     /// leap directly to exactly those records.
-    pub fn flat_map<I, L>(
+    pub fn flat_map<I, C, L>(
         &self,
         key: Option<Row>,
-        mut logic: L,
+        logic: C,
     ) -> (
         timely::dataflow::Stream<S, I::Item>,
         Collection<S, DataflowError, Diff>,
@@ -217,7 +217,8 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff, &'b RowArena) -> I
+        C: FnOnce(Option<Permutation>) -> L,
+        L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
             + 'static,
     {
         // Set a number of tuples after which the operator should yield.
@@ -225,34 +226,24 @@ where
         // arrangement, as well as provides time to accumulate our produced output.
         let refuel = 1000000;
 
-        let mut datum_vec = DatumVec::new();
-
         match &self {
             ArrangementFlavor::Local(oks, errs, permutation) => {
-                let permutation = permutation.clone();
+                let mut logic = logic(Some(permutation.clone()));
                 let oks = CollectionBundle::<S, Row, T>::flat_map_core(
                     &oks,
                     key,
-                    move |k, v, t, d| {
-                        let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
-                        permutation.permute_in_place(&mut borrow);
-                        logic(borrow, t, d, &RowArena::default())
-                    },
+                    move |k, v, t, d| logic(&[&k, &v], t, d),
                     refuel,
                 );
                 let errs = errs.as_collection(|k, &()| k.clone());
                 return (oks, errs);
             }
             ArrangementFlavor::Trace(_, oks, errs, permutation) => {
-                let permutation = permutation.clone();
+                let mut logic = logic(Some(permutation.clone()));
                 let oks = CollectionBundle::<S, Row, T>::flat_map_core(
                     &oks,
                     key,
-                    move |k, v, t, d| {
-                        let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
-                        permutation.permute_in_place(&mut borrow);
-                        logic(borrow, t, d, &RowArena::default())
-                    },
+                    move |k, v, t, d| logic(&[&k, &v], t, d),
                     refuel,
                 );
                 let errs = errs.as_collection(|k, &()| k.clone());
@@ -352,10 +343,10 @@ where
     /// It is important that `logic` still guard against data that does not satisfy
     /// this constraint, as this method does not statically know that it will have
     /// that arrangement.
-    pub fn flat_map<I, L>(
+    pub fn flat_map<I, C, L>(
         &self,
         key_val: Option<(Vec<MirScalarExpr>, Row)>,
-        mut logic: L,
+        logic: C,
     ) -> (
         timely::dataflow::Stream<S, I::Item>,
         Collection<S, DataflowError, Diff>,
@@ -363,7 +354,8 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff, &'b RowArena) -> I
+        C: FnOnce(Option<Permutation>) -> L,
+        L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
             + 'static,
     {
         // If `key_val` is set, and we have the arrangement by that key, we should
@@ -383,13 +375,10 @@ where
         } else {
             use timely::dataflow::operators::Map;
             let (oks, errs) = self.as_collection();
-            let mut datum_vec = DatumVec::new();
+            let mut logic = logic(None);
             (
-                oks.inner.flat_map(move |(v, t, d)| {
-                    let arena = RowArena::default();
-                    let borrow = datum_vec.borrow_with(&v);
-                    logic(borrow, &t, &d, &arena)
-                }),
+                oks.inner
+                    .flat_map(move |(mut v, t, d)| logic(&[&RefOrMut::Mut(&mut v)], &t, &d)),
                 errs,
             )
         }
@@ -540,9 +529,15 @@ where
         } else {
             mfp.optimize();
             let mfp_plan = mfp.into_plan().unwrap();
-            let (stream, errors) = self.flat_map(key_val, {
+            let (stream, errors) = self.flat_map(key_val, |permutation| {
                 let mut row_builder = Row::default();
-                move |mut datums_local, time, diff, temp_storage| {
+                let mut datum_vec = DatumVec::new();
+                move |row, time, diff| {
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datum_vec.borrow_with_many(row);
+                    if let Some(permutation) = &permutation {
+                        permutation.permute_in_place(&mut datums_local);
+                    }
                     mfp_plan.evaluate(
                         &mut datums_local,
                         &temp_storage,

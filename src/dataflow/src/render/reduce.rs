@@ -686,33 +686,48 @@ where
         let mut row_packer = Row::default();
         let mut row_mfp = Row::default();
         let mut datums = DatumVec::new();
+        let mut row_datums = DatumVec::new();
         let (key_val_input, err_input): (
             timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
             _,
-        ) = input.flat_map(None, move |row, time, diff, temp_storage| {
-            // Unpack only the demanded columns.
-            let mut datums_local = datums.borrow();
-            let mut row_iter = row.iter();
-            for skip in skips.iter() {
-                datums_local.push(*(&mut row_iter).nth(*skip).unwrap());
-            }
+        ) = input.flat_map(None, |permutation| {
+            move |row, time, diff| {
+                let temp_storage = RowArena::new();
 
-            // Evaluate the key expressions.
-            let key = match key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_mfp) {
-                Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
-                Ok(key) => key.expect("Row expected as no predicate was used"),
-            };
-            // Evaluate the value expressions.
-            // The prior evaluation may have left additional columns we should delete.
-            datums_local.truncate(skips.len());
-            let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
-                Ok(val) => val.expect("Row expected as no predicate was used"),
-            };
-            row_packer.clear();
-            row_packer.extend(val);
-            let row = row_packer.finish_and_reuse();
-            return Some((Ok((key, row)), time.clone(), diff.clone()));
+                let mut row_datums = row_datums.borrow_with_many(row);
+                if let Some(permutation) = &permutation {
+                    permutation.permute_in_place(&mut row_datums);
+                }
+
+                let mut row_iter = row_datums.drain(..);
+                let mut datums_local = datums.borrow();
+                // Unpack only the demanded columns.
+                for skip in skips.iter() {
+                    datums_local.push((&mut row_iter).nth(*skip).unwrap());
+                }
+
+                // Evaluate the key expressions.
+                let key =
+                    match key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_mfp) {
+                        Err(e) => {
+                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
+                        }
+                        Ok(key) => key.expect("Row expected as no predicate was used"),
+                    };
+                // Evaluate the value expressions.
+                // The prior evaluation may have left additional columns we should delete.
+                datums_local.truncate(skips.len());
+                let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
+                    Err(e) => {
+                        return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
+                    }
+                    Ok(val) => val.expect("Row expected as no predicate was used"),
+                };
+                row_packer.clear();
+                row_packer.extend(val);
+                let row = row_packer.finish_and_reuse();
+                return Some((Ok((key, row)), time.clone(), diff.clone()));
+            }
         });
 
         // Demux out the potential errors from key and value selector evaluation.
