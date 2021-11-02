@@ -119,7 +119,7 @@ class PrevStats(NamedTuple):
 
 def print_stats(cid: str, prev: PrevStats) -> PrevStats:
     proc = mz_proc(cid)
-    memory = proc.memory_info()  # type: ignore
+    memory = proc.memory_info()
     cpu = proc.cpu_times()
     new_prev = PrevStats(time.time(), cpu.user, cpu.system)
     print(
