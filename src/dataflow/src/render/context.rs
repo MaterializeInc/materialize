@@ -29,7 +29,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use crate::operator::CollectionExt;
-use crate::render::datum_vec::DatumVec;
+use crate::render::datum_vec::{DatumVec, DatumVecBorrow};
 use crate::render::Permutation;
 use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
@@ -217,7 +217,8 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(RefOrMut<'b, Row>, &'a S::Timestamp, &'a Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff, &'b RowArena) -> I
+            + 'static,
     {
         // Set a number of tuples after which the operator should yield.
         // This allows us to remain responsive even when enumerating a substantial
@@ -225,7 +226,6 @@ where
         let refuel = 1000000;
 
         let mut datum_vec = DatumVec::new();
-        let mut row_builder = Row::default();
 
         match &self {
             ArrangementFlavor::Local(oks, errs, permutation) => {
@@ -236,10 +236,7 @@ where
                     move |k, v, t, d| {
                         let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
                         permutation.permute_in_place(&mut borrow);
-                        // TODO: Change `logic` to take a `DatumVecBorrow`.
-                        row_builder.clear();
-                        row_builder.extend(&*borrow);
-                        logic(RefOrMut::Mut(&mut row_builder), t, d)
+                        logic(borrow, t, d, &RowArena::default())
                     },
                     refuel,
                 );
@@ -254,9 +251,7 @@ where
                     move |k, v, t, d| {
                         let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
                         permutation.permute_in_place(&mut borrow);
-                        row_builder.clear();
-                        row_builder.extend(&*borrow);
-                        logic(RefOrMut::Mut(&mut row_builder), t, d)
+                        logic(borrow, t, d, &RowArena::default())
                     },
                     refuel,
                 );
@@ -368,7 +363,8 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(RefOrMut<'b, Row>, &'a S::Timestamp, &'a Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff, &'b RowArena) -> I
+            + 'static,
     {
         // If `key_val` is set, and we have the arrangement by that key, we should
         // use that arrangement.
@@ -387,9 +383,13 @@ where
         } else {
             use timely::dataflow::operators::Map;
             let (oks, errs) = self.as_collection();
+            let mut datum_vec = DatumVec::new();
             (
-                oks.inner
-                    .flat_map(move |(mut v, t, d)| logic(RefOrMut::Mut(&mut v), &t, &d)),
+                oks.inner.flat_map(move |(v, t, d)| {
+                    let arena = RowArena::default();
+                    let borrow = datum_vec.borrow_with(&v);
+                    logic(borrow, &t, &d, &arena)
+                }),
                 errs,
             )
         }
@@ -541,11 +541,8 @@ where
             mfp.optimize();
             let mfp_plan = mfp.into_plan().unwrap();
             let (stream, errors) = self.flat_map(key_val, {
-                let mut datums = crate::render::datum_vec::DatumVec::new();
                 let mut row_builder = Row::default();
-                move |data, time, diff| {
-                    let temp_storage = repr::RowArena::new();
-                    let mut datums_local = datums.borrow_with(&data);
+                move |mut datums_local, time, diff, temp_storage| {
                     mfp_plan.evaluate(
                         &mut datums_local,
                         &temp_storage,

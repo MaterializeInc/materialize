@@ -689,14 +689,12 @@ where
         let (key_val_input, err_input): (
             timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
             _,
-        ) = input.flat_map(None, move |row, time, diff| {
-            let temp_storage = RowArena::new();
-
+        ) = input.flat_map(None, move |row, time, diff, temp_storage| {
             // Unpack only the demanded columns.
             let mut datums_local = datums.borrow();
             let mut row_iter = row.iter();
             for skip in skips.iter() {
-                datums_local.push((&mut row_iter).nth(*skip).unwrap());
+                datums_local.push(*(&mut row_iter).nth(*skip).unwrap());
             }
 
             // Evaluate the key expressions.
@@ -713,20 +711,7 @@ where
             };
             row_packer.clear();
             row_packer.extend(val);
-            drop(datums_local);
-
-            // Mint the final row, ideally re-using resources.
-            // TODO(mcsherry): This can perhaps be extracted for
-            // re-use if it seems to be a common pattern.
-            use timely::communication::message::RefOrMut;
-            let row = match row {
-                RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
-                RefOrMut::Mut(row) => {
-                    row.clone_from(&row_packer);
-                    row_packer.clear();
-                    std::mem::take(row)
-                }
-            };
+            let row = row_packer.finish_and_reuse();
             return Some((Ok((key, row)), time.clone(), diff.clone()));
         });
 

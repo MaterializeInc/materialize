@@ -1201,14 +1201,17 @@ pub mod plan {
         ///
         /// This does not apply `self.projection`, which is up to the calling method.
         pub fn evaluate_inner<'b, 'a: 'b>(
-            &'a self,
+            &self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
         ) -> Result<bool, EvalError> {
             let mut expression = 0;
             for (support, predicate) in self.mfp.predicates.iter() {
                 while self.mfp.input_arity + expression < *support {
-                    datums.push(self.mfp.expressions[expression].eval(&datums[..], &arena)?);
+                    let datum = self.mfp.expressions[expression].eval(&datums[..], &arena)?;
+                    // Copy the `datum` to decouple its lifetime from `self`
+                    let datum = arena.make_datum(|row| row.push(datum));
+                    datums.push(datum);
                     expression += 1;
                 }
                 if predicate.eval(&datums[..], &arena)? != Datum::True {
@@ -1216,7 +1219,10 @@ pub mod plan {
                 }
             }
             while expression < self.mfp.expressions.len() {
-                datums.push(self.mfp.expressions[expression].eval(&datums[..], &arena)?);
+                let datum = self.mfp.expressions[expression].eval(&datums[..], &arena)?;
+                // Copy the `datum` to decouple its lifetime from `self`
+                let datum = arena.make_datum(|row| row.push(datum));
+                datums.push(datum);
                 expression += 1;
             }
             Ok(true)
@@ -1403,7 +1409,7 @@ pub mod plan {
         /// The `row_builder` is not cleared first, but emptied if the function
         /// returns an iterator with any `Ok(_)` element.
         pub fn evaluate<'b, 'a: 'b, E: From<EvalError>>(
-            &'a self,
+            &self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
             time: repr::Timestamp,
