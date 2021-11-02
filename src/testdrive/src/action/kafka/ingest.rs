@@ -27,7 +27,7 @@ use crate::parser::BuiltinCommand;
 
 pub struct IngestAction {
     topic_prefix: String,
-    partition: i32,
+    partition: Option<i32>,
     format: Format,
     key_format: Option<Format>,
     timestamp: Option<i64>,
@@ -164,7 +164,7 @@ impl Transcoder {
 
 pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
-    let partition = cmd.args.opt_parse::<i32>("partition")?.unwrap_or(0);
+    let partition = cmd.args.opt_parse::<i32>("partition")?;
     let repeat = cmd.args.opt_parse::<isize>("repeat")?.unwrap_or(1);
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro {
@@ -317,8 +317,11 @@ impl Action for IngestAction {
                 let producer = &state.kafka_producer;
                 let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
                 futs.push(async move {
-                    let mut record: FutureRecord<_, _> =
-                        FutureRecord::to(topic_name).partition(self.partition);
+                    let mut record: FutureRecord<_, _> = FutureRecord::to(topic_name);
+
+                    if let Some(partition) = self.partition {
+                        record = record.partition(partition);
+                    }
                     if let Some(key) = &key {
                         record = record.key(key);
                     }

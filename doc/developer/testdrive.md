@@ -651,6 +651,10 @@ For data provided as `format=bytes key-format=bytes`, the separator between the 
 
 Send the same data `N` times to Kafka. This is used to create larger Kafka topics without bloating the test
 
+#### `partition=N`
+
+Send the data to the specified partition.
+
 #### `kafka-verify format=avro sink=... [sort-messages=true] [consistency=debezium]`
 
 Obtains the data from the specified `sink` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test.
