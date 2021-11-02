@@ -14,7 +14,7 @@ pytest==6.2.5
 requests==2.23.0
 twine==3.4.2
 types-prettytable==2.1.0
-types-psutil==5.8.8
+types-psutil==5.8.13
 types-PyMYSQL==1.0.2
 types-PyYAML==5.4.10
 types-requests==2.25.6
