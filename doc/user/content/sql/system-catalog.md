@@ -114,6 +114,7 @@ Field            | Type        | Meaning
 `nullable`       | [`boolean`] | Can the column contain a `NULL` value?
 `type`           | [`text`]    | The data type of the column.
 `default`        | [`text`]    | The default expression of the column.
+`type_oid`       | [`oid`]     | The OID of the type of the column (references `mz_types`).
 
 ### `mz_databases`
 

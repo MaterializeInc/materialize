@@ -126,6 +126,7 @@ impl CatalogState {
                     .as_ref()
                     .map(|d| Datum::String(d))
                     .unwrap_or(Datum::Null);
+                let pgtype = pgrepr::Type::from(&column_type.scalar_type);
                 updates.push(BuiltinTableUpdate {
                     id: MZ_COLUMNS.id,
                     row: Row::pack_slice(&[
@@ -137,8 +138,9 @@ impl CatalogState {
                         ),
                         Datum::Int64(i as i64 + 1),
                         Datum::from(column_type.nullable),
-                        Datum::String(pgrepr::Type::from(&column_type.scalar_type).name()),
+                        Datum::String(pgtype.name()),
                         default,
+                        Datum::Int32(pgtype.oid() as i32),
                     ]),
                     diff,
                 });

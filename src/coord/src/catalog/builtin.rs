@@ -709,7 +709,8 @@ lazy_static! {
             .with_named_column("position", ScalarType::Int64.nullable(false))
             .with_named_column("nullable", ScalarType::Bool.nullable(false))
             .with_named_column("type", ScalarType::String.nullable(false))
-            .with_named_column("default", ScalarType::String.nullable(true)),
+            .with_named_column("default", ScalarType::String.nullable(true))
+            .with_named_column("type_oid", ScalarType::Oid.nullable(false)),
         id: GlobalId::System(4013),
         index_id: GlobalId::System(4014),
         persistent: false,
@@ -1325,7 +1326,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_attribute AS SELECT
     mz_objects.oid as attrelid,
     mz_columns.name as attname,
-    mz_types.oid AS atttypid,
+    mz_columns.type_oid AS atttypid,
     pg_type.typlen AS attlen,
     position as attnum,
     -1::pg_catalog.int4 as atttypmod,
@@ -1335,8 +1336,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     FALSE as attisdropped
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
-JOIN mz_catalog.mz_types ON mz_columns.type = mz_types.name
-JOIN pg_catalog.pg_type ON pg_type.oid = mz_types.oid",
+JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid",
     // Since this depends on pg_type, its id must be higher due to initialization
     // ordering.
     id: GlobalId::System(5020),
