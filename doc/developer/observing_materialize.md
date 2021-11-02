@@ -69,7 +69,7 @@ bunch of ad hoc queries against Materialize.
 
 Another method for gathering performance metrics is to run diagnostic queries directly using psql.
 For examples, see the [diagnosting using sql
-guide](https://materialize.com/docs/ops/diagnosing-using-sql/).
+guide](https://materialize.com/docs/ops/troubleshooting/).
 
 ### Materialize Log File
 

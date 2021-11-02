@@ -162,7 +162,7 @@ introduction to this catalog is available as part of our [SQL
 documentation](/sql/system-catalog).
 
 A user guide for debugging a running `materialized` using the system catalog is available
-in the form of a walkthrough of useful [diagnostic queries](/ops/diagnosing-using-sql).
+in the form of a walkthrough of useful [diagnostic queries](/ops/troubleshooting).
 
 ## Grafana
 

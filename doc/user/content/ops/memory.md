@@ -1,16 +1,12 @@
 ---
-title: "Deployment"
-description: "Find details about running your Materialize instances"
+title: "Memory"
+description: "Recommendations for memory settings"
 menu:
   main:
     parent: operations
+aliases:
+  - deployment
 ---
-
-_This page is a work in progress and will have more detail in the coming months.
-If you have specific questions, feel free to [file a GitHub
-issue](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md)._
-
-## Memory
 
 Materialize stores the majority of its state in memory, and works best when the
 streamed data can be reduced in some way. For example, if you know that only a
@@ -19,7 +15,7 @@ materializing sources or views until you've expressed this to the system.
 Materialize can then avoid stashing the full set of rows and columns, which can
 in some cases dramatically reduce Materialize's memory footprint.
 
-### Compaction
+## Compaction
 
 To prevent memory from growing without bound, Materialize periodically
 "compacts" data in [arrangements](/overview/arrangements). For
@@ -79,7 +75,7 @@ solutions:
 
   * Periodically send dummy updates to trigger compaction.
 
-### Swap
+## Swap
 
 To minimize the chances that Materialize runs out of memory in a production
 environment, we recommend you make additional memory available to Materialize
@@ -88,14 +84,14 @@ via a SSD-backed swap file or swap partition.
 This is particularly important in Linux and in Docker, where swap may not be
 automatically set up for you.
 
-#### Docker
+### Docker
 
 By default, a container has no [resource
 constraints](https://docs.docker.com/config/containers/resource_constraints/)
 and can use as much memory and swap as the host allows, unless you have
 overridden this with the `--memory` or the `--memory-swap` flags.
 
-#### Linux
+### Linux
 
 Most cloud Linux distributions do not enable swap by default. However, you can
 enable it quite easily with the following steps.

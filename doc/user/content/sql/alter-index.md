@@ -44,7 +44,7 @@ indexes.
 
 Name                        | Meaning
 ----------------------------|--------
-`logical_compaction_window` | Overrides the [logical compaction window](/ops/deployment#compaction) for the data stored in this index. The default value is controlled by the [`--logical-compaction-window`](/cli/#compaction-window) command-line option.
+`logical_compaction_window` | Overrides the [logical compaction window](/ops/memory#compaction) for the data stored in this index. The default value is controlled by the [`--logical-compaction-window`](/cli/#compaction-window) command-line option.
 
 ## Examples
 
