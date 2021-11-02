@@ -18,10 +18,10 @@ use timely::PartialOrder;
 use tokio::runtime::Runtime;
 
 use crate::error::Error;
-use crate::future::Future;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{BlobTraceBatch, TraceBatchMeta};
 use crate::indexed::trace::Trace;
+use crate::pfuture::PFuture;
 use crate::storage::Blob;
 
 /// A request to merge two trace batches and write the results to blob storage.
@@ -70,11 +70,11 @@ impl<B: Blob> Maintainer<B> {
 
     /// Asynchronously runs the requested compaction on the work pool provided
     /// at construction time.
-    pub fn compact_trace(&self, req: CompactTraceReq) -> Future<CompactTraceRes> {
-        let (tx, rx) = Future::new();
+    pub fn compact_trace(&self, req: CompactTraceReq) -> PFuture<CompactTraceRes> {
+        let (tx, rx) = PFuture::new();
         let blob = self.blob.clone();
         // Ignore the spawn_blocking response since we communicate
-        // success/failure through the returned Future.
+        // success/failure through the returned future.
         //
         // TODO: Push the spawn_blocking down into the cpu-intensive bits and
         // use spawn here once the storage traits are made async.

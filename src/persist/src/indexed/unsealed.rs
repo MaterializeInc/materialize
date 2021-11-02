@@ -20,10 +20,10 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::Error;
-use crate::future::Future;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{UnsealedBatchMeta, UnsealedMeta};
 use crate::indexed::{BlobUnsealedBatch, Id, Snapshot};
+use crate::pfuture::PFuture;
 use crate::storage::{Blob, SeqNo};
 
 /// A persistent, compacting data structure containing `(Key, Value, Time,
@@ -314,7 +314,7 @@ pub struct UnsealedSnapshot {
     pub ts_lower: Antichain<u64>,
     /// An open upper bound on the times of the contained updates.
     pub ts_upper: Antichain<u64>,
-    batches: Vec<Future<Arc<BlobUnsealedBatch>>>,
+    batches: Vec<PFuture<Arc<BlobUnsealedBatch>>>,
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
@@ -350,7 +350,7 @@ pub struct UnsealedSnapshotIter {
     ts_upper: Antichain<u64>,
 
     current_batch: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
-    batches: VecDeque<Future<Arc<BlobUnsealedBatch>>>,
+    batches: VecDeque<PFuture<Arc<BlobUnsealedBatch>>>,
 }
 
 impl fmt::Debug for UnsealedSnapshotIter {

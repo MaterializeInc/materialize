@@ -20,11 +20,11 @@ use ore::cast::CastFrom;
 use persist_types::Codec;
 
 use crate::error::Error;
-use crate::future::Future;
 use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, TraceBatchMeta, UnsealedBatchMeta,
 };
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
+use crate::pfuture::PFuture;
 use crate::storage::Blob;
 
 /// A disk-backed cache for objects in [Blob] storage.
@@ -107,8 +107,8 @@ impl<B: Blob> BlobCache<B> {
 
     /// Asynchronously returns the batch for the given key, fetching in another
     /// thread if it's not already in the cache.
-    pub fn get_unsealed_batch_async(&self, key: &str) -> Future<Arc<BlobUnsealedBatch>> {
-        let (tx, rx) = Future::new();
+    pub fn get_unsealed_batch_async(&self, key: &str) -> PFuture<Arc<BlobUnsealedBatch>> {
+        let (tx, rx) = PFuture::new();
         {
             // New scope to ensure the cache lock is dropped during the
             // (expensive) get.
@@ -214,8 +214,8 @@ impl<B: Blob> BlobCache<B> {
 
     /// Asynchronously returns the batch for the given key, fetching in another
     /// thread if it's not already in the cache.
-    pub fn get_trace_batch_async(&self, key: &str) -> Future<Arc<BlobTraceBatch>> {
-        let (tx, rx) = Future::new();
+    pub fn get_trace_batch_async(&self, key: &str) -> PFuture<Arc<BlobTraceBatch>> {
+        let (tx, rx) = PFuture::new();
         {
             // New scope to ensure the cache lock is dropped during the
             // (expensive) get.

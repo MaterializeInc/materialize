@@ -561,12 +561,12 @@ where
     }
 }
 
-enum PendingSealFuture<F: std::future::Future<Output = Result<(), Error>>> {
+enum PendingSealFuture<F: Future<Output = Result<(), Error>>> {
     PrimarySeal(SealFuture<F>),
     ConditionSeal(SealFuture<F>),
 }
 
-struct SealFuture<F: std::future::Future<Output = Result<(), Error>>> {
+struct SealFuture<F: Future<Output = Result<(), Error>>> {
     cap: Capability<u64>,
     future: F,
 }

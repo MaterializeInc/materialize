@@ -32,7 +32,6 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
-use crate::future::FutureHandle;
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{
@@ -41,12 +40,13 @@ use crate::indexed::encoding::{
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::trace::{Trace, TraceSnapshot, TraceSnapshotIter};
 use crate::indexed::unsealed::{Unsealed, UnsealedSnapshot, UnsealedSnapshotIter};
+use crate::pfuture::PFutureHandle;
 use crate::storage::{Blob, Log, SeqNo};
 
 #[derive(Debug)]
 enum PendingResponse {
-    SeqNo(FutureHandle<SeqNo>, Result<SeqNo, Error>),
-    Unit(FutureHandle<()>, Result<(), Error>),
+    SeqNo(PFutureHandle<SeqNo>, Result<SeqNo, Error>),
+    Unit(PFutureHandle<()>, Result<(), Error>),
 }
 
 impl PendingResponse {
@@ -378,7 +378,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         id_str: &str,
         key_codec_name: &str,
         val_codec_name: &str,
-        res: FutureHandle<Id>,
+        res: PFutureHandle<Id>,
     ) {
         let resp = self.do_register(id_str, key_codec_name, val_codec_name);
         res.fill(resp);
@@ -442,7 +442,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// This method is idempotent and may be called multiple times. It returns
     /// true if the stream was destroyed from this call, and false if it was
     /// already destroyed.
-    pub fn destroy(&mut self, id_str: &str, res: FutureHandle<bool>) {
+    pub fn destroy(&mut self, id_str: &str, res: PFutureHandle<bool>) {
         let resp = self.do_destroy(id_str);
         res.fill(resp);
     }
@@ -663,7 +663,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     pub fn write(
         &mut self,
         updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-        res: FutureHandle<SeqNo>,
+        res: PFutureHandle<SeqNo>,
     ) {
         let resp = self.validate_write(&updates);
 
@@ -926,7 +926,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// Sealing a time advances the "sealed" frontier for an id, which restricts
     /// what times can later be sealed and written for that id. See
     /// `sealed_frontier` for details.
-    pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: FutureHandle<()>) {
+    pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: PFutureHandle<()>) {
         let resp = self.do_seal(&ids, seal_ts);
         if resp.is_ok() {
             self.pending.add_seals(ids, seal_ts);
@@ -960,7 +960,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     pub fn allow_compaction(
         &mut self,
         id_sinces: Vec<(Id, Antichain<u64>)>,
-        res: FutureHandle<()>,
+        res: PFutureHandle<()>,
     ) {
         let response = self.do_allow_compaction(id_sinces);
         self.pending
@@ -996,7 +996,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     }
 
     /// Returns a [Snapshot] for the given id.
-    pub fn snapshot(&mut self, id: Id, res: FutureHandle<IndexedSnapshot>) {
+    pub fn snapshot(&mut self, id: Id, res: PFutureHandle<IndexedSnapshot>) {
         let resp = self.do_snapshot(id);
         res.fill(resp);
     }
@@ -1034,7 +1034,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         &mut self,
         id: Id,
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-        res: FutureHandle<IndexedSnapshot>,
+        res: PFutureHandle<IndexedSnapshot>,
     ) {
         let resp = self.do_listen(id, listen_fn);
         res.fill(resp);
@@ -1194,23 +1194,23 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::error::Error;
-    use crate::future::Future;
     use crate::mem::MemRegistry;
+    use crate::pfuture::PFuture;
 
     use super::*;
 
-    fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, FutureHandle<T>), L: Log, B: Blob>(
+    fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, PFutureHandle<T>), L: Log, B: Blob>(
         index: &mut Indexed<L, B>,
         f: F,
     ) -> Result<T, Error> {
-        let (tx, rx) = Future::new();
+        let (tx, rx) = PFuture::new();
         f(index, tx.into());
         index.drain_pending()?;
         rx.recv()
     }
 
-    fn block_on<T, F: FnOnce(FutureHandle<T>)>(f: F) -> Result<T, Error> {
-        let (tx, rx) = Future::new();
+    fn block_on<T, F: FnOnce(PFutureHandle<T>)>(f: F) -> Result<T, Error> {
+        let (tx, rx) = PFuture::new();
         f(tx.into());
         rx.recv()
     }

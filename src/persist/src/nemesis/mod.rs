@@ -79,9 +79,9 @@ use rand::RngCore;
 use timely::progress::Antichain;
 
 use crate::error::Error;
-use crate::future::Future;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::validator::Validator;
+use crate::pfuture::PFuture;
 use crate::storage::SeqNo;
 
 pub mod direct;
@@ -246,9 +246,9 @@ impl FutureStep {
 
 #[derive(Debug)]
 pub enum FutureRes {
-    Write(WriteReq, Result<Future<SeqNo>, Error>),
-    Seal(SealReq, Result<Future<()>, Error>),
-    AllowCompaction(AllowCompactionReq, Result<Future<()>, Error>),
+    Write(WriteReq, Result<PFuture<SeqNo>, Error>),
+    Seal(SealReq, Result<PFuture<()>, Error>),
+    AllowCompaction(AllowCompactionReq, Result<PFuture<()>, Error>),
     Ready(Res),
 }
 

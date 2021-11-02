@@ -20,10 +20,10 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::ActivateOnDrop;
 use timely::Data as TimelyData;
 
-use crate::future::Future;
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
 use crate::operators::replay::Replay;
 use crate::operators::split_ok_err;
+use crate::pfuture::PFuture;
 use crate::storage::SeqNo;
 
 /// A persistent equivalent of [UnorderedInput].
@@ -124,7 +124,7 @@ impl<'b, K: timely::Data> fmt::Debug for PersistentUnorderedSession<'b, K> {
 
 impl<'b, K: timely::Data + Codec> PersistentUnorderedSession<'b, K> {
     /// Transmits a single record after synchronously persisting it.
-    pub fn give(&mut self, data: (K, u64, isize)) -> Future<SeqNo> {
+    pub fn give(&mut self, data: (K, u64, isize)) -> PFuture<SeqNo> {
         let r = self.write.write(&[((data.0.clone(), ()), data.1, data.2)]);
         // TODO: The signature of this method is now async, but this bit is
         // still blocking. The lifetime issues here are really tricky.
@@ -132,7 +132,7 @@ impl<'b, K: timely::Data + Codec> PersistentUnorderedSession<'b, K> {
         if let Ok(_) = r {
             self.session.give(data);
         }
-        let (tx, rx) = Future::new();
+        let (tx, rx) = PFuture::new();
         tx.fill(r);
         rx
     }
