@@ -246,6 +246,9 @@ pub struct Coordinator {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Channel to communicate source status updates to the timestamper thread.
     ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
+    /// Handle to the timestamper thread. Drop order matters here! This must be
+    /// located after `ts_tx`.
+    _timestamper_thread_handle: JoinOnDropHandle<()>,
     metric_scraper: Scraper,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
@@ -612,7 +615,6 @@ impl Coordinator {
         internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         cmd_rx: mpsc::UnboundedReceiver<Command>,
         feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
-        _timestamper_thread_handle: JoinOnDropHandle<()>,
     ) {
         let (drain_trigger, drain_tripwire) = oneshot::channel::<()>();
 
@@ -672,6 +674,7 @@ impl Coordinator {
 
         // Cleanly drain any pending messages from the worker before shutting
         // down.
+        drop(self.ts_tx);
         drop(drain_trigger);
         drop(self.internal_cmd_tx);
         while messages.next().await.is_some() {}
@@ -913,7 +916,6 @@ impl Coordinator {
     }
 
     fn message_shutdown(&mut self) {
-        self.ts_tx.send(TimestampMessage::Shutdown).unwrap();
         self.broadcast(dataflow::Command::Shutdown);
     }
 
@@ -4361,8 +4363,6 @@ pub async fn serve(
 
     let metric_scraper = Scraper::new(logging.as_ref(), metrics_registry.clone())?;
 
-    // Spawn timestamper after any fallible operations so that if bootstrap fails we still
-    // tell it to shut down.
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
     let mut timestamper = Timestamper::new(
         Duration::from_millis(10),
@@ -4401,7 +4401,8 @@ pub async fn serve(
                     .map(duration_to_timestamp_millis),
                 logging_enabled: logging.is_some(),
                 internal_cmd_tx,
-                ts_tx: ts_tx.clone(),
+                ts_tx,
+                _timestamper_thread_handle: timestamper_thread_handle,
                 metric_scraper,
                 closed_up_to: 1,
                 read_lower_bound: 1,
@@ -4433,11 +4434,6 @@ pub async fn serve(
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if !ok {
-                // Tell the timestamper thread to shut down.
-                ts_tx.send(TimestampMessage::Shutdown).unwrap();
-                // Explicitly drop the timestamper handle here so we can wait for
-                // the thread to return.
-                drop(timestamper_thread_handle);
                 coord.broadcast(dataflow::Command::Shutdown);
                 return;
             }
@@ -4445,7 +4441,6 @@ pub async fn serve(
                 internal_cmd_rx,
                 cmd_rx,
                 feedback_rx,
-                timestamper_thread_handle,
             ))
         })
         .unwrap();
@@ -4523,23 +4518,22 @@ pub fn serve_debug(
         .spawn(move || {
             let _executor_guard = executor.enter();
             loop {
-                match ts_rx.recv().unwrap() {
-                    TimestampMessage::Shutdown => break,
-
+                match ts_rx.recv() {
                     // Allow local and file sources only. We don't need to do anything for these.
-                    TimestampMessage::Add(
+                    Ok(TimestampMessage::Add(
                         GlobalId::System(_),
                         SourceConnector::Local {
                             timeline: Timeline::EpochMilliseconds,
                         },
-                    )
-                    | TimestampMessage::Add(
+                    ))
+                    | Ok(TimestampMessage::Add(
                         GlobalId::User(_),
                         SourceConnector::External {
                             connector: ExternalSourceConnector::File(_),
                             ..
                         },
-                    ) => {}
+                    )) => {}
+                    Err(_) => break,
                     // Panic on anything else (like Kafka sources) until we support them.
                     msg => panic!("unexpected {:?}", msg),
                 }
@@ -4563,6 +4557,7 @@ pub fn serve_debug(
             logging_enabled: false,
             internal_cmd_tx,
             ts_tx,
+            _timestamper_thread_handle: timestamper_thread_handle,
             metric_scraper: Scraper::new(None, metrics_registry).unwrap(),
             closed_up_to: 1,
             read_lower_bound: 1,
@@ -4586,7 +4581,6 @@ pub fn serve_debug(
             internal_cmd_rx,
             cmd_rx,
             feedback_rx,
-            timestamper_thread_handle,
         ))
     })
     .join_on_drop();
