@@ -398,3 +398,22 @@ FROM
     v
 ----
 {"0":"c","1":"a","2":"b"}  {"0":"c","1":"a","2":"d"}  {"0":"c","1":"a","2":"d"}  {"0":"c","1":"a","2":"b"}
+
+
+# Test Reduction elision
+
+statement ok
+CREATE TABLE a (x text)
+
+statement ok
+INSERT INTO a VALUES ('a'),('b')
+
+query T
+SELECT STRING_AGG(y, ', ') FROM (SELECT x as y FROM a);
+----
+a, b
+
+query T
+SELECT STRING_AGG(y, ', ') FROM (SELECT x as y FROM a limit 1);
+----
+a

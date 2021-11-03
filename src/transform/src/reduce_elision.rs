@@ -94,6 +94,30 @@ impl ReduceElision {
                             exprs: vec![a.expr.clone()],
                         },
 
+                        // StringAgg takes nested records of strings and outputs a string
+                        AggregateFunc::StringAgg { .. } => {
+                            if let MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate { .. },
+                                ref exprs,
+                            } = a.expr
+                            {
+                                if let MirScalarExpr::CallVariadic {
+                                    func: VariadicFunc::RecordCreate { .. },
+                                    ref exprs,
+                                } = exprs[0]
+                                {
+                                    exprs[0].clone()
+                                } else {
+                                    panic!(
+                                        "need nested RecordCreate as expr for StringAgg {:?}",
+                                        a.expr,
+                                    )
+                                }
+                            } else {
+                                panic!("need RecordCreate as expr for StringAgg {:?}", a.expr,)
+                            }
+                        }
+
                         // All other variants should return the argument to the aggregation.
                         _ => a.expr.clone(),
                     })
