@@ -174,6 +174,12 @@ pub enum Command {
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
+    /// Enable persistence.
+    // TODO: to enable persistence in clustered mode, we'll need to figure out
+    // an alternative design that doesn't require serializing a persistence
+    // client.
+    #[serde(skip)]
+    EnablePersistence(RuntimeClient),
 }
 
 impl Command {
@@ -245,6 +251,7 @@ impl CommandKind {
             CommandKind::DropSources => "drop_sources",
             CommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             CommandKind::EnableLogging => "enable_logging",
+            CommandKind::EnablePersistence => "enable_persistence",
             CommandKind::Insert => "insert",
             CommandKind::Peek => "peek",
         }
@@ -295,8 +302,6 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// Handle to the persistence runtime. None if disabled.
-    pub persist: Option<RuntimeClient>,
     /// An optional callback that is presented with both halves of the dataflow
     /// feedback channel on startup. The callback can swap the channel for
     /// another in order to intercept messages.
@@ -386,7 +391,6 @@ pub fn serve(config: Config) -> Result<(Server, Client), anyhow::Error> {
     let now = config.now;
     let metrics = Metrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
-    let persist = config.persist;
     let worker_guards = timely::execute::execute(
         timely::Config {
             communication: timely::CommunicationConfig::Process(config.workers),
@@ -412,7 +416,7 @@ pub fn serve(config: Config) -> Result<(Server, Client), anyhow::Error> {
                     dataflow_tokens: HashMap::new(),
                     sink_write_frontiers: HashMap::new(),
                     metrics,
-                    persist: persist.clone(),
+                    persist: None,
                     tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
                 },
                 materialized_logger: None,
@@ -1098,6 +1102,9 @@ where
             }
             Command::EnableLogging(config) => {
                 self.initialize_logging(&config);
+            }
+            Command::EnablePersistence(runtime) => {
+                self.render_state.persist = Some(runtime);
             }
             Command::AddSourceTimestamping {
                 id,

@@ -205,8 +205,7 @@ pub struct LoggingConfig {
 
 /// Configures a coordinator.
 pub struct Config<'a> {
-    pub workers: usize,
-    pub timely_worker: timely::WorkerConfig,
+    pub dataflow_client: dataflow::Client,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
@@ -220,26 +219,12 @@ pub struct Config<'a> {
     /// Persistence subsystem configuration.
     pub persist: PersistConfig,
     pub now: NowFn,
-    /// An optional callback that is presented with both halves of the dataflow
-    /// feedback channel on startup. The callback can swap the channel for
-    /// another in order to intercept messages.
-    pub dataflow_response_interceptor: Option<
-        Box<
-            dyn FnOnce(
-                &mut mpsc::UnboundedSender<dataflow::Response>,
-                &mut mpsc::UnboundedReceiver<dataflow::Response>,
-            ),
-        >,
-    >,
 }
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// A client to a running dataflow cluster.
     dataflow_client: dataflow::Client,
-    /// A handle to a running dataflow server. Drop order matters here! The
-    /// client must be dropped before the server.
-    _dataflow_server: dataflow::Server,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -4241,8 +4226,7 @@ impl Coordinator {
 /// coordinator.
 pub async fn serve(
     Config {
-        workers,
-        timely_worker,
+        dataflow_client,
         symbiosis_url,
         logging,
         data_directory,
@@ -4255,7 +4239,6 @@ pub async fn serve(
         metrics_registry,
         persist,
         now,
-        dataflow_response_interceptor,
     }: Config<'_>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -4274,7 +4257,7 @@ pub async fn serve(
         safe_mode,
         enable_logging: logging.is_some(),
         build_info,
-        num_workers: workers,
+        num_workers: dataflow_client.num_workers(),
         timestamp_frequency,
         now: now.clone(),
         persist,
@@ -4285,17 +4268,6 @@ pub async fn serve(
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
-
-    let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
-        workers,
-        timely_worker,
-        experimental_mode,
-        now,
-        metrics_registry: metrics_registry.clone(),
-        persist: persister,
-        response_interceptor: dataflow_response_interceptor,
-    })
-    .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
     let metric_scraper = Scraper::new(logging.as_ref(), metrics_registry.clone())?;
 
@@ -4326,7 +4298,6 @@ pub async fn serve(
         .spawn(move || {
             let mut coord = Coordinator {
                 dataflow_client,
-                _dataflow_server: dataflow_server,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 symbiosis,
@@ -4363,6 +4334,9 @@ pub async fn serve(
                         .collect(),
                     log_logging: config.log_logging,
                 }));
+            }
+            if let Some(persister) = persister {
+                coord.broadcast(dataflow::Command::EnablePersistence(persister));
             }
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

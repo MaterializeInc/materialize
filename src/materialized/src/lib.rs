@@ -224,10 +224,19 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
 
-    // Initialize coordinator.
-    let (coord_handle, coord_client) = coord::serve(coord::Config {
+    // Initialize dataflow server.
+    let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
         workers,
         timely_worker: config.timely_worker,
+        experimental_mode: config.experimental_mode,
+        now: SYSTEM_TIME.clone(),
+        metrics_registry: config.metrics_registry.clone(),
+        response_interceptor: None,
+    })?;
+
+    // Initialize coordinator.
+    let (coord_handle, coord_client) = coord::serve(coord::Config {
+        dataflow_client,
         symbiosis_url: config.symbiosis_url.as_deref(),
         logging: config.logging,
         data_directory: &config.data_directory,
@@ -240,7 +249,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         persist: config.persist,
         now: SYSTEM_TIME.clone(),
-        dataflow_response_interceptor: None,
     })
     .await?;
 
@@ -308,6 +316,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         _pid_file: pid_file,
         _drain_trigger: drain_trigger,
         _coord_handle: coord_handle,
+        _dataflow_server: dataflow_server,
     })
 }
 
@@ -318,6 +327,7 @@ pub struct Server {
     // Drop order matters for these fields.
     _drain_trigger: oneshot::Sender<()>,
     _coord_handle: coord::Handle,
+    _dataflow_server: dataflow::Server,
 }
 
 impl Server {

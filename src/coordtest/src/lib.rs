@@ -94,6 +94,7 @@ pub struct CoordTest {
     coord_feedback_tx: mpsc::UnboundedSender<dataflow::Response>,
     client: Client,
     _handle: Handle,
+    _dataflow_server: dataflow::Server,
     dataflow_feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
     // Keep a queue of messages in the order received from dataflow_feedback_rx so
     // we can safely modify or inject things and maintain original message order.
@@ -109,38 +110,50 @@ pub struct CoordTest {
 
 impl CoordTest {
     pub async fn new() -> anyhow::Result<Self> {
+        let experimental_mode = false;
         let timestamp = Arc::new(Mutex::new(0));
-        let data_directory = tempfile::tempdir()?;
+        let now = {
+            let timestamp = timestamp.clone();
+            NowFn::from(move || *timestamp.lock().unwrap())
+        };
+        let metrics_registry = MetricsRegistry::new();
         let (mut dataflow_feedback_tx, dataflow_feedback_rx) = mpsc::unbounded_channel();
         let (coord_feedback_tx, mut coord_feedback_rx) = mpsc::unbounded_channel();
-        let (handle, client) = coord::serve(coord::Config {
+
+        let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
             workers: 1,
             timely_worker: timely::WorkerConfig::default(),
+            experimental_mode,
+            now: now.clone(),
+            metrics_registry: metrics_registry.clone(),
+            response_interceptor: Some(Box::new(move |tx, rx| {
+                mem::swap(tx, &mut dataflow_feedback_tx);
+                mem::swap(rx, &mut coord_feedback_rx);
+            })),
+        })?;
+
+        let data_directory = tempfile::tempdir()?;
+        let (handle, client) = coord::serve(coord::Config {
+            dataflow_client,
             symbiosis_url: None,
             data_directory: data_directory.path(),
             logging: None,
             logical_compaction_window: None,
             timestamp_frequency: Duration::from_millis(1),
-            experimental_mode: false,
+            experimental_mode,
             disable_user_indexes: false,
             safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
-            metrics_registry: MetricsRegistry::new(),
+            metrics_registry,
             persist: PersistConfig::disabled(),
-            now: {
-                let timestamp = timestamp.clone();
-                NowFn::from(move || *timestamp.lock().unwrap())
-            },
-            dataflow_response_interceptor: Some(Box::new(move |tx, rx| {
-                mem::swap(tx, &mut dataflow_feedback_tx);
-                mem::swap(rx, &mut coord_feedback_rx);
-            })),
+            now,
         })
         .await?;
         let coordtest = CoordTest {
             coord_feedback_tx,
             _handle: handle,
             client,
+            _dataflow_server: dataflow_server,
             dataflow_feedback_rx,
             _data_directory: data_directory,
             temp_dir: tempfile::tempdir().unwrap(),
