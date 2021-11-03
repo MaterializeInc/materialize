@@ -22,12 +22,22 @@ use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
+use crate::render::Permutation;
 use crate::replay::MzReplay;
 use dataflow_types::logging::LoggingConfig;
 use ore::iter::IteratorExt;
 use repr::{Datum, Row, RowArena, Timestamp};
 
-/// Constructs the logging dataflows and returns a logger and trace handles.
+/// Constructs the logging dataflow for reachability logs.
+///
+/// Params
+/// * `worker`: The Timely worker hosting the log analysis dataflow.
+/// * `config`: Logging configuration
+/// * `linked`: The source to read log events from.
+/// * `activator`: A handle to acknowledge activations.
+///
+/// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
+/// the original rows.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
@@ -45,7 +55,7 @@ pub fn construct<A: Allocate>(
         >,
     >,
     activator: RcActivator,
-) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
+) -> std::collections::HashMap<LogVariant, (KeysValsHandle, Permutation)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     // A dataflow for multiple log-derived arrangements.
@@ -61,7 +71,7 @@ pub fn construct<A: Allocate>(
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-        let construct_reachability = |key: Vec<_>| {
+        let construct_reachability = |key: Vec<_>, value: Vec<_>| {
             let mut flatten = OperatorBuilder::new(
                 "Timely Reachability Logging Flatten ".to_string(),
                 scope.clone(),
@@ -124,7 +134,9 @@ pub fn construct<A: Allocate>(
                     ];
                     row_packer.extend(key.iter().map(|k| datums[*k]));
                     let key_row = row_packer.finish_and_reuse();
-                    (key_row, Row::pack_slice(datums))
+                    row_packer.extend(value.iter().map(|k| datums[*k]));
+                    let value_row = row_packer.finish_and_reuse();
+                    (key_row, value_row)
                 })
         };
 
@@ -135,11 +147,12 @@ pub fn construct<A: Allocate>(
         for variant in logs {
             if config.active_logs.contains_key(&variant) {
                 let key = variant.index_by();
-                let key_clone = key.clone();
-                let trace = construct_reachability(key.clone())
+                let (permutation, value) =
+                    Permutation::construct_from_columns(&key, variant.desc().arity());
+                let trace = construct_reachability(key.clone(), value)
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
                     .trace;
-                result.insert(variant, (key_clone, trace));
+                result.insert(variant, (trace, permutation));
             }
         }
         result

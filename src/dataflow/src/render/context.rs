@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
@@ -27,6 +28,9 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
+use crate::operator::CollectionExt;
+use crate::render::datum_vec::DatumVec;
+use crate::render::Permutation;
 use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
 use repr::{Diff, Row, RowArena};
@@ -143,7 +147,7 @@ where
     S::Timestamp: Lattice + Refines<T>,
 {
     /// A dataflow-local arrangement.
-    Local(Arrangement<S, V>, ErrArrangement<S>),
+    Local(Arrangement<S, V>, ErrArrangement<S>, Permutation),
     /// An imported trace from outside the dataflow.
     ///
     /// The `GlobalId` identifier exists so that exports of this same trace
@@ -152,10 +156,11 @@ where
         GlobalId,
         ArrangementImport<S, V, T>,
         ErrArrangementImport<S, T>,
+        Permutation,
     ),
 }
 
-impl<S: Scope, V: Data, T: Lattice> ArrangementFlavor<S, V, T>
+impl<S: Scope, T> ArrangementFlavor<S, Row, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -163,18 +168,101 @@ where
     /// Presents `self` as a stream of updates.
     ///
     /// This method presents the contents as they are, without further computation.
-    /// For some cases, the [CollectionBundle] provides the same or more specific functions,
-    /// specifically [CollectionBundle::as_collection_core].
-    pub fn as_collection(&self) -> (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>) {
-        match self {
-            ArrangementFlavor::Local(oks, errs) => (
-                oks.as_collection(|_k, v| v.clone()),
-                errs.as_collection(|k, _v| k.clone()),
-            ),
-            ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.as_collection(|_k, v| v.clone()),
-                errs.as_collection(|k, _v| k.clone()),
-            ),
+    /// If you have logic that could be applied to each record, consider using the
+    /// `flat_map` methods which allows this and can reduce the work done.
+    pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
+        let mut datum_vec = DatumVec::new();
+        let mut row_builder = Row::default();
+        match &self {
+            ArrangementFlavor::Local(oks, errs, permutation) => {
+                let permutation = permutation.clone();
+                (
+                    oks.as_collection(move |k, v| {
+                        let mut borrow = datum_vec.borrow_with_many(&[k, v]);
+                        permutation.permute_in_place(&mut borrow);
+                        row_builder.extend(&*borrow);
+                        row_builder.finish_and_reuse()
+                    }),
+                    errs.as_collection(|k, &()| k.clone()),
+                )
+            }
+            ArrangementFlavor::Trace(_, oks, errs, permutation) => {
+                let permutation = permutation.clone();
+                (
+                    oks.as_collection(move |k, v| {
+                        let mut borrow = datum_vec.borrow_with_many(&[k, v]);
+                        permutation.permute_in_place(&mut borrow);
+                        row_builder.extend(&*borrow);
+                        row_builder.finish_and_reuse()
+                    }),
+                    errs.as_collection(|k, &()| k.clone()),
+                )
+            }
+        }
+    }
+
+    /// Applies logic to elements of `self` and returns the results.
+    ///
+    /// If `key` is set, this is a promise that `logic` will produce no results on
+    /// records for which the key does not evaluate to the value. This is used to
+    /// leap directly to exactly those records.
+    pub fn flat_map<I, L>(
+        &self,
+        key: Option<Row>,
+        mut logic: L,
+    ) -> (
+        timely::dataflow::Stream<S, I::Item>,
+        Collection<S, DataflowError, Diff>,
+    )
+    where
+        I: IntoIterator,
+        I::Item: Data,
+        L: for<'a, 'b> FnMut(RefOrMut<'b, Row>, &'a S::Timestamp, &'a Diff) -> I + 'static,
+    {
+        // Set a number of tuples after which the operator should yield.
+        // This allows us to remain responsive even when enumerating a substantial
+        // arrangement, as well as provides time to accumulate our produced output.
+        let refuel = 1000000;
+
+        let mut datum_vec = DatumVec::new();
+        let mut row_builder = Row::default();
+
+        match &self {
+            ArrangementFlavor::Local(oks, errs, permutation) => {
+                let permutation = permutation.clone();
+                let oks = CollectionBundle::<S, Row, T>::flat_map_core(
+                    &oks,
+                    key,
+                    move |k, v, t, d| {
+                        let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
+                        permutation.permute_in_place(&mut borrow);
+                        // TODO: Change `logic` to take a `DatumVecBorrow`.
+                        row_builder.clear();
+                        row_builder.extend(&*borrow);
+                        logic(RefOrMut::Mut(&mut row_builder), t, d)
+                    },
+                    refuel,
+                );
+                let errs = errs.as_collection(|k, &()| k.clone());
+                return (oks, errs);
+            }
+            ArrangementFlavor::Trace(_, oks, errs, permutation) => {
+                let permutation = permutation.clone();
+                let oks = CollectionBundle::<S, Row, T>::flat_map_core(
+                    &oks,
+                    key,
+                    move |k, v, t, d| {
+                        let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
+                        permutation.permute_in_place(&mut borrow);
+                        row_builder.clear();
+                        row_builder.extend(&*borrow);
+                        logic(RefOrMut::Mut(&mut row_builder), t, d)
+                    },
+                    refuel,
+                );
+                let errs = errs.as_collection(|k, &()| k.clone());
+                return (oks, errs);
+            }
         }
     }
 }
@@ -233,13 +321,23 @@ where
         }
         Self::from_expressions(keys, arrangements)
     }
+}
 
+/// Parameter type to [CollectionBundle::ensure_arrangements], describing a key, a permutation of
+/// data and a thinning expression.
+pub type EnsureArrangement = (Vec<MirScalarExpr>, Permutation, Vec<usize>);
+
+impl<S: Scope, T: Lattice> CollectionBundle<S, Row, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
     /// Presents `self` as a stream of updates.
     ///
     /// This method presents the contents as they are, without further computation.
     /// If you have logic that could be applied to each record, consider using the
     /// `as_collection_core` methods which allows this and can reduce the work done.
-    pub fn as_collection(&self) -> (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>) {
+    pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
         if let Some(collection) = &self.collection {
             collection.clone()
         } else {
@@ -261,7 +359,7 @@ where
     /// that arrangement.
     pub fn flat_map<I, L>(
         &self,
-        key_val: Option<(Vec<MirScalarExpr>, V)>,
+        key_val: Option<(Vec<MirScalarExpr>, Row)>,
         mut logic: L,
     ) -> (
         timely::dataflow::Stream<S, I::Item>,
@@ -270,28 +368,13 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(RefOrMut<'b, V>, &'a S::Timestamp, &'a Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(RefOrMut<'b, Row>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
-        // Set a number of tuples after which the operator should yield.
-        // This allows us to remain responsive even when enumerating a substantial
-        // arrangement, as well as provides time to accumulate our produced output.
-        let refuel = 1000000;
         // If `key_val` is set, and we have the arrangement by that key, we should
         // use that arrangement.
         if let Some((key, val)) = key_val {
             if let Some(flavor) = self.arrangement(&key) {
-                match flavor {
-                    ArrangementFlavor::Local(oks, errs) => {
-                        let oks = Self::flat_map_core(&oks, Some(val), logic, refuel);
-                        let errs = errs.as_collection(|k, _v| k.clone());
-                        return (oks, errs);
-                    }
-                    ArrangementFlavor::Trace(_, oks, errs) => {
-                        let oks = Self::flat_map_core(&oks, Some(val), logic, refuel);
-                        let errs = errs.as_collection(|k, _v| k.clone());
-                        return (oks, errs);
-                    }
-                }
+                return flavor.flat_map(Some(val), logic);
             }
         }
 
@@ -300,18 +383,7 @@ where
         // We should now prefer to use an arrangement if available (avoids allocation),
         // and resort to using a collection if not available (copies all rows).
         if let Some(flavor) = self.arranged.values().next() {
-            match flavor {
-                ArrangementFlavor::Local(oks, errs) => {
-                    let oks = Self::flat_map_core(&oks, None, logic, refuel);
-                    let errs = errs.as_collection(|k, _v| k.clone());
-                    (oks, errs)
-                }
-                ArrangementFlavor::Trace(_, oks, errs) => {
-                    let oks = Self::flat_map_core(&oks, None, logic, refuel);
-                    let errs = errs.as_collection(|k, _v| k.clone());
-                    (oks, errs)
-                }
-            }
+            flavor.flat_map(None, logic)
         } else {
             use timely::dataflow::operators::Map;
             let (oks, errs) = self.as_collection();
@@ -327,19 +399,31 @@ where
     ///
     /// This logic is sufficiently interesting that we want to write it only
     /// once, and thereby avoid any skew in the two uses of the logic.
+    ///
+    /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
+    /// where key and value are rows. Often, a [Permutation] is approriate to present the row's
+    /// columns in the expected order.
     fn flat_map_core<Tr, I, L>(
         trace: &Arranged<S, Tr>,
-        key: Option<V>,
+        key: Option<Row>,
         mut logic: L,
         refuel: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
-        Tr: TraceReader<Key = V, Val = V, Time = S::Timestamp, R = repr::Diff> + Clone + 'static,
-        Tr::Batch: BatchReader<V, Tr::Val, S::Timestamp, repr::Diff> + 'static,
-        Tr::Cursor: Cursor<V, Tr::Val, S::Timestamp, repr::Diff> + 'static,
+        Tr: TraceReader<Key = Row, Val = Row, Time = S::Timestamp, R = repr::Diff>
+            + Clone
+            + 'static,
+        Tr::Batch: BatchReader<Row, Tr::Val, S::Timestamp, repr::Diff> + 'static,
+        Tr::Cursor: Cursor<Row, Tr::Val, S::Timestamp, repr::Diff> + 'static,
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(RefOrMut<'b, V>, &'a S::Timestamp, &'a repr::Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(
+                RefOrMut<'b, Row>,
+                RefOrMut<'b, Row>,
+                &'a S::Timestamp,
+                &'a repr::Diff,
+            ) -> I
+            + 'static,
     {
         let mode = if key.is_some() { "index" } else { "scan" };
         let name = format!("ArrangementFlatMap({})", mode);
@@ -387,22 +471,16 @@ where
     ///
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
-    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, V, T>> {
+    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, Row, T>> {
         self.arranged.get(key).map(|x| x.clone())
     }
-}
 
-impl<S: Scope, T: Lattice> CollectionBundle<S, repr::Row, T>
-where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
-{
     /// Ensures that arrangements in `keys` are present, creating them if they do not exist.
-    pub fn ensure_arrangements<K: IntoIterator<Item = Vec<MirScalarExpr>>>(
+    pub fn ensure_arrangements<K: IntoIterator<Item = EnsureArrangement>>(
         mut self,
         keys: K,
     ) -> Self {
-        for key in keys {
+        for (key, permutation, thinning) in keys {
             if !self.arranged.contains_key(&key) {
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
@@ -414,22 +492,24 @@ where
                     self.collection = Some(self.as_collection());
                 }
                 let (oks, errs) = self.as_collection();
-                use crate::operator::CollectionExt;
+                let mut row_packer = Row::default();
+
                 let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
                     let datums = row.unpack();
                     let temp_storage = RowArena::new();
-                    let key_row =
-                        Row::try_pack(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                    Ok::<(Row, Row), DataflowError>((key_row, row))
+                    row_packer.try_extend(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
+                    let key_row = row_packer.finish_and_reuse();
+                    row_packer.extend(thinning.iter().map(|c| datums[*c]));
+                    let val_row = row_packer.finish_and_reuse();
+                    Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });
 
-                use differential_dataflow::operators::arrange::Arrange;
                 let oks = oks_keyed.arrange_named::<RowSpine<Row, Row, _, _>>(&name);
                 let errs = errs
                     .concat(&errs_keyed)
                     .arrange_named::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
-                    .insert(key, ArrangementFlavor::Local(oks, errs));
+                    .insert(key, ArrangementFlavor::Local(oks, errs, permutation));
             }
         }
         self
@@ -519,7 +599,7 @@ impl<K: PartialEq, V, T: Timestamp, R, C: Cursor<K, V, T, R>> PendingWork<K, V, 
     ) where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(RefOrMut<'b, V>, &'a T, &'a R) -> I + 'static,
+        L: for<'a, 'b> FnMut(RefOrMut<'b, K>, RefOrMut<'b, V>, &'a T, &'a R) -> I + 'static,
     {
         // Attempt to make progress on this batch.
         let mut work: usize = 0;
@@ -531,7 +611,7 @@ impl<K: PartialEq, V, T: Timestamp, R, C: Cursor<K, V, T, R>> PendingWork<K, V, 
             if self.cursor.get_key(&self.batch) == Some(key) {
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        for datum in logic(RefOrMut::Ref(val), time, diff) {
+                        for datum in logic(RefOrMut::Ref(key), RefOrMut::Ref(val), time, diff) {
                             session.give(datum);
                             work += 1;
                         }
@@ -544,10 +624,10 @@ impl<K: PartialEq, V, T: Timestamp, R, C: Cursor<K, V, T, R>> PendingWork<K, V, 
                 }
             }
         } else {
-            while let Some(_key) = self.cursor.get_key(&self.batch) {
+            while let Some(key) = self.cursor.get_key(&self.batch) {
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        for datum in logic(RefOrMut::Ref(val), time, diff) {
+                        for datum in logic(RefOrMut::Ref(key), RefOrMut::Ref(val), time, diff) {
                             session.give(datum);
                             work += 1;
                         }

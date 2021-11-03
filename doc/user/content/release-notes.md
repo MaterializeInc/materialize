@@ -103,6 +103,10 @@ List new features before bug fixes.
 
 {{% version-header v0.9.12 %}}
 
+- Deduplicate columns in [arrangements](/overview/arrangements) that are
+  shared between keys and values. This can result in memory savings of up to a
+  factor of two for arrangements indexed by the whole row.
+
 - Add the [`date_bin`](/sql/functions/date-bin) function, which is similar to
   `date_trunc` but supports "truncating" to arbitrary intervals.
 

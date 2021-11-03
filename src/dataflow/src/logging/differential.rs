@@ -27,16 +27,26 @@ use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
 use crate::render::datum_vec::DatumVec;
+use crate::render::Permutation;
 use crate::replay::MzReplay;
 use repr::{Datum, Row, Timestamp};
 
-/// Constructs the logging dataflows and returns a logger and trace handles.
+/// Constructs the logging dataflow for differential logs.
+///
+/// Params
+/// * `worker`: The Timely worker hosting the log analysis dataflow.
+/// * `config`: Logging configuration
+/// * `linked`: The source to read log events from.
+/// * `activator`: A handle to acknowledge activations.
+///
+/// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
+/// the original rows.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &dataflow_types::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
     activator: RcActivator,
-) -> HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
+) -> HashMap<LogVariant, (KeysValsHandle, Permutation)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow_named("Dataflow: differential logging", move |scope| {
@@ -147,7 +157,8 @@ pub fn construct<A: Allocate>(
         for (variant, collection) in logs {
             if config.active_logs.contains_key(&variant) {
                 let key = variant.index_by();
-                let key_clone = key.clone();
+                let (permutation, value) =
+                    Permutation::construct_from_columns(&key, variant.desc().arity());
                 let trace = collection
                     .map({
                         let mut row_packer = Row::default();
@@ -155,13 +166,14 @@ pub fn construct<A: Allocate>(
                         move |row| {
                             let datums = datums.borrow_with(&row);
                             row_packer.extend(key.iter().map(|k| datums[*k]));
-                            ::std::mem::drop(datums);
-                            (row_packer.finish_and_reuse(), row)
+                            let row_key = row_packer.finish_and_reuse();
+                            row_packer.extend(value.iter().map(|c| datums[*c]));
+                            (row_key, row_packer.finish_and_reuse())
                         }
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                result.insert(variant, (key_clone, trace));
+                result.insert(variant, (trace, permutation));
             }
         }
         result

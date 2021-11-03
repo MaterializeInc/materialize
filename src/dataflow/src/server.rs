@@ -56,6 +56,7 @@ use crate::source::timestamp::TimestampBindingRc;
 
 use self::metrics::{ServerMetrics, WorkerMetrics};
 use crate::activator::RcActivator;
+use crate::render::datum_vec::DatumVec;
 
 mod metrics;
 
@@ -598,35 +599,35 @@ where
         }
 
         // Install traces as maintained indexes
-        for (log, (_, trace)) in t_traces {
+        for (log, (trace, permutation)) in t_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace)) in r_traces {
+        for (log, (trace, permutation)) in r_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace)) in d_traces {
+        for (log, (trace, permutation)) in d_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace)) in m_traces {
+        for (log, (trace, permutation)) in m_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()));
+                .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
@@ -1326,6 +1327,7 @@ impl PendingPeek {
         }
 
         let mut row_builder = Row::default();
+        let mut datum_vec = DatumVec::new();
 
         while cursor.key_valid(&storage) {
             while cursor.val_valid(&storage) {
@@ -1335,14 +1337,18 @@ impl PendingPeek {
                 // This choice is conservative, and not the end of the world
                 // from a performance perspective.
                 let arena = RowArena::new();
+                let key = cursor.key(&storage);
                 let row = cursor.val(&storage);
                 // TODO: We could unpack into a re-used allocation, except
                 // for the arena above (the allocation would not be allowed
                 // to outlive the arena above, from which it might borrow).
-                let mut datums = row.unpack();
+                let mut borrow = datum_vec.borrow_with_many(&[key, row]);
+                self.trace_bundle
+                    .permutation()
+                    .permute_in_place(&mut borrow);
                 if let Some(result) = self
                     .map_filter_project
-                    .evaluate_into(&mut datums, &arena, &mut row_builder)
+                    .evaluate_into(&mut borrow, &arena, &mut row_builder)
                     .map_err_to_string()?
                 {
                     let mut copies = 0;
@@ -1355,7 +1361,7 @@ impl PendingPeek {
                         return Err(format!(
                             "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
                             copies * -1,
-                            row.unpack(),
+                            &*borrow,
                         ));
                     }
 
