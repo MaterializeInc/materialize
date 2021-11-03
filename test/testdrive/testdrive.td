@@ -129,6 +129,38 @@ $ kafka-verify format=avro sink=materialize.public.kafka_ingest_repeat_sink sort
 {"before":null,"after":{"row":{"f1":"fish"}}}
 {"before":null,"after":{"row":{"f1":"fish"}}}
 
+# kafka-ingest with no explicit 'partition' argument should spread the records evenly across the partitions
+
+$ set kafka-ingest-no-partition-key={"type": "string"}
+$ set kafka-ingest-no-partition-value={"type": "record", "name": "r", "fields": [{"name": "a", "type": "string"}]}
+
+$ kafka-create-topic topic=kafka-ingest-no-partition partitions=2
+
+$ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-schema=${kafka-ingest-no-partition-key} schema=${kafka-ingest-no-partition-value} publish=true
+"a" {"a": "a"}
+"b" {"a": "b"}
+"c" {"a": "c"}
+"d" {"a": "d"}
+"e" {"a": "e"}
+"f" {"a": "f"}
+"g" {"a": "g"}
+"h" {"a": "h"}
+
+> CREATE MATERIALIZED SOURCE kafka_ingest_no_partition
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-ingest-no-partition-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE NONE
+
+> SELECT COUNT(*) = 8 FROM kafka_ingest_no_partition;
+true
+
+> SELECT count(*) = 2
+  FROM mz_kafka_consumer_partitions, mz_sources
+  WHERE mz_kafka_consumer_partitions.source_id = mz_sources.id
+  AND name = 'kafka_ingest_no_partition'
+  AND rx_msgs > 0;
+true
+
 # kafka-verify with regexp (the set-regexp from above is used
 
 > CREATE VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
