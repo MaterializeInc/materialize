@@ -514,7 +514,7 @@ mod tests {
         t.allow_compaction(Antichain::from_elem(3));
         let (written_bytes, deleted_batches) = t.step(&maintainer)?;
         // Change this to a >0 check if it starts to be a maintenance burden.
-        assert_eq!(written_bytes, 322);
+        assert_eq!(written_bytes, 162);
         assert_eq!(
             deleted_batches
                 .into_iter()
@@ -535,13 +535,13 @@ mod tests {
                     key: "KEY".to_string(),
                     desc: desc_from(0, 3, 3),
                     level: 1,
-                    size_bytes: 322,
+                    size_bytes: 162,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
                     desc: desc_from(3, 9, 0),
                     level: 0,
-                    size_bytes: 186,
+                    size_bytes: 90,
                 },
             ]
         );
@@ -572,7 +572,7 @@ mod tests {
         t.validate_allow_compaction(&Antichain::from_elem(10))?;
         t.allow_compaction(Antichain::from_elem(10));
         let (written_bytes, deleted_batches) = t.step(&maintainer)?;
-        assert_eq!(written_bytes, 186);
+        assert_eq!(written_bytes, 90);
         assert_eq!(
             deleted_batches
                 .into_iter()
@@ -590,13 +590,13 @@ mod tests {
                     key: "KEY".to_string(),
                     desc: desc_from(0, 3, 3),
                     level: 1,
-                    size_bytes: 322,
+                    size_bytes: 162,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
                     desc: desc_from(3, 10, 10),
                     level: 0,
-                    size_bytes: 186,
+                    size_bytes: 90,
                 },
             ]
         );

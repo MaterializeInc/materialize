@@ -14,9 +14,9 @@ use std::io::Read;
 use std::ops::Range;
 use std::str::FromStr;
 
-use abomonation_derive::Abomonation;
 use async_trait::async_trait;
 use futures_executor::block_on;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::indexed::encoding::BlobMeta;
@@ -63,7 +63,7 @@ pub fn check_meta_version_maybe_delete_data<B: Blob>(b: &mut B) -> Result<(), Er
 }
 
 /// A "sequence number", uniquely associated with an entry in a Log.
-#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Abomonation)]
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SeqNo(pub u64);
 
 impl timely::PartialOrder for SeqNo {

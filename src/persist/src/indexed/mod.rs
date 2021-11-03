@@ -19,7 +19,7 @@ pub mod runtime;
 pub mod trace;
 pub mod unsealed;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -491,6 +491,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ///   in blob's key-val map.
     #[cfg(any(debug_assertions, test))]
     fn validate_drain_pending_preconditions(&self) -> Result<(), Error> {
+        use std::collections::HashSet;
+
         // We can only check this invariant when blob is available, as otherwise
         // we fail to make progress on draining pending requests and writes during nemesis
         // tests.

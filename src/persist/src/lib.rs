@@ -36,8 +36,6 @@ pub mod nemesis;
 // TODO
 // - Backward compatibility of persisted data, particularly the encoded keys and
 //   values.
-// - Abomonation is convenient for prototyping, but we'll likely want to reuse
-//   one of the popular serialization libraries.
 // - Tighten up the jargon and usage of that jargon: write, update, persist,
 //   drain, entry, update, data, log, blob, indexed, unsealed, trace.
 // - Think through all the <, <=, !<= usages and document them more correctly

@@ -2967,10 +2967,9 @@ dependencies = [
 name = "persist"
 version = "0.0.0"
 dependencies = [
- "abomonation",
- "abomonation_derive",
  "async-trait",
  "aws-util",
+ "bincode",
  "criterion",
  "crossbeam-channel",
  "differential-dataflow",

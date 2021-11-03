@@ -569,9 +569,9 @@ mod tests {
         assert_eq!(
             cleared_keys(&f.batches),
             vec![
-                unsealed_batch_meta("KEY", 0, 1, 0, 0, 0, 186),
-                unsealed_batch_meta("KEY", 1, 2, 0, 1, 1, 186),
-                unsealed_batch_meta("KEY", 2, 3, 0, 0, 1, 252),
+                unsealed_batch_meta("KEY", 0, 1, 0, 0, 0, 90),
+                unsealed_batch_meta("KEY", 1, 2, 0, 1, 1, 90),
+                unsealed_batch_meta("KEY", 2, 3, 0, 0, 1, 124),
             ],
         );
 
@@ -596,8 +596,8 @@ mod tests {
         assert_eq!(
             cleared_keys(&f.batches),
             vec![
-                unsealed_batch_meta("KEY", 1, 2, 0, 1, 1, 186),
-                unsealed_batch_meta("KEY", 2, 3, 0, 0, 1, 252),
+                unsealed_batch_meta("KEY", 1, 2, 0, 1, 1, 90),
+                unsealed_batch_meta("KEY", 2, 3, 0, 0, 1, 124),
             ],
         );
 
@@ -717,7 +717,7 @@ mod tests {
 
         assert_eq!(
             cleared_keys(&f.batches),
-            vec![unsealed_batch_meta("KEY", 0, 2, 0, 1, 2, 252)],
+            vec![unsealed_batch_meta("KEY", 0, 2, 0, 1, 2, 124)],
         );
 
         Ok(())

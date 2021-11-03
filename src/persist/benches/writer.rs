@@ -68,8 +68,9 @@ fn get_encoded_len(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> u64 {
         ),
         updates,
     };
-    let mut val = Vec::new();
-    unsafe { abomonation::encode(&batch, &mut val) }.expect("write to Vec is infallible");
+    // See https://github.com/bincode-org/bincode/issues/293 for why this is
+    // infallible.
+    let val = bincode::serialize(&batch).expect("infallible for BlobUnsealedBatch");
     u64::cast_from(val.len())
 }
 
