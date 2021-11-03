@@ -6,7 +6,7 @@ menu:
         parent: "sql"
 ---
 
-`COPY FROM` copies data into a table using the [Postgres COPY protocol](https://www.postgresql.org/docs/current/sql-copy.html).
+`COPY FROM` copies data into a table using the [Postgres `COPY` protocol](https://www.postgresql.org/docs/current/sql-copy.html).
 
 ## Syntax
 
@@ -24,11 +24,11 @@ Name | Default value | Description
 `DELIMITER` | tab character | Specifies the character that separates columns within each row (line) of the file.
 `NULL` | `\N` (backslash-N) | Specifies the string that represents a null value.
 
-Rows are expected in `text` format, one per line, with columns separated by the `DELIMITER` character.
+Rows are expected in `text` format, one per line, with columns separated by the
+`DELIMITER` character.
 
 ## Example
 
-
 ```sql
-COPY t FROM STDIN
+COPY t FROM STDIN WITH (DELIMITER '|')
 ```

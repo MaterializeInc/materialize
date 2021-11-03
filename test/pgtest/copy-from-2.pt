@@ -297,3 +297,28 @@ DataRow {"fields":["4","NULL"]}
 DataRow {"fields":["5","NULL"]}
 CommandComplete {"tag":"SELECT 5"}
 ReadyForQuery {"status":"I"}
+
+# ignore junk data after end of copy marker
+send
+Query {"query": "COPY t FROM STDIN"}
+CopyData "\\.\n"
+CopyData "invalid data\n"
+CopyDone
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 0"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","blah"]}
+DataRow {"fields":["2","NULL"]}
+DataRow {"fields":["3",""]}
+DataRow {"fields":["4","NULL"]}
+DataRow {"fields":["5","NULL"]}
+CommandComplete {"tag":"SELECT 5"}
+ReadyForQuery {"status":"I"}

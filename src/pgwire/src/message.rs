@@ -568,23 +568,6 @@ impl<'a> CopyTextFormatParser<'a> {
         self.check_bytes(Self::end_of_copy_marker())
     }
 
-    /// Verifies there is no extra data after the end-of-copy marker.
-    fn expect_no_junk_data(&mut self) -> Result<(), io::Error> {
-        if self.is_end_of_copy_marker() {
-            self.consume_bytes(Self::end_of_copy_marker());
-            if self.is_end_of_line() {
-                self.consume_n(1);
-            }
-            if self.peek().is_some() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "end-of-copy marker corrupt",
-                ));
-            }
-        }
-        Ok(())
-    }
-
     fn is_end_of_line(&self) -> bool {
         match self.peek() {
             Some(b'\n') | None => true,
@@ -808,7 +791,8 @@ pub fn decode_copy_text_format(
         parser.expect_end_of_line()?;
         rows.push(Row::pack(row));
     }
-    parser.expect_no_junk_data()?;
+    // Note that if there is any junk data after the end of copy marker, we drop
+    // it on the floor as PG does.
     Ok(rows)
 }
 
@@ -936,7 +920,6 @@ mod tests {
             }
             parser.expect_end_of_line().expect("expected eol");
         }
-        parser.expect_no_junk_data().expect("expected data end");
     }
 
     #[test]
