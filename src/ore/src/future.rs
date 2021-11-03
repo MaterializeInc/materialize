@@ -26,9 +26,7 @@ use std::task::{Context, Poll};
 
 use futures::future::{Either, FutureExt, MapOk, TryFuture, TryFutureExt};
 use futures::sink::Sink;
-use futures::stream::{
-    self, Fuse, FuturesUnordered, Stream, StreamExt, StreamFuture, TryStream, TryStreamExt,
-};
+use futures::stream::{self, Stream, StreamExt, TryStream, TryStreamExt};
 use futures::{io, ready};
 
 /// Extension methods for futures.
@@ -231,23 +229,6 @@ pub trait OreStreamExt: Stream {
     {
         Drain(self)
     }
-
-    /// Flattens a stream of streams into one continuous stream, but does not
-    /// exhaust each incoming stream before moving on to the next.
-    ///
-    /// In other words, this is a combination of [`futures::stream::Flatten`] and
-    /// [`futures::stream::select`]. The streams may be interleaved in any order, but
-    /// the ordering within one of the underlying streams is preserved.
-    fn select_flatten(self) -> SelectFlatten<Self>
-    where
-        Self: Stream + Sized,
-        Self::Item: Stream + Unpin,
-    {
-        SelectFlatten {
-            incoming_streams: self.fuse(),
-            active_streams: FuturesUnordered::new(),
-        }
-    }
 }
 
 impl<S: Stream> OreStreamExt for S {}
@@ -282,68 +263,6 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         while ready!(Pin::new(&mut self.0).poll_next(cx)).is_some() {}
         Poll::Ready(())
-    }
-}
-
-/// The stream returned by [`OreStreamExt::select_flatten`].
-#[derive(Debug)]
-pub struct SelectFlatten<S>
-where
-    S: Stream,
-{
-    /// The stream of incoming streams.
-    incoming_streams: Fuse<S>,
-    /// The set of currently active streams that have been received from
-    /// `incoming_streams`. Streams are removed from the set when they are
-    /// closed.
-    active_streams: FuturesUnordered<StreamFuture<S::Item>>,
-}
-
-impl<S> Stream for SelectFlatten<S>
-where
-    S: Stream + Unpin,
-    S::Item: Stream + Unpin,
-{
-    type Item = <S::Item as Stream>::Item;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        // First, drain the incoming stream queue.
-        while let Poll::Ready(Some(stream)) = self.incoming_streams.poll_next_unpin(cx) {
-            // New stream available. Add it to the set of active streams.
-            self.active_streams.push(stream.into_future())
-        }
-
-        // Second, try to find an item from a ready stream.
-        loop {
-            match self.active_streams.poll_next_unpin(cx) {
-                Poll::Ready(Some((Some(item), stream))) => {
-                    // An active stream yielded an item. Arrange to receive the
-                    // next item from the stream, then propagate the received
-                    // item.
-                    self.active_streams.push(stream.into_future());
-                    return Poll::Ready(Some(item));
-                }
-                Poll::Ready(Some((None, _stream))) => {
-                    // An active stream yielded a `None`, which means it has
-                    // terminated. Drop it on the floor. Then go around the loop
-                    // to see if another stream is ready.
-                }
-                Poll::Ready(None) => {
-                    if self.incoming_streams.is_done() {
-                        // There are no remaining active streams, and our
-                        // incoming stream queue is done too. We're good and
-                        // truly finished, so propagate the termination event.
-                        return Poll::Ready(None);
-                    } else {
-                        // There are no remaining active streams, but we might
-                        // yet get another stream from the incoming stream
-                        // queue. Indicate that we're not yet ready.
-                        return Poll::Pending;
-                    }
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
     }
 }
 
