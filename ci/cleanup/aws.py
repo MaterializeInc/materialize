@@ -51,9 +51,14 @@ def clean_up_s3() -> None:
             )
             continue
         print("Deleting bucket {} (age={})".format(desc["Name"], age))
-        bucket = boto3.resource("s3").Bucket(desc["Name"])
-        bucket.objects.all().delete()
-        bucket.delete()
+        try:
+            bucket = boto3.resource("s3").Bucket(desc["Name"])
+            bucket.objects.all().delete()
+            bucket.delete()
+        except client.exceptions.NoSuchBucket:
+            print(
+                f"Couldn't delete {desc['Name']}: NoSuchBucket. This might be a transient issue."
+            )
 
 
 def clean_up_sqs() -> None:
