@@ -20,7 +20,7 @@ ci_init
 
 while read -r binary cwd; do
     cd "$cwd"
-    ci_try "/tests/$binary"
+    ci_try "/tests/$binary" --nocapture
     cd "$OLDPWD"
 done < /tests/manifest
 
