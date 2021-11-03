@@ -11,7 +11,7 @@ default = ["network", "chrono", "cli", "metrics", "test"]
 cli = ["structopt"]
 metrics = ["prometheus"]
 network = ["async-trait", "bytes", "futures", "openssl", "smallvec", "tokio-openssl", "tokio"]
-test = ["ctor", "tracing-subscriber"]
+test = ["anyhow", "ctor", "tracing-subscriber"]
 
 # NB: ore is meant to be an extension of the Rust stdlib. To keep it
 # lightweight, dependencies on external crates should be avoided if possible. If
@@ -21,6 +21,7 @@ test = ["ctor", "tracing-subscriber"]
 # dependencies and is widely considered to be basically part of the stdlib.
 [dependencies]
 async-trait = { version = "0.1.51", optional = true }
+anyhow = { version = "1.0.44", optional = true }
 bytes = { version = "1.1.0", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
 ctor = { version = "0.1.21", optional = true }

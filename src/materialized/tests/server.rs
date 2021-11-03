@@ -125,7 +125,7 @@ fn test_experimental_mode_reboot() -> Result<(), Box<dyn Error>> {
                     .to_string()
                     .contains("Materialize previously started with --experimental")
                 {
-                    return Err(e);
+                    return Err(e.into());
                 }
             }
         }
@@ -156,7 +156,7 @@ fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
                     .to_string()
                     .contains("Experimental mode is only available on new nodes")
                 {
-                    return Err(e);
+                    return Err(e.into());
                 }
             }
         }
@@ -177,7 +177,7 @@ fn test_pid_file() -> Result<(), Box<dyn Error>> {
         Ok(_) => panic!("unexpected success"),
         Err(e) => {
             if !e.to_string().contains("process already running") {
-                return Err(e);
+                return Err(e.into());
             }
         }
     }

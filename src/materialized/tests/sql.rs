@@ -19,9 +19,6 @@ use std::io::Write;
 use std::net::Shutdown;
 use std::net::TcpListener;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::thread;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -36,78 +33,68 @@ use util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 pub mod util;
 
 #[test]
-fn test_no_block() -> Result<(), Box<dyn Error>> {
+fn test_no_block() -> Result<(), anyhow::Error> {
     ore::test::init_logging();
 
-    ore::panic::set_abort_on_panic();
-    // This is better than relying on CI to time out,
-    // because an actual abort (as opposed to a CI timeout) causes `services.log` to be uploaded.
-    let finished = Arc::new(AtomicBool::new(false));
-    thread::spawn({
-        let finished = finished.clone();
-        move || {
-            sleep(Duration::from_secs(30));
-            if !finished.load(Ordering::SeqCst) {
-                panic!("test_no_block timed out")
-            }
-        }
-    });
-    // Create a listener that will simulate a slow Confluent Schema Registry.
-    info!("test_no_block: creating listener");
-    let listener = TcpListener::bind("localhost:0")?;
-    let listener_port = listener.local_addr()?.port();
+    // This is better than relying on CI to time out, because an actual failure
+    // (as opposed to a CI timeout) causes `services.log` to be uploaded.
+    ore::test::timeout(Duration::from_secs(30), || {
+        // Create a listener that will simulate a slow Confluent Schema Registry.
+        info!("test_no_block: creating listener");
+        let listener = TcpListener::bind("localhost:0")?;
+        let listener_port = listener.local_addr()?.port();
 
-    info!("test_no_block: starting server");
-    let server = util::start_server(util::Config::default())?;
-    info!("test_no_block: connecting to server");
-    let mut client = server.connect(postgres::NoTls)?;
+        info!("test_no_block: starting server");
+        let server = util::start_server(util::Config::default())?;
+        info!("test_no_block: connecting to server");
+        let mut client = server.connect(postgres::NoTls)?;
 
-    info!("test_no_block: spawning thread");
-    let slow_thread = thread::spawn(move || {
-        info!("test_no_block: in thread; executing create source");
-        let result = client.batch_execute(&format!(
-            "CREATE SOURCE foo \
-             FROM KAFKA BROKER '{}' TOPIC 'foo' \
-             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
-            &*KAFKA_ADDRS, listener_port,
-        ));
-        info!("test_no_block: in thread; create source done");
-        result
-    });
+        info!("test_no_block: spawning thread");
+        let slow_thread = thread::spawn(move || {
+            info!("test_no_block: in thread; executing create source");
+            let result = client.batch_execute(&format!(
+                "CREATE SOURCE foo \
+                FROM KAFKA BROKER '{}' TOPIC 'foo' \
+                FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
+                &*KAFKA_ADDRS, listener_port,
+            ));
+            info!("test_no_block: in thread; create source done");
+            result
+        });
 
-    // Wait for materialized to contact the schema registry, which indicates
-    // the coordinator is processing the CREATE SOURCE command. It will be
-    // unable to complete the query until we respond.
-    info!("test_no_block: accepting fake schema registry connection");
-    let (mut stream, _) = listener.accept()?;
+        // Wait for materialized to contact the schema registry, which indicates
+        // the coordinator is processing the CREATE SOURCE command. It will be
+        // unable to complete the query until we respond.
+        info!("test_no_block: accepting fake schema registry connection");
+        let (mut stream, _) = listener.accept()?;
 
-    // Verify that the coordinator can still process other requests from other
-    // sessions.
-    info!("test_no_block: connecting to server again");
-    let mut client = server.connect(postgres::NoTls)?;
-    info!("test_no_block: executing query");
-    let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
-    assert_eq!(answer, 2);
+        // Verify that the coordinator can still process other requests from other
+        // sessions.
+        info!("test_no_block: connecting to server again");
+        let mut client = server.connect(postgres::NoTls)?;
+        info!("test_no_block: executing query");
+        let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
+        assert_eq!(answer, 2);
 
-    // Return an error to the coordinator, so that we can shutdown cleanly.
-    info!("test_no_block: writing fake schema registry error");
-    write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
-    info!("test_no_block: shutting down fake schema registry connection");
+        // Return an error to the coordinator, so that we can shutdown cleanly.
+        info!("test_no_block: writing fake schema registry error");
+        write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
+        info!("test_no_block: shutting down fake schema registry connection");
 
-    stream.shutdown(Shutdown::Write).unwrap();
+        stream.shutdown(Shutdown::Write).unwrap();
 
-    // Verify that the schema registry error was returned to the client, for
-    // good measure.
-    info!("test_no_block: joining thread");
-    let slow_res = slow_thread.join().unwrap();
-    assert!(slow_res
-        .unwrap_err()
-        .to_string()
-        .contains("server error 503"));
+        // Verify that the schema registry error was returned to the client, for
+        // good measure.
+        info!("test_no_block: joining thread");
+        let slow_res = slow_thread.join().unwrap();
+        assert!(slow_res
+            .unwrap_err()
+            .to_string()
+            .contains("server error 503"));
 
-    info!("test_no_block: returning");
-    finished.store(true, Ordering::SeqCst);
-    Ok(())
+        info!("test_no_block: returning");
+        Ok(())
+    })
 }
 
 #[test]
