@@ -13,10 +13,10 @@ use std::ops::Deref;
 use std::panic;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use std::sync::mpsc::TryRecvError;
 
 use anyhow::{bail, Context};
 use itertools::Itertools;

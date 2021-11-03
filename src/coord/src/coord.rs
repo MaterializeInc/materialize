@@ -51,7 +51,6 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
-use lazy_static::lazy_static;
 use rand::Rng;
 use repr::adt::interval::Interval;
 use timely::communication::WorkerGuards;
@@ -77,7 +76,7 @@ use expr::{
 };
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
-use ore::now::{system_time, to_datetime, EpochMillis, NowFn};
+use ore::now::{to_datetime, NowFn};
 use ore::retry::Retry;
 use ore::thread::{JoinHandleExt as _, JoinOnDropHandle};
 use repr::adt::numeric;
@@ -222,6 +221,7 @@ pub struct Config<'a> {
     pub metrics_registry: MetricsRegistry,
     /// Persistence subsystem configuration.
     pub persist: PersistConfig,
+    pub now: NowFn,
 }
 
 /// Glues the external world to the Timely workers.
@@ -263,7 +263,6 @@ pub struct Coordinator {
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
     active_conns: HashMap<u32, ConnMeta>,
-    now: NowFn,
 
     /// Holds pending compaction messages to be sent to the dataflow workers. When
     /// `since_handles` are advanced or `txn_reads` are dropped, this can advance.
@@ -424,7 +423,7 @@ impl Coordinator {
         // This is a hack. In a perfect world we would represent time as having a "real" dimension
         // and a "coordinator" dimension so that clients always observed linearizability from
         // things the coordinator did without being related to the real dimension.
-        let ts = (self.now)();
+        let ts = (self.catalog.config().now)();
 
         if ts < self.read_lower_bound {
             self.read_lower_bound
@@ -434,7 +433,7 @@ impl Coordinator {
     }
 
     fn now_datetime(&self) -> DateTime<Utc> {
-        to_datetime((self.now)())
+        to_datetime((self.catalog.config().now)())
     }
 
     /// Generate a new frontiers object that forwards since changes to since_updates.
@@ -4317,6 +4316,7 @@ pub async fn serve(
         build_info,
         metrics_registry,
         persist,
+        now,
     }: Config<'_>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -4338,7 +4338,7 @@ pub async fn serve(
         build_info,
         num_workers: workers,
         timestamp_frequency,
-        now: system_time,
+        now: now.clone(),
         persist,
         skip_migrations: false,
         metrics_registry: &metrics_registry,
@@ -4354,7 +4354,7 @@ pub async fn serve(
         command_receivers: worker_rxs,
         timely_worker,
         experimental_mode,
-        now: system_time,
+        now,
         metrics_registry: metrics_registry.clone(),
         persist: persister,
         feedback_tx,
@@ -4388,7 +4388,6 @@ pub async fn serve(
     let thread = thread::Builder::new()
         .name("coordinator".to_string())
         .spawn(move || {
-            let now = catalog.config().now;
             let dataflow_client = DataflowClient::new(worker_guards, worker_txs);
             let mut coord = Coordinator {
                 dataflow_client,
@@ -4414,7 +4413,6 @@ pub async fn serve(
                 since_handles: HashMap::new(),
                 since_updates: Rc::new(RefCell::new(HashMap::new())),
                 sink_writes: HashMap::new(),
-                now,
                 pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -4437,11 +4435,7 @@ pub async fn serve(
                 coord.broadcast(dataflow::Command::Shutdown);
                 return;
             }
-            handle.block_on(coord.serve(
-                internal_cmd_rx,
-                cmd_rx,
-                feedback_rx,
-            ))
+            handle.block_on(coord.serve(internal_cmd_rx, cmd_rx, feedback_rx))
         })
         .unwrap();
     match bootstrap_rx.recv().unwrap() {
@@ -4469,12 +4463,11 @@ pub fn serve_debug(
     tokio::sync::mpsc::UnboundedReceiver<dataflow::Response>,
     Arc<Mutex<u64>>,
 ) {
-    lazy_static! {
-        static ref DEBUG_TIMESTAMP: Arc<Mutex<EpochMillis>> = Arc::new(Mutex::new(0));
-    }
-    pub fn get_debug_timestamp() -> EpochMillis {
-        *DEBUG_TIMESTAMP.lock().unwrap()
-    }
+    let debug_timestamp = Arc::new(Mutex::new(0));
+    let now = NowFn::from({
+        let debug_timestamp = debug_timestamp.clone();
+        move || *debug_timestamp.lock().unwrap()
+    });
 
     let (catalog, builtin_table_updates, persister) = catalog::Catalog::open(&catalog::Config {
         path: catalog_path,
@@ -4484,7 +4477,7 @@ pub fn serve_debug(
         build_info: &DUMMY_BUILD_INFO,
         num_workers: 0,
         timestamp_frequency: Duration::from_millis(1),
-        now: get_debug_timestamp,
+        now: now.clone(),
         persist: PersistConfig::disabled(),
         skip_migrations: false,
         metrics_registry: &MetricsRegistry::new(),
@@ -4504,7 +4497,7 @@ pub fn serve_debug(
         command_receivers: vec![worker_rx],
         timely_worker: timely::WorkerConfig::default(),
         experimental_mode: true,
-        now: get_debug_timestamp,
+        now,
         metrics_registry: metrics_registry.clone(),
         persist: persister,
         feedback_tx,
@@ -4569,7 +4562,6 @@ pub fn serve_debug(
             since_handles: HashMap::new(),
             since_updates: Rc::new(RefCell::new(HashMap::new())),
             sink_writes: HashMap::new(),
-            now: get_debug_timestamp,
             pending_peeks: HashMap::new(),
             pending_tails: HashMap::new(),
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -4577,11 +4569,7 @@ pub fn serve_debug(
         };
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         bootstrap_tx.send(bootstrap).unwrap();
-        handle.block_on(coord.serve(
-            internal_cmd_rx,
-            cmd_rx,
-            feedback_rx,
-        ))
+        handle.block_on(coord.serve(internal_cmd_rx, cmd_rx, feedback_rx))
     })
     .join_on_drop();
     bootstrap_rx.recv().unwrap().unwrap();
@@ -4591,7 +4579,7 @@ pub fn serve_debug(
         client,
         inner_feedback_tx,
         inner_feedback_rx,
-        DEBUG_TIMESTAMP.clone(),
+        debug_timestamp,
     )
 }
 

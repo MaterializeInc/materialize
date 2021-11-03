@@ -26,6 +26,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"], opti
 ctor = { version = "0.1.21", optional = true }
 either = "1.6.1"
 futures = { version = "0.3.17", optional = true }
+lazy_static = "1.4.0"
 # This isn't directly imported by anything, but it's required at link time. The
 # vendored feature is transitively depended upon by tokio-openssl.
 openssl = { version = "0.10.38", features = ["vendored"], optional = true  }

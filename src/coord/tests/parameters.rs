@@ -13,6 +13,7 @@ use tempfile::NamedTempFile;
 
 use coord::catalog::Catalog;
 use ore::collections::CollectionExt;
+use ore::now::NOW_ZERO;
 use pgrepr::Type;
 use sql::plan::PlanContext;
 
@@ -92,7 +93,7 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
     ];
 
     let catalog_file = NamedTempFile::new()?;
-    let catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero)?;
+    let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone())?;
     let catalog = catalog.for_system_session();
     for (sql, types) in test_cases {
         let stmt = sql::parse::parse(sql)?.into_element();

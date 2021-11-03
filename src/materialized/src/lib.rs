@@ -29,6 +29,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use build_info::BuildInfo;
 use coord::LoggingConfig;
 use ore::metrics::MetricsRegistry;
+use ore::now::SYSTEM_TIME;
 use pid_file::PidFile;
 
 use crate::mux::Mux;
@@ -238,6 +239,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         build_info: &BUILD_INFO,
         metrics_registry: config.metrics_registry.clone(),
         persist: config.persist,
+        now: SYSTEM_TIME.clone(),
     })
     .await?;
 

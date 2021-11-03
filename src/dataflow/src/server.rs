@@ -361,7 +361,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 reported_bindings_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
                 metrics: server_metrics.for_worker_id(worker_idx),
-                now,
+                now: now.clone(),
                 dataflow_source_metrics,
                 dataflow_sink_metrics,
             }
@@ -878,7 +878,7 @@ where
                         self.timely_worker,
                         &mut self.render_state,
                         dataflow,
-                        self.now,
+                        self.now.clone(),
                         &self.dataflow_source_metrics,
                         &self.dataflow_sink_metrics,
                     );
@@ -1034,10 +1034,10 @@ where
                     ..
                 } = connector
                 {
-                    let byo_default = TimestampBindingRc::new(None, self.now, true);
+                    let byo_default = TimestampBindingRc::new(None, self.now.clone(), true);
                     let rt_default = TimestampBindingRc::new(
                         Some(ts_frequency.as_millis().try_into().unwrap()),
-                        self.now,
+                        self.now.clone(),
                         false,
                     );
                     match (connector, consistency) {

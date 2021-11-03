@@ -2807,6 +2807,7 @@ dependencies = [
  "ctor",
  "either",
  "futures",
+ "lazy_static",
  "openssl",
  "pin-project",
  "prometheus",
