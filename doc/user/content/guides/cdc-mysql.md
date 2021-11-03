@@ -38,7 +38,8 @@ Before deploying a Debezium connector, you need to ensure that the upstream data
 
 ### Deploy Debezium
 
-Debezium is deployed as a set of Kafka Connect-compatible connectors, so you first need to define a MySQL connector configuration and then start the connector by adding it to Kafka Connect.
+Debezium is deployed as a set of Kafka Connect-compatible
+connectors, so you first need to define a MySQL connector configuration and then start the connector by adding it to Kafka Connect.
 
 {{< note >}}
 Currently, Materialize only supports Avro-encoded Debezium records. If you’re interested in JSON support, please reach out in the community Slack or leave a comment on [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
@@ -73,8 +74,7 @@ Currently, Materialize only supports Avro-encoded Debezium records. If you’re 
 
     ```bash
     export CURRENT_HOST='<your-host>'
-
-    curl -i -X POST -H "Accept:application/json" -H  "Content-Type:application/json" \
+    curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json"
     http://$CURRENT_HOST:8083/connectors/ -d @register-mysql.json
     ```
 
