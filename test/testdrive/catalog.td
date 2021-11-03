@@ -308,8 +308,7 @@ mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operator_reachability_internal
 mz_dataflow_operators
-mz_kafka_broker_rtt
-mz_kafka_consumer_partitions
+mz_kafka_source_statistics
 mz_materialization_dependencies
 mz_materializations
 mz_message_counts_received_internal
@@ -332,8 +331,7 @@ mz_dataflow_channels                          system true          volatile    l
 mz_dataflow_operator_addresses                system true          volatile    local
 mz_dataflow_operator_reachability_internal    system true          volatile    local
 mz_dataflow_operators                         system true          volatile    local
-mz_kafka_broker_rtt                           system true          volatile    local
-mz_kafka_consumer_partitions                  system true          volatile    local
+mz_kafka_source_statistics                    system true          volatile    local
 mz_materialization_dependencies               system true          volatile    local
 mz_materializations                           system true          volatile    local
 mz_message_counts_received_internal           system true          volatile    local
@@ -468,7 +466,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-44
+43
 
 > SHOW VIEWS FROM mz_catalog
 mz_arrangement_sharing

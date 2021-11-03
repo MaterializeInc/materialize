@@ -92,7 +92,7 @@ use crate::{Datum, Row};
 /// All numbers are represented as [`f64`]s. It is not possible to construct a
 /// `Jsonb` from a JSON object that contains integers that cannot be represented
 /// exactly as `f64`s.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct Jsonb {
     row: Row,
 }

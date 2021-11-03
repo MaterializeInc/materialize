@@ -14,6 +14,7 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::count::CountTotal;
+use differential_dataflow::operators::Count;
 use log::error;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
@@ -28,6 +29,7 @@ use crate::render::datum_vec::DatumVec;
 use crate::render::Permutation;
 use crate::replay::MzReplay;
 use expr::{GlobalId, SourceInstanceId};
+use repr::adt::jsonb::Jsonb;
 use repr::{Datum, Row, Timestamp};
 
 /// Type alias for logging of materialized events.
@@ -45,71 +47,14 @@ pub enum MaterializedEvent {
         /// Globally unique identifier for the source on which the dataflow depends.
         source: GlobalId,
     },
-    /// Tracks RTT statistics for a Kafka broker, by consumer
-    /// Reference: <https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md>
-    /// This structure containe splatted metrics from the rdkafka::statistics::Window struct
-    /// Window cannot be used as it does not satisfy several of the traits required
-    KafkaBrokerRtt {
-        /// Kafka name for the consumer
-        consumer_name: String,
-        /// Materialize source identifier
+    /// Underling librdkafka statistics for a Kafka source.
+    KafkaSourceStatistics {
+        /// Materialize source identifier.
         source_id: SourceInstanceId,
-        /// The Kafka broker for these metrics (may be multiple per consumer)
-        broker_name: String,
-        /// Smallest value
-        min: i64,
-        /// Largest value
-        max: i64,
-        /// Average value
-        avg: i64,
-        /// Sum of all values
-        sum: i64,
-        /// Number of values samples
-        cnt: i64,
-        /// Standard deviation of values (based on histogram)
-        stddev: i64,
-        /// 50th percentile value
-        p50: i64,
-        /// 75th percentile value
-        p75: i64,
-        /// 90th percentile value
-        p90: i64,
-        /// 959h percentile value
-        p95: i64,
-        /// 99th percentile value
-        p99: i64,
-        /// 99.99th percentile value
-        p99_99: i64,
-    },
-    /// Tracks statistics for a particular Kafka consumer / partition pair
-    /// Reference: <https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md>
-    KafkaConsumerPartition {
-        /// Kafka name for the consumer
-        consumer_name: String,
-        /// Materialize source identifier
-        source_id: SourceInstanceId,
-        /// The Kafka partition ID for these metrics (may be multiple per consumer)
-        partition_id: String,
-        /// Number of message sets received from Brokers
-        rxmsgs: i64,
-        /// Number of bytes received from Brokers
-        rxbytes: i64,
-        /// Number of message sets sent to Brokers
-        txmsgs: i64,
-        /// Number of bytes transmitted to Brokers
-        txbytes: i64,
-        /// Partition's low watermark offset on the broker
-        lo_offset: i64,
-        /// Partition's high watermark offset on the broker
-        hi_offset: i64,
-        /// Last stable offset on the broker
-        ls_offset: i64,
-        /// How far into the topic our consumer has read
-        app_offset: i64,
-        /// How many messages remain until our consumer reaches the (hi|lo) watermark
-        consumer_lag: i64,
-        /// Initial partiation's high watermark offset on the broker (hi_offset)
-        initial_high_offset: i64,
+        /// The old JSONB statistics blob to retract, if any.
+        old: Option<Jsonb>,
+        /// The new JSONB statistics blob to produce, if any.
+        new: Option<Jsonb>,
     },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
@@ -183,8 +128,7 @@ pub fn construct<A: Allocate>(
         let (mut dataflow_out, dataflow) = demux.new_output();
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
-        let (mut kafka_broker_rtt_out, kafka_broker_rtt) = demux.new_output();
-        let (mut kafka_consumer_info_out, kafka_consumer_info) = demux.new_output();
+        let (mut kafka_source_statistics_out, kafka_source_statistics) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut peek_duration_out, peek_duration) = demux.new_output();
         let (mut source_info_out, source_info) = demux.new_output();
@@ -197,8 +141,7 @@ pub fn construct<A: Allocate>(
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
                 let mut frontier = frontier_out.activate();
-                let mut kafka_broker_rtt = kafka_broker_rtt_out.activate();
-                let mut kafka_consumer_info = kafka_consumer_info_out.activate();
+                let mut kafka_source_statistics = kafka_source_statistics_out.activate();
                 let mut peek = peek_out.activate();
                 let mut peek_duration = peek_duration_out.activate();
                 let mut source_info = source_info_out.activate();
@@ -209,8 +152,8 @@ pub fn construct<A: Allocate>(
                     let mut dataflow_session = dataflow.session(&time);
                     let mut dependency_session = dependency.session(&time);
                     let mut frontier_session = frontier.session(&time);
-                    let mut kafka_broker_rtt_session = kafka_broker_rtt.session(&time);
-                    let mut kafka_consumer_info_session = kafka_consumer_info.session(&time);
+                    let mut kafka_source_statistics_session =
+                        kafka_source_statistics.session(&time);
                     let mut peek_session = peek.session(&time);
                     let mut peek_duration_session = peek_duration.session(&time);
                     let mut source_info_session = source_info.session(&time);
@@ -277,63 +220,25 @@ pub fn construct<A: Allocate>(
                                     delta as isize,
                                 ));
                             }
-                            MaterializedEvent::KafkaBrokerRtt {
-                                consumer_name,
+                            MaterializedEvent::KafkaSourceStatistics {
                                 source_id,
-                                broker_name,
-                                min,
-                                max,
-                                avg,
-                                sum,
-                                cnt,
-                                stddev,
-                                p50,
-                                p75,
-                                p90,
-                                p95,
-                                p99,
-                                p99_99,
+                                old,
+                                new,
                             } => {
-                                kafka_broker_rtt_session.give((
-                                    (consumer_name, source_id, broker_name),
-                                    time_ms,
-                                    vec![
-                                        min, max, avg, sum, cnt, stddev, p50, p75, p90, p95, p99,
-                                        p99_99,
-                                    ],
-                                ));
-                            }
-                            MaterializedEvent::KafkaConsumerPartition {
-                                consumer_name,
-                                source_id,
-                                partition_id,
-                                rxmsgs,
-                                rxbytes,
-                                txmsgs,
-                                txbytes,
-                                lo_offset,
-                                hi_offset,
-                                ls_offset,
-                                app_offset,
-                                consumer_lag,
-                                initial_high_offset,
-                            } => {
-                                kafka_consumer_info_session.give((
-                                    (consumer_name, source_id, partition_id),
-                                    time_ms,
-                                    vec![
-                                        rxmsgs,
-                                        rxbytes,
-                                        txmsgs,
-                                        txbytes,
-                                        lo_offset,
-                                        hi_offset,
-                                        ls_offset,
-                                        app_offset,
-                                        consumer_lag,
-                                        initial_high_offset,
-                                    ],
-                                ));
+                                if let Some(old) = old {
+                                    kafka_source_statistics_session.give((
+                                        (source_id, worker, old),
+                                        time_ms,
+                                        -1,
+                                    ));
+                                }
+                                if let Some(new) = new {
+                                    kafka_source_statistics_session.give((
+                                        (source_id, worker, new),
+                                        time_ms,
+                                        1,
+                                    ));
+                                }
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
                                 let key = (worker, peek.conn_id);
@@ -405,48 +310,14 @@ pub fn construct<A: Allocate>(
 
         let frontier_current = frontier.as_collection();
 
-        use differential_dataflow::operators::Count;
-        let kafka_broker_rtt_current = kafka_broker_rtt.as_collection().count().map({
-            move |((consumer_name, source_id, broker_name), diff_vector)| {
-                Row::pack_slice(&[
-                    Datum::String(&consumer_name),
-                    Datum::String(&source_id.source_id.to_string()),
-                    Datum::Int64(source_id.dataflow_id as i64),
-                    Datum::String(&broker_name),
-                    Datum::Int64(diff_vector[0]),
-                    Datum::Int64(diff_vector[1]),
-                    Datum::Int64(diff_vector[2]),
-                    Datum::Int64(diff_vector[3]),
-                    Datum::Int64(diff_vector[4]),
-                    Datum::Int64(diff_vector[5]),
-                    Datum::Int64(diff_vector[6]),
-                    Datum::Int64(diff_vector[7]),
-                    Datum::Int64(diff_vector[8]),
-                    Datum::Int64(diff_vector[9]),
-                    Datum::Int64(diff_vector[10]),
-                    Datum::Int64(diff_vector[11]),
-                ])
-            }
-        });
-
-        let kafka_consumer_info_current = kafka_consumer_info.as_collection().count().map({
-            move |((consumer_name, source_id, partition_id), diff_vector)| {
-                Row::pack_slice(&[
-                    Datum::String(&consumer_name),
-                    Datum::String(&source_id.source_id.to_string()),
-                    Datum::Int64(source_id.dataflow_id as i64),
-                    Datum::String(&partition_id),
-                    Datum::Int64(diff_vector[0]),
-                    Datum::Int64(diff_vector[1]),
-                    Datum::Int64(diff_vector[2]),
-                    Datum::Int64(diff_vector[3]),
-                    Datum::Int64(diff_vector[4]),
-                    Datum::Int64(diff_vector[5]),
-                    Datum::Int64(diff_vector[6]),
-                    Datum::Int64(diff_vector[7]),
-                    Datum::Int64(diff_vector[8]),
-                    Datum::Int64(diff_vector[9]),
-                ])
+        let kafka_source_statistics_current = kafka_source_statistics.as_collection().map({
+            move |(source_id, worker, stats)| {
+                let mut row = Row::pack_slice(&[
+                    Datum::String(&source_id.to_string()),
+                    Datum::Int64(worker as i64),
+                ]);
+                row.extend_by_row(&stats.into_row());
+                row
             }
         });
 
@@ -499,12 +370,8 @@ pub fn construct<A: Allocate>(
                 frontier_current,
             ),
             (
-                LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt),
-                kafka_broker_rtt_current,
-            ),
-            (
-                LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo),
-                kafka_consumer_info_current,
+                LogVariant::Materialized(MaterializedLog::KafkaSourceStatistics),
+                kafka_source_statistics_current,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::PeekCurrent),

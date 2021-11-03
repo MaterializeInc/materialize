@@ -230,50 +230,19 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
-### `mz_kafka_broker_rtt`
+### `mz_kafka_source_statistics`
 
-The `mz_kafka_broker_rtt` table contains round-trip time (RTT) statistics for
-the Kafka consumers in the system.
+The `mz_kafka_source_statistics` table contains statistics for Kafka sources
+from the underlying [librdkafka] library.
 
-Field           | Type       | Meaning
-----------------|------------|--------
-`consumer_name` | [`text`]   | The internal name of the Kafka consumer.
-`source_id`     | [`text`]   | The ID of the source that created this consumer object. Corresponds to [`mz_source_info.source_id`](#mz_source_info).
-`dataflow_id`   | [`bigint`] | The ID of the dataflow reading from the consumer. Corresponds to [`mz_source_info.dataflow_id`](#mz_source_info).
-`broker_name`   | [`text`]   | The name of the Kafka broker.
-`min`           | [`bigint`] | The minimum RTT in milliseconds.
-`max`           | [`bigint`] | The maximum RTT in milliseconds.
-`avg`           | [`bigint`] | The average RTT in milliseconds.
-`sum`           | [`bigint`] | The sum of all RTTs in milliseconds.
-`cnt`           | [`bigint`] | The number of round trips recorded.
-`stddev`        | [`bigint`] | The standard deviation of the RTT in milliseconds.
-`p50`           | [`bigint`] | The 50th percentile RTT in milliseconds.
-`p90`           | [`bigint`] | The 90th percentile RTT in milliseconds.
-`p95`           | [`bigint`] | The 95th percentile RTT in milliseconds.
-`p99`           | [`bigint`] | The 99th percentile RTT in milliseconds.
-`p99_99`        | [`bigint`] | The 99.99th percentile RTT in milliseconds.
-
-### `mz_kafka_consumer_partitions`
-
-The `mz_kafka_consumer_partitions` table contains a row for each partition being
-read by a Kafka consumer in the system.
+Note that the contents of this table may evolve without warning when Materialize
+updates the version of librdkafka in use.
 
 Field           | Type       | Meaning
 ----------------|------------|--------
-`consumer_name` | [`text`]   | The handle name for the consumer.
-`source_id`     | [`text`]   | The ID of the source that created this consumer object. Corresponds to [`mz_source_info.source_id`](#mz_source_info).
-`dataflow_id`   | [`bigint`] | The ID of the dataflow reading from the consumer. Corresponds to [`mz_source_info.dataflow_id`](#mz_source_info).
-`partition_id`  | [`text`]   | The ID of the topic partition the consumer is reading from.
-`rx_msgs`       | [`bigint`] | The number of messages read by this consumer since materialized startup.
-`rx_bytes`      | [`bigint`] | The number of bytes read by this consumer since materialized startup.
-`tx_msgs`       | [`bigint`] | The number of messages sent by this consumer since materialized startup.
-`tx_bytes`      | [`bigint`] | The number of bytes sent by this consumer since materialized startup.
-`lo_offset`     | [`bigint`] | The partition's low watermark offset on the broker.
-`hi_offset`     | [`bigint`] | The partition's high watermark offset on the broker.
-`ls_offset`     | [`bigint`] | The partition's last stable offset on the broker.
-`app_offset`    | [`bigint`] | The offset of the last message passed to materialized + 1.
-`consumer_lag`  | [`bigint`] | Difference between the `hi_offset` and `app_offset`.
-`initial_high_offset`  | [`bigint`] | The first known partition's high watermark offset on the broker, based on `hi_offset`.
+`source_id`     | [`text`]   | The ID of the source. Corresponds to [`mz_source_info.source_id`](#mz_source_info).
+`worker_id`     | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`statistics`    | [`jsonb`]  | A JSON object containing the statistics. See [`STATISTICS.md`] in the librdkafka documentation for details.
 
 ### `mz_kafka_sinks`
 
@@ -692,3 +661,5 @@ Materialize with minor changes to the `pg_catalog` compatibility shim.
 [`text array`]: /sql/types/array
 [arrangement]: /overview/arrangements/#arrangements
 [dataflow]: /overview/arrangements/#dataflows
+[librdkafka]: https://github.com/edenhill/librdkafka/tree/v{{< librdkafka-version >}}
+[`STATISTICS.md`]: https://github.com/edenhill/librdkafka/tree/v{{< librdkafka-version >}}/STATISTICS.md
