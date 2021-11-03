@@ -1816,6 +1816,16 @@ lazy_static! {
                     Ok(HirScalarExpr::literal(Datum::String(&version), ScalarType::String))
                 }), 89;
             },
+            "window_tumbling" => Scalar {
+                params!(Timestamp, Interval) => Operation::binary(|ecx, ts, interval| {
+                    ecx.require_experimental_mode("window_tumbling")?;
+                    Ok(ts.call_binary(interval, BinaryFunc::WindowTumblingTs))
+                }), oid::FUNC_MZ_WINDOW_TUMBLING_TS_OID;
+                params!(TimestampTz, Interval) => Operation::binary(|ecx, ts, interval| {
+                    ecx.require_experimental_mode("window_tumbling")?;
+                    Ok(ts.call_binary(interval, BinaryFunc::WindowTumblingTsTz))
+                }), oid::FUNC_MZ_WINDOW_TUMBLING_TSTZ_OID;
+            },
 
             // Aggregates.
             "array_agg" => Aggregate {

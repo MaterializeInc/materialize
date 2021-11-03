@@ -2272,7 +2272,28 @@ where
     }
 }
 
-fn date_bin<'a, T>(stride: Interval, source: T, origin: T) -> Result<Datum<'a>, EvalError>
+fn window_tumbling<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    is_ts_tz: bool,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let ts = a.unwrap_timestamp();
+    let interval = b.unwrap_interval();
+    let origin = ts.truncate_year();
+
+    let mut window_start = date_bin(interval, ts, origin)?;
+    let mut window_end = add_timestamp_interval(window_start, b)?;
+
+    if is_ts_tz {
+        window_start = cast_timestamp_to_timestamptz(window_start);
+        window_end = cast_timestamp_to_timestamptz(window_end);
+    }
+
+    Ok(list_create(&[window_start, window_end], temp_storage))
+}
+
+pub fn date_bin<'a, T>(stride: Interval, source: T, origin: T) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
 {
@@ -2571,6 +2592,8 @@ pub enum BinaryFunc {
     IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
+    WindowTumblingTs,
+    WindowTumblingTsTz,
     DateBinTimestamp,
     DateBinTimestampTz,
     DatePartInterval,
@@ -2726,6 +2749,8 @@ impl BinaryFunc {
             }
             BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
             BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
+            BinaryFunc::WindowTumblingTs => eager!(window_tumbling, false, temp_storage),
+            BinaryFunc::WindowTumblingTsTz => eager!(window_tumbling, true, temp_storage),
             BinaryFunc::DateBinTimestamp => {
                 eager!(|a: Datum, b: Datum| date_bin(
                     a.unwrap_interval(),
@@ -2901,6 +2926,38 @@ impl BinaryFunc {
 
             AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
             | DateTruncTimestamp => ScalarType::Timestamp.nullable(true),
+
+            WindowTumblingTs => ScalarType::Record {
+                fields: vec![
+                    (
+                        ColumnName::from("window_start"),
+                        ScalarType::Timestamp.nullable(false),
+                    ),
+                    (
+                        ColumnName::from("window_end"),
+                        ScalarType::Timestamp.nullable(false),
+                    ),
+                ],
+                custom_name: None,
+                custom_oid: None,
+            }
+            .nullable(true),
+
+            WindowTumblingTsTz => ScalarType::Record {
+                fields: vec![
+                    (
+                        ColumnName::from("window_start"),
+                        ScalarType::TimestampTz.nullable(false),
+                    ),
+                    (
+                        ColumnName::from("window_end"),
+                        ScalarType::TimestampTz.nullable(false),
+                    ),
+                ],
+                custom_name: None,
+                custom_oid: None,
+            }
+            .nullable(true),
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
                 ScalarType::Timestamp.nullable(in_nullable)
@@ -3180,6 +3237,8 @@ impl BinaryFunc {
             IsLikePatternMatch { .. }
             | ToCharTimestamp
             | ToCharTimestampTz
+            | WindowTumblingTs
+            | WindowTumblingTsTz
             | DateBinTimestamp
             | DateBinTimestampTz
             | DatePartInterval
@@ -3316,6 +3375,8 @@ impl fmt::Display for BinaryFunc {
             } => f.write_str("~*"),
             BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
             BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
+            BinaryFunc::WindowTumblingTs => f.write_str("window_tumbling"),
+            BinaryFunc::WindowTumblingTsTz => f.write_str("window_tumbling"),
             BinaryFunc::DateBinTimestamp => f.write_str("bin_unix_epoch_timestamp"),
             BinaryFunc::DateBinTimestampTz => f.write_str("bin_unix_epoch_timestamptz"),
             BinaryFunc::DatePartInterval => f.write_str("date_partiv"),

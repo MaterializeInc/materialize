@@ -1,0 +1,44 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# window_tumbling
+
+query T
+SELECT window_tumbling(ts, '1m')
+FROM (
+    VALUES ('2001-01-01 01:02:34'::timestamp)
+) vals (ts);
+----
+("2001-01-01 01:02:00","2001-01-01 01:03:00")
+
+query TT
+SELECT window_tumbling(ts, '1m'), sum(v)
+FROM (
+    VALUES
+        ('2001-01-01 01:02:34'::timestamp, 1),
+        ('2001-01-01 01:02:35'::timestamp, 10),
+        ('2001-01-01 01:03:35'::timestamp, 2)
+) vals (ts, v)
+GROUP BY window_tumbling;
+----
+("2001-01-01 01:02:00","2001-01-01 01:03:00") 11
+("2001-01-01 01:03:00","2001-01-01 01:04:00") 2
+
+query TT
+SELECT (window_tumbling(ts, '1m')).window_start, sum(v)
+FROM (
+    VALUES
+        ('2001-01-01 01:02:34'::timestamp, 1),
+        ('2001-01-01 01:02:35'::timestamp, 10),
+        ('2001-01-01 01:03:35'::timestamp, 2)
+) vals (ts, v)
+GROUP BY window_start;
+----
+2001-01-01 01:02:00 11
+2001-01-01 01:03:00 2
