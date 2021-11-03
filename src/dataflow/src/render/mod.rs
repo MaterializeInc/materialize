@@ -566,6 +566,7 @@ where
 /// It uses `ore::vec::repurpose_allocation` to accomplish this, which contains
 /// unsafe code.
 pub mod datum_vec {
+
     use repr::{Datum, Row};
 
     /// A re-useable vector of `Datum` with no particular lifetime.

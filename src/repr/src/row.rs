@@ -1310,51 +1310,6 @@ impl RowArena {
         f(&mut row)?;
         Ok(self.push_unary_row(row))
     }
-
-    /// Clone a datum to match the lifetime of the row arena.
-    ///
-    /// All datums without references are copied, but the ones with references
-    /// have their data duplicated into the arena and then reconstructed.
-    ///
-    /// The purpose of this function is to create copies of datums that have a different lifetime
-    /// than the original.
-    pub fn clone_datum<'a>(&'a self, datum: Datum) -> Datum<'a> {
-        match datum {
-            Datum::False => Datum::False,
-            Datum::True => Datum::True,
-            Datum::Int16(i) => Datum::Int16(i),
-            Datum::Int32(i) => Datum::Int32(i),
-            Datum::Int64(i) => Datum::Int64(i),
-            Datum::Float32(f) => Datum::Float32(f),
-            Datum::Float64(f) => Datum::Float64(f),
-            Datum::Date(d) => Datum::Date(d),
-            Datum::Time(t) => Datum::Time(t),
-            Datum::Timestamp(t) => Datum::Timestamp(t),
-            Datum::TimestampTz(t) => Datum::TimestampTz(t),
-            Datum::Interval(i) => Datum::Interval(i),
-            Datum::Bytes(b) => Datum::Bytes(self.push_bytes(b.to_vec())),
-            Datum::String(s) => Datum::String(self.push_string(s.to_owned())),
-            Datum::Array(Array { dims, elements }) => Datum::Array(Array {
-                dims: ArrayDimensions {
-                    data: self.push_bytes(dims.data.to_vec()),
-                },
-                elements: DatumList {
-                    data: self.push_bytes(elements.data.to_vec()),
-                },
-            }),
-            Datum::List(list) => Datum::List(DatumList {
-                data: self.push_bytes(list.data.to_vec()),
-            }),
-            Datum::Map(m) => Datum::Map(DatumMap {
-                data: self.push_bytes(m.data.to_vec()),
-            }),
-            Datum::Numeric(n) => Datum::Numeric(n),
-            Datum::JsonNull => Datum::JsonNull,
-            Datum::Uuid(u) => Datum::Uuid(u),
-            Datum::Dummy => Datum::Dummy,
-            Datum::Null => Datum::Null,
-        }
-    }
 }
 
 impl Default for RowArena {
