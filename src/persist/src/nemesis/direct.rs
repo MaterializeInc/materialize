@@ -565,6 +565,7 @@ mod tests {
     use crate::mem::MemRegistry;
     use crate::nemesis;
     use crate::nemesis::generator::GeneratorConfig;
+    use crate::storage::Blob;
     use crate::unreliable::{UnreliableBlob, UnreliableLog};
 
     use super::*;
@@ -587,7 +588,8 @@ mod tests {
             let (log_dir, blob_dir) = (self.path().join("log"), self.path().join("blob"));
             let log = FileLog::new(log_dir, ("reentrance0", "direct_file").into())?;
             let log = UnreliableLog::from_handle(log, unreliable.clone());
-            let blob = FileBlob::new(blob_dir, ("reentrance0", "direct_file").into())?;
+            let blob =
+                FileBlob::open_exclusive(blob_dir.into(), ("reentrance0", "direct_file").into())?;
             let blob = UnreliableBlob::from_handle(blob, unreliable);
             runtime::start(
                 RuntimeConfig::for_tests(),

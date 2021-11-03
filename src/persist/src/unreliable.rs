@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use crate::error::Error;
-use crate::storage::{Atomicity, Blob, Log, SeqNo};
+use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 
 #[derive(Debug)]
 struct UnreliableCore {
@@ -122,6 +122,13 @@ impl<L: Log> Log for UnreliableLog<L> {
     }
 }
 
+/// Configuration for opening an [UnreliableBlob].
+#[derive(Debug)]
+pub struct UnreliableBlobConfig<B: Blob> {
+    handle: UnreliableHandle,
+    blob: B::Config,
+}
+
 /// An unreliable delegate to [Blob].
 #[derive(Debug)]
 pub struct UnreliableBlob<B> {
@@ -129,7 +136,7 @@ pub struct UnreliableBlob<B> {
     blob: B,
 }
 
-impl<B: Blob> UnreliableBlob<B> {
+impl<B: BlobRead> UnreliableBlob<B> {
     /// Returns a new [UnreliableBlob] and a handle for controlling it.
     pub fn new(blob: B) -> (Self, UnreliableHandle) {
         let h = UnreliableHandle::default();
@@ -144,25 +151,15 @@ impl<B: Blob> UnreliableBlob<B> {
 }
 
 #[async_trait]
-impl<B: Blob + Sync> Blob for UnreliableBlob<B> {
+impl<B: BlobRead + Sync> BlobRead for UnreliableBlob<B> {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         self.handle.check_unavailable("blob get")?;
         self.blob.get(key).await
     }
 
-    async fn set(&mut self, key: &str, value: Vec<u8>, atomic: Atomicity) -> Result<(), Error> {
-        self.handle.check_unavailable("blob set")?;
-        self.blob.set(key, value, atomic).await
-    }
-
     async fn list_keys(&self) -> Result<Vec<String>, Error> {
         self.handle.check_unavailable("blob list keys")?;
         self.blob.list_keys().await
-    }
-
-    async fn delete(&mut self, key: &str) -> Result<(), Error> {
-        self.handle.check_unavailable("blob delete")?;
-        self.blob.delete(key).await
     }
 
     async fn close(&mut self) -> Result<bool, Error> {
@@ -174,6 +171,42 @@ impl<B: Blob + Sync> Blob for UnreliableBlob<B> {
         let did_work = self.blob.close().await?;
         self.handle.check_unavailable("blob close")?;
         Ok(did_work)
+    }
+}
+
+#[async_trait]
+impl<B> Blob for UnreliableBlob<B>
+where
+    B: Blob + Sync,
+    B::Read: Sync,
+{
+    type Config = UnreliableBlobConfig<B>;
+    type Read = UnreliableBlob<B::Read>;
+
+    fn open_exclusive(config: UnreliableBlobConfig<B>, lock_info: LockInfo) -> Result<Self, Error> {
+        let blob = B::open_exclusive(config.blob, lock_info)?;
+        Ok(UnreliableBlob {
+            blob,
+            handle: config.handle,
+        })
+    }
+
+    fn open_read(config: UnreliableBlobConfig<B>) -> Result<UnreliableBlob<B::Read>, Error> {
+        let blob = B::open_read(config.blob)?;
+        Ok(UnreliableBlob {
+            blob,
+            handle: config.handle,
+        })
+    }
+
+    async fn set(&mut self, key: &str, value: Vec<u8>, atomic: Atomicity) -> Result<(), Error> {
+        self.handle.check_unavailable("blob set")?;
+        self.blob.set(key, value, atomic).await
+    }
+
+    async fn delete(&mut self, key: &str) -> Result<(), Error> {
+        self.handle.check_unavailable("blob delete")?;
+        self.blob.delete(key).await
     }
 }
 

@@ -21,7 +21,7 @@ use fail::fail_point;
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::storage::{Atomicity, Blob, LockInfo, Log, SeqNo};
+use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 
 /// Inner struct handles to separate files that store the data and metadata about the
 /// most recently truncated sequence number for [FileLog].
@@ -271,24 +271,34 @@ impl Log for FileLog {
     }
 }
 
-/// Implementation of [Blob] backed by files.
+/// Configuration for opening a [FileBlob] or [FileBlobRead].
 #[derive(Debug)]
-pub struct FileBlob {
+pub struct FileBlobConfig {
+    base_dir: PathBuf,
+}
+
+impl<P: AsRef<Path>> From<P> for FileBlobConfig {
+    fn from(base_dir: P) -> Self {
+        FileBlobConfig {
+            base_dir: base_dir.as_ref().to_path_buf(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FileBlobCore {
     base_dir: Option<PathBuf>,
 }
 
-impl FileBlob {
+impl FileBlobCore {
     fn blob_path(&self, key: &str) -> Result<PathBuf, Error> {
         self.base_dir
             .as_ref()
             .map(|base_dir| base_dir.join(key))
             .ok_or_else(|| return Error::from("FileBlob unexpectedly closed"))
     }
-}
 
-#[async_trait]
-impl Blob for FileBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         let file_path = self.blob_path(key)?;
         let mut file = match File::open(file_path) {
             Ok(file) => file,
@@ -300,7 +310,7 @@ impl Blob for FileBlob {
         Ok(Some(buf))
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+    fn list_keys(&self) -> Result<Vec<String>, Error> {
         let base_dir = match &self.base_dir {
             Some(base_dir) => base_dir.canonicalize()?,
             None => return Err(Error::from("FileBlob unexpectedly closed")),
@@ -340,17 +350,36 @@ impl Blob for FileBlob {
         Ok(ret)
     }
 
-    async fn close(&mut self) -> Result<bool, Error> {
-        if let Some(base_dir) = self.base_dir.as_ref() {
-            let lockfile_path = Self::lockfile_path(&base_dir);
-            fs::remove_file(lockfile_path)?;
-            self.base_dir = None;
-            Ok(true)
-        } else {
-            // Already closed. Close implementations must be idempotent.
-            Ok(false)
-        }
+    fn close(&mut self) -> Option<PathBuf> {
+        self.base_dir.take()
     }
+}
+
+/// Implementation of [BlobRead] backed by files.
+#[derive(Debug)]
+pub struct FileBlobRead {
+    core: FileBlobCore,
+}
+
+#[async_trait]
+impl BlobRead for FileBlobRead {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.core.get(key)
+    }
+
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.core.list_keys()
+    }
+
+    async fn close(&mut self) -> Result<bool, Error> {
+        Ok(self.core.close().is_some())
+    }
+}
+
+/// Implementation of [Blob] backed by files.
+#[derive(Debug)]
+pub struct FileBlob {
+    core: FileBlobCore,
 }
 
 impl FileBlob {
@@ -362,47 +391,62 @@ impl FileBlob {
 }
 
 #[async_trait]
-impl Blob for FileBlob {
-    async fn close(&mut self) -> Result<bool, Error> {
-        if let Some(base_dir) = self.base_dir.as_ref() {
-            let lockfile_path = Self::lockfile_path(&base_dir);
-            fs::remove_file(lockfile_path)?;
-            self.base_dir = None;
-            Ok(true)
-        } else {
-            // Already closed. Close implementations must be idempotent.
-            Ok(false)
-        }
+impl BlobRead for FileBlob {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.core.get(key)
     }
-}
 
-impl FileBlob {
-    /// Returns a new [FileBlob] which stores files under the given dir.
-    ///
-    /// To ensure directory-wide mutual exclusion, a LOCK file is placed in
-    /// base_dir at construction time. If this file already exists (indicating
-    /// that another FileBlob is already using the dir), an error is returned
-    /// from `new`.
-    ///
-    /// The contents of `lock_info` are stored in the LOCK file and should
-    /// include anything that would help debug an unexpected LOCK file, such as
-    /// version, ip, worker number, etc.
-    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: LockInfo) -> Result<Self, Error> {
-        let base_dir = base_dir.as_ref();
-        fs::create_dir_all(&base_dir)?;
-        {
-            let _ = file_storage_lock(&Self::lockfile_path(&base_dir), lock_info)?;
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.core.list_keys()
+    }
+
+    async fn close(&mut self) -> Result<bool, Error> {
+        match self.core.close() {
+            Some(base_dir) => {
+                let lockfile_path = Self::lockfile_path(&base_dir);
+                fs::remove_file(lockfile_path)?;
+                Ok(true)
+            }
+            None => Ok(false),
         }
-        Ok(FileBlob {
-            base_dir: Some(base_dir.to_path_buf()),
-        })
     }
 }
 
 #[async_trait]
 impl Blob for FileBlob {
+    type Config = FileBlobConfig;
+    type Read = FileBlobRead;
+
+    /// Returns a new [FileBlob] which stores files under the given dir.
+    ///
+    /// To ensure directory-wide mutual exclusion, a LOCK file is placed in
+    /// base_dir at construction time. If this file already exists (indicating
+    /// that another FileBlob is already using the dir), an error is returned.
+    ///
+    /// The contents of `lock_info` are stored in the LOCK file and should
+    /// include anything that would help debug an unexpected LOCK file, such as
+    /// version, ip, worker number, etc.
+    fn open_exclusive(config: FileBlobConfig, lock_info: LockInfo) -> Result<Self, Error> {
+        let base_dir = config.base_dir;
+        fs::create_dir_all(&base_dir)?;
+        {
+            let _ = file_storage_lock(&Self::lockfile_path(&base_dir), lock_info)?;
+        }
+        let core = FileBlobCore {
+            base_dir: Some(base_dir),
+        };
+        Ok(FileBlob { core })
+    }
+
+    fn open_read(config: FileBlobConfig) -> Result<FileBlobRead, Error> {
+        let core = FileBlobCore {
+            base_dir: Some(config.base_dir),
+        };
+        Ok(FileBlobRead { core })
+    }
+
     async fn set(&mut self, key: &str, value: Vec<u8>, atomic: Atomicity) -> Result<(), Error> {
-        let file_path = self.blob_path(key)?;
+        let file_path = self.core.blob_path(key)?;
         match atomic {
             Atomicity::RequireAtomic => {
                 // To implement require_atomic, write to a temp file and rename
@@ -450,7 +494,7 @@ impl Blob for FileBlob {
     }
 
     async fn delete(&mut self, key: &str) -> Result<(), Error> {
-        let file_path = self.blob_path(key)?;
+        let file_path = self.core.blob_path(key)?;
         // TODO: strict correctness requires that we fsync the parent directory
         // as well after file removal.
         if let Err(err) = fs::remove_file(&file_path) {
@@ -494,10 +538,17 @@ mod tests {
     #[tokio::test]
     async fn file_blob() -> Result<(), Error> {
         let temp_dir = tempfile::tempdir()?;
-        blob_impl_test(move |t| {
-            let instance_dir = temp_dir.path().join(t.path);
-            FileBlob::new(instance_dir, (t.reentrance_id, "file_blob_test").into())
-        })
+        let temp_dir_read = temp_dir.path().to_owned();
+        blob_impl_test(
+            move |t| {
+                let instance_dir = temp_dir.path().join(t.path);
+                FileBlob::open_exclusive(
+                    instance_dir.into(),
+                    (t.reentrance_id, "file_blob_test").into(),
+                )
+            },
+            move |path| FileBlob::open_read(temp_dir_read.join(path).into()),
+        )
         .await
     }
 

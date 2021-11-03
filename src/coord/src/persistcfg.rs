@@ -24,8 +24,8 @@ use itertools::Itertools;
 use ore::metrics::MetricsRegistry;
 use persist::error::{Error, ErrorLog};
 use persist::indexed::encoding::Id as PersistId;
-use persist::s3::{Config as S3Config, S3Blob};
-use persist::storage::LockInfo;
+use persist::s3::{S3Blob, S3BlobConfig};
+use persist::storage::{Blob, LockInfo};
 use repr::Row;
 use serde::Serialize;
 use tokio::runtime::Runtime;
@@ -149,7 +149,7 @@ impl PersistConfig {
             let log = ErrorLog;
             let persister = match &self.storage {
                 PersistStorage::File(s) => {
-                    let mut blob = FileBlob::new(&s.blob_path, lock_info)?;
+                    let mut blob = FileBlob::open_exclusive((&s.blob_path).into(), lock_info)?;
                     persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
                         RuntimeConfig::with_min_step_interval(self.min_step_interval),
@@ -161,8 +161,8 @@ impl PersistConfig {
                     )
                 }
                 PersistStorage::S3(s) => {
-                    let config = S3Config::new(s.bucket.clone(), s.prefix.clone()).await?;
-                    let mut blob = S3Blob::new(config, lock_info)?;
+                    let config = S3BlobConfig::new(s.bucket.clone(), s.prefix.clone()).await?;
+                    let mut blob = S3Blob::open_exclusive(config, lock_info)?;
                     persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
                         RuntimeConfig::with_min_step_interval(self.min_step_interval),

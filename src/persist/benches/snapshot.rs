@@ -17,7 +17,7 @@ use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamReadHandle};
 use persist::indexed::Snapshot;
 use persist::mem::MemRegistry;
-use persist::storage::LockInfo;
+use persist::storage::{Blob, LockInfo};
 use persist_types::Codec;
 
 fn read_full_snapshot<K: Codec + Ord, V: Codec + Ord>(
@@ -87,7 +87,7 @@ pub fn bench_file_snapshots(c: &mut Criterion) {
         runtime::start(
             RuntimeConfig::default(),
             FileLog::new(log_dir, lock_info.clone())?,
-            FileBlob::new(blob_dir, lock_info)?,
+            FileBlob::open_exclusive(blob_dir.into(), lock_info)?,
             build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
             None,

@@ -26,7 +26,7 @@ use ore::metrics::MetricsRegistry;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamWriteHandle};
 use persist::operators::source::PersistedSource;
-use persist::storage::LockInfo;
+use persist::storage::{Blob, LockInfo};
 
 use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, Criterion, Throughput};
 use rand::distributions::Alphanumeric;
@@ -150,7 +150,7 @@ fn create_runtime(base_path: &Path, nonce: &str) -> Result<RuntimeClient, Error>
     let runtime = runtime::start(
         RuntimeConfig::default(),
         FileLog::new(log_dir, lock_info.clone())?,
-        FileBlob::new(blob_dir, lock_info)?,
+        FileBlob::open_exclusive(blob_dir.into(), lock_info)?,
         build_info::DUMMY_BUILD_INFO,
         &MetricsRegistry::new(),
         None,
