@@ -14,12 +14,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::{FuturesUnordered, StreamExt};
+use maplit::hashmap;
 use ore::display::DisplayExt;
 use ore::result::ResultExt;
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
 
-use crate::action::{Action, State};
+use crate::action::{substitute_vars, Action, State};
 use crate::format::avro::{self, Schema};
 use crate::format::bytes;
 use crate::format::protobuf;
@@ -304,8 +305,13 @@ impl Action for IngestAction {
 
         let mut futs = FuturesUnordered::new();
 
-        for _n in 0..self.repeat {
+        for iteration in 0..self.repeat {
             for row in &self.rows {
+                let row = substitute_vars(
+                    row,
+                    &hashmap! { "kafka-ingest.iteration".into() => iteration.to_string() },
+                    &None,
+                )?;
                 let mut row = row.as_bytes();
                 let key = match &key_transcoder {
                     None => None,

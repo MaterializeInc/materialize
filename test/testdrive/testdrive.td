@@ -1,3 +1,4 @@
+
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -121,13 +122,20 @@ $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repea
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
 
-> CREATE SINK kafka_ingest_repeat_sink FROM kafka_ingest_repeat_input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'kafka-ingest-repeat'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+> SELECT * FROM kafka_ingest_repeat_input;
+fish
+fish
 
-$ kafka-verify format=avro sink=materialize.public.kafka_ingest_repeat_sink sort-messages=true
-{"before":null,"after":{"row":{"f1":"fish"}}}
-{"before":null,"after":{"row":{"f1":"fish"}}}
+# kafka-ingest repeat with ${kafka-ingest.iteration}
+
+$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} publish=true repeat=2
+{"f1": "${kafka-ingest.iteration}"}
+
+> SELECT * FROM kafka_ingest_repeat_input;
+0
+1
+fish
+fish
 
 # kafka-ingest with no explicit 'partition' argument should spread the records evenly across the partitions
 
@@ -161,7 +169,7 @@ true
   AND rx_msgs > 0;
 true
 
-# kafka-verify with regexp (the set-regexp from above is used
+# kafka-verify with regexp (the set-regexp from above is used)
 
 > CREATE VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
 
