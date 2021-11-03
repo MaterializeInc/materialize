@@ -11,9 +11,11 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::thread::Thread;
 use std::time::{Duration, Instant};
 use timely::progress::reachability::logging::TrackerEvent;
 
+use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
@@ -21,6 +23,7 @@ use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
+use log::trace;
 use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
 use timely::communication::initialize::WorkerGuards;
@@ -282,11 +285,8 @@ pub enum WorkerFeedback {
 
 /// Configures a dataflow server.
 pub struct Config {
-    /// Command stream receivers for each desired workers.
-    ///
-    /// The length of this vector determines the number of worker threads that
-    /// will be spawned.
-    pub command_receivers: Vec<crossbeam_channel::Receiver<Command>>,
+    /// The number of worker threads to spawn.
+    pub workers: usize,
     /// The Timely worker configuration.
     pub timely_worker: timely::WorkerConfig,
     /// Whether the server is running in experimental mode.
@@ -297,17 +297,79 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient>,
-    /// Responses to commands should be sent into this channel.
-    pub feedback_tx: mpsc::UnboundedSender<Response>,
+    /// An optional callback that is presented with both halves of the dataflow
+    /// feedback channel on startup. The callback can swap the channel for
+    /// another in order to intercept messages.
+    ///
+    /// For testing purposes only.
+    pub response_interceptor: Option<ResponseInterceptor>,
+}
+
+type ResponseInterceptor =
+    Box<dyn FnOnce(&mut mpsc::UnboundedSender<Response>, &mut mpsc::UnboundedReceiver<Response>)>;
+
+/// A handle to a running dataflow server.
+///
+/// Dropping this object will block until the dataflow computation ceases.
+pub struct Server {
+    _worker_guards: WorkerGuards<()>,
+}
+
+/// A client to a dataflow [`Server`].
+pub struct Client {
+    feedback_rx: mpsc::UnboundedReceiver<Response>,
+    worker_txs: Vec<crossbeam_channel::Sender<Command>>,
+    worker_threads: Vec<Thread>,
+}
+
+impl Client {
+    /// Reports the number of dataflow workers.
+    pub fn num_workers(&self) -> usize {
+        self.worker_txs.len()
+    }
+
+    /// Sends a command to the dataflow server.
+    pub fn send(&self, cmd: Command) {
+        trace!("Broadcasting dataflow command: {:?}", cmd);
+        let num_workers = self.num_workers();
+        if num_workers == 1 {
+            // This special case avoids a clone of the whole plan.
+            self.worker_txs[0]
+                .send(cmd)
+                .expect("worker command receiver should not drop first");
+        } else {
+            for (index, sendpoint) in self.worker_txs.iter().enumerate() {
+                sendpoint
+                    .send(cmd.clone_for_worker(index, self.num_workers()))
+                    .expect("worker command receiver should not drop first")
+            }
+        }
+        for thread in &self.worker_threads {
+            thread.unpark()
+        }
+    }
+
+    /// Receives the next response from the dataflow server.
+    ///
+    /// This method blocks until the next response is available, or, if the
+    /// dataflow server has been shut down, returns `None`.
+    pub async fn recv(&mut self) -> Option<Response> {
+        return self.feedback_rx.recv().await;
+    }
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
+pub fn serve(config: Config) -> Result<(Server, Client), anyhow::Error> {
+    assert!(config.workers > 0);
+
     let server_metrics = ServerMetrics::register_with(&config.metrics_registry);
     let dataflow_source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
     let dataflow_sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
-    let workers = config.command_receivers.len();
-    assert!(workers > 0);
+
+    let (mut feedback_tx, mut feedback_rx) = mpsc::unbounded_channel();
+    if let Some(response_interceptor) = config.response_interceptor {
+        response_interceptor(&mut feedback_tx, &mut feedback_rx);
+    }
 
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream.
@@ -315,23 +377,24 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
     // TODO(benesch): package up this idiom of handing out ownership of N items
     // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
     // is hard to read through.
-    let command_rxs: Mutex<Vec<_>> =
-        Mutex::new(config.command_receivers.into_iter().map(Some).collect());
+    let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+        .map(|_| crossbeam_channel::unbounded())
+        .unzip();
+    let command_rxs: Mutex<Vec<_>> = Mutex::new(worker_rxs.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
     let metrics = Metrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     let persist = config.persist;
-    let feedback_tx = config.feedback_tx.clone();
-    timely::execute::execute(
+    let worker_guards = timely::execute::execute(
         timely::Config {
-            communication: timely::CommunicationConfig::Process(workers),
+            communication: timely::CommunicationConfig::Process(config.workers),
             worker: config.timely_worker,
         },
         move |timely_worker| {
             let _tokio_guard = tokio_executor.enter();
-            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % workers]
+            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % config.workers]
                 .take()
                 .unwrap();
             let worker_idx = timely_worker.index();
@@ -367,6 +430,20 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
             .run()
         },
     )
+    .map_err(|e| anyhow!("{}", e))?;
+    let client = Client {
+        feedback_rx,
+        worker_txs,
+        worker_threads: worker_guards
+            .guards()
+            .iter()
+            .map(|g| g.thread().clone())
+            .collect(),
+    };
+    let server = Server {
+        _worker_guards: worker_guards,
+    };
+    Ok((server, client))
 }
 
 /// State maintained for each worker thread.

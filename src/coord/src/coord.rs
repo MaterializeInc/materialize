@@ -53,7 +53,6 @@ use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::StreamExt;
 use rand::Rng;
 use repr::adt::interval::Interval;
-use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
@@ -236,7 +235,11 @@ pub struct Config<'a> {
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
-    dataflow_client: DataflowClient,
+    /// A client to a running dataflow cluster.
+    dataflow_client: dataflow::Client,
+    /// A handle to a running dataflow server. Drop order matters here! The
+    /// client must be dropped before the server.
+    _dataflow_server: dataflow::Server,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -298,59 +301,6 @@ pub struct Coordinator {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<DeferredPlan>,
-}
-
-/// State guarding the connection to dataflow workers.
-///
-/// This state is extracted from the coordinator to better reflection the abstraction boundary.
-/// Although it is present in the coordinator process / thread, it represents information best
-/// maintained by the dataflow module itself.
-pub struct DataflowClient {
-    // Drop order matters here. The transmitters must be dropped in order for
-    // the workers to wind down.
-    /// Channels to broadcast commands to workers.
-    worker_txs: Vec<crossbeam_channel::Sender<dataflow::Command>>,
-    /// Guards for worker threads.
-    worker_guards: WorkerGuards<()>,
-}
-
-impl DataflowClient {
-    /// Creates a new dataflow client from connection objects.
-    pub fn new(
-        worker_guards: WorkerGuards<()>,
-        worker_txs: Vec<crossbeam_channel::Sender<dataflow::Command>>,
-    ) -> Self {
-        Self {
-            worker_guards,
-            worker_txs,
-        }
-    }
-
-    /// Reports the number of dataflow workers.
-    pub fn num_workers(&self) -> usize {
-        self.worker_txs.len()
-    }
-
-    /// Broadcasts a command to all dataflow workers.
-    fn broadcast(&self, cmd: dataflow::Command) {
-        log::trace!("Broadcasting dataflow command: {:?}", cmd);
-        let num_workers = self.num_workers();
-        if num_workers == 1 {
-            // This special case avoids a clone of the whole plan.
-            self.worker_txs[0]
-                .send(cmd)
-                .expect("worker command receiver should not drop first");
-        } else {
-            for (index, sendpoint) in self.worker_txs.iter().enumerate() {
-                sendpoint
-                    .send(cmd.clone_for_worker(index, self.num_workers()))
-                    .expect("worker command receiver should not drop first")
-            }
-        }
-        for handle in self.worker_guards.guards() {
-            handle.thread().unpark()
-        }
-    }
 }
 
 /// Metadata about an active connection.
@@ -625,7 +575,6 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
-        mut feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
     ) {
         let mut metric_scraper_stream = self.metric_scraper.tick_stream();
 
@@ -636,7 +585,7 @@ impl Coordinator {
                 biased;
 
                 Some(m) = internal_cmd_rx.recv() => m,
-                Some(m) = feedback_rx.recv() => Message::Worker(m),
+                Some(m) = self.dataflow_client.recv() => Message::Worker(m),
                 Some(m) = metric_scraper_stream.next() => m,
                 m = cmd_rx.recv() => match m {
                     None => break,
@@ -4147,7 +4096,7 @@ impl Coordinator {
     }
 
     fn broadcast(&self, cmd: dataflow::Command) {
-        self.dataflow_client.broadcast(cmd);
+        self.dataflow_client.send(cmd);
     }
 
     // Notify the timestamper thread that a source has been created or dropped.
@@ -4310,10 +4259,6 @@ pub async fn serve(
     }: Config<'_>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-    let (mut feedback_tx, mut feedback_rx) = mpsc::unbounded_channel();
-    if let Some(dataflow_response_interceptor) = dataflow_response_interceptor {
-        dataflow_response_interceptor(&mut feedback_tx, &mut feedback_rx);
-    }
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
     let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
@@ -4341,16 +4286,14 @@ pub async fn serve(
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
 
-    let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) =
-        (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
-    let worker_guards = dataflow::serve(dataflow::Config {
-        command_receivers: worker_rxs,
+    let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
+        workers,
         timely_worker,
         experimental_mode,
         now,
         metrics_registry: metrics_registry.clone(),
         persist: persister,
-        feedback_tx,
+        response_interceptor: dataflow_response_interceptor,
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
@@ -4381,9 +4324,9 @@ pub async fn serve(
     let thread = thread::Builder::new()
         .name("coordinator".to_string())
         .spawn(move || {
-            let dataflow_client = DataflowClient::new(worker_guards, worker_txs);
             let mut coord = Coordinator {
                 dataflow_client,
+                _dataflow_server: dataflow_server,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 symbiosis,
@@ -4425,7 +4368,7 @@ pub async fn serve(
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {
-                handle.block_on(coord.serve(internal_cmd_rx, cmd_rx, feedback_rx));
+                handle.block_on(coord.serve(internal_cmd_rx, cmd_rx));
             }
         })
         .unwrap();
