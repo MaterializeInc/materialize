@@ -25,4 +25,6 @@ pub mod logging;
 pub mod source;
 
 pub use render::plan::Plan;
-pub use server::{serve, Command, Config, Response, TimestampBindingFeedback, WorkerFeedback};
+pub use server::{
+    serve, Client, Command, Config, Response, Server, TimestampBindingFeedback, WorkerFeedback,
+};

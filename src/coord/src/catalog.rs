@@ -860,7 +860,7 @@ impl Catalog {
                 build_info: config.build_info,
                 num_workers: config.num_workers,
                 timestamp_frequency: config.timestamp_frequency,
-                now: config.now,
+                now: config.now.clone(),
                 disable_user_indexes: config.disable_user_indexes,
             },
             persist,
@@ -2877,6 +2877,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 mod tests {
     use tempfile::NamedTempFile;
 
+    use ore::now::NOW_ZERO;
     use sql::names::{DatabaseSpecifier, FullName, PartialName};
 
     use crate::catalog::{Catalog, Op, MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA};
@@ -2934,7 +2935,7 @@ mod tests {
         ];
 
         let catalog_file = NamedTempFile::new()?;
-        let catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero)?;
+        let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone())?;
         for tc in test_cases {
             assert_eq!(
                 catalog
@@ -2955,7 +2956,7 @@ mod tests {
     #[test]
     fn test_catalog_revision() {
         let catalog_file = NamedTempFile::new().unwrap();
-        let mut catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero).unwrap();
+        let mut catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).unwrap();
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
@@ -2969,7 +2970,7 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 2);
         drop(catalog);
 
-        let catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero).unwrap();
+        let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).unwrap();
         assert_eq!(catalog.transient_revision(), 1);
     }
 }

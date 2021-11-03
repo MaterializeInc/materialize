@@ -227,7 +227,7 @@ pub fn build_dataflow<A: Allocate>(
                     src_id.clone(),
                     src.clone(),
                     orig_id.clone(),
-                    now,
+                    now.clone(),
                     source_metrics,
                 );
             }

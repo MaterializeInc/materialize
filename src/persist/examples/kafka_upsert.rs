@@ -20,7 +20,7 @@ use persist::operators::stream::Persist;
 use serde::{Deserialize, Serialize};
 
 use ore::metrics::MetricsRegistry;
-use ore::now::{system_time, NowFn};
+use ore::now::{NowFn, SYSTEM_TIME};
 use persist::error::Error as PersistError;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamReadHandle};
@@ -123,7 +123,7 @@ where
 
     let source_interval_ms = 1000;
     let timestamp_interval_ms = 5000;
-    let now_fn = system_time;
+    let now_fn = SYSTEM_TIME.clone();
 
     let start_ts = cmp::min(sealed_ts(&ts_read)?, sealed_ts(&out_read)?);
     println!("Restored start timestamp: {}", start_ts);
@@ -220,7 +220,7 @@ where
     let mut source = S::new(
         starting_offsets,
         emission_interval_ms,
-        now_fn,
+        now_fn.clone(),
         worker_index,
         num_workers,
     );

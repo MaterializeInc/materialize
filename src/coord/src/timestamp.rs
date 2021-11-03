@@ -13,6 +13,7 @@ use std::ops::Deref;
 use std::panic;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -92,7 +93,6 @@ lazy_static! {
 pub enum TimestampMessage {
     Add(GlobalId, SourceConnector),
     Drop(GlobalId),
-    Shutdown,
 }
 
 /// Timestamp consumer: wrapper around source consumers that stores necessary information
@@ -553,9 +553,9 @@ impl Timestamper {
     fn update_sources(&mut self) -> bool {
         // First check if there are some new source that we should
         // start checking
-        while let Ok(update) = self.rx.try_recv() {
-            match update {
-                TimestampMessage::Add(source_id, sc) => {
+        loop {
+            match self.rx.try_recv() {
+                Ok(TimestampMessage::Add(source_id, sc)) => {
                     let (sc, enc, env, cons) = if let SourceConnector::External {
                         connector,
                         encoding,
@@ -604,10 +604,11 @@ impl Timestamper {
                         }
                     }
                 }
-                TimestampMessage::Drop(id) => {
+                Ok(TimestampMessage::Drop(id)) => {
                     self.drop_source(id);
                 }
-                TimestampMessage::Shutdown => {
+                Err(TryRecvError::Empty) => return false,
+                Err(TryRecvError::Disconnected) => {
                     // First, let's remove all of the threads consuming metadata
                     // from realtime Kafka sources
                     for (_, src) in self.rt_sources.iter_mut() {
@@ -619,12 +620,10 @@ impl Timestamper {
                             coordination_state.stop.store(true, Ordering::SeqCst);
                         }
                     }
-
                     return true;
                 }
             }
         }
-        false
     }
 
     fn drop_source(&mut self, id: GlobalId) {

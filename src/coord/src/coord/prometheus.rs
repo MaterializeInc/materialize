@@ -21,7 +21,7 @@ use tokio::time::{self, Duration};
 use tokio_stream::wrappers::IntervalStream;
 
 use ore::metrics::MetricsRegistry;
-use ore::now;
+use ore::now::{self, SYSTEM_TIME};
 use repr::{Datum, Diff, Row};
 
 use crate::catalog::builtin::{
@@ -213,7 +213,7 @@ impl Scraper {
     /// Scrapes the metrics once, producing a batch of updates that should be
     /// inserted into the `mz_metrics` table.
     pub fn scrape_once(&mut self) -> Vec<TimestampedUpdate> {
-        let now = now::system_time();
+        let now = SYSTEM_TIME();
         let timestamp = now::to_datetime(now);
 
         let metric_fams = self.registry.gather();

@@ -11,9 +11,9 @@
 
 //! Catalog abstraction layer.
 
+use std::error::Error;
 use std::fmt;
 use std::time::{Duration, Instant};
-use std::{error::Error, unimplemented};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
 use dataflow_types::SourceConnector;
@@ -21,7 +21,7 @@ use lazy_static::lazy_static;
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
-use ore::now::{now_zero, EpochMillis, NowFn};
+use ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use repr::{RelationDesc, ScalarType};
 use sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
@@ -377,7 +377,7 @@ lazy_static! {
         build_info: &DUMMY_BUILD_INFO,
         num_workers: 0,
         timestamp_frequency: Duration::from_secs(1),
-        now: now_zero,
+        now: NOW_ZERO.clone(),
         disable_user_indexes: false,
     };
 }

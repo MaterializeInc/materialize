@@ -23,6 +23,7 @@ use tokio_postgres::types::{FromSql, Type};
 
 use coord::catalog::Catalog;
 use ore::collections::CollectionExt;
+use ore::now::NOW_ZERO;
 use ore::retry::Retry;
 use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::{
@@ -167,7 +168,7 @@ impl Action for SqlAction {
                 | Statement::CreateView { .. }
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
-                    let disk_state = Catalog::open_debug(path, ore::now::now_zero)
+                    let disk_state = Catalog::open_debug(path, NOW_ZERO.clone())
                         .map_err_to_string()?
                         .dump();
                     let mem_state = reqwest::get(&format!(

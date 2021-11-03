@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SinkEnvelope, SourceConnector};
+use ore::now::{self, NOW_ZERO};
 use repr::{ColumnName, Diff, RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::ast::{
@@ -491,7 +492,7 @@ impl PlanContext {
     /// tests.
     pub fn zero() -> Self {
         PlanContext {
-            wall_time: ore::now::to_datetime(ore::now::now_zero()),
+            wall_time: now::to_datetime(NOW_ZERO()),
         }
     }
 }

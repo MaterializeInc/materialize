@@ -18,22 +18,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
 
-use expr::GlobalId;
-use repr::{RelationDesc, RelationType};
 use tempfile::NamedTempFile;
 
-use coord::{
-    catalog::{Catalog, CatalogItem, Table},
-    session::Session,
-};
-use sql::{
-    ast::{Expr, Statement},
-    names::{DatabaseSpecifier, FullName},
-    plan::{resolve_names, PlanContext, QueryContext, QueryLifetime, StatementContext},
-};
-use sql_parser::parser::parse_statements;
+use coord::catalog::{Catalog, CatalogItem, Table};
+use coord::session::Session;
+use expr::GlobalId;
+use ore::now::NOW_ZERO;
+use repr::{RelationDesc, RelationType};
+use sql::ast::{Expr, Statement};
+use sql::names::{DatabaseSpecifier, FullName};
+use sql::plan::{resolve_names, PlanContext, QueryContext, QueryLifetime, StatementContext};
 
 // This morally tests the name resolution stuff, but we need access to a
 // catalog.
@@ -44,7 +42,7 @@ fn datadriven() {
 
     walk("tests/testdata", |f| {
         let catalog_file = NamedTempFile::new().unwrap();
-        let mut catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero).unwrap();
+        let mut catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).unwrap();
         let mut id: u32 = 1;
         f.run(|test_case| -> String {
             match test_case.directive.as_str() {
@@ -77,7 +75,7 @@ fn datadriven() {
                     let sess = Session::dummy();
                     let catalog = catalog.for_session(&sess);
 
-                    let parsed = parse_statements(&test_case.input).unwrap();
+                    let parsed = sql::parse::parse(&test_case.input).unwrap();
                     let pcx = &PlanContext::zero();
                     let scx = StatementContext::new(
                         Some(pcx),

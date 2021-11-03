@@ -684,6 +684,7 @@ name = "coordtest"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "build-info",
  "coord",
  "datadriven",
  "dataflow",
@@ -2813,6 +2814,7 @@ dependencies = [
  "ctor",
  "either",
  "futures",
+ "lazy_static",
  "openssl",
  "pin-project",
  "prometheus",

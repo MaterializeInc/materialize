@@ -866,6 +866,7 @@ impl TimestampBindingUpdater {
 mod tests {
     use dataflow_types::MzOffset;
     use expr::PartitionId;
+    use ore::now::NOW_ZERO;
     use persist_types::Codec;
     use timely::progress::Antichain;
 
@@ -909,7 +910,7 @@ mod tests {
 
     #[test]
     fn timestamp_updater_simple_updates() {
-        let timestamp_histories = TimestampBindingRc::new(None, || 0, false);
+        let timestamp_histories = TimestampBindingRc::new(None, NOW_ZERO.clone(), false);
         let mut timestamp_binding_updater = TimestampBindingUpdater::new(Vec::new());
 
         timestamp_histories.add_partition(PartitionId::Kafka(0), None);
@@ -953,7 +954,7 @@ mod tests {
     // timestamp history.
     #[test]
     fn timestamp_updater_repeated_update() {
-        let timestamp_histories = TimestampBindingRc::new(None, || 0, false);
+        let timestamp_histories = TimestampBindingRc::new(None, NOW_ZERO.clone(), false);
         let mut timestamp_binding_updater = TimestampBindingUpdater::new(Vec::new());
 
         timestamp_histories.add_partition(PartitionId::Kafka(0), None);
@@ -985,7 +986,7 @@ mod tests {
     // emitted changes.
     #[test]
     fn timestamp_updater_compaction() {
-        let mut timestamp_histories = TimestampBindingRc::new(None, || 0, false);
+        let mut timestamp_histories = TimestampBindingRc::new(None, NOW_ZERO.clone(), false);
         let mut timestamp_binding_updater = TimestampBindingUpdater::new(Vec::new());
 
         timestamp_histories.add_partition(PartitionId::Kafka(0), None);

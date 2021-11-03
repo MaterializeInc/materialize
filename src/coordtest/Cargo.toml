@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.44"
+build-info = { path = "../build-info" }
 coord = { path = "../coord" }
 datadriven = "0.6.0"
 dataflow = { path = "../dataflow" }

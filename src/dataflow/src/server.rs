@@ -11,17 +11,20 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::thread::Thread;
 use std::time::{Duration, Instant};
 use timely::progress::reachability::logging::TrackerEvent;
 
+use anyhow::anyhow;
+use crossbeam_channel::TryRecvError;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
+use log::trace;
 use num_enum::IntoPrimitive;
-use ore::metrics::MetricsRegistry;
 use serde::{Deserialize, Serialize};
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
@@ -40,7 +43,9 @@ use dataflow_types::{
     PeekResponse, SourceConnector, TailResponse, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
-use ore::{now::NowFn, result::ResultExt};
+use ore::metrics::MetricsRegistry;
+use ore::now::NowFn;
+use ore::result::ResultExt;
 use persist::indexed::runtime::RuntimeClient;
 use repr::{Diff, Row, RowArena, Timestamp};
 
@@ -170,8 +175,12 @@ pub enum Command {
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
-    /// Disconnect inputs, drain dataflows, and shut down timely workers.
-    Shutdown,
+    /// Enable persistence.
+    // TODO: to enable persistence in clustered mode, we'll need to figure out
+    // an alternative design that doesn't require serializing a persistence
+    // client.
+    #[serde(skip)]
+    EnablePersistence(RuntimeClient),
 }
 
 impl Command {
@@ -243,9 +252,9 @@ impl CommandKind {
             CommandKind::DropSources => "drop_sources",
             CommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
             CommandKind::EnableLogging => "enable_logging",
+            CommandKind::EnablePersistence => "enable_persistence",
             CommandKind::Insert => "insert",
             CommandKind::Peek => "peek",
-            CommandKind::Shutdown => "shutdown",
         }
     }
 }
@@ -284,11 +293,8 @@ pub enum WorkerFeedback {
 
 /// Configures a dataflow server.
 pub struct Config {
-    /// Command stream receivers for each desired workers.
-    ///
-    /// The length of this vector determines the number of worker threads that
-    /// will be spawned.
-    pub command_receivers: Vec<crossbeam_channel::Receiver<Command>>,
+    /// The number of worker threads to spawn.
+    pub workers: usize,
     /// The Timely worker configuration.
     pub timely_worker: timely::WorkerConfig,
     /// Whether the server is running in experimental mode.
@@ -297,19 +303,79 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// Handle to the persistence runtime. None if disabled.
-    pub persist: Option<RuntimeClient>,
-    /// Responses to commands should be sent into this channel.
-    pub feedback_tx: mpsc::UnboundedSender<Response>,
+    /// An optional callback that is presented with both halves of the dataflow
+    /// feedback channel on startup. The callback can swap the channel for
+    /// another in order to intercept messages.
+    ///
+    /// For testing purposes only.
+    pub response_interceptor: Option<ResponseInterceptor>,
+}
+
+type ResponseInterceptor =
+    Box<dyn FnOnce(&mut mpsc::UnboundedSender<Response>, &mut mpsc::UnboundedReceiver<Response>)>;
+
+/// A handle to a running dataflow server.
+///
+/// Dropping this object will block until the dataflow computation ceases.
+pub struct Server {
+    _worker_guards: WorkerGuards<()>,
+}
+
+/// A client to a dataflow [`Server`].
+pub struct Client {
+    feedback_rx: mpsc::UnboundedReceiver<Response>,
+    worker_txs: Vec<crossbeam_channel::Sender<Command>>,
+    worker_threads: Vec<Thread>,
+}
+
+impl Client {
+    /// Reports the number of dataflow workers.
+    pub fn num_workers(&self) -> usize {
+        self.worker_txs.len()
+    }
+
+    /// Sends a command to the dataflow server.
+    pub fn send(&self, cmd: Command) {
+        trace!("Broadcasting dataflow command: {:?}", cmd);
+        let num_workers = self.num_workers();
+        if num_workers == 1 {
+            // This special case avoids a clone of the whole plan.
+            self.worker_txs[0]
+                .send(cmd)
+                .expect("worker command receiver should not drop first");
+        } else {
+            for (index, sendpoint) in self.worker_txs.iter().enumerate() {
+                sendpoint
+                    .send(cmd.clone_for_worker(index, self.num_workers()))
+                    .expect("worker command receiver should not drop first")
+            }
+        }
+        for thread in &self.worker_threads {
+            thread.unpark()
+        }
+    }
+
+    /// Receives the next response from the dataflow server.
+    ///
+    /// This method blocks until the next response is available, or, if the
+    /// dataflow server has been shut down, returns `None`.
+    pub async fn recv(&mut self) -> Option<Response> {
+        return self.feedback_rx.recv().await;
+    }
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
+pub fn serve(config: Config) -> Result<(Server, Client), anyhow::Error> {
+    assert!(config.workers > 0);
+
     let server_metrics = ServerMetrics::register_with(&config.metrics_registry);
     let dataflow_source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
     let dataflow_sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
-    let workers = config.command_receivers.len();
-    assert!(workers > 0);
+
+    let (mut feedback_tx, mut feedback_rx) = mpsc::unbounded_channel();
+    if let Some(response_interceptor) = config.response_interceptor {
+        response_interceptor(&mut feedback_tx, &mut feedback_rx);
+    }
 
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream.
@@ -317,23 +383,23 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
     // TODO(benesch): package up this idiom of handing out ownership of N items
     // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
     // is hard to read through.
-    let command_rxs: Mutex<Vec<_>> =
-        Mutex::new(config.command_receivers.into_iter().map(Some).collect());
+    let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+        .map(|_| crossbeam_channel::unbounded())
+        .unzip();
+    let command_rxs: Mutex<Vec<_>> = Mutex::new(worker_rxs.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
     let metrics = Metrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
-    let persist = config.persist;
-    let feedback_tx = config.feedback_tx.clone();
-    timely::execute::execute(
+    let worker_guards = timely::execute::execute(
         timely::Config {
-            communication: timely::CommunicationConfig::Process(workers),
+            communication: timely::CommunicationConfig::Process(config.workers),
             worker: config.timely_worker,
         },
         move |timely_worker| {
             let _tokio_guard = tokio_executor.enter();
-            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % workers]
+            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % config.workers]
                 .take()
                 .unwrap();
             let worker_idx = timely_worker.index();
@@ -351,7 +417,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     dataflow_tokens: HashMap::new(),
                     sink_write_frontiers: HashMap::new(),
                     metrics,
-                    persist: persist.clone(),
+                    persist: None,
                     tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
                 },
                 materialized_logger: None,
@@ -362,13 +428,27 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 reported_bindings_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
                 metrics: server_metrics.for_worker_id(worker_idx),
-                now,
+                now: now.clone(),
                 dataflow_source_metrics,
                 dataflow_sink_metrics,
             }
             .run()
         },
     )
+    .map_err(|e| anyhow!("{}", e))?;
+    let client = Client {
+        feedback_rx,
+        worker_txs,
+        worker_threads: worker_guards
+            .guards()
+            .iter()
+            .map(|g| g.thread().clone())
+            .collect(),
+    };
+    let server = Server {
+        _worker_guards: worker_guards,
+    };
+    Ok((server, client))
 }
 
 /// State maintained for each worker thread.
@@ -669,12 +749,20 @@ where
             self.report_timestamp_bindings();
 
             // Handle any received commands.
-            let cmds: Vec<_> = self.command_rx.try_iter().collect();
+            let mut cmds = vec![];
+            let mut empty = false;
+            while !empty {
+                match self.command_rx.try_recv() {
+                    Ok(cmd) => cmds.push(cmd),
+                    Err(TryRecvError::Empty) => empty = true,
+                    Err(TryRecvError::Disconnected) => {
+                        empty = true;
+                        shutdown = true;
+                    }
+                }
+            }
             self.metrics.observe_command_queue(&cmds);
             for cmd in cmds {
-                if let Command::Shutdown = cmd {
-                    shutdown = true;
-                }
                 self.metrics.observe_command(&cmd);
                 self.handle_command(cmd);
             }
@@ -684,6 +772,8 @@ where
             self.process_peeks();
             self.process_tails();
         }
+        self.render_state.traces.del_all_traces();
+        self.shutdown_logging();
     }
 
     /// Send progress information to the coordinator.
@@ -765,12 +855,10 @@ where
         }
 
         if !progress.is_empty() {
-            self.feedback_tx
-                .send(Response {
-                    worker_id: self.timely_worker.index(),
-                    message: WorkerFeedback::FrontierUppers(progress),
-                })
-                .expect("feedback receiver should not drop first");
+            self.send_response(Response {
+                worker_id: self.timely_worker.index(),
+                message: WorkerFeedback::FrontierUppers(progress),
+            });
         }
     }
 
@@ -829,15 +917,13 @@ where
         }
 
         if !changes.is_empty() || !bindings.is_empty() {
-            self.feedback_tx
-                .send(Response {
-                    worker_id: self.timely_worker.index(),
-                    message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
-                        changes,
-                        bindings,
-                    }),
-                })
-                .expect("feedback receiver should not drop first");
+            self.send_response(Response {
+                worker_id: self.timely_worker.index(),
+                message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
+                    changes,
+                    bindings,
+                }),
+            });
         }
         self.last_bindings_feedback = Instant::now();
     }
@@ -879,7 +965,7 @@ where
                         self.timely_worker,
                         &mut self.render_state,
                         dataflow,
-                        self.now,
+                        self.now.clone(),
                         &self.dataflow_source_metrics,
                         &self.dataflow_sink_metrics,
                     );
@@ -1018,10 +1104,8 @@ where
             Command::EnableLogging(config) => {
                 self.initialize_logging(&config);
             }
-            Command::Shutdown => {
-                // this should lead timely to wind down eventually
-                self.render_state.traces.del_all_traces();
-                self.shutdown_logging();
+            Command::EnablePersistence(runtime) => {
+                self.render_state.persist = Some(runtime);
             }
             Command::AddSourceTimestamping {
                 id,
@@ -1035,10 +1119,10 @@ where
                     ..
                 } = connector
                 {
-                    let byo_default = TimestampBindingRc::new(None, self.now, true);
+                    let byo_default = TimestampBindingRc::new(None, self.now.clone(), true);
                     let rt_default = TimestampBindingRc::new(
                         Some(ts_frequency.as_millis().try_into().unwrap()),
-                        self.now,
+                        self.now.clone(),
                         false,
                     );
                     match (connector, consistency) {
@@ -1197,12 +1281,10 @@ where
     /// meant to prevent multiple responses to the same peek.
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         // Respond with the response.
-        self.feedback_tx
-            .send(Response {
-                worker_id: self.timely_worker.index(),
-                message: WorkerFeedback::PeekResponse(peek.conn_id, response),
-            })
-            .expect("feedback receiver should not drop first");
+        self.send_response(Response {
+            worker_id: self.timely_worker.index(),
+            message: WorkerFeedback::PeekResponse(peek.conn_id, response),
+        });
 
         // Log responding to the peek request.
         if let Some(logger) = self.materialized_logger.as_mut() {
@@ -1214,13 +1296,18 @@ where
     fn process_tails(&mut self) {
         let mut tail_responses = self.render_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
-            self.feedback_tx
-                .send(Response {
-                    worker_id: self.timely_worker.index(),
-                    message: WorkerFeedback::TailResponse(sink_id, response),
-                })
-                .expect("feedback receiver should not drop first");
+            self.send_response(Response {
+                worker_id: self.timely_worker.index(),
+                message: WorkerFeedback::TailResponse(sink_id, response),
+            });
         }
+    }
+
+    /// Send a response to the coordinator.
+    fn send_response(&self, response: Response) {
+        // Ignore send errors because the coordinator is free to ignore our
+        // responses. This happens during shutdown.
+        let _ = self.feedback_tx.send(response);
     }
 }
 
