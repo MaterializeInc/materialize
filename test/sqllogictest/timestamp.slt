@@ -25,7 +25,7 @@ FROM (
   ('hour', '1 h'),
   ('minute', '1 m'),
   ('second', '1 s')
-) intervals (ts, interval),
+) intervals (str, interval),
 (VALUES (timestamp '2020-02-29 15:44:17.71393')) ts (ts);
 ----
 day

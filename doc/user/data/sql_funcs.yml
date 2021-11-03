@@ -434,6 +434,10 @@
     description: Converts a timestamp into a string using the specified format.
     url: to_char
 
+  - signature: 'window_tumbling(ts: timestamp, width: interval) -> Record { window_start, window_end }'
+    description: Determines which non-overlapping window of the specified `width` starting at the Unix epoch `ts` belongs to.
+    url: window_tumbling
+
 - type: UUID
   functions:
   - signature: mz_cluster_id() -> uuid
