@@ -29,7 +29,10 @@ class Generator:
     """
 
     # By default, we create that many objects of the type under test
-    # unless overriden on a per-object basis
+    # unless overriden on a per-test basis.
+    #
+    # For tests that deal with records, the number of records processed
+    # is usually COUNT * 1000
     COUNT = 1000
 
     @classmethod
@@ -159,6 +162,139 @@ class KafkaSourcesSameTopic(Generator):
         ]
 
         [print(f"> SELECT * FROM s{i};\n123") for i in cls.all()]
+
+
+class KafkaPartitions(Generator):
+    COUNT = min(Generator.COUNT, 100)  # It takes 5+min to process 1K partitions
+
+    @classmethod
+    def body(cls):
+        print("$ set-sql-timeout duration=120s")
+        print('$ set key-schema={"type": "string"}')
+        print(
+            '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
+        )
+        print(
+            f"$ kafka-create-topic topic=kafka-partitions partitions={round(cls.COUNT/2)}"
+        )
+        print(
+            "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true partition=-1"
+        )
+        [print(f'"{i}" {{"f1": "{i}"}}') for i in cls.all()]
+
+        print(
+            """> CREATE MATERIALIZED SOURCE s1
+            FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-partitions-${testdrive.seed}'
+            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+            ENVELOPE NONE;
+            """
+        )
+
+        print(
+            f"$ kafka-add-partitions topic=kafka-partitions total-partitions={cls.COUNT}"
+        )
+
+        print(
+            "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true partition=-1"
+        )
+        [print(f'"{i}" {{"f1": "{i}"}}') for i in cls.all()]
+
+        print(f"> SELECT COUNT(*) FROM s1;\n{cls.COUNT * 2}")
+
+
+class KafkaRecordsEnvelopeNone(Generator):
+    COUNT = Generator.COUNT * 1_000
+
+    @classmethod
+    def body(cls):
+        print(
+            '$ set kafka-records-envelope-none={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
+        )
+        print("$ kafka-create-topic topic=kafka-records-envelope-none")
+        print(
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-none schema=${{kafka-records-envelope-none}} publish=true repeat={cls.COUNT}"
+        )
+        print('{"f1": "123"}')
+
+        print(
+            f"""> CREATE MATERIALIZED SOURCE kafka_records_envelope_none
+              FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-none-${{testdrive.seed}}'
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+              ENVELOPE NONE;
+              """
+        )
+
+        print(f"> SELECT COUNT(*) FROM kafka_records_envelope_none;\n{cls.COUNT}")
+
+
+class KafkaRecordsEnvelopeUpsertSameValue(Generator):
+    COUNT = Generator.COUNT * 1_000
+
+    @classmethod
+    def body(cls):
+        print(
+            '$ set kafka-records-envelope-upsert-same-key={"type": "record", "name": "Key", "fields": [ {"name": "key", "type": "string"} ] }'
+        )
+        print(
+            '$ set kafka-records-envelope-upsert-same-value={"type" : "record", "name" : "test", "fields" : [ {"name":"f1", "type":"string"} ] }'
+        )
+        print("$ kafka-create-topic topic=kafka-records-envelope-upsert-same")
+        print(
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-same key-format=avro key-schema=${{kafka-records-envelope-upsert-same-key}} schema=${{kafka-records-envelope-upsert-same-value}} publish=true repeat={cls.COUNT}"
+        )
+        print('{"key": "fish"} {"f1": "fish"}')
+
+        print(
+            f"""> CREATE MATERIALIZED SOURCE kafka_records_envelope_upsert_same
+              FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-upsert-same-${{testdrive.seed}}'
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+              ENVELOPE UPSERT;
+              """
+        )
+
+        print("> SELECT * FROM kafka_records_envelope_upsert_same;\nfish fish")
+        print("> SELECT COUNT(*) FROM kafka_records_envelope_upsert_same;\n1")
+
+
+class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
+    COUNT = Generator.COUNT * 1_000
+
+    @classmethod
+    def body(cls):
+        print(
+            '$ set kafka-records-envelope-upsert-distinct-key={"type": "record", "name": "Key", "fields": [ {"name": "key", "type": "string"} ] }'
+        )
+        print(
+            '$ set kafka-records-envelope-upsert-distinct-value={"type" : "record", "name" : "test", "fields" : [ {"name":"f1", "type":"string"} ] }'
+        )
+        print("$ kafka-create-topic topic=kafka-records-envelope-upsert-distinct")
+        print(
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} publish=true repeat={cls.COUNT}"
+        )
+        print(
+            '{"key": "${kafka-ingest.iteration}"} {"f1": "${kafka-ingest.iteration}"}'
+        )
+
+        print(
+            f"""> CREATE MATERIALIZED SOURCE kafka_records_envelope_upsert_distinct
+              FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-upsert-distinct-${{testdrive.seed}}'
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+              ENVELOPE UPSERT;
+              """
+        )
+
+        print(
+            f"> SELECT COUNT(*), COUNT(DISTINCT f1) FROM kafka_records_envelope_upsert_distinct;\n{cls.COUNT} {cls.COUNT}"
+        )
+
+        print(
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} publish=true repeat={cls.COUNT}"
+        )
+        print('{"key": "${kafka-ingest.iteration}"}')
+
+        print(
+            f"> SELECT COUNT(*), COUNT(DISTINCT f1) FROM kafka_records_envelope_upsert_distinct;\n0 0"
+        )
 
 
 class KafkaSinks(Generator):
