@@ -16,8 +16,51 @@ use std::str::FromStr;
 
 use abomonation_derive::Abomonation;
 use async_trait::async_trait;
+use futures_executor::block_on;
 
 use crate::error::Error;
+use crate::indexed::encoding::BlobMeta;
+
+/// Sanity check whether we can decode the Blob's persisted meta object, and delete
+/// all data if the encoded version is less than what the current implementation supports.
+///
+/// TODO: this is a hack and we will need to get rid of this once we have a
+/// proper backwards compatibility policy.
+pub fn check_meta_version_maybe_delete_data<B: Blob>(b: &mut B) -> Result<(), Error> {
+    let meta = match block_on(b.get("META"))? {
+        None => return Ok(()),
+        Some(bytes) => bytes,
+    };
+
+    let current_version = BlobMeta::version();
+    let persisted_version = BlobMeta::encoded_version(&meta)?;
+
+    if current_version == persisted_version {
+        // Nothing to do here, everything is working as expected.
+        Ok(())
+    } else if current_version > persisted_version {
+        // Delete all the keys, as we are upgrading to a new version.
+        log::info!(
+            "Persistence beta detected version mismatch. Deleting all previously persisted data as part of upgrade from version {} to {}.",
+            persisted_version,
+            current_version
+        );
+        let keys = block_on(b.list_keys())?;
+        for key in keys {
+            block_on(b.delete(&key))?;
+        }
+
+        Ok(())
+    } else {
+        // We are reading a version further in advance than current,
+        // likely because a user has downgraded to an older version of
+        // Materialize.
+        Err(Error::from(format!(
+            "invalid persistence version found {} can only read {}. hint: try upgrading Materialize or deleting the previously persisted data.",
+            persisted_version, current_version
+        )))
+    }
+}
 
 /// A "sequence number", uniquely associated with an entry in a Log.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Abomonation)]
@@ -218,7 +261,10 @@ impl From<(&str, &str)> for LockInfo {
 pub mod tests {
     use std::ops::RangeInclusive;
 
+    use persist_types::Codec;
+
     use crate::error::Error;
+    use crate::mem::MemRegistry;
 
     use super::*;
 
@@ -471,6 +517,47 @@ pub mod tests {
                 .check_reentrant_for(&"", l.to_string().as_bytes()),
             Err("location \"\" was already_locked:\nfoo\nbar".into())
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn check_meta_version() -> Result<(), Error> {
+        let registry = MemRegistry::new();
+        let mut blob = registry.blob_no_reentrance()?;
+
+        let meta = BlobMeta::default();
+        let mut val = Vec::new();
+        meta.encode(&mut val);
+        let current_version = val[0];
+
+        // This test needs to be able to increment and decrement the current
+        // version.
+        assert!(current_version > 0 && current_version < u8::MAX);
+        let (future_version, prev_version) = (current_version + 1, current_version - 1);
+
+        // Blob without meta. No-op.
+        check_meta_version_maybe_delete_data(&mut blob)?;
+        assert_eq!(block_on(blob.list_keys())?, Vec::<String>::new());
+
+        // encoded_version == current version. No-op.
+        block_on(blob.set("META", val.clone(), true))?;
+        check_meta_version_maybe_delete_data(&mut blob)?;
+        assert_eq!(block_on(blob.list_keys())?, vec!["META".to_string()]);
+
+        // encoded_version > current_version. Should return an error indicating
+        // encoded_version is from the future, and not modify the blob.
+        val[0] = future_version;
+        block_on(blob.set("META", val.clone(), true))?;
+        assert!(check_meta_version_maybe_delete_data(&mut blob).is_err());
+        assert_eq!(block_on(blob.list_keys())?, vec!["META".to_string()]);
+
+        // encoded_version < current_version. Should delete all existing keys,
+        // and not return any errors.
+        val[0] = prev_version;
+        block_on(blob.set("META", val.clone(), true))?;
+        check_meta_version_maybe_delete_data(&mut blob)?;
+        assert_eq!(block_on(blob.list_keys())?, Vec::<String>::new());
 
         Ok(())
     }
