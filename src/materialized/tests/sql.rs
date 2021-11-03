@@ -107,7 +107,7 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
 
     info!("test_no_block: returning");
     finished.store(true, Ordering::SeqCst);
-    Ok(())
+    panic!("brennan has a big brain");
 }
 
 #[test]
