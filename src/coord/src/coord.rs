@@ -50,7 +50,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
-use futures::stream::{self, StreamExt};
+use futures::stream::StreamExt;
 use rand::Rng;
 use repr::adt::interval::Interval;
 use timely::communication::WorkerGuards;
@@ -58,8 +58,8 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
+use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use build_info::BuildInfo;
 use dataflow::{TimestampBindingFeedback, WorkerFeedback};
@@ -138,7 +138,6 @@ pub enum Message {
     ScrapeMetrics,
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
-    Shutdown,
 }
 
 #[derive(Derivative)]
@@ -307,10 +306,12 @@ pub struct Coordinator {
 /// Although it is present in the coordinator process / thread, it represents information best
 /// maintained by the dataflow module itself.
 pub struct DataflowClient {
-    /// Guards for worker threads.
-    worker_guards: WorkerGuards<()>,
+    // Drop order matters here. The transmitters must be dropped in order for
+    // the workers to wind down.
     /// Channels to broadcast commands to workers.
     worker_txs: Vec<crossbeam_channel::Sender<dataflow::Command>>,
+    /// Guards for worker threads.
+    worker_guards: WorkerGuards<()>,
 }
 
 impl DataflowClient {
@@ -622,35 +623,27 @@ impl Coordinator {
     /// You must call `bootstrap` before calling this method.
     async fn serve(
         mut self,
-        internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
-        cmd_rx: mpsc::UnboundedReceiver<Command>,
-        feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
+        mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
+        mut cmd_rx: mpsc::UnboundedReceiver<Command>,
+        mut feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
     ) {
-        let (drain_trigger, drain_tripwire) = oneshot::channel::<()>();
+        let mut metric_scraper_stream = self.metric_scraper.tick_stream();
 
-        let cmd_stream = UnboundedReceiverStream::new(cmd_rx)
-            .map(Message::Command)
-            .chain(stream::once(future::ready(Message::Shutdown)));
+        loop {
+            let msg = select! {
+                // Order matters here. We want to process internal commands
+                // before processing external commands.
+                biased;
 
-        let feedback_stream = UnboundedReceiverStream::new(feedback_rx).map(Message::Worker);
+                Some(m) = internal_cmd_rx.recv() => m,
+                Some(m) = feedback_rx.recv() => Message::Worker(m),
+                Some(m) = metric_scraper_stream.next() => m,
+                m = cmd_rx.recv() => match m {
+                    None => break,
+                    Some(m) => Message::Command(m),
+                },
+            };
 
-        let metric_scraper_stream = self
-            .metric_scraper
-            .tick_stream()
-            .take_until(drain_tripwire)
-            .boxed();
-
-        let mut messages = ore::future::select_all_biased(vec![
-            // Order matters here. We want to drain internal commands
-            // (`internal_cmd_rx` and `feedback_stream`) before processing
-            // external commands (`cmd_stream`).
-            UnboundedReceiverStream::new(internal_cmd_rx).boxed(),
-            feedback_stream.boxed(),
-            metric_scraper_stream,
-            cmd_stream.boxed(),
-        ]);
-
-        while let Some(msg) = messages.next().await {
             match msg {
                 Message::Command(cmd) => self.message_command(cmd),
                 Message::Worker(worker) => self.message_worker(worker),
@@ -671,23 +664,12 @@ impl Coordinator {
                     self.message_advance_source_timestamp(advance)
                 }
                 Message::ScrapeMetrics => self.message_scrape_metrics(),
-                Message::Shutdown => {
-                    self.message_shutdown();
-                    break;
-                }
             }
 
             if self.need_advance {
                 self.advance_local_inputs();
             }
         }
-
-        // Cleanly drain any pending messages from the worker before shutting
-        // down.
-        drop(self.ts_tx);
-        drop(drain_trigger);
-        drop(self.internal_cmd_tx);
-        while messages.next().await.is_some() {}
     }
 
     // Advance all local inputs (tables) to the current wall clock or at least
@@ -923,10 +905,6 @@ impl Coordinator {
                 tx.send(Err(e), session);
             }
         }
-    }
-
-    fn message_shutdown(&mut self) {
-        self.broadcast(dataflow::Command::Shutdown);
     }
 
     fn message_send_diffs(
@@ -4398,7 +4376,7 @@ pub async fn serve(
     // In order for the coordinator to support Rc and Refcell types, it cannot be
     // sent across threads. Spawn it in a thread and have this parent thread wait
     // for bootstrap completion before proceeding.
-    let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
+    let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
     let handle = TokioHandle::current();
     let thread = thread::Builder::new()
         .name("coordinator".to_string())
@@ -4446,14 +4424,12 @@ pub async fn serve(
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
-            if !ok {
-                coord.broadcast(dataflow::Command::Shutdown);
-                return;
+            if ok {
+                handle.block_on(coord.serve(internal_cmd_rx, cmd_rx, feedback_rx));
             }
-            handle.block_on(coord.serve(internal_cmd_rx, cmd_rx, feedback_rx))
         })
         .unwrap();
-    match bootstrap_rx.recv().unwrap() {
+    match bootstrap_rx.await.unwrap() {
         Ok(()) => {
             let handle = Handle {
                 cluster_id,

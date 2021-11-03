@@ -14,6 +14,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use timely::progress::reachability::logging::TrackerEvent;
 
+use crossbeam_channel::TryRecvError;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
@@ -21,7 +22,6 @@ use differential_dataflow::Collection;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
 use num_enum::IntoPrimitive;
-use ore::metrics::MetricsRegistry;
 use serde::{Deserialize, Serialize};
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
@@ -40,7 +40,9 @@ use dataflow_types::{
     PeekResponse, SourceConnector, TailResponse, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
-use ore::{now::NowFn, result::ResultExt};
+use ore::metrics::MetricsRegistry;
+use ore::now::NowFn;
+use ore::result::ResultExt;
 use persist::indexed::runtime::RuntimeClient;
 use repr::{Diff, Row, RowArena, Timestamp};
 
@@ -169,8 +171,6 @@ pub enum Command {
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
-    /// Disconnect inputs, drain dataflows, and shut down timely workers.
-    Shutdown,
 }
 
 impl Command {
@@ -244,7 +244,6 @@ impl CommandKind {
             CommandKind::EnableLogging => "enable_logging",
             CommandKind::Insert => "insert",
             CommandKind::Peek => "peek",
-            CommandKind::Shutdown => "shutdown",
         }
     }
 }
@@ -668,12 +667,20 @@ where
             self.report_timestamp_bindings();
 
             // Handle any received commands.
-            let cmds: Vec<_> = self.command_rx.try_iter().collect();
+            let mut cmds = vec![];
+            let mut empty = false;
+            while !empty {
+                match self.command_rx.try_recv() {
+                    Ok(cmd) => cmds.push(cmd),
+                    Err(TryRecvError::Empty) => empty = true,
+                    Err(TryRecvError::Disconnected) => {
+                        empty = true;
+                        shutdown = true;
+                    }
+                }
+            }
             self.metrics.observe_command_queue(&cmds);
             for cmd in cmds {
-                if let Command::Shutdown = cmd {
-                    shutdown = true;
-                }
                 self.metrics.observe_command(&cmd);
                 self.handle_command(cmd);
             }
@@ -683,6 +690,8 @@ where
             self.process_peeks();
             self.process_tails();
         }
+        self.render_state.traces.del_all_traces();
+        self.shutdown_logging();
     }
 
     /// Send progress information to the coordinator.
@@ -764,12 +773,10 @@ where
         }
 
         if !progress.is_empty() {
-            self.feedback_tx
-                .send(Response {
-                    worker_id: self.timely_worker.index(),
-                    message: WorkerFeedback::FrontierUppers(progress),
-                })
-                .expect("feedback receiver should not drop first");
+            self.send_response(Response {
+                worker_id: self.timely_worker.index(),
+                message: WorkerFeedback::FrontierUppers(progress),
+            });
         }
     }
 
@@ -828,15 +835,13 @@ where
         }
 
         if !changes.is_empty() || !bindings.is_empty() {
-            self.feedback_tx
-                .send(Response {
-                    worker_id: self.timely_worker.index(),
-                    message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
-                        changes,
-                        bindings,
-                    }),
-                })
-                .expect("feedback receiver should not drop first");
+            self.send_response(Response {
+                worker_id: self.timely_worker.index(),
+                message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
+                    changes,
+                    bindings,
+                }),
+            });
         }
         self.last_bindings_feedback = Instant::now();
     }
@@ -1017,11 +1022,6 @@ where
             Command::EnableLogging(config) => {
                 self.initialize_logging(&config);
             }
-            Command::Shutdown => {
-                // this should lead timely to wind down eventually
-                self.render_state.traces.del_all_traces();
-                self.shutdown_logging();
-            }
             Command::AddSourceTimestamping {
                 id,
                 connector,
@@ -1196,12 +1196,10 @@ where
     /// meant to prevent multiple responses to the same peek.
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         // Respond with the response.
-        self.feedback_tx
-            .send(Response {
-                worker_id: self.timely_worker.index(),
-                message: WorkerFeedback::PeekResponse(peek.conn_id, response),
-            })
-            .expect("feedback receiver should not drop first");
+        self.send_response(Response {
+            worker_id: self.timely_worker.index(),
+            message: WorkerFeedback::PeekResponse(peek.conn_id, response),
+        });
 
         // Log responding to the peek request.
         if let Some(logger) = self.materialized_logger.as_mut() {
@@ -1213,13 +1211,18 @@ where
     fn process_tails(&mut self) {
         let mut tail_responses = self.render_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
-            self.feedback_tx
-                .send(Response {
-                    worker_id: self.timely_worker.index(),
-                    message: WorkerFeedback::TailResponse(sink_id, response),
-                })
-                .expect("feedback receiver should not drop first");
+            self.send_response(Response {
+                worker_id: self.timely_worker.index(),
+                message: WorkerFeedback::TailResponse(sink_id, response),
+            });
         }
+    }
+
+    /// Send a response to the coordinator.
+    fn send_response(&self, response: Response) {
+        // Ignore send errors because the coordinator is free to ignore our
+        // responses. This happens during shutdown.
+        let _ = self.feedback_tx.send(response);
     }
 }
 
