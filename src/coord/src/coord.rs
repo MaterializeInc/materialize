@@ -2663,6 +2663,7 @@ where
             session
                 .vars()
                 .iter()
+                .filter(|v| !v.experimental())
                 .map(|v| {
                     Row::pack_slice(&[
                         Datum::String(v.name()),
