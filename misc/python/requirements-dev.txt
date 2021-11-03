@@ -1,6 +1,6 @@
 black==21.9b0
 boto3-stubs[ec2,kinesis,s3,sqs,ssm,sts]==1.19.8
-boto3==1.19.8
+boto3==1.19.9
 flake8==3.9.2
 humanize==3.11.0
 isort==5.9.3
