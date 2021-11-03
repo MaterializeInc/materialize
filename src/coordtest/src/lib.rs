@@ -61,23 +61,23 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::future::Future;
 use std::io::Write;
+use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use futures::future::FutureExt;
-use ore::metrics::MetricsRegistry;
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::TempDir;
 use tokio::sync::mpsc;
 
-use coord::{
-    session::{EndTransactionAction, Session},
-    Client, ExecuteResponse, SessionClient, StartupResponse,
-};
+use build_info::DUMMY_BUILD_INFO;
+use coord::session::{EndTransactionAction, Session};
+use coord::{Client, ExecuteResponse, Handle, PersistConfig, SessionClient, StartupResponse};
 use dataflow::WorkerFeedback;
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
-use ore::thread::JoinOnDropHandle;
+use ore::metrics::MetricsRegistry;
+use ore::now::NowFn;
 use repr::{Datum, Timestamp};
 use timely::progress::change_batch::ChangeBatch;
 
@@ -92,39 +92,61 @@ use timely::progress::change_batch::ChangeBatch;
 // down without ever panicing.
 pub struct CoordTest {
     coord_feedback_tx: mpsc::UnboundedSender<dataflow::Response>,
-    client: Option<Client>,
-    _handle: JoinOnDropHandle<()>,
+    client: Client,
+    _handle: Handle,
     dataflow_feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
     // Keep a queue of messages in the order received from dataflow_feedback_rx so
     // we can safely modify or inject things and maintain original message order.
     queued_feedback: Vec<dataflow::Response>,
-    _catalog_file: NamedTempFile,
+    _data_directory: TempDir,
     temp_dir: TempDir,
     uppers: HashMap<GlobalId, Timestamp>,
     timestamp: Arc<Mutex<u64>>,
-    _verbose: bool,
-    _metrics_registry: MetricsRegistry,
+    verbose: bool,
     persisted_sessions: HashMap<String, (SessionClient, StartupResponse)>,
     deferred_results: HashMap<String, Vec<ExecuteResponse>>,
 }
 
 impl CoordTest {
     pub async fn new() -> anyhow::Result<Self> {
-        let catalog_file = NamedTempFile::new()?;
-        let metrics_registry = MetricsRegistry::new();
-        let (handle, client, coord_feedback_tx, dataflow_feedback_rx, timestamp) =
-            coord::serve_debug(catalog_file.path(), metrics_registry.clone());
+        let timestamp = Arc::new(Mutex::new(0));
+        let data_directory = tempfile::tempdir()?;
+        let (mut dataflow_feedback_tx, dataflow_feedback_rx) = mpsc::unbounded_channel();
+        let (coord_feedback_tx, mut coord_feedback_rx) = mpsc::unbounded_channel();
+        let (handle, client) = coord::serve(coord::Config {
+            workers: 1,
+            timely_worker: timely::WorkerConfig::default(),
+            symbiosis_url: None,
+            data_directory: data_directory.path(),
+            logging: None,
+            logical_compaction_window: None,
+            timestamp_frequency: Duration::from_millis(1),
+            experimental_mode: false,
+            disable_user_indexes: false,
+            safe_mode: false,
+            build_info: &DUMMY_BUILD_INFO,
+            metrics_registry: MetricsRegistry::new(),
+            persist: PersistConfig::disabled(),
+            now: {
+                let timestamp = timestamp.clone();
+                NowFn::from(move || *timestamp.lock().unwrap())
+            },
+            dataflow_response_interceptor: Some(Box::new(move |tx, rx| {
+                mem::swap(tx, &mut dataflow_feedback_tx);
+                mem::swap(rx, &mut coord_feedback_rx);
+            })),
+        })
+        .await?;
         let coordtest = CoordTest {
-            _handle: handle,
-            client: Some(client),
             coord_feedback_tx,
+            _handle: handle,
+            client,
             dataflow_feedback_rx,
-            _catalog_file: catalog_file,
+            _data_directory: data_directory,
             temp_dir: tempfile::tempdir().unwrap(),
             uppers: HashMap::new(),
-            _verbose: std::env::var_os("COORDTEST_VERBOSE").is_some(),
             timestamp,
-            _metrics_registry: metrics_registry,
+            verbose: std::env::var_os("COORDTEST_VERBOSE").is_some(),
             queued_feedback: Vec::new(),
             persisted_sessions: HashMap::new(),
             deferred_results: HashMap::new(),
@@ -133,7 +155,7 @@ impl CoordTest {
     }
 
     async fn connect(&self) -> anyhow::Result<(SessionClient, StartupResponse)> {
-        let conn_client = self.client.as_ref().unwrap().new_conn()?;
+        let conn_client = self.client.new_conn()?;
         let session = Session::new(conn_client.conn_id(), "materialize".into());
         Ok(conn_client.startup(session).await?)
     }
@@ -302,7 +324,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
     let ct = std::rc::Rc::new(std::cell::RefCell::new(CoordTest::new().await.unwrap()));
     tf.run_async(|tc| {
         let mut ct = ct.borrow_mut();
-        if ct._verbose {
+        if ct.verbose {
             println!("{} {:?}: {}", tc.directive, tc.args, tc.input);
         }
         async move {

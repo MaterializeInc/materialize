@@ -240,6 +240,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         persist: config.persist,
         now: SYSTEM_TIME.clone(),
+        dataflow_response_interceptor: None,
     })
     .await?;
 

@@ -41,7 +41,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -61,7 +61,7 @@ use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use build_info::BuildInfo;
 use dataflow::{TimestampBindingFeedback, WorkerFeedback};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
@@ -222,6 +222,17 @@ pub struct Config<'a> {
     /// Persistence subsystem configuration.
     pub persist: PersistConfig,
     pub now: NowFn,
+    /// An optional callback that is presented with both halves of the dataflow
+    /// feedback channel on startup. The callback can swap the channel for
+    /// another in order to intercept messages.
+    pub dataflow_response_interceptor: Option<
+        Box<
+            dyn FnOnce(
+                &mut mpsc::UnboundedSender<dataflow::Response>,
+                &mut mpsc::UnboundedReceiver<dataflow::Response>,
+            ),
+        >,
+    >,
 }
 
 /// Glues the external world to the Timely workers.
@@ -4317,10 +4328,14 @@ pub async fn serve(
         metrics_registry,
         persist,
         now,
+        dataflow_response_interceptor,
     }: Config<'_>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-    let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
+    let (mut feedback_tx, mut feedback_rx) = mpsc::unbounded_channel();
+    if let Some(dataflow_response_interceptor) = dataflow_response_interceptor {
+        dataflow_response_interceptor(&mut feedback_tx, &mut feedback_rx);
+    }
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
     let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
@@ -4451,136 +4466,6 @@ pub async fn serve(
         }
         Err(e) => Err(e),
     }
-}
-
-pub fn serve_debug(
-    catalog_path: &Path,
-    metrics_registry: MetricsRegistry,
-) -> (
-    JoinOnDropHandle<()>,
-    Client,
-    tokio::sync::mpsc::UnboundedSender<dataflow::Response>,
-    tokio::sync::mpsc::UnboundedReceiver<dataflow::Response>,
-    Arc<Mutex<u64>>,
-) {
-    let debug_timestamp = Arc::new(Mutex::new(0));
-    let now = NowFn::from({
-        let debug_timestamp = debug_timestamp.clone();
-        move || *debug_timestamp.lock().unwrap()
-    });
-
-    let (catalog, builtin_table_updates, persister) = catalog::Catalog::open(&catalog::Config {
-        path: catalog_path,
-        enable_logging: true,
-        experimental_mode: None,
-        safe_mode: false,
-        build_info: &DUMMY_BUILD_INFO,
-        num_workers: 0,
-        timestamp_frequency: Duration::from_millis(1),
-        now: now.clone(),
-        persist: PersistConfig::disabled(),
-        skip_migrations: false,
-        metrics_registry: &MetricsRegistry::new(),
-        disable_user_indexes: false,
-    })
-    .unwrap();
-
-    // We want to be able to control communication from dataflow to the
-    // coordinator, so setup an additional channel pair.
-    let (feedback_tx, inner_feedback_rx) = mpsc::unbounded_channel();
-    let (inner_feedback_tx, feedback_rx) = mpsc::unbounded_channel();
-
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-    let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
-    let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
-    let worker_guards = dataflow::serve(dataflow::Config {
-        command_receivers: vec![worker_rx],
-        timely_worker: timely::WorkerConfig::default(),
-        experimental_mode: true,
-        now,
-        metrics_registry: metrics_registry.clone(),
-        persist: persister,
-        feedback_tx,
-    })
-    .unwrap();
-
-    let executor = TokioHandle::current();
-    let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-    let timestamper_thread_handle = thread::Builder::new()
-        .name("timestamper".to_string())
-        .spawn(move || {
-            let _executor_guard = executor.enter();
-            loop {
-                match ts_rx.recv() {
-                    // Allow local and file sources only. We don't need to do anything for these.
-                    Ok(TimestampMessage::Add(
-                        GlobalId::System(_),
-                        SourceConnector::Local {
-                            timeline: Timeline::EpochMilliseconds,
-                        },
-                    ))
-                    | Ok(TimestampMessage::Add(
-                        GlobalId::User(_),
-                        SourceConnector::External {
-                            connector: ExternalSourceConnector::File(_),
-                            ..
-                        },
-                    )) => {}
-                    Err(_) => break,
-                    // Panic on anything else (like Kafka sources) until we support them.
-                    msg => panic!("unexpected {:?}", msg),
-                }
-            }
-        })
-        .unwrap()
-        .join_on_drop();
-
-    let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
-    let handle = TokioHandle::current();
-    let thread = thread::spawn(move || {
-        let dataflow_client = DataflowClient::new(worker_guards, vec![worker_tx]);
-        let mut coord = Coordinator {
-            dataflow_client,
-            view_optimizer: Optimizer::logical_optimizer(),
-            catalog,
-            symbiosis: None,
-            indexes: ArrangementFrontiers::default(),
-            sources: ArrangementFrontiers::default(),
-            logical_compaction_window_ms: None,
-            logging_enabled: false,
-            internal_cmd_tx,
-            ts_tx,
-            _timestamper_thread_handle: timestamper_thread_handle,
-            metric_scraper: Scraper::new(None, metrics_registry).unwrap(),
-            closed_up_to: 1,
-            read_lower_bound: 1,
-            last_op_was_read: false,
-            need_advance: true,
-            transient_id_counter: 1,
-            active_conns: HashMap::new(),
-            txn_reads: HashMap::new(),
-            since_handles: HashMap::new(),
-            since_updates: Rc::new(RefCell::new(HashMap::new())),
-            sink_writes: HashMap::new(),
-            pending_peeks: HashMap::new(),
-            pending_tails: HashMap::new(),
-            write_lock: Arc::new(tokio::sync::Mutex::new(())),
-            write_lock_wait_group: VecDeque::new(),
-        };
-        let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
-        bootstrap_tx.send(bootstrap).unwrap();
-        handle.block_on(coord.serve(internal_cmd_rx, cmd_rx, feedback_rx))
-    })
-    .join_on_drop();
-    bootstrap_rx.recv().unwrap().unwrap();
-    let client = Client::new(cmd_tx);
-    (
-        thread,
-        client,
-        inner_feedback_tx,
-        inner_feedback_rx,
-        debug_timestamp,
-    )
 }
 
 /// The styles in which an expression can be prepared.

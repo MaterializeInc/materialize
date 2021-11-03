@@ -684,6 +684,7 @@ name = "coordtest"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "build-info",
  "coord",
  "datadriven",
  "dataflow",
