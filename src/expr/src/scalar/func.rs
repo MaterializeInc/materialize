@@ -520,24 +520,16 @@ fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let dt = a.unwrap_timestamp();
-    let i = b.unwrap_interval();
-    let dt = add_timestamp_months(dt, i.months)?;
-    Ok(Datum::Timestamp(
-        dt.checked_add_signed(i.duration_as_chrono())
-            .ok_or(EvalError::TimestampOutOfRange)?,
-    ))
-}
-
-fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let dt = a.unwrap_timestamptz().naive_utc();
-    let i = b.unwrap_interval();
-    let mut dt = add_timestamp_months(dt, i.months)?;
+fn add_timestamplike_interval<'a, T>(a: T, b: Interval) -> Result<Datum<'a>, EvalError>
+where
+    T: TimestampLike,
+{
+    let mut dt = a.date_time();
+    dt = add_timestamp_months(dt, b.months)?;
     dt = dt
-        .checked_add_signed(i.duration_as_chrono())
+        .checked_add_signed(b.duration_as_chrono())
         .ok_or(EvalError::TimestampOutOfRange)?;
-    Ok(Datum::TimestampTz(DateTime::<Utc>::from_utc(dt, Utc)))
+    Ok(T::from_date_time(dt).into())
 }
 
 fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -717,14 +709,6 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
         Ok(l) => Ok(Datum::from(l)),
         Err(_) => Err(EvalError::Int32OutOfRange),
     }
-}
-
-fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    add_timestamp_interval(a, Datum::Interval(-b.unwrap_interval()))
-}
-
-fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    add_timestamptz_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
 
 pub fn add_timestamp_months(
@@ -1618,6 +1602,7 @@ pub trait TimestampLike:
     + std::ops::Sub<Duration, Output = Self>
     + std::ops::Sub<Output = Duration>
     + for<'a> Into<Datum<'a>>
+    + for<'a> TryFrom<Datum<'a>, Error = ()>
 {
     fn new(date: NaiveDate, time: NaiveTime) -> Self;
 
@@ -1841,6 +1826,12 @@ pub trait TimestampLike:
     /// Return the date component of the timestamp
     fn date(&self) -> NaiveDate;
 
+    /// Return the date and time of the timestamp
+    fn date_time(&self) -> NaiveDateTime;
+
+    /// Return the date and time of the timestamp
+    fn from_date_time(dt: NaiveDateTime) -> Self;
+
     /// Returns a string representing the timezone's offset from UTC.
     fn timezone_offset(&self) -> &'static str;
 
@@ -1864,6 +1855,14 @@ impl TimestampLike for chrono::NaiveDateTime {
 
     fn date(&self) -> NaiveDate {
         self.date()
+    }
+
+    fn date_time(&self) -> NaiveDateTime {
+        self.clone()
+    }
+
+    fn from_date_time(dt: NaiveDateTime) -> NaiveDateTime {
+        dt
     }
 
     fn timestamp(&self) -> i64 {
@@ -1893,11 +1892,19 @@ impl TimestampLike for chrono::NaiveDateTime {
 
 impl TimestampLike for chrono::DateTime<chrono::Utc> {
     fn new(date: NaiveDate, time: NaiveTime) -> Self {
-        DateTime::<Utc>::from_utc(NaiveDateTime::new(date, time), Utc)
+        Self::from_date_time(NaiveDateTime::new(date, time))
     }
 
     fn date(&self) -> NaiveDate {
         self.naive_utc().date()
+    }
+
+    fn date_time(&self) -> NaiveDateTime {
+        self.naive_utc()
+    }
+
+    fn from_date_time(dt: NaiveDateTime) -> Self {
+        DateTime::<Utc>::from_utc(dt, Utc)
     }
 
     fn timestamp(&self) -> i64 {
@@ -2006,7 +2013,7 @@ where
     }
 }
 
-fn date_bin<'a, T>(stride: Interval, source: T, origin: T) -> Result<Datum<'a>, EvalError>
+pub fn date_bin<'a, T>(stride: Interval, source: T, origin: T) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
 {
@@ -2389,8 +2396,18 @@ impl BinaryFunc {
             BinaryFunc::AddInt64 => eager!(add_int64),
             BinaryFunc::AddFloat32 => eager!(add_float32),
             BinaryFunc::AddFloat64 => eager!(add_float64),
-            BinaryFunc::AddTimestampInterval => eager!(add_timestamp_interval),
-            BinaryFunc::AddTimestampTzInterval => eager!(add_timestamptz_interval),
+            BinaryFunc::AddTimestampInterval => {
+                eager!(|a: Datum, b: Datum| add_timestamplike_interval(
+                    a.unwrap_timestamp(),
+                    b.unwrap_interval(),
+                ))
+            }
+            BinaryFunc::AddTimestampTzInterval => {
+                eager!(|a: Datum, b: Datum| add_timestamplike_interval(
+                    a.unwrap_timestamptz(),
+                    b.unwrap_interval(),
+                ))
+            }
             BinaryFunc::AddDateTime => Ok(eager!(add_date_time)),
             BinaryFunc::AddDateInterval => eager!(add_date_interval),
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
@@ -2418,8 +2435,18 @@ impl BinaryFunc {
             BinaryFunc::SubFloat64 => eager!(sub_float64),
             BinaryFunc::SubTimestamp => Ok(eager!(sub_timestamp)),
             BinaryFunc::SubTimestampTz => Ok(eager!(sub_timestamptz)),
-            BinaryFunc::SubTimestampInterval => eager!(sub_timestamp_interval),
-            BinaryFunc::SubTimestampTzInterval => eager!(sub_timestamptz_interval),
+            BinaryFunc::SubTimestampInterval => {
+                eager!(|a: Datum, b: Datum| add_timestamplike_interval(
+                    a.unwrap_timestamp(),
+                    -b.unwrap_interval(),
+                ))
+            }
+            BinaryFunc::SubTimestampTzInterval => {
+                eager!(|a: Datum, b: Datum| add_timestamplike_interval(
+                    a.unwrap_timestamptz(),
+                    -b.unwrap_interval(),
+                ))
+            }
             BinaryFunc::SubInterval => eager!(sub_interval),
             BinaryFunc::SubDate => Ok(eager!(sub_date)),
             BinaryFunc::SubDateInterval => eager!(sub_date_interval),
