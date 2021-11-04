@@ -12,6 +12,7 @@ byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
+csv = "1.1.6"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 futures = "0.3.17"

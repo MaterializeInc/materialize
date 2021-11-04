@@ -9,6 +9,7 @@
 
 use std::cmp;
 use std::collections::HashMap;
+use std::convert::{TryFrom, TryInto};
 use std::future::Future;
 use std::iter;
 use std::mem;
@@ -18,7 +19,6 @@ use expr::GlobalId;
 use futures::future::{BoxFuture, FutureExt};
 use itertools::izip;
 use log::debug;
-use message::decode_copy_text_format;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
@@ -40,8 +40,10 @@ use sql::ast::{FetchDirection, Ident, Raw, Statement};
 use sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
+use crate::message::CopyFormatParams;
 use crate::message::{
-    self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
+    self, decode_copy_format, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS,
+    VERSION_3,
 };
 use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
@@ -1462,7 +1464,7 @@ where
         Ok(State::Ready)
     }
 
-    /// Handles the copy-in mode of the postgres protocol from transfering
+    /// Handles the copy-in mode of the postgres protocol from transferring
     /// data to the server.
     async fn copy_from(
         &mut self,
@@ -1471,26 +1473,29 @@ where
         params: CopyParams,
         row_desc: RelationDesc,
     ) -> Result<State, io::Error> {
-        let encode_format: pgrepr::Format = match params.format {
-            CopyFormat::Text => pgrepr::Format::Text,
-            // CopyFormat::Binary => pgrepr::Format::Binary,
-            _ => {
-                return self
-                    .error(ErrorResponse::error(
-                        SqlState::FEATURE_NOT_SUPPORTED,
-                        format!("COPY FROM format {:?} not supported", params.format),
-                    ))
-                    .await
+        if !matches!(params.format, CopyFormat::Text | CopyFormat::Csv) {
+            return self
+                .error(ErrorResponse::error(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!("COPY FROM format {:?} not supported", params.format),
+                ))
+                .await;
+        }
+
+        // Ensure params are valid here so as to error before waiting to receive
+        // any data from the client.
+        let params: CopyFormatParams = match params.try_into() {
+            Ok(params) => params,
+            Err(e) => {
+                return self.error(e).await;
             }
         };
 
         let typ = row_desc.typ();
-        let column_formats = iter::repeat(encode_format)
-            .take(typ.column_types.len())
-            .collect::<Vec<pgrepr::Format>>();
+        let column_formats = vec![pgrepr::Format::Text; typ.column_types.len()];
         self.conn
             .send(BackendMessage::CopyInResponse {
-                overall_format: encode_format,
+                overall_format: pgrepr::Format::Text,
                 column_formats,
             })
             .await?;
@@ -1535,12 +1540,7 @@ where
             .collect::<Vec<pgrepr::Type>>();
 
         if let State::Ready = next_state {
-            let rows = match decode_copy_text_format(
-                &data,
-                &column_types,
-                &params.delimiter,
-                &params.null,
-            ) {
+            let rows = match decode_copy_format(&data, &column_types, params) {
                 Ok(rows) => rows,
                 Err(e) => {
                     return self
@@ -1551,6 +1551,7 @@ where
                         .await
                 }
             };
+
             let count = rows.len();
 
             if let Err(e) = self.coord_client.insert_rows(id, columns, rows).await {

@@ -430,18 +430,21 @@ pub enum MutationKind {
     Delete,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CopyFormat {
     Text,
     Csv,
     Binary,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CopyParams {
     pub format: CopyFormat,
     pub null: Option<String>,
     pub delimiter: Option<String>,
+    pub quote: Option<String>,
+    pub escape: Option<String>,
+    pub header: Option<bool>,
 }
 
 #[derive(Debug, Copy, Clone)]

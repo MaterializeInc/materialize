@@ -7,19 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::convert::{TryFrom, TryInto};
 use std::io;
 
 use bytes::BytesMut;
-use coord::{CoordError, StartupMessage};
+use csv::{ByteRecord, ReaderBuilder};
 use itertools::Itertools;
 use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
+use coord::{CoordError, StartupMessage};
 use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
 use repr::{
     ColumnName, Datum, NotNullViolation, RelationDesc, RelationType, Row, RowArena, ScalarType,
 };
+use sql::plan::{CopyFormat, CopyParams};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -525,6 +529,9 @@ pub fn encode_copy_row_text(
     Ok(())
 }
 
+// This is equivalent to a backslash followed by a dot, i.e "\."
+static END_OF_COPY_MARKER: [u8; 2] = [92, 46];
+
 struct CopyTextFormatParser<'a> {
     data: &'a [u8],
     position: usize,
@@ -561,7 +568,7 @@ impl<'a> CopyTextFormatParser<'a> {
     }
 
     fn end_of_copy_marker() -> &'static [u8] {
-        "\\.".as_bytes()
+        &END_OF_COPY_MARKER
     }
 
     fn is_end_of_copy_marker(&self) -> bool {
@@ -750,24 +757,106 @@ impl<'a> CopyTextFormatParser<'a> {
     }
 }
 
-pub fn decode_copy_text_format(
+/// `CopyFormatParams` expresses valid conversions from [`CopyParams`] to the
+/// parameters supported by different `COPY FROM...WITH (FORMAT...)` options.
+///
+/// The circuitous path the conversions take let us error when executing the
+/// statement for the first time, before we've received any of the data.
+pub enum CopyFormatParams<'a> {
+    Text(CopyTextFormatParams<'a>),
+    Csv(CopyCsvFormatParams<'a>),
+}
+
+impl<'a> TryFrom<CopyParams> for CopyFormatParams<'a> {
+    type Error = ErrorResponse;
+
+    fn try_from(params: CopyParams) -> Result<CopyFormatParams<'a>, Self::Error> {
+        match params.format {
+            CopyFormat::Text => {
+                let params: CopyTextFormatParams = params.try_into()?;
+                Ok(CopyFormatParams::Text(params))
+            }
+            CopyFormat::Csv => {
+                let params: CopyCsvFormatParams = params.try_into()?;
+                Ok(CopyFormatParams::Csv(params))
+            }
+            CopyFormat::Binary => unreachable!(),
+        }
+    }
+}
+
+pub fn decode_copy_format<'a>(
     data: &[u8],
-    column_types: &Vec<pgrepr::Type>,
-    delimiter: &Option<String>,
-    null: &Option<String>,
+    column_types: &[pgrepr::Type],
+    params: CopyFormatParams<'a>,
+) -> Result<Vec<Row>, io::Error> {
+    match params {
+        CopyFormatParams::Text(params) => decode_copy_format_text(data, column_types, params),
+        CopyFormatParams::Csv(params) => decode_copy_format_csv(data, column_types, params),
+    }
+}
+
+pub struct CopyTextFormatParams<'a> {
+    null: Cow<'a, str>,
+    delimiter: Cow<'a, str>,
+}
+
+impl<'a> TryFrom<CopyParams> for CopyTextFormatParams<'a> {
+    type Error = ErrorResponse;
+
+    fn try_from(
+        CopyParams {
+            format,
+            null,
+            delimiter,
+            quote,
+            escape,
+            header,
+        }: CopyParams,
+    ) -> Result<Self, Self::Error> {
+        fn only_available_with_csv<T>(option: Option<T>, param: &str) -> Result<(), ErrorResponse> {
+            match option {
+                Some(..) => Err(ErrorResponse::error(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!("COPY {} only available in CSV mode", param),
+                )),
+                None => Ok(()),
+            }
+        }
+
+        assert_eq!(format, CopyFormat::Text);
+        only_available_with_csv(quote, "quote")?;
+        only_available_with_csv(escape, "escape")?;
+        only_available_with_csv(header, "header")?;
+        let null = match null {
+            Some(null) => Cow::from(null),
+            None => Cow::from("\\N"),
+        };
+        let delimiter = match delimiter {
+            Some(delimiter) => {
+                if delimiter.len() > 1 {
+                    return Err(ErrorResponse::error(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "COPY delimiter must be a single one-byte character".to_string(),
+                    ));
+                }
+                Cow::from(delimiter)
+            }
+            None => Cow::from("\t"),
+        };
+
+        Ok(CopyTextFormatParams { null, delimiter })
+    }
+}
+
+pub fn decode_copy_format_text(
+    data: &[u8],
+    column_types: &[pgrepr::Type],
+    CopyTextFormatParams { null, delimiter }: CopyTextFormatParams,
 ) -> Result<Vec<Row>, io::Error> {
     let mut rows = Vec::new();
-    let null = if let Some(null) = null {
-        null.as_str()
-    } else {
-        "\\N"
-    };
-    let delimiter = if let Some(delimiter) = delimiter {
-        delimiter.as_str()
-    } else {
-        "\t"
-    };
-    let mut parser = CopyTextFormatParser::new(data, delimiter, null);
+
+    let mut parser = CopyTextFormatParser::new(data, &delimiter, &null);
     while !parser.is_eof() && !parser.is_end_of_copy_marker() {
         let mut row = Vec::new();
         let buf = RowArena::new();
@@ -793,6 +882,147 @@ pub fn decode_copy_text_format(
     }
     // Note that if there is any junk data after the end of copy marker, we drop
     // it on the floor as PG does.
+    Ok(rows)
+}
+
+pub struct CopyCsvFormatParams<'a> {
+    delimiter: u8,
+    quote: u8,
+    escape: u8,
+    header: bool,
+    null: Cow<'a, str>,
+}
+
+impl<'a> TryFrom<CopyParams> for CopyCsvFormatParams<'a> {
+    type Error = ErrorResponse;
+
+    fn try_from(
+        CopyParams {
+            format,
+            null,
+            delimiter,
+            quote,
+            escape,
+            header,
+        }: CopyParams,
+    ) -> Result<Self, Self::Error> {
+        assert_eq!(format, CopyFormat::Csv);
+
+        fn extract_byte_param_value(
+            v: Option<String>,
+            default: u8,
+            param_name: &str,
+        ) -> Result<u8, ErrorResponse> {
+            Ok(match v {
+                Some(v) if v.len() == 1 => v.as_bytes()[0],
+                Some(..) => {
+                    return Err(ErrorResponse::error(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        format!("COPY {} must be a single one-byte character", param_name),
+                    ))
+                }
+                None => default,
+            })
+        }
+
+        let null = match null {
+            Some(null) => Cow::from(null),
+            None => Cow::from(""),
+        };
+        let delimiter = extract_byte_param_value(delimiter, b',', "delimiter")?;
+        let quote = extract_byte_param_value(quote, b'"', "quote")?;
+        let escape = extract_byte_param_value(escape, quote, "escape")?;
+        let header = header.unwrap_or(false);
+
+        if delimiter == quote {
+            return Err(ErrorResponse::error(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "COPY delimiter and quote must be different".to_string(),
+            ));
+        }
+
+        Ok(CopyCsvFormatParams {
+            delimiter,
+            quote,
+            escape,
+            null,
+            header,
+        })
+    }
+}
+
+pub fn decode_copy_format_csv(
+    data: &[u8],
+    column_types: &[pgrepr::Type],
+    CopyCsvFormatParams {
+        delimiter,
+        quote,
+        escape,
+        null,
+        header,
+    }: CopyCsvFormatParams,
+) -> Result<Vec<Row>, io::Error> {
+    let mut rows = Vec::new();
+
+    let (double_quote, escape) = if quote == escape {
+        (true, None)
+    } else {
+        (false, Some(escape))
+    };
+
+    let mut rdr = ReaderBuilder::new()
+        .delimiter(delimiter)
+        .quote(quote)
+        .has_headers(header)
+        .double_quote(double_quote)
+        .escape(escape)
+        // Must be flexible to accept end of copy marker, which will always be 1
+        // field.
+        .flexible(true)
+        .from_reader(data);
+
+    let null_as_bytes = null.as_bytes();
+
+    let mut record = ByteRecord::new();
+
+    while rdr.read_byte_record(&mut record)? {
+        if record.len() == 1 {
+            if record.iter().next() == Some(&END_OF_COPY_MARKER) {
+                break;
+            }
+        }
+
+        match record.len().cmp(&column_types.len()) {
+            std::cmp::Ordering::Less => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "missing data for column",
+            )),
+            std::cmp::Ordering::Greater => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "extra data after last expected column",
+            )),
+            std::cmp::Ordering::Equal => Ok(()),
+        }?;
+
+        let mut row = Vec::new();
+        let buf = RowArena::new();
+
+        for (typ, raw_value) in column_types.iter().zip(record.iter()) {
+            if raw_value == null_as_bytes {
+                row.push(Datum::Null);
+            } else {
+                match pgrepr::Value::decode_text(typ, raw_value) {
+                    Ok(value) => row.push(value.into_datum(&buf, &typ).0),
+                    Err(err) => {
+                        let msg = format!("unable to decode column: {}", err);
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
+                    }
+                }
+            }
+        }
+        rows.push(Row::pack(row));
+    }
+
     Ok(rows)
 }
 

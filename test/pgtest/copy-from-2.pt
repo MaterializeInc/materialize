@@ -19,6 +19,8 @@ CommandComplete {"tag":"CREATE TABLE"}
 ReadyForQuery {"status":"I"}
 
 # COPY with both empty string and \N for NULL.
+# Note that after receiving the terminating char, no other data should be
+# accepted.
 send
 Query {"query": "COPY t FROM STDIN"}
 CopyData "1\tblah\n"
@@ -321,4 +323,36 @@ DataRow {"fields":["3",""]}
 DataRow {"fields":["4","NULL"]}
 DataRow {"fields":["5","NULL"]}
 CommandComplete {"tag":"SELECT 5"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t FROM STDIN WITH (DELIMITER '||')"}
+----
+
+until
+ErrorResponse
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY delimiter must be a single one-byte character"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t FROM STDIN WITH (QUOTE '||')"}
+Query {"query": "COPY t FROM STDIN WITH (ESCAPE '||')"}
+Query {"query": "COPY t FROM STDIN WITH (HEADER true)"}
+----
+
+until
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY quote only available in CSV mode"}]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY escape only available in CSV mode"}]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY header only available in CSV mode"}]}
 ReadyForQuery {"status":"I"}

@@ -356,6 +356,9 @@ with_options! {
         format: String,
         delimiter: String,
         null: String,
+        escape: String,
+        quote: String,
+        header: bool,
     }
 }
 
@@ -399,6 +402,9 @@ pub fn plan_copy(
         format: CopyFormat::Text,
         delimiter: options.delimiter,
         null: options.null,
+        escape: options.escape,
+        quote: options.quote,
+        header: options.header,
     };
     if let Some(format) = options.format {
         copy_params.format = match format.to_lowercase().as_str() {

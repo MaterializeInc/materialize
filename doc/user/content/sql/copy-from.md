@@ -6,29 +6,66 @@ menu:
         parent: "sql"
 ---
 
-`COPY FROM` copies data into a table using the [Postgres `COPY` protocol](https://www.postgresql.org/docs/current/sql-copy.html).
+`COPY FROM` copies data into a table using the [Postgres `COPY` protocol][pg-copy-from].
 
 ## Syntax
 
 {{< diagram "copy-from.svg" >}}
 
-Field       | Use
-------------|-----
-_table_name_| The name of the table to be copied.
-_column_    | An optional list of columns to be copied. If no column list is specified, all columns of the table will be copied.
+Field | Use
+------|-----
+_table_name_ | Copy values to this table.
+**(**_column_...**)** | Correlate the inserted rows' columns to _table_name_'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. <br/><br/>Without a column list, all columns must have data provided, and will be referenced using their order in the table. With a partial column list, all unreferenced columns will receive their default value.
 
 Supported `option` values:
 
-Name | Default value | Description
+Name | Permitted values| Default value | Description
 -----|---------------|------------
-`DELIMITER` | tab character | Specifies the character that separates columns within each row (line) of the file.
-`NULL` | `\N` (backslash-N) | Specifies the string that represents a null value.
+`FORMAT` | `TEXT`, `CSV` | `TEXT` | Sets the input formatting method. For more information see [Text formatting](#text-formatting), [CSV formatting](#csv-formatting).
+`DELIMITER` | Single-quoted one-byte character | Format-dependent | Overrides the format's default column delimiter.
+`NULL` | Single-quoted strings | Format-dependent | Specifies the string that represents a _NULL_ value.
+`QUOTE` | Single-quoted one-byte character | `"` | Specifies the character to signal a quoted string, which may contain the `DELIMITER` value (without beginning new columns). To include the `QUOTE` character itself in column, wrap the column's value in the `QUOTE` character and prefix all instance of the value you want to literally interpret with the `ESCAPE` value. _`FORMAT CSV` only_
+`ESCAPE` | Single-quoted strings | `QUOTE`'s value | Specifies the character to allow instances of the `QUOTE` character to be parsed literally as part of a column's value. _`FORMAT CSV` only_
 
-Rows are expected in `text` format, one per line, with columns separated by the
-`DELIMITER` character.
+Note that `DELIMITER` and `QUOTE` must use distinct values.
+
+## Details
+
+### Text formatting
+
+As described in the **Text Format** section of [PostgreSQL's documentation][pg-copy-from].
+
+### CSV formatting
+
+As described in the **CSV Format** section of [PostgreSQL's documentation][pg-copy-from]
+except that:
+
+- Single-column rows containing quoted end-of-data markers (e.g. `"\."`) will be
+  treated as end-of-data markers despite being quoted. In PostgreSQL, this data
+  would be escaped and would not terminate the data processing.
+
+- Quoted null strings will be parsed as nulls, despite being quoted. In
+  PostgreSQL, this data would be escaped.
+
+  To ensure proper null handling, we recommend specifying a unique string for
+  null values, and ensuring it is never quoted.
+
+- Unterminated quotes are allowed, i.e. they do not generate errors. In
+  PostgreSQL, all open unescaped quotation punctuation must have a matching
+  piece of unescaped quotation punctuation or it generates an error.
 
 ## Example
 
 ```sql
 COPY t FROM STDIN WITH (DELIMITER '|')
 ```
+
+```sql
+COPY t FROM STDIN (FORMAT CSV)
+```
+
+```sql
+COPY t FROM STDIN (DELIMITER '|')
+```
+
+[pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html

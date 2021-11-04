@@ -1,0 +1,216 @@
+# Note that this file will not work on PG due to the lack of "strict" parsing
+# from the Rust CSV crate: https://github.com/BurntSushi/rust-csv/issues/77
+
+send
+Query {"query": "DROP TABLE IF EXISTS t"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE t (i INT8, t TEXT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+# Note that we cannot differentiate between empty string and the quoted empty
+# string, both of which will generate NULL in MZ.
+send
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV)"}
+CopyData "1,one\n"
+CopyData "2,\"two\"\n"
+CopyData "3,\"\"\"three\"\"\"\n"
+CopyData "4,\"fo,ur\"\n"
+CopyData "5,\"\"\n"
+CopyData "6,\n"
+CopyData "7,\"seven\n"
+CopyData "8,eight\n"
+CopyDone
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 7"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","one"]}
+DataRow {"fields":["2","two"]}
+DataRow {"fields":["3","\"three\""]}
+DataRow {"fields":["4","fo,ur"]}
+DataRow {"fields":["5","NULL"]}
+DataRow {"fields":["6","NULL"]}
+DataRow {"fields":["7","seven\n8,eight\n"]}
+CommandComplete {"tag":"SELECT 7"}
+ReadyForQuery {"status":"I"}
+
+# Change options. Note that:
+# - After receiving terminating char, no other data should be accepted
+# - Quoted end of copy markers are still processed as end of copy markers
+send
+Query {"query": "DELETE FROM t"}
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV, QUOTE '|', ESCAPE '#', NULL 'NS', HEADER true)"}
+CopyData "Header,IsIgnored\n"
+CopyData "1,NS\n"
+CopyData "2,|two|\n"
+CopyData "3,|#|three#||\n"
+CopyData "4,|fo,ur|\n"
+CopyData "5,\"five\"\n"
+CopyData "6,||\n"
+CopyData "|\\.|\n"
+CopyData "invalid data"
+CopyDone
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DELETE 7"}
+ReadyForQuery {"status":"I"}
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 6"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","NULL"]}
+DataRow {"fields":["2","two"]}
+DataRow {"fields":["3","|three|"]}
+DataRow {"fields":["4","fo,ur"]}
+DataRow {"fields":["5","\"five\""]}
+DataRow {"fields":["6",""]}
+CommandComplete {"tag":"SELECT 6"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DELETE FROM t"}
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV, DELIMITER '#', ESCAPE '#')"}
+CopyData "1#\"one\"\n"
+CopyData "2#\"#\"two#\"\"\n"
+CopyData "3#\"thr##ee\"\n"
+CopyDone
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DELETE 6"}
+ReadyForQuery {"status":"I"}
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","one"]}
+DataRow {"fields":["2","\"two\""]}
+DataRow {"fields":["3","thr#ee"]}
+CommandComplete {"tag":"SELECT 3"}
+ReadyForQuery {"status":"I"}
+
+# ESCAPE defaults to QUOTE if not provided, and exhibits same behavior as
+# default.
+send
+Query {"query": "DELETE FROM t"}
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV, QUOTE '#')"}
+CopyData "1,#one#\n"
+CopyData "2,###two###\n"
+CopyData "3,#thr##ee#\n"
+CopyDone
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DELETE 3"}
+ReadyForQuery {"status":"I"}
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","one"]}
+DataRow {"fields":["2","#two#"]}
+DataRow {"fields":["3","thr#ee"]}
+CommandComplete {"tag":"SELECT 3"}
+ReadyForQuery {"status":"I"}
+
+# Invalid data
+send
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV)"}
+CopyData "1\n"
+CopyDone
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV)"}
+CopyData "1,2,3\n"
+CopyDone
+----
+
+until
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"missing data for column"}]}
+ReadyForQuery {"status":"I"}
+CopyIn {"format":"text","column_formats":["text","text"]}
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"extra data after last expected column"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV, DELIMITER '||')"}
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV, QUOTE '||')"}
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV, ESCAPE '||')"}
+----
+
+until
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY delimiter must be a single one-byte character"}]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY quote must be a single one-byte character"}]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY escape must be a single one-byte character"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV, DELIMITER '\"')"}
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV, QUOTE ',')"}
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV, DELIMITER '!', QUOTE '!')"}
+----
+
+until
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY delimiter and quote must be different"}]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY delimiter and quote must be different"}]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY delimiter and quote must be different"}]}
+ReadyForQuery {"status":"I"}
