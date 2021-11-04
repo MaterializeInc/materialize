@@ -296,8 +296,8 @@ pub enum WorkerFeedback {
 pub struct Config {
     /// The number of worker threads to spawn.
     pub workers: usize,
-    /// The Timely worker configuration.
-    pub timely_worker: timely::WorkerConfig,
+    /// The Timely configuration
+    pub timely_config: timely::Config,
     /// Whether the server is running in experimental mode.
     pub experimental_mode: bool,
     /// Function to get wall time now.
@@ -402,49 +402,43 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     let now = config.now;
     let metrics = Metrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
-    let worker_guards = timely::execute::execute(
-        timely::Config {
-            communication: timely::CommunicationConfig::Process(config.workers),
-            worker: config.timely_worker,
-        },
-        move |timely_worker| {
-            let _tokio_guard = tokio_executor.enter();
-            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % config.workers]
-                .take()
-                .unwrap();
-            let worker_idx = timely_worker.index();
-            let metrics = metrics.clone();
-            let trace_metrics = trace_metrics.clone();
-            let dataflow_source_metrics = dataflow_source_metrics.clone();
-            let dataflow_sink_metrics = dataflow_sink_metrics.clone();
-            Worker {
-                timely_worker,
-                render_state: RenderState {
-                    traces: TraceManager::new(trace_metrics, worker_idx),
-                    local_inputs: HashMap::new(),
-                    ts_source_mapping: HashMap::new(),
-                    ts_histories: HashMap::default(),
-                    dataflow_tokens: HashMap::new(),
-                    sink_write_frontiers: HashMap::new(),
-                    metrics,
-                    persist: None,
-                    tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-                },
-                materialized_logger: None,
-                command_rx,
-                pending_peeks: Vec::new(),
-                feedback_tx: feedback_tx.clone(),
-                reported_frontiers: HashMap::new(),
-                reported_bindings_frontiers: HashMap::new(),
-                last_bindings_feedback: Instant::now(),
-                metrics: server_metrics.for_worker_id(worker_idx),
-                now: now.clone(),
-                dataflow_source_metrics,
-                dataflow_sink_metrics,
-            }
-            .run()
-        },
-    )
+    let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
+        let _tokio_guard = tokio_executor.enter();
+        let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % config.workers]
+            .take()
+            .unwrap();
+        let worker_idx = timely_worker.index();
+        let metrics = metrics.clone();
+        let trace_metrics = trace_metrics.clone();
+        let dataflow_source_metrics = dataflow_source_metrics.clone();
+        let dataflow_sink_metrics = dataflow_sink_metrics.clone();
+        Worker {
+            timely_worker,
+            render_state: RenderState {
+                traces: TraceManager::new(trace_metrics, worker_idx),
+                local_inputs: HashMap::new(),
+                ts_source_mapping: HashMap::new(),
+                ts_histories: HashMap::default(),
+                dataflow_tokens: HashMap::new(),
+                sink_write_frontiers: HashMap::new(),
+                metrics,
+                persist: None,
+                tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            },
+            materialized_logger: None,
+            command_rx,
+            pending_peeks: Vec::new(),
+            feedback_tx: feedback_tx.clone(),
+            reported_frontiers: HashMap::new(),
+            reported_bindings_frontiers: HashMap::new(),
+            last_bindings_feedback: Instant::now(),
+            metrics: server_metrics.for_worker_id(worker_idx),
+            now: now.clone(),
+            dataflow_source_metrics,
+            dataflow_sink_metrics,
+        }
+        .run()
+    })
     .map_err(|e| anyhow!("{}", e))?;
     let client = LocalClient {
         feedback_rx,

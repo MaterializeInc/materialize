@@ -39,7 +39,7 @@ struct Args {
         env = "COORDD_DATAFLOWD_ADDR",
         default_value = "127.0.0.1:6876"
     )]
-    dataflowd_addr: SocketAddr,
+    dataflowd_addr: Vec<SocketAddr>,
     /// Number of dataflow worker threads. This must match the number of
     /// workers that the targeted dataflowd was started with.
     #[structopt(
@@ -77,12 +77,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .init();
 
     info!(
-        "connecting to dataflowd server at {}...",
+        "connecting to dataflowd server at {:?}...",
         args.dataflowd_addr
     );
 
     let dataflow_client =
-        dataflowd::RemoteClient::connect(args.workers, args.dataflowd_addr).await?;
+        dataflowd::RemoteClient::connect(args.workers, &args.dataflowd_addr).await?;
     let metrics_registry = MetricsRegistry::new();
     let (_coord_handle, coord_client) = coord::serve(coord::Config {
         dataflow_client,

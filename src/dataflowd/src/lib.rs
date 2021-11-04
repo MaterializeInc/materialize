@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use async_trait::async_trait;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
+use log::trace;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_serde::formats::Bincode;
@@ -62,20 +63,20 @@ where
 pub struct RemoteClient {
     // TODO: the client could discover the number of workers from the server.
     num_workers: usize,
-    conn: FramedClient<TcpStream>,
+    conns: Vec<FramedClient<TcpStream>>,
 }
 
 impl RemoteClient {
     /// Connects a remote client to the specified remote dataflow server.
     pub async fn connect(
         num_workers: usize,
-        addr: SocketAddr,
+        addrs: &[SocketAddr],
     ) -> Result<RemoteClient, anyhow::Error> {
-        let conn = TcpStream::connect(addr).await?;
-        Ok(RemoteClient {
-            num_workers,
-            conn: framed_client(conn),
-        })
+        let mut conns = Vec::new();
+        for addr in addrs {
+            conns.push(framed_client(TcpStream::connect(addr).await?));
+        }
+        Ok(RemoteClient { num_workers, conns })
     }
 }
 
@@ -87,17 +88,39 @@ impl dataflow::Client for RemoteClient {
 
     async fn send(&mut self, cmd: dataflow::Command) {
         // TODO: something better than panicking.
-        self.conn
-            .send(cmd)
-            .await
-            .expect("connection to dataflow server broken")
+        trace!("Broadcasting dataflow command: {:?}", cmd);
+        let num_workers = self.num_workers();
+        if num_workers == 1 {
+            // This special case avoids a clone of the whole plan.
+            self.conns[0]
+                .send(cmd)
+                .await
+                .expect("worker command receiver should not drop first");
+        } else {
+            for (index, sendpoint) in self.conns.iter_mut().enumerate() {
+                sendpoint
+                    .send(cmd.clone_for_worker(index, num_workers))
+                    .await
+                    .expect("worker command receiver should not drop first")
+            }
+        }
+        // self.conn
+        //     .send(cmd)
+        //     .await
+        //     .expect("connection to dataflow server broken")
     }
 
     async fn recv(&mut self) -> Option<dataflow::Response> {
         // TODO: something better than panicking.
-        self.conn
-            .try_next()
-            .await
-            .expect("connection to dataflow server broken")
+        for conn in &mut self.conns {
+            if let Some(next) = conn
+                .try_next()
+                .await
+                .expect("connection to dataflow server broken")
+            {
+                return Some(next);
+            }
+        }
+        None
     }
 }
