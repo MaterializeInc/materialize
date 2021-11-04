@@ -60,10 +60,10 @@ class Crate:
                 self.bins.append(bin["name"])
         if (path / "src" / "main.rs").exists():
             self.bins.append(self.name)
-        for path in (path / "src" / "bin").glob("*.rs"):
-            self.bins.append(path.stem)
-        for path in (path / "src" / "bin").glob("*/main.rs"):
-            self.bins.append(path.parent.stem)
+        for p in (path / "src" / "bin").glob("*.rs"):
+            self.bins.append(p.stem)
+        for p in (path / "src" / "bin").glob("*/main.rs"):
+            self.bins.append(p.parent.stem)
 
     def inputs(self) -> Set[str]:
         """Compute the files that can impact the compilation of this crate.
