@@ -10,6 +10,7 @@
 //! Timely and Differential Dataflow operators for persisting and replaying
 //! data.
 
+#[macro_use]
 mod async_ext;
 pub mod input;
 pub mod replay;

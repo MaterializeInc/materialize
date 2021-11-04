@@ -169,3 +169,19 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
         });
     }
 }
+
+macro_rules! async_op {
+    (|$capabilities:ident, $frontiers:ident| $body:block) => {
+        move |mut capabilities, mut frontiers, scheduler| async move {
+            loop {
+                scheduler.notified().await;
+                // rebind to mutable references to make sure they can't be accidentally dropped
+                #[allow(unused_mut)]
+                let mut $capabilities = &mut capabilities;
+                #[allow(unused_mut)]
+                let mut $frontiers = &mut frontiers;
+                let _: () = async { $body }.await;
+            }
+        }
+    };
+}
