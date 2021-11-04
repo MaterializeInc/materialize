@@ -109,7 +109,6 @@ pub fn plan_read_then_write(
     query::ReadThenWritePlan {
         id,
         mut selection,
-        finishing,
         assignments,
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, anyhow::Error> {
@@ -125,7 +124,6 @@ pub fn plan_read_then_write(
     Ok(Plan::ReadThenWrite(ReadThenWritePlan {
         id,
         selection,
-        finishing,
         assignments: assignments_outer,
         kind,
     }))
@@ -146,9 +144,8 @@ pub fn plan_select(
     params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
-    let query::PlannedQuery {
-        expr, finishing, ..
-    } = plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
+    let query::PlannedQuery { expr, .. } =
+        plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
 
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
         Some(ts) => PeekWhen::AtTimestamp(ts),
@@ -158,7 +155,6 @@ pub fn plan_select(
     Ok(Plan::Peek(PeekPlan {
         source: expr,
         when,
-        finishing,
         copy_to,
     }))
 }
@@ -204,7 +200,6 @@ pub fn plan_explain(
     }: ExplainStatement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    let is_view = matches!(explainee, Explainee::View(_));
     let query = match explainee {
         Explainee::View(name) => {
             let view = scx.resolve_item(name.clone())?;
@@ -226,25 +221,11 @@ pub fn plan_explain(
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    let query::PlannedQuery {
-        mut expr,
-        desc,
-        finishing,
-        ..
-    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
-    let finishing = if is_view {
-        // views don't use a separate finishing
-        expr.finish(finishing);
-        None
-    } else if finishing.is_trivial(desc.arity()) {
-        None
-    } else {
-        Some(finishing)
-    };
+    let query::PlannedQuery { mut expr, .. } =
+        query::plan_root_query(&scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     expr.bind_parameters(&params)?;
     Ok(Plan::Explain(ExplainPlan {
         raw_plan: expr,
-        row_set_finishing: finishing,
         stage,
         options,
     }))
@@ -261,14 +242,12 @@ pub fn plan_query(
     let query::PlannedQuery {
         mut expr,
         desc,
-        finishing,
         depends_on,
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
     Ok(query::PlannedQuery {
         expr: expr.lower(),
         desc,
-        finishing,
         depends_on,
     })
 }

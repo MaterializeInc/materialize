@@ -1258,12 +1258,9 @@ pub fn plan_view(
     let query::PlannedQuery {
         mut expr,
         mut desc,
-        finishing,
         depends_on,
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
     expr.bind_parameters(&params)?;
-    //TODO: materialize#724 - persist finishing information with the view?
-    expr.finish(finishing);
     let relation_expr = expr.lower();
 
     let name = if temporary {

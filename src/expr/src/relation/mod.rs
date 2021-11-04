@@ -1594,6 +1594,16 @@ pub struct RowSetFinishing {
 }
 
 impl RowSetFinishing {
+    /// Creates a trivial RowSetFinishing instance
+    pub fn new_trivial(arity: usize) -> Self {
+        Self {
+            order_by: vec![],
+            limit: None,
+            offset: 0,
+            project: (0..arity).collect(),
+        }
+    }
+
     /// True if the finishing does nothing to any result set.
     pub fn is_trivial(&self, arity: usize) -> bool {
         self.limit.is_none()

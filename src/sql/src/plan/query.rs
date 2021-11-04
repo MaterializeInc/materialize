@@ -41,7 +41,7 @@ use sql_parser::ast::{
     TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
 };
 
-use ::expr::{GlobalId, Id, RowSetFinishing};
+use ::expr::{GlobalId, Id};
 use repr::adt::numeric;
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType,
@@ -327,18 +327,12 @@ where
 pub struct PlannedQuery<E> {
     pub expr: E,
     pub desc: RelationDesc,
-    pub finishing: RowSetFinishing,
     pub depends_on: Vec<GlobalId>,
 }
 
 /// Plans a top-level query, returning the `HirRelationExpr` describing the query
-/// plan, the `RelationDesc` describing the shape of the result set, a
-/// `RowSetFinishing` describing post-processing that must occur before results
-/// are sent to the client, and the types of the parameters in the query, if any
-/// were present.
-///
-/// Note that the returned `RelationDesc` describes the expression after
-/// applying the returned `RowSetFinishing`.
+/// plan, the `RelationDesc` describing the shape of the result set, and the types
+/// of the parameters in the query, if any were present.
 pub fn plan_root_query(
     scx: &StatementContext,
     mut query: Query<Raw>,
@@ -347,30 +341,15 @@ pub fn plan_root_query(
     transform_ast::transform_query(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
     let resolved_query = resolve_names(&mut qcx, query)?;
-    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &resolved_query)?;
-
-    // Attempt to push the finishing's ordering past its projection. This allows
-    // data to be projected down on the workers rather than the coordinator. It
-    // also improves the optimizer's demand analysis, as the optimizer can only
-    // reason about demand information in `expr` (i.e., it can't see
-    // `finishing.project`).
-    try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
+    let (expr, scope) = plan_query(&mut qcx, &resolved_query)?;
 
     let typ = qcx.relation_type(&expr);
-    let typ = RelationType::new(
-        finishing
-            .project
-            .iter()
-            .map(|i| typ.column_types[*i].clone())
-            .collect(),
-    );
     let desc = RelationDesc::new(typ, scope.column_names());
     let depends_on = qcx.ids.into_iter().collect();
 
     Ok(PlannedQuery {
         expr,
         desc,
-        finishing,
         depends_on,
     })
 }
@@ -697,7 +676,6 @@ pub struct ReadThenWritePlan {
     pub selection: HirRelationExpr,
     /// Map from column index to SET expression. Empty for DELETE statements.
     pub assignments: HashMap<usize, HirScalarExpr>,
-    pub finishing: RowSetFinishing,
 }
 
 pub fn plan_delete_query(
@@ -820,17 +798,9 @@ pub fn plan_mutation_query_inner(
         };
     }
 
-    let finishing = RowSetFinishing {
-        order_by: vec![],
-        limit: None,
-        offset: 0,
-        project: (0..desc.arity()).collect(),
-    };
-
     Ok(ReadThenWritePlan {
         id,
         selection: get,
-        finishing,
         assignments: sets,
     })
 }
@@ -1169,7 +1139,7 @@ fn check_col_index(name: &str, e: &Expr<Aug>, max: usize) -> Result<Option<usize
 fn plan_query(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
-) -> Result<(HirRelationExpr, Scope, RowSetFinishing), anyhow::Error> {
+) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
     // Retain the old values of various CTE names so that we can restore them
     // after we're done planning this SELECT.
     let mut old_cte_values = Vec::new();
@@ -1235,13 +1205,12 @@ fn plan_query(
     let result = match &q.body {
         SetExpr::Select(s) => {
             let plan = plan_view_select(qcx, s, &q.order_by)?;
-            let finishing = RowSetFinishing {
-                order_by: plan.order_by,
-                project: plan.project,
-                limit,
-                offset,
-            };
-            Ok((plan.expr, plan.scope, finishing))
+            Ok((
+                plan.expr
+                    .top_k(vec![], plan.order_by, limit, offset)
+                    .project(plan.project),
+                plan.scope,
+            ))
         }
         _ => {
             let (expr, scope) = plan_set_expr(qcx, &q.body)?;
@@ -1254,13 +1223,10 @@ fn plan_query(
                 allow_subqueries: true,
             };
             let (order_by, map_exprs) = plan_order_by_exprs(ecx, &q.order_by)?;
-            let finishing = RowSetFinishing {
-                order_by,
-                limit,
-                project: (0..ecx.relation_type.arity()).collect(),
-                offset,
-            };
-            Ok((expr.map(map_exprs), scope, finishing))
+            Ok((
+                expr.map(map_exprs).top_k(vec![], order_by, limit, offset),
+                scope,
+            ))
         }
     };
 
@@ -1271,17 +1237,7 @@ fn plan_subquery(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
-    let (mut expr, scope, finishing) = plan_query(qcx, q)?;
-    if finishing.limit.is_some() || finishing.offset > 0 {
-        expr = HirRelationExpr::TopK {
-            input: Box::new(expr),
-            group_key: vec![],
-            order_key: finishing.order_by,
-            limit: finishing.limit,
-            offset: finishing.offset,
-        };
-    }
-    Ok((expr.project(finishing.project), scope))
+    plan_query(qcx, q)
 }
 
 fn plan_set_expr(

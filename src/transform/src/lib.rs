@@ -53,6 +53,7 @@ pub mod union_cancel;
 pub mod update_let;
 
 pub mod dataflow;
+pub use dataflow::extract_row_set_finishing;
 pub use dataflow::optimize_dataflow;
 
 /// Arguments that get threaded through all transforms.

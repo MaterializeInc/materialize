@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use expr::explain::Indices;
-use expr::{ExprHumanizer, Id, RowSetFinishing};
+use expr::{ExprHumanizer, Id};
 use ore::id_gen::IdGen;
 use ore::str::{bracketed, separated};
 use repr::{RelationType, ScalarType};
@@ -40,8 +40,6 @@ pub struct Explanation<'a> {
     /// One `ExplanationNode` for each `HirRelationExpr` in the plan, in
     /// left-to-right post-order.
     nodes: Vec<ExplanationNode<'a>>,
-    /// An optional `RowSetFinishing` to mention at the end.
-    finishing: Option<RowSetFinishing>,
     /// Records the chain ID that was assigned to each expression.
     expr_chains: HashMap<*const HirRelationExpr, u64>,
     /// The ID of the current chain. Incremented while constructing the
@@ -75,20 +73,6 @@ impl<'a> fmt::Display for Explanation<'a> {
             prev_chain = node.chain;
 
             self.fmt_node(f, node)?;
-        }
-
-        if let Some(finishing) = &self.finishing {
-            writeln!(
-                f,
-                "\nFinish order_by={} limit={} offset={} project={}",
-                bracketed("(", ")", separated(", ", &finishing.order_by)),
-                match finishing.limit {
-                    Some(limit) => limit.to_string(),
-                    None => "none".to_owned(),
-                },
-                finishing.offset,
-                bracketed("(", ")", Indices(&finishing.project))
-            )?;
         }
 
         Ok(())
@@ -207,7 +191,6 @@ impl<'a> Explanation<'a> {
         let mut explanation = Explanation {
             expr_humanizer,
             nodes: vec![],
-            finishing: None,
             expr_chains: HashMap::new(),
             chain: id_gen.allocate_id(),
         };
@@ -235,11 +218,6 @@ impl<'a> Explanation<'a> {
             }
             node.typ = outers.pop();
         }
-    }
-
-    /// Attach a `RowSetFinishing` to the explanation.
-    pub fn explain_row_set_finishing(&mut self, finishing: RowSetFinishing) {
-        self.finishing = Some(finishing);
     }
 
     fn fmt_node(&self, f: &mut fmt::Formatter, node: &ExplanationNode) -> fmt::Result {

@@ -15,7 +15,7 @@
 //! in which the views will be executed.
 
 use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
+use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use ore::id_gen::IdGen;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -53,6 +53,43 @@ pub fn optimize_dataflow(
     optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer());
 
     monotonic::optimize_dataflow_monotonic(dataflow);
+}
+
+/// Extracts the finishing information from the source of the given index
+pub fn extract_row_set_finishing(
+    dataflow: &mut DataflowDesc,
+    view_id: GlobalId,
+) -> Option<RowSetFinishing> {
+    let view_desc = dataflow
+        .objects_to_build
+        .iter_mut()
+        .find(|desc| desc.id == view_id)
+        .expect("a valid object");
+
+    let expr = &mut view_desc.view.0;
+    let arity = expr.arity();
+
+    match expr {
+        MirRelationExpr::TopK {
+            input,
+            group_key,
+            order_key,
+            limit,
+            offset,
+            ..
+        } if group_key.is_empty() => {
+            let finishing = RowSetFinishing {
+                order_by: order_key.to_owned(),
+                limit: *limit,
+                offset: *offset,
+                project: (0..arity).collect(),
+            };
+            *expr = input.take_dangerous();
+            // @todo update index_exports
+            Some(finishing)
+        }
+        _ => None,
+    }
 }
 
 /// Inline views used in one other view, and in no exported objects.

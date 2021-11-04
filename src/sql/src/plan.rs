@@ -33,7 +33,7 @@ use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use ::expr::{GlobalId, RowSetFinishing};
+use ::expr::GlobalId;
 use dataflow_types::{SinkConnectorBuilder, SinkEnvelope, SourceConnector};
 use ore::now::{self, NOW_ZERO};
 use repr::{ColumnName, Diff, RelationDesc, Row, ScalarType, Timestamp};
@@ -228,7 +228,6 @@ pub struct SetVariablePlan {
 pub struct PeekPlan {
     pub source: ::expr::MirRelationExpr,
     pub when: PeekWhen,
-    pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
 }
 
@@ -258,7 +257,6 @@ pub struct CopyFromPlan {
 #[derive(Debug)]
 pub struct ExplainPlan {
     pub raw_plan: HirRelationExpr,
-    pub row_set_finishing: Option<RowSetFinishing>,
     pub stage: ExplainStage,
     pub options: ExplainOptions,
 }
@@ -280,7 +278,6 @@ pub struct InsertPlan {
 pub struct ReadThenWritePlan {
     pub id: GlobalId,
     pub selection: ::expr::MirRelationExpr,
-    pub finishing: RowSetFinishing,
     pub assignments: HashMap<usize, ::expr::MirScalarExpr>,
     pub kind: MutationKind,
 }

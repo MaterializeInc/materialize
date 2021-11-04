@@ -2854,7 +2854,6 @@ where
         let PeekPlan {
             source,
             when,
-            finishing,
             copy_to,
         } = plan;
 
@@ -2955,6 +2954,7 @@ where
         // This can happen if the result optimizes to a constant, or to a `Get` expression
         // around a maintained arrangement.
         let typ = source.typ();
+        let arity = typ.arity();
         let key: Vec<MirScalarExpr> = typ
             .default_key()
             .iter()
@@ -2978,13 +2978,14 @@ where
             typ,
         );
         // Finalization optimizes the dataflow as much as possible.
-        let dataflow_plan = self.finalize_dataflow(dataflow);
+        let (dataflow_plan, finishing) = self.finalize_dataflow(dataflow, Some(view_id));
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
         let fast_path = fast_path_peek::create_plan(dataflow_plan, view_id, index_id)?;
 
         // Implement the peek, and capture the response.
+        let finishing = finishing.unwrap_or_else(|| RowSetFinishing::new_trivial(arity));
         let resp = self
             .implement_fast_path_peek(fast_path, timestamp, finishing, conn_id, source.arity())
             .await?;
@@ -3289,7 +3290,6 @@ where
     ) -> Result<ExecuteResponse, CoordError> {
         let ExplainPlan {
             raw_plan,
-            row_set_finishing,
             stage,
             options,
         } = plan;
@@ -3312,33 +3312,36 @@ where
             decorrelated_plan
         };
 
-        let optimize =
-            |timings: &mut Timings,
-             coord: &mut Self,
-             decorrelated_plan: MirRelationExpr|
-             -> Result<DataflowDescription<OptimizedMirRelationExpr>, CoordError> {
-                let start = Instant::now();
-                let optimized_plan =
-                    coord.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"));
-                coord.dataflow_builder().import_view_into_dataflow(
-                    // TODO: If explaining a view, pipe the actual id of the view.
-                    &GlobalId::Explain,
-                    &optimized_plan,
-                    &mut dataflow,
-                );
-                transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes());
-                timings.optimization = Some(start.elapsed());
-                Ok(dataflow)
-            };
+        let optimize = |timings: &mut Timings,
+                        coord: &mut Self,
+                        decorrelated_plan: MirRelationExpr|
+         -> Result<
+            (
+                DataflowDescription<OptimizedMirRelationExpr>,
+                Option<RowSetFinishing>,
+            ),
+            CoordError,
+        > {
+            let start = Instant::now();
+            let optimized_plan =
+                coord.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
+            let mut dataflow = DataflowDesc::new(format!("explanation"));
+            coord.dataflow_builder().import_view_into_dataflow(
+                // TODO: If explaining a view, pipe the actual id of the view.
+                &GlobalId::Explain,
+                &optimized_plan,
+                &mut dataflow,
+            );
+            transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes());
+            let finishing = transform::extract_row_set_finishing(&mut dataflow, GlobalId::Explain);
+            timings.optimization = Some(start.elapsed());
+            Ok((dataflow, finishing))
+        };
 
         let mut explanation_string = match stage {
             ExplainStage::RawPlan => {
                 let catalog = self.catalog.for_session(session);
                 let mut explanation = sql::plan::Explanation::new(&raw_plan, &catalog);
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
-                }
                 if options.typed {
                     explanation.explain_types(&BTreeMap::new());
                 }
@@ -3352,17 +3355,15 @@ where
                 let catalog = self.catalog.for_session(session);
                 let formatter =
                     dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
-                let mut explanation =
+                let explanation =
                     dataflow_types::Explanation::new(&decorrelated_plan, &catalog, &formatter);
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
-                }
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
                 self.validate_timeline(decorrelated_plan.global_uses())?;
-                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
+                let (dataflow, row_set_finishing) =
+                    optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
                 let formatter =
                     dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
@@ -3376,7 +3377,8 @@ where
             ExplainStage::PhysicalPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
                 self.validate_timeline(decorrelated_plan.global_uses())?;
-                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
+                let (dataflow, row_set_finishing) =
+                    optimize(&mut timings, self, decorrelated_plan)?;
                 let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
                     .expect("Dataflow planning failed; unrecoverable error");
                 let catalog = self.catalog.for_session(session);
@@ -3481,30 +3483,9 @@ where
             ),
             // All non-constant values must be planned as read-then-writes.
             selection => {
-                let desc_arity = match self.catalog.try_get_by_id(plan.id) {
-                    Some(table) => table.desc().expect("desc called on table").arity(),
-                    None => {
-                        tx.send(
-                            Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
-                                plan.id.to_string(),
-                            ))),
-                            session,
-                        );
-                        return;
-                    }
-                };
-
-                let finishing = RowSetFinishing {
-                    order_by: vec![],
-                    limit: None,
-                    offset: 0,
-                    project: (0..desc_arity).collect(),
-                };
-
                 let read_then_write_plan = ReadThenWritePlan {
                     id: plan.id,
                     selection,
-                    finishing,
                     assignments: HashMap::new(),
                     kind: MutationKind::Insert,
                 };
@@ -3588,7 +3569,6 @@ where
             kind,
             selection,
             assignments,
-            finishing,
         } = plan;
 
         // Read then writes can be queued, so re-verify the id exists.
@@ -3626,7 +3606,6 @@ where
                 PeekPlan {
                     source: selection,
                     when: PeekWhen::AtTimestamp(ts),
-                    finishing,
                     copy_to: None,
                 },
             )
@@ -4058,7 +4037,7 @@ where
     async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
-            dataflow_plans.push(self.finalize_dataflow(dataflow));
+            dataflow_plans.push(self.finalize_dataflow(dataflow, None).0);
         }
         self.broadcast(dataflow::Command::CreateDataflows(dataflow_plans))
             .await;
@@ -4082,7 +4061,11 @@ where
     fn finalize_dataflow(
         &mut self,
         mut dataflow: DataflowDesc,
-    ) -> dataflow_types::DataflowDescription<dataflow::Plan> {
+        extract_row_set_finishing_for_view: Option<GlobalId>,
+    ) -> (
+        dataflow_types::DataflowDescription<dataflow::Plan>,
+        Option<RowSetFinishing>,
+    ) {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
@@ -4145,8 +4128,14 @@ where
 
         // Optimize the dataflow across views, and any other ways that appeal.
         transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
-        dataflow::Plan::finalize_dataflow(dataflow)
-            .expect("Dataflow planning failed; unrecoverable error")
+        let finishing = if let Some(view_id) = extract_row_set_finishing_for_view {
+            transform::extract_row_set_finishing(&mut dataflow, view_id)
+        } else {
+            None
+        };
+        let plan = dataflow::Plan::finalize_dataflow(dataflow)
+            .expect("Dataflow planning failed; unrecoverable error");
+        (plan, finishing)
     }
 
     async fn broadcast(&mut self, cmd: dataflow::Command) {
