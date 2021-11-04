@@ -2258,11 +2258,14 @@ impl<'a> Parser<'a> {
     fn parse_source_include_metadata(&mut self) -> Result<Vec<SourceIncludeMetadata>, ParserError> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
-                let ty = match parser.expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, TOPIC])? {
+                let ty = match parser
+                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, TOPIC, OFFSET])?
+                {
                     KEY => SourceIncludeMetadataType::Key,
                     TIMESTAMP => SourceIncludeMetadataType::Timestamp,
                     PARTITION => SourceIncludeMetadataType::Partition,
                     TOPIC => SourceIncludeMetadataType::Topic,
+                    OFFSET => SourceIncludeMetadataType::Offset,
                     _ => unreachable!("only explicitly allowed items can be parsed"),
                 };
                 let alias = parser

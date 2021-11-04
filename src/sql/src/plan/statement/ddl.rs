@@ -496,6 +496,9 @@ pub fn plan_create_source(
                     SourceIncludeMetadataType::Topic => {
                         bail_unsupported!("INCLUDE TOPIC")
                     }
+                    SourceIncludeMetadataType::Offset => {
+                        bail_unsupported!("INCLUDE OFFSET")
+                    }
                 }
             }
 
