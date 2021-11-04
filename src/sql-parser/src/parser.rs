@@ -1578,7 +1578,7 @@ impl<'a> Parser<'a> {
 
     fn parse_avro_schema(&mut self) -> Result<AvroSchema<Raw>, ParserError> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
-            let csr_connector = self.parse_csr_connector()?;
+            let csr_connector = self.parse_csr_connector_avro()?;
             AvroSchema::Csr { csr_connector }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
@@ -1607,7 +1607,7 @@ impl<'a> Parser<'a> {
 
     fn parse_protobuf_schema(&mut self) -> Result<ProtobufSchema<Raw>, ParserError> {
         if self.parse_keywords(&[USING, CONFLUENT, SCHEMA, REGISTRY]) {
-            let csr_connector = self.parse_csr_connector()?;
+            let csr_connector = self.parse_csr_connector_proto()?;
             Ok(ProtobufSchema::Csr { csr_connector })
         } else if self.parse_keyword(MESSAGE) {
             let message_name = self.parse_literal_string()?;
@@ -1626,7 +1626,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_csr_connector(&mut self) -> Result<CsrConnector<Raw>, ParserError> {
+    fn parse_csr_connector_avro(&mut self) -> Result<CsrConnectorAvro<Raw>, ParserError> {
         let url = self.parse_literal_string()?;
 
         let seed = if self.parse_keyword(SEED) {
@@ -1654,7 +1654,51 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        Ok(CsrConnector {
+        Ok(CsrConnectorAvro {
+            url,
+            seed,
+            with_options,
+        })
+    }
+
+    fn parse_csr_connector_proto(&mut self) -> Result<CsrConnectorProto<Raw>, ParserError> {
+        let url = self.parse_literal_string()?;
+
+        let seed = if self.parse_keyword(SEED) {
+            let key = if self.parse_keyword(KEY) {
+                self.expect_keyword(SCHEMA)?;
+                let message_name = self.parse_literal_string()?;
+                let schema = self.parse_comma_separated(|parser| parser.parse_literal_uint8())?;
+                Some(CsrSeedCompiledEncoding {
+                    schema,
+                    message_name,
+                })
+            } else {
+                None
+            };
+            self.expect_keywords(&[VALUE, SCHEMA])?;
+            let value_message_name = self.parse_literal_string()?;
+            let value_schema = self.parse_comma_separated(|parser| parser.parse_literal_uint8())?;
+            Some(CsrSeedCompiled {
+                value: CsrSeedCompiledEncoding {
+                    schema: value_schema,
+                    message_name: value_message_name,
+                },
+                key,
+            })
+        } else {
+            None
+        };
+
+        // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
+        // accept `WITH (...)` here.
+        let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
+            self.parse_opt_with_sql_options()?
+        } else {
+            vec![]
+        };
+
+        Ok(CsrConnectorProto {
             url,
             seed,
             with_options,
@@ -2824,6 +2868,18 @@ impl<'a> Parser<'a> {
     fn parse_literal_uint(&mut self) -> Result<u64, ParserError> {
         match self.next_token() {
             Some(Token::Number(s)) => s.parse::<u64>().map_err(|e| {
+                self.error(
+                    self.peek_prev_pos(),
+                    format!("Could not parse '{}' as u64: {}", s, e),
+                )
+            }),
+            other => self.expected(self.peek_prev_pos(), "literal int", other),
+        }
+    }
+
+    fn parse_literal_uint8(&mut self) -> Result<u8, ParserError> {
+        match self.next_token() {
+            Some(Token::Number(s)) => s.parse::<u8>().map_err(|e| {
                 self.error(
                     self.peek_prev_pos(),
                     format!("Could not parse '{}' as u64: {}", s, e),

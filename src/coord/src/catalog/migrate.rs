@@ -19,9 +19,9 @@ use sql::ast::visit_mut::{self, VisitMut};
 use sql::ast::{
     AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceConnector,
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
-    CreateViewStatement, CsrConnector, CsvColumns, DataType, Format, Function, Ident, Raw, RawName,
-    SqlOption, Statement, TableFactor, UnresolvedObjectName, Value, ViewDefinition, WithOption,
-    WithOptionValue,
+    CreateViewStatement, CsrConnectorAvro, CsvColumns, DataType, Format, Function, Ident, Raw,
+    RawName, SqlOption, Statement, TableFactor, UnresolvedObjectName, Value, ViewDefinition,
+    WithOption, WithOptionValue,
 };
 use sql::plan::resolve_names_stmt;
 
@@ -255,7 +255,7 @@ fn ast_insert_default_confluent_wire_format_0_7_1(
             format:
                 CreateSourceFormat::Bare(Format::Avro(AvroSchema::Csr {
                     csr_connector:
-                        CsrConnector {
+                        CsrConnectorAvro {
                             ref mut with_options,
                             ..
                         },

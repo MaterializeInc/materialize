@@ -58,7 +58,7 @@ impl_display!(Schema);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AvroSchema<T: AstInfo> {
     Csr {
-        csr_connector: CsrConnector<T>,
+        csr_connector: CsrConnectorAvro<T>,
     },
     InlineSchema {
         schema: Schema,
@@ -92,7 +92,7 @@ impl_display_t!(AvroSchema);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProtobufSchema<T: AstInfo> {
     Csr {
-        csr_connector: CsrConnector<T>,
+        csr_connector: CsrConnectorProto<T>,
     },
     InlineSchema {
         message_name: String,
@@ -121,13 +121,13 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CsrConnector<T: AstInfo> {
+pub struct CsrConnectorAvro<T: AstInfo> {
     pub url: String,
     pub seed: Option<CsrSeed>,
     pub with_options: Vec<SqlOption<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for CsrConnector<T> {
+impl<T: AstInfo> AstDisplay for CsrConnectorAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("USING CONFLUENT SCHEMA REGISTRY '");
         f.write_node(&display::escape_single_quote_string(&self.url));
@@ -143,7 +143,32 @@ impl<T: AstInfo> AstDisplay for CsrConnector<T> {
         }
     }
 }
-impl_display_t!(CsrConnector);
+impl_display_t!(CsrConnectorAvro);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrConnectorProto<T: AstInfo> {
+    pub url: String,
+    pub seed: Option<CsrSeedCompiled>,
+    pub with_options: Vec<SqlOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CsrConnectorProto<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY '");
+        f.write_node(&display::escape_single_quote_string(&self.url));
+        f.write_str("'");
+        if let Some(seed) = &self.seed {
+            f.write_str(" ");
+            f.write_node(seed);
+        }
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(CsrConnectorProto);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeed {
@@ -165,6 +190,40 @@ impl AstDisplay for CsrSeed {
     }
 }
 impl_display!(CsrSeed);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrSeedCompiled {
+    pub key: Option<CsrSeedCompiledEncoding>,
+    pub value: CsrSeedCompiledEncoding,
+}
+impl AstDisplay for CsrSeedCompiled {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SEED");
+        if let Some(key) = &self.key {
+            f.write_str(" KEY ");
+            f.write_node(key);
+        }
+        f.write_str(" VALUE ");
+        f.write_node(&self.value);
+    }
+}
+impl_display!(CsrSeedCompiled);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrSeedCompiledEncoding {
+    pub schema: Vec<u8>,
+    pub message_name: String,
+}
+impl AstDisplay for CsrSeedCompiledEncoding {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(" SCHEMA '");
+        f.write_str(&self.message_name);
+        f.write_str("' ");
+        f.write_node(&display::comma_separated(&self.schema));
+        f.write_str(" ");
+    }
+}
+impl_display!(CsrSeedCompiledEncoding);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceFormat<T: AstInfo> {

@@ -13,12 +13,20 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
+use std::path::PathBuf;
+use std::{fs, iter};
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use aws_util::aws;
+use ccsr::Client;
 use csv::ReaderBuilder;
 use itertools::Itertools;
+use lazy_static::lazy_static;
+use protobuf::Message;
+use protoc::Protoc;
+use regex::Regex;
+use reqwest::Url;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
@@ -31,10 +39,11 @@ use sql_parser::parser::parse_columns;
 use crate::ast::{
     display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
     CreateSourceStatement, CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnector, CsrSeed, CsvColumns, DbzMode, Envelope, Expr, Format, Ident, ProtobufSchema,
-    Query, Raw, RawName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
-    SourceIncludeMetadataType, Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
-    ViewDefinition, WithOption, WithOptionValue,
+    CsrConnectorAvro, CsrConnectorProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding,
+    CsvColumns, DbzMode, Envelope, Expr, Format, Ident, ProtobufSchema, Query, Raw, RawName,
+    Select, SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, SqlOption,
+    Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
+    WithOption, WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
@@ -198,7 +207,15 @@ pub fn purify(
                 CreateSourceConnector::PubNub { .. } => (),
             }
 
-            purify_source_format(format, connector, &envelope, file, &config_options).await?;
+            purify_source_format(
+                format,
+                connector,
+                &envelope,
+                file,
+                &config_options,
+                with_options,
+            )
+            .await?;
 
             if include_metadata.iter().any(|i| {
                 matches!(
@@ -371,6 +388,7 @@ async fn purify_source_format(
     envelope: &Envelope,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
+    with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
         && !matches!(connector, CreateSourceConnector::Kafka { .. })
@@ -401,8 +419,15 @@ async fn purify_source_format(
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
-            purify_source_format_single(format, connector, envelope, file, connector_options)
-                .await?
+            purify_source_format_single(
+                format,
+                connector,
+                envelope,
+                file,
+                connector_options,
+                with_options,
+            )
+            .await?;
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
@@ -411,8 +436,24 @@ async fn purify_source_format(
                 anyhow!("[internal-error] File sources cannot be key-value sources")
             );
 
-            purify_source_format_single(key, connector, envelope, None, connector_options).await?;
-            purify_source_format_single(val, connector, envelope, None, connector_options).await?;
+            purify_source_format_single(
+                key,
+                connector,
+                envelope,
+                None,
+                connector_options,
+                with_options,
+            )
+            .await?;
+            purify_source_format_single(
+                val,
+                connector,
+                envelope,
+                None,
+                connector_options,
+                with_options,
+            )
+            .await?;
         }
     }
     Ok(())
@@ -424,11 +465,13 @@ async fn purify_source_format_single(
     envelope: &Envelope,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
+    with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     match format {
         Format::Avro(schema) => match schema {
             AvroSchema::Csr { csr_connector } => {
-                purify_csr_connector(connector, connector_options, envelope, csr_connector).await?
+                purify_csr_connector_avro(connector, csr_connector, envelope, connector_options)
+                    .await?
             }
             AvroSchema::InlineSchema {
                 schema: sql_parser::ast::Schema::File(path),
@@ -458,14 +501,18 @@ async fn purify_source_format_single(
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connector } => {
-                purify_csr_connector(connector, connector_options, envelope, csr_connector).await?
+                purify_csr_connector_proto(connector, csr_connector, envelope, with_options)
+                    .await?;
             }
-            ProtobufSchema::InlineSchema { schema, .. } => {
-                if let sql_parser::ast::Schema::File(path) = schema {
+            ProtobufSchema::InlineSchema {
+                message_name: _,
+                schema: inline_schema,
+            } => {
+                if let sql_parser::ast::Schema::File(path) = inline_schema {
                     let descriptors = tokio::fs::read(path).await?;
                     let mut buf = String::new();
                     strconv::format_bytes(&mut buf, &descriptors);
-                    *schema = sql_parser::ast::Schema::Inline(buf);
+                    *inline_schema = sql_parser::ast::Schema::Inline(buf);
                 }
             }
         },
@@ -480,11 +527,11 @@ async fn purify_source_format_single(
     Ok(())
 }
 
-async fn purify_csr_connector(
+async fn purify_csr_connector_proto(
     connector: &mut CreateSourceConnector,
-    connector_options: &BTreeMap<String, String>,
+    csr_connector: &mut CsrConnectorProto<Raw>,
     envelope: &Envelope,
-    csr_connector: &mut CsrConnector<Raw>,
+    with_options: &Vec<SqlOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
         topic
@@ -492,7 +539,49 @@ async fn purify_csr_connector(
         bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
-    let CsrConnector {
+    let CsrConnectorProto {
+        url,
+        seed,
+        with_options: ccsr_options,
+    } = csr_connector;
+    if seed.is_none() {
+        let url: Url = url.parse()?;
+        let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
+        let ccsr_config = kafka_util::generate_ccsr_client_config(
+            url,
+            &kafka_options,
+            normalize::options(&ccsr_options),
+        )?;
+
+        let value =
+            compile_proto(&format!("{}-value", topic), ccsr_config.clone().build()?).await?;
+        let key = compile_proto(&format!("{}-key", topic), ccsr_config.build()?)
+            .await
+            .ok();
+
+        if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) && key.is_none() {
+            bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+        }
+
+        *seed = Some(CsrSeedCompiled { value, key });
+    }
+
+    Ok(())
+}
+
+async fn purify_csr_connector_avro(
+    connector: &mut CreateSourceConnector,
+    csr_connector: &mut CsrConnectorAvro<Raw>,
+    envelope: &Envelope,
+    connector_options: &BTreeMap<String, String>,
+) -> Result<(), anyhow::Error> {
+    let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
+        topic
+    } else {
+        bail!("Confluent Schema Registry is only supported with Kafka sources")
+    };
+
+    let CsrConnectorAvro {
         url,
         seed,
         with_options: ccsr_options,
@@ -686,4 +775,67 @@ async fn get_remote_csr_schema(
         schema_registry_config: Some(schema_registry_config),
         confluent_wire_format: true,
     })
+}
+
+async fn compile_proto(
+    subject_name: &String,
+    ccsr_client: Client,
+) -> Result<CsrSeedCompiledEncoding, anyhow::Error> {
+    lazy_static! {
+        static ref WELL_KNOWN_REGEX: Regex = Regex::new(r#"(\.)?google\.protobuf\.\w+"#).unwrap();
+        static ref MISSING_IMPORT_ERROR: Regex =
+            Regex::new(r#"protobuf path \\"(?P<reference>.*)\\" is not found in import path"#)
+                .unwrap();
+    }
+
+    let (primary_subject, dependency_subjects) = ccsr_client.get_all_subjects(subject_name).await?;
+
+    let primary_proto_name = primary_subject.name.clone();
+    let include_dir = tempfile::tempdir()?;
+    let primary_proto_path = include_dir.path().join(&primary_proto_name);
+
+    for subject in iter::once(primary_subject).chain(dependency_subjects.into_iter()) {
+        if WELL_KNOWN_REGEX.is_match(&subject.name) {
+            continue;
+        }
+        let subject_pb = PathBuf::from(subject.name);
+        if let Some(parent) = subject_pb.parent() {
+            fs::create_dir_all(include_dir.path().join(parent))?;
+        }
+        let path = include_dir.path().join(subject_pb);
+        let bytes = strconv::parse_bytes(&subject.schema.raw)?;
+        fs::write(&path, &bytes)?;
+    }
+
+    match Protoc::new()
+        .include(include_dir.path())
+        .input(primary_proto_path)
+        .parse()
+    {
+        Ok(fds) => {
+            let message_name = fds
+                .get_file()
+                .iter()
+                .find(|f| f.get_name() == primary_proto_name)
+                .map(|file| file.get_message_type().iter().next())
+                .flatten()
+                .map(|message| format!(".{}", message.get_name()))
+                .ok_or_else(|| anyhow!("unable to compile temporary schema"))?;
+            Ok(CsrSeedCompiledEncoding {
+                schema: fds.write_to_bytes()?,
+                message_name,
+            })
+        }
+        Err(e) => {
+            // Make protobuf import errors more user-friendly.
+            if let Some(captures) = MISSING_IMPORT_ERROR.captures(&e.to_string()) {
+                bail!(
+                    "unsupported protobuf schema reference {}",
+                    &captures["reference"]
+                )
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
