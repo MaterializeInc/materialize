@@ -130,7 +130,7 @@ impl DebeziumDeduplicationStrategy {
                         &debug_name,
                         worker_index,
                         &row,
-                        // Debezium decoding always adds two extra rows to the end of the record: one with the deduplication position,
+                        // Debezium decoding always adds two extra columns to the end of the record: one with the deduplication position,
                         // and one with the upstream time in milliseconds.
                         // Since these are the last two datums in the row, they are at `arity - 2` and `arity - 1`, respectively.
                         arity - 2,

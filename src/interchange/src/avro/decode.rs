@@ -161,7 +161,6 @@ impl Decoder {
     pub async fn decode(
         &mut self,
         bytes: &mut &[u8],
-        coord: Option<i64>,
         upstream_time_millis: Option<i64>,
     ) -> anyhow::Result<Row> {
         let (bytes2, resolved_schema) = self.csr_avro.resolve(bytes).await?;
@@ -213,13 +212,8 @@ impl Decoder {
             self.packer.finish_and_reuse()
         };
         log::trace!(
-            "[customer-data] Decoded row {:?}{} in {}",
+            "[customer-data] Decoded row {:?} in {}",
             result,
-            if let Some(coord) = coord {
-                format!(" at offset {}", coord)
-            } else {
-                format!("")
-            },
             self.debug_name
         );
         Ok(result)

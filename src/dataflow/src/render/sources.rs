@@ -28,9 +28,7 @@ use dataflow_types::*;
 use expr::{GlobalId, Id, SourceInstanceId};
 use ore::cast::CastFrom;
 use ore::now::NowFn;
-use repr::RelationDesc;
-use repr::ScalarType;
-use repr::{Row, Timestamp};
+use repr::{Datum, RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -249,7 +247,7 @@ where
                     base_metrics,
                 };
 
-                let (collection, capability) = if let ExternalSourceConnector::PubNub(
+                let (mut collection, capability) = if let ExternalSourceConnector::PubNub(
                     pubnub_connector,
                 ) = connector
                 {
@@ -337,6 +335,10 @@ where
                             SourceDataEncoding::Single(value) => (None, value),
                         };
 
+                        // TODO(petrosagg): remove this inconsistency once INCLUDE (offset)
+                        // syntax is implemented
+                        let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_));
+
                         // CDCv2 can't quite be slotted in to the below code, since it determines its own diffs/timestamps as part of decoding.
                         if let SourceEnvelope::CdcV2 = &envelope {
                             let AvroEncoding {
@@ -391,45 +393,109 @@ where
                                     .push(Rc::new(tok));
                             }
 
-                            // render debezium or regular upsert
+                            // render envelopes
                             match &envelope {
-                                SourceEnvelope::Debezium(_, DebeziumMode::Upsert) => {
-                                    let mut trackstate = (
-                                        HashMap::new(),
-                                        render_state
-                                            .metrics
-                                            .debezium_upsert_count_for(src_id, self.dataflow_id),
-                                    );
-                                    let results = results.flat_map(
-                                            move |DecodeResult { key, value, .. }| {
-                                                let (keys, metrics) = &mut trackstate;
-                                                #[rustfmt::skip]
-                                                let value = value.map(|value| {
-                                                    match key {
-                                                        None => Err::<_, DataflowError>(
-                                                            DecodeError::Text(
-                                                                "All upsert keys should decode to a value."
-                                                                    .to_string(),
-                                                            )
-                                                            .into(),
-                                                        ),
-                                                        Some(Err(e)) => Err(e),
-                                                        Some(Ok(key)) => {
-                                                            rewrite_for_upsert(value, keys, key, metrics)
+                                SourceEnvelope::Debezium(dedupe_strategy, mode) => {
+                                    let results = match mode {
+                                        DebeziumMode::Upsert => {
+                                            let mut trackstate = (
+                                                HashMap::new(),
+                                                render_state.metrics.debezium_upsert_count_for(
+                                                    src_id,
+                                                    self.dataflow_id,
+                                                ),
+                                            );
+                                            results.flat_map(
+                                                move |DecodeResult { key, value, .. }| {
+                                                    let (keys, metrics) = &mut trackstate;
+                                                    #[rustfmt::skip]
+                                                    let value = value.map(|value| {
+                                                        match key {
+                                                            None => Err::<_, DataflowError>(
+                                                                DecodeError::Text(
+                                                                    "All upsert keys should decode to a value."
+                                                                        .to_string(),
+                                                                )
+                                                                .into(),
+                                                            ),
+                                                            Some(Err(e)) => Err(e),
+                                                            Some(Ok(key)) => {
+                                                                rewrite_for_upsert(value, keys, key, metrics)
+                                                            }
                                                         }
-                                                    }
-                                                });
-                                                value
-                                            },
-                                        );
+                                                    });
+                                                    value
+                                                },
+                                            )
+                                        }
+                                        DebeziumMode::Plain => {
+                                            results.flat_map(|DecodeResult { value, .. }| value)
+                                        }
+                                    };
                                     let (stream, errors) = results.ok_err(std::convert::identity);
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
                                         errors.pass_through("decode-errors").as_collection();
+
+                                    let dbz_key_indices = match &src.connector {
+                                        SourceConnector::External {
+                                            encoding:
+                                                SourceDataEncoding::KeyValue {
+                                                    key:
+                                                        DataEncoding::Avro(AvroEncoding {
+                                                            schema: key_schema,
+                                                            ..
+                                                        }),
+                                                    ..
+                                                },
+                                            ..
+                                        } => {
+                                            let fields = match &src.bare_desc.typ().column_types[0]
+                                                .scalar_type
+                                            {
+                                                ScalarType::Record { fields, .. } => fields.clone(),
+                                                _ => unreachable!(),
+                                            };
+                                            let row_desc = RelationDesc::from_names_and_types(
+                                                fields.into_iter().map(|(n, t)| (Some(n), t)),
+                                            );
+                                            // these must be available because the DDL parsing logic already
+                                            // checks this and bails in case the key is not correct
+                                            let key_indices =
+                                                interchange::avro::validate_key_schema(key_schema, &row_desc)
+                                                    .expect(
+                                                    "Invalid key schema, this indicates a bug in Materialize",
+                                                );
+                                            Some(key_indices)
+                                        }
+                                        _ => None,
+                                    };
+
+                                    let stream = dedupe_strategy.clone().render(
+                                        stream,
+                                        self.debug_name.to_string(),
+                                        scope.index(),
+                                        // Debezium decoding has produced two extra fields, with the dedupe information and the upstream time in millis
+                                        src.bare_desc.arity() + 2,
+                                        dbz_key_indices,
+                                    );
+
                                     (stream, Some(errors))
                                 }
                                 SourceEnvelope::Upsert => {
                                     let upsert_operator_name = format!("{}-upsert", source_name);
+
+                                    // append position metadata to the output row
+                                    let results = if push_metadata {
+                                        results.map(|mut d| {
+                                            if let Some(Ok(ref mut row)) = d.value {
+                                                row.push(Datum::from(d.position));
+                                            }
+                                            d
+                                        })
+                                    } else {
+                                        results
+                                    };
 
                                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                                         &upsert_operator_name,
@@ -442,7 +508,7 @@ where
                                             .map(|config| config.upsert_config.clone()),
                                     );
 
-                                    // When persistence is enable we need to seal up both the
+                                    // When persistence is enabled we need to seal up both the
                                     // timestamp bindings and the upsert state. Otherwise, just
                                     // pass through.
                                     let upsert_ok = if let Some(source_persist_config) =
@@ -476,7 +542,8 @@ where
                                     (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                                 }
                                 _ => {
-                                    let (stream, errors) = flatten_results(key_envelope, results);
+                                    let (stream, errors) =
+                                        flatten_results(key_envelope, push_metadata, results);
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
                                         errors.pass_through("decode-errors").as_collection();
@@ -491,52 +558,6 @@ where
                     }
 
                     (stream, capability)
-                };
-
-                // render debezium dedupe
-                let mut collection = match &envelope {
-                    SourceEnvelope::Debezium(dedupe_strategy, _) => {
-                        let dbz_key_indices = match &src.connector {
-                            SourceConnector::External {
-                                encoding:
-                                    SourceDataEncoding::KeyValue {
-                                        key:
-                                            DataEncoding::Avro(AvroEncoding {
-                                                schema: key_schema, ..
-                                            }),
-                                        ..
-                                    },
-                                ..
-                            } => {
-                                let fields = match &src.bare_desc.typ().column_types[0].scalar_type
-                                {
-                                    ScalarType::Record { fields, .. } => fields.clone(),
-                                    _ => unreachable!(),
-                                };
-                                let row_desc = RelationDesc::from_names_and_types(
-                                    fields.into_iter().map(|(n, t)| (Some(n), t)),
-                                );
-                                // these must be available because the DDL parsing logic already
-                                // checks this and bails in case the key is not correct
-                                let key_indices =
-                                    interchange::avro::validate_key_schema(key_schema, &row_desc)
-                                        .expect(
-                                        "Invalid key schema, this indicates a bug in Materialize",
-                                    );
-                                Some(key_indices)
-                            }
-                            _ => None,
-                        };
-                        dedupe_strategy.clone().render(
-                            collection,
-                            self.debug_name.to_string(),
-                            scope.index(),
-                            // Debezium decoding has produced two extra fields, with the dedupe information and the upstream time in millis
-                            src.bare_desc.arity() + 2,
-                            dbz_key_indices,
-                        )
-                    }
-                    _ => collection,
                 };
 
                 // Force a shuffling of data in case sources are not uniformly distributed.
@@ -710,6 +731,7 @@ fn get_persist_config(
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results<G>(
     key_envelope: KeyEnvelope,
+    push_metadata: bool,
     results: timely::dataflow::Stream<G, DecodeResult>,
 ) -> (
     timely::dataflow::Stream<G, Row>,
@@ -720,48 +742,67 @@ where
 {
     match key_envelope {
         KeyEnvelope::None => results
-            .flat_map(|DecodeResult { key: _, value, .. }| value)
+            .flat_map(move |res| {
+                if push_metadata {
+                    res.value.map(|result| {
+                        let mut row = result?;
+                        row.push(Datum::from(res.position));
+                        Ok(row)
+                    })
+                } else {
+                    res.value
+                }
+            })
             .ok_err(std::convert::identity),
         KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
             .flat_map(flatten_key_value)
-            .map(|maybe_kv| {
-                maybe_kv.map(|(mut key, value)| {
+            .map(move |maybe_kv| {
+                maybe_kv.map(|(mut key, value, position)| {
                     key.extend_by_row(&value);
+                    if push_metadata {
+                        key.push(Datum::from(position));
+                    }
                     key
                 })
             })
             .ok_err(std::convert::identity),
         KeyEnvelope::Named(_) => results
             .flat_map(flatten_key_value)
-            .map(|maybe_kv| match maybe_kv {
-                Ok((mut key, value)) => {
+            .map(move |maybe_kv| {
+                maybe_kv.map(|(mut key, value, position)| {
                     // Named semantics rename a key that is a single column, and encode a
                     // multi-column field as a struct with that name
-                    match key.iter().count() {
-                        1 => {
-                            key.extend_by_row(&value);
-                            Ok(key)
-                        }
-                        _ => {
-                            let mut new_row = Row::default();
-                            new_row.push_list(key.iter());
-                            new_row.extend_by_row(&value);
-                            Ok(new_row)
-                        }
+                    let mut row = if key.iter().nth(1).is_none() {
+                        key.extend_by_row(&value);
+                        key
+                    } else {
+                        let mut new_row = Row::default();
+                        new_row.push_list(key.iter());
+                        new_row.extend_by_row(&value);
+                        new_row
+                    };
+                    if push_metadata {
+                        row.push(Datum::from(position));
                     }
-                }
-                Err(e) => Err(e),
+                    row
+                })
             })
             .ok_err(std::convert::identity),
     }
 }
 
 /// Handle possibly missing key or value portions of messages
-fn flatten_key_value(result: DecodeResult) -> Option<Result<(Row, Row), DataflowError>> {
-    let DecodeResult { key, value, .. } = result;
+fn flatten_key_value(
+    result: DecodeResult,
+) -> Option<Result<(Row, Row, Option<i64>), DataflowError>> {
+    let DecodeResult {
+        key,
+        value,
+        position,
+    } = result;
     match (key, value) {
         (Some(key), Some(value)) => match (key, value) {
-            (Ok(key), Ok(value)) => Some(Ok((key, value))),
+            (Ok(key), Ok(value)) => Some(Ok((key, value, position))),
             // always prioritize the value error if either or both have an error
             (_, Err(e)) => Some(Err(e)),
             (Err(e), _) => Some(Err(e)),
