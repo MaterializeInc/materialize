@@ -207,6 +207,7 @@ impl Default for FuseAndCollapse {
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
                 Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+                Box::new(crate::fusion::top_k::TopK),
             ],
         }
     }
