@@ -127,6 +127,8 @@ List new features before bug fixes.
   [`mz_kafka_source_statistics`](/sql/system-catalog#mz_kafka_source_statistics),
   containing raw statistics from the underlying librdkafka library.
 
+- Fix a bug that caused a panic when using a query containing `STRING_AGG`
+
 {{% version-header v0.9.11 %}}
 
 - Disallow `UPDATE` and `DELETE` operations on tables when boot in
