@@ -185,3 +185,53 @@ macro_rules! async_op {
         }
     };
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use std::time::Duration;
+
+    use timely::dataflow::channels::pact::Pipeline;
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::{Capture, ToStream};
+
+    #[tokio::test]
+    async fn async_operator() {
+        // Run timely in a separate thread
+        let extracted = tokio::task::spawn_blocking(|| {
+            let capture = timely::example(|scope| {
+                let input = (0..10).to_stream(scope);
+
+                let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
+                let mut input_handle = op.new_input(&input, Pipeline);
+                let (mut output, output_stream) = op.new_output();
+
+                op.build_async(
+                    input.scope(),
+                    async_op!(|capabilities, _frontiers| {
+                        // Drop initial capabilities
+                        capabilities.clear();
+                        let mut output_handle = output.activate();
+                        while let Some((cap, data)) = input_handle.next() {
+                            let cap = cap.retain();
+
+                            let mut session = output_handle.session(&cap);
+                            for item in data.iter().copied() {
+                                tokio::time::sleep(Duration::from_millis(10)).await;
+                                session.give(item);
+                            }
+                        }
+                    }),
+                );
+
+                output_stream.capture()
+            });
+            capture.extract()
+        })
+        .await
+        .expect("timely panicked");
+
+        assert_eq!(extracted, vec![(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9])]);
+    }
+}
