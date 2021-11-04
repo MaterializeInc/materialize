@@ -11,7 +11,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use criterion::measurement::WallTime;
 use criterion::{
@@ -119,6 +119,13 @@ pub fn bench_writes_log(c: &mut Criterion) {
 
 pub fn bench_writes_blob(c: &mut Criterion) {
     let mut group = c.benchmark_group("blob_set");
+
+    // Limit the amount of time this test gets to run in order to limit the total
+    // number of iterations criterion takes, and consequently, limit the peak
+    // memory usage.
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(1));
+
     let mut data = vec![];
 
     // Ensure that each value has the same number of bytes to make reasoning about
@@ -250,6 +257,10 @@ fn bench_writes_indexed_inner<B: Blob, L: Log>(
 
 pub fn bench_writes_indexed(c: &mut Criterion) {
     let mut group = c.benchmark_group("indexed_write_drain");
+
+    // Limit the sample size of this benchmark group to constrain it to a more
+    // reasonable runtime.
+    group.sample_size(10);
     let mem_indexed = MemRegistry::new()
         .indexed_no_reentrance()
         .expect("failed to create mem indexed");
@@ -270,6 +281,20 @@ pub fn bench_writes_indexed(c: &mut Criterion) {
 
 pub fn bench_writes_blob_cache(c: &mut Criterion) {
     let mut group = c.benchmark_group("blob_cache_set_unsealed_batch");
+
+    // Limit the sample size and measurement time of this benchmark group to both
+    // limit the overall runtime to a reasonable length and bound the memory
+    // utilization.
+    //
+    // Criterion tries to fit as many iterations as possible within `measurement_time`,
+    // but chooses some minimum number of iterations based on `sample_size`. So,
+    // because we want to have a tight limit on the number of iterations, as each
+    // incurs substantial memory usage for both file and mem blobs (because of how
+    // caching is currently implemented), we have to manually specify both.
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(1));
+
     let mem_blob = MemRegistry::new()
         .blob_no_reentrance()
         .expect("creating a MemBlob cannot fail");
