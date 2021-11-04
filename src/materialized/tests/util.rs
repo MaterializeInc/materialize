@@ -104,7 +104,7 @@ impl Config {
     }
 }
 
-pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
+pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     let runtime = Arc::new(Runtime::new()?);
     let (data_directory, temp_dir) = match config.data_directory {
         None => {
@@ -181,7 +181,7 @@ impl Server {
         config
     }
 
-    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, Box<dyn Error>>
+    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,
@@ -194,7 +194,7 @@ impl Server {
     pub async fn connect_async<T>(
         &self,
         tls: T,
-    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), Box<dyn Error>>
+    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), anyhow::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,
