@@ -15,6 +15,7 @@
 
 use std::error::Error;
 use std::fs::File;
+use std::io::Read;
 use std::io::Write;
 use std::net::Shutdown;
 use std::net::TcpListener;
@@ -77,6 +78,19 @@ fn test_no_block() -> Result<(), anyhow::Error> {
         info!("test_no_block: executing query");
         let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
         assert_eq!(answer, 2);
+
+        info!("test_no_block: reading the HTTP request");
+        let mut buf = vec![0; 1024];
+        let mut input = vec![];
+        // The HTTP request will end in two CRLFs, so detect that to know we've finished reading.
+        while {
+            let len = input.len();
+            len < 4 || &input[len - 4..] != b"\r\n\r\n"
+        } {
+            let len_read = stream.read(&mut buf).unwrap();
+            assert!(len_read > 0);
+            input.extend_from_slice(&buf[0..len_read]);
+        }
 
         // Return an error to the coordinator, so that we can shutdown cleanly.
         info!("test_no_block: writing fake schema registry error");
