@@ -9,7 +9,7 @@
 
 //! Persistent metadata storage for the coordinator.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -2382,13 +2382,15 @@ impl Catalog {
         // Find all relations referenced by the expression. Find their parent schemas
         // and add all tables, views, and sources in those schemas to a set.
         let mut relations: HashSet<GlobalId> = HashSet::new();
+        let mut schema_ids = VecDeque::new();
         for id in ids {
             // Always add in the user-specified ids.
             relations.insert(*id);
             let entry = self.get_by_id(&id);
             let name = entry.name();
             if let Some(schema) = self.get_schema(&name.database, &name.schema, conn_id) {
-                for id in schema.items.values() {
+                schema_ids.extend(schema.items.values());
+                while let Some(id) = schema_ids.pop_front() {
                     let entry = self.get_by_id(id);
                     let ty = entry.item_type();
                     match ty {
@@ -2404,16 +2406,7 @@ impl Catalog {
                                 if let SqlCatalogItemType::View = ty {
                                     // Add transitive items from views.
                                     if let CatalogItem::View(view) = entry.item() {
-                                        for view_id in &view.depends_on {
-                                            if matches!(
-                                                self.get_by_id(&view_id).item_type(),
-                                                SqlCatalogItemType::Table
-                                                    | SqlCatalogItemType::View
-                                                    | SqlCatalogItemType::Source,
-                                            ) {
-                                                relations.insert(*view_id);
-                                            }
-                                        }
+                                        schema_ids.extend(&view.depends_on);
                                     }
                                 }
                             }
