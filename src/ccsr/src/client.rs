@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 
@@ -94,13 +94,13 @@ impl Client {
         &self,
         subject: &str,
     ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
-        let mut subjects = VecDeque::new();
+        let mut subjects = vec![];
         let mut seen = HashSet::new();
         let mut subjects_queue = vec![(subject.to_owned(), "latest".to_owned())];
         while let Some((subject, version)) = subjects_queue.pop() {
             let req = self.make_request(Method::GET, &["subjects", &subject, "versions", &version]);
             let res: GetBySubjectResponse = send_request(req).await?;
-            subjects.push_back(Subject {
+            subjects.push(Subject {
                 schema: Schema {
                     id: res.id,
                     raw: res.schema,
@@ -117,13 +117,11 @@ impl Client {
                 );
             }
         }
+        assert!(subjects.len() > 0, "Request should error if no subjects");
 
-        let primary = subjects
-            .pop_front()
-            .expect("Request should error if no subjects");
-        let mut dependencies: Vec<_> = subjects.into();
-        dependencies.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok((primary, dependencies))
+        let primary = subjects.remove(0);
+        subjects.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok((primary, subjects))
     }
 
     /// Publishes a new schema for the specified subject. The ID of the new
