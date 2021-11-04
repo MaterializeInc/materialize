@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashSet;
 use std::env;
 
+use ccsr::SchemaReference;
 use hyper::server::conn::AddrIncoming;
 use hyper::service;
 use hyper::Server;
@@ -127,6 +129,102 @@ async fn test_client() -> Result<(), anyhow::Error> {
         assert_eq!(schema_test_id, res.schema.id);
         assert_raw_schemas_eq(schema_v1, &res.schema.raw);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_client_all_subjects() -> Result<(), anyhow::Error> {
+    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
+
+    let existing_subjects = client.list_subjects().await?;
+    for s in existing_subjects {
+        if s.starts_with("ccsr-test-") {
+            client.delete_subject(&s).await?;
+        }
+    }
+    assert_eq!(count_schemas(&client, "ccsr-test-").await?, 0);
+
+    let schema0_subject = "schema0.proto".to_owned();
+    let schema0 = r#"
+        syntax = "proto3";
+
+        message Choice {
+            string field0 = 1;
+            int64 field2 = 2;
+        }
+    "#;
+
+    let schema1_subject = "schema1.proto".to_owned();
+    let schema1 = r#"
+        syntax = "proto3";
+        import "schema0.proto";
+
+        message ChoiceId {
+            string id = 1;
+            Choice choice = 2;
+        }
+    "#;
+
+    let schema2_subject = "schema2.proto".to_owned();
+    let schema2 = r#"
+        syntax = "proto3";
+
+        import "schema0.proto";
+        import "schema1.proto";
+
+        message OtherThingWhoKnowWhatEven {
+            string whatever = 1;
+            ChoiceId nonsense = 2;
+            Choice third_field = 3;
+        }
+    "#;
+
+    let schema0_id = client
+        .publish_schema(&schema0_subject, schema0, SchemaType::Protobuf, &[])
+        .await?;
+    assert!(schema0_id > 0);
+
+    let schema1_id = client
+        .publish_schema(
+            &schema1_subject,
+            schema1,
+            SchemaType::Protobuf,
+            &[SchemaReference {
+                name: schema0_subject.clone(),
+                subject: schema0_subject.clone(),
+                version: 1,
+            }],
+        )
+        .await?;
+    assert!(schema1_id > 0);
+
+    let schema2_id = client
+        .publish_schema(
+            &schema2_subject,
+            schema2,
+            SchemaType::Protobuf,
+            &[
+                SchemaReference {
+                    name: schema1_subject.clone(),
+                    subject: schema1_subject.clone(),
+                    version: 1,
+                },
+                SchemaReference {
+                    name: schema0_subject.clone(),
+                    subject: schema0_subject.clone(),
+                    version: 1,
+                },
+            ],
+        )
+        .await?;
+    assert!(schema2_id > 0);
+
+    let (primary_subject, dependency_subjects) = client.get_all_subjects(&schema2_subject).await?;
+    assert_eq!(schema2_subject, primary_subject.name);
+    assert_eq!(2, dependency_subjects.len());
+    assert_eq!(schema0_subject, dependency_subjects[0].name);
+    assert_eq!(schema1_subject, dependency_subjects[1].name);
 
     Ok(())
 }
