@@ -9,6 +9,7 @@
 
 //! Benchmarks for different persistent Write implementations.
 
+use std::mem::size_of;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -60,18 +61,15 @@ fn generate_updates() -> Vec<((Vec<u8>, Vec<u8>), u64, isize)> {
 }
 
 fn get_encoded_len(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> u64 {
-    let batch = BlobUnsealedBatch {
-        desc: Description::new(
-            Antichain::from_elem(SeqNo(0)),
-            Antichain::from_elem(SeqNo(1)),
-            Antichain::from_elem(SeqNo(0)),
-        ),
-        updates,
-    };
-    // See https://github.com/bincode-org/bincode/issues/293 for why this is
-    // infallible.
-    let val = bincode::serialize(&batch).expect("infallible for BlobUnsealedBatch");
-    u64::cast_from(val.len())
+    let mut len = 0;
+
+    for ((key, val), _, _) in updates {
+        len += key.len();
+        len += val.len();
+        len += size_of::<u64>() + size_of::<isize>();
+    }
+
+    u64::cast_from(len)
 }
 
 // Benchmark the write throughput of Log::write_sync.
