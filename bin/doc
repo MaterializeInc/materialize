@@ -26,7 +26,7 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-RUSTDOCFLAGS="-D warnings"
+RUSTDOCFLAGS+=" -D warnings "
 if [[ $(cargo -V) = *nightly* ]]; then
   RUSTDOCFLAGS+=" --cfg nightly_doc_features"
 fi
