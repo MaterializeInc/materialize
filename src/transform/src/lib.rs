@@ -183,6 +183,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::filter::Filter),
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
+                Box::new(crate::fusion::top_k::TopK),
                 Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
                 Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),

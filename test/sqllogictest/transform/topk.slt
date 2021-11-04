@@ -94,3 +94,22 @@ explain typed plan for select * from (select * from with_primary_key limit 0);
 | | keys = (())
 
 EOF
+
+# Check that TopK fusion transform is wired up
+
+statement ok
+create table t1(f1 int, f2 int);
+----
+
+statement ok
+create materialized view v1 as select * from (select * from t1 order by f1 limit 10 offset 2) order by f1 limit 3 offset 1;
+----
+
+query T multiline
+explain view v1;
+----
+%0 =
+| Get materialize.public.t1 (u7)
+| TopK group=() order=(#0 asc) limit=3 offset=3
+
+EOF
