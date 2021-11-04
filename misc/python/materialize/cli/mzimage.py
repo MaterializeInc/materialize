@@ -81,13 +81,6 @@ def parse_args() -> argparse.Namespace:
 
     def add_subcommand(name: str, **kwargs: Any) -> argparse.ArgumentParser:
         subparser = subparsers.add_parser(name, **kwargs)
-        return subparser
-
-    def add_image_subcommand(name: str, **kwargs: Any) -> argparse.ArgumentParser:
-        subparser = add_subcommand(name, **kwargs)
-        subparser.add_argument(
-            "image", help="the name of an mzbuild image in this repository"
-        )
         subparser.add_argument(
             "--build-mode",
             default="release",
@@ -98,6 +91,13 @@ def parse_args() -> argparse.Namespace:
             "--coverage",
             help="whether to enable code coverage compilation flags",
             action="store_true",
+        )
+        return subparser
+
+    def add_image_subcommand(name: str, **kwargs: Any) -> argparse.ArgumentParser:
+        subparser = add_subcommand(name, **kwargs)
+        subparser.add_argument(
+            "image", help="the name of an mzbuild image in this repository"
         )
         return subparser
 

@@ -13,9 +13,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::thread::Thread;
 use std::time::{Duration, Instant};
-use timely::progress::reachability::logging::TrackerEvent;
 
 use anyhow::anyhow;
+use async_trait::async_trait;
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
@@ -33,6 +33,7 @@ use timely::dataflow::operators::ActivateCapability;
 use timely::logging::Logger;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
+use timely::progress::reachability::logging::TrackerEvent;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
@@ -303,16 +304,7 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// An optional callback that is presented with both halves of the dataflow
-    /// feedback channel on startup. The callback can swap the channel for
-    /// another in order to intercept messages.
-    ///
-    /// For testing purposes only.
-    pub response_interceptor: Option<ResponseInterceptor>,
 }
-
-type ResponseInterceptor =
-    Box<dyn FnOnce(&mut mpsc::UnboundedSender<Response>, &mut mpsc::UnboundedReceiver<Response>)>;
 
 /// A handle to a running dataflow server.
 ///
@@ -321,21 +313,36 @@ pub struct Server {
     _worker_guards: WorkerGuards<()>,
 }
 
-/// A client to a dataflow [`Server`].
-pub struct Client {
+/// A client to a running dataflow server.
+#[async_trait]
+pub trait Client: Send {
+    /// Reports the number of dataflow workers.
+    fn num_workers(&self) -> usize;
+
+    /// Sends a command to the dataflow server.
+    async fn send(&mut self, cmd: Command);
+
+    /// Receives the next response from the dataflow server.
+    ///
+    /// This method blocks until the next response is available, or, if the
+    /// dataflow server has been shut down, returns `None`.
+    async fn recv(&mut self) -> Option<Response>;
+}
+
+/// A client to a dataflow server running in the current process.
+pub struct LocalClient {
     feedback_rx: mpsc::UnboundedReceiver<Response>,
     worker_txs: Vec<crossbeam_channel::Sender<Command>>,
     worker_threads: Vec<Thread>,
 }
 
-impl Client {
-    /// Reports the number of dataflow workers.
-    pub fn num_workers(&self) -> usize {
+#[async_trait]
+impl Client for LocalClient {
+    fn num_workers(&self) -> usize {
         self.worker_txs.len()
     }
 
-    /// Sends a command to the dataflow server.
-    pub fn send(&self, cmd: Command) {
+    async fn send(&mut self, cmd: Command) {
         trace!("Broadcasting dataflow command: {:?}", cmd);
         let num_workers = self.num_workers();
         if num_workers == 1 {
@@ -355,27 +362,20 @@ impl Client {
         }
     }
 
-    /// Receives the next response from the dataflow server.
-    ///
-    /// This method blocks until the next response is available, or, if the
-    /// dataflow server has been shut down, returns `None`.
-    pub async fn recv(&mut self) -> Option<Response> {
+    async fn recv(&mut self) -> Option<Response> {
         return self.feedback_rx.recv().await;
     }
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(config: Config) -> Result<(Server, Client), anyhow::Error> {
+pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     assert!(config.workers > 0);
 
     let server_metrics = ServerMetrics::register_with(&config.metrics_registry);
     let dataflow_source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
     let dataflow_sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
 
-    let (mut feedback_tx, mut feedback_rx) = mpsc::unbounded_channel();
-    if let Some(response_interceptor) = config.response_interceptor {
-        response_interceptor(&mut feedback_tx, &mut feedback_rx);
-    }
+    let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
 
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream.
@@ -436,7 +436,7 @@ pub fn serve(config: Config) -> Result<(Server, Client), anyhow::Error> {
         },
     )
     .map_err(|e| anyhow!("{}", e))?;
-    let client = Client {
+    let client = LocalClient {
         feedback_rx,
         worker_txs,
         worker_threads: worker_guards

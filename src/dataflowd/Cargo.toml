@@ -1,0 +1,20 @@
+[package]
+name = "dataflowd"
+description = "Independent dataflow server for Materialize."
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "1.0.44"
+async-trait = "0.1.51"
+dataflow = { path = "../dataflow" }
+log = "0.4.13"
+ore = { path = "../ore" }
+structopt = "0.3.25"
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tracing-subscriber = "0.3.1"
+tokio = { version = "1.13.0", features = ["macros", "rt-multi-thread"] }
+tokio-serde = { version = "0.8.0", features = ["bincode"] }
+tokio-util = { version = "0.6.9", features = ["codec"] }
+futures = "0.3.17"

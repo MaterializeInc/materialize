@@ -61,18 +61,19 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::future::Future;
 use std::io::Write;
-use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use async_trait::async_trait;
 use futures::future::FutureExt;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex as TokioMutex;
 
 use build_info::DUMMY_BUILD_INFO;
 use coord::session::{EndTransactionAction, Session};
-use coord::{Client, ExecuteResponse, Handle, PersistConfig, SessionClient, StartupResponse};
+use coord::{ExecuteResponse, PersistConfig, SessionClient, StartupResponse};
 use dataflow::WorkerFeedback;
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
@@ -81,21 +82,18 @@ use ore::now::NowFn;
 use repr::{Datum, Timestamp};
 use timely::progress::change_batch::ChangeBatch;
 
-/// CoordTest works by creating a Coordinator with mechanisms to control
-/// when it receives messages. The dataflow server is started with a
-/// single worker, but it's feedback channel into the Coordinator is
-/// buffered (`dataflow_feedback_rx`), and only sent to the Coordinator
-/// (`coord_feedback_tx`) when specified, allowing us to control when uppers
-/// and sinces advance.
+/// CoordTest works by creating a Coordinator with mechanisms to control when it
+/// receives messages. The dataflow server is started with a single worker, but
+/// it's feedback channel is controlled by the InterceptingDataflowClient,
+/// allowing us to control when uppers and sinces advance.
 //
 // The field order matters a lot here so the various threads/tasks are shut
 // down without ever panicing.
 pub struct CoordTest {
-    coord_feedback_tx: mpsc::UnboundedSender<dataflow::Response>,
-    client: Client,
-    _handle: Handle,
+    dataflow_client: InterceptingDataflowClient<dataflow::LocalClient>,
+    coord_client: coord::Client,
+    _coord_handle: coord::Handle,
     _dataflow_server: dataflow::Server,
-    dataflow_feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
     // Keep a queue of messages in the order received from dataflow_feedback_rx so
     // we can safely modify or inject things and maintain original message order.
     queued_feedback: Vec<dataflow::Response>,
@@ -117,24 +115,18 @@ impl CoordTest {
             NowFn::from(move || *timestamp.lock().unwrap())
         };
         let metrics_registry = MetricsRegistry::new();
-        let (mut dataflow_feedback_tx, dataflow_feedback_rx) = mpsc::unbounded_channel();
-        let (coord_feedback_tx, mut coord_feedback_rx) = mpsc::unbounded_channel();
-
         let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
             workers: 1,
             timely_worker: timely::WorkerConfig::default(),
             experimental_mode,
             now: now.clone(),
             metrics_registry: metrics_registry.clone(),
-            response_interceptor: Some(Box::new(move |tx, rx| {
-                mem::swap(tx, &mut dataflow_feedback_tx);
-                mem::swap(rx, &mut coord_feedback_rx);
-            })),
         })?;
+        let dataflow_client = InterceptingDataflowClient::new(dataflow_client);
 
         let data_directory = tempfile::tempdir()?;
-        let (handle, client) = coord::serve(coord::Config {
-            dataflow_client,
+        let (coord_handle, coord_client) = coord::serve(coord::Config {
+            dataflow_client: dataflow_client.clone(),
             symbiosis_url: None,
             data_directory: data_directory.path(),
             logging: None,
@@ -150,11 +142,10 @@ impl CoordTest {
         })
         .await?;
         let coordtest = CoordTest {
-            coord_feedback_tx,
-            _handle: handle,
-            client,
+            dataflow_client,
+            _coord_handle: coord_handle,
+            coord_client,
             _dataflow_server: dataflow_server,
-            dataflow_feedback_rx,
             _data_directory: data_directory,
             temp_dir: tempfile::tempdir().unwrap(),
             uppers: HashMap::new(),
@@ -168,7 +159,7 @@ impl CoordTest {
     }
 
     async fn connect(&self) -> anyhow::Result<(SessionClient, StartupResponse)> {
-        let conn_client = self.client.new_conn()?;
+        let conn_client = self.coord_client.new_conn()?;
         let session = Session::new(conn_client.conn_id(), "materialize".into());
         Ok(conn_client.startup(session).await?)
     }
@@ -215,9 +206,9 @@ impl CoordTest {
         self.with_sc_inner(Some(session_name), f).await
     }
 
-    fn drain_feedback_msgs(&mut self) {
+    async fn drain_feedback_msgs(&mut self) {
         loop {
-            if let Some(Some(msg)) = self.dataflow_feedback_rx.recv().now_or_never() {
+            if let Some(msg) = self.dataflow_client.intercepting_recv().await {
                 self.queued_feedback.push(msg);
             } else {
                 return;
@@ -228,7 +219,7 @@ impl CoordTest {
     // Drains messages from the queue into coord, extracting and requeueing
     // excluded uppers.
     async fn drain_skip_uppers(&mut self, exclude_uppers: &HashSet<GlobalId>) {
-        self.drain_feedback_msgs();
+        self.drain_feedback_msgs().await;
         let mut to_send = vec![];
         let mut to_queue = vec![];
         for mut msg in self.queued_feedback.drain(..) {
@@ -249,7 +240,7 @@ impl CoordTest {
             to_send.push(msg);
         }
         for msg in to_send {
-            self.coord_feedback_tx.send(msg).unwrap();
+            self.dataflow_client.forward_response(msg);
         }
         self.queued_feedback = to_queue;
     }
@@ -263,13 +254,13 @@ impl CoordTest {
             if let futures::task::Poll::Ready(rows) = futures::poll!(rows.as_mut()) {
                 return rows;
             }
-            self.drain_peek_response();
+            self.drain_peek_response().await;
         }
     }
 
     // Drains PeekResponse messages from the queue into coord.
-    fn drain_peek_response(&mut self) {
-        self.drain_feedback_msgs();
+    async fn drain_peek_response(&mut self) {
+        self.drain_feedback_msgs().await;
         let mut to_send = vec![];
         let mut to_queue = vec![];
         for msg in self.queued_feedback.drain(..) {
@@ -280,7 +271,7 @@ impl CoordTest {
             }
         }
         for msg in to_send {
-            self.coord_feedback_tx.send(msg).unwrap();
+            self.dataflow_client.forward_response(msg);
         }
         self.queued_feedback = to_queue;
     }
@@ -503,12 +494,10 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                         batch.update(ts, 1);
                         updates.push((id, batch));
                     }
-                    ct.coord_feedback_tx
-                        .send(dataflow::Response {
-                            worker_id: 0,
-                            message: WorkerFeedback::FrontierUppers(updates),
-                        })
-                        .unwrap();
+                    ct.dataflow_client.forward_response(dataflow::Response {
+                        worker_id: 0,
+                        message: WorkerFeedback::FrontierUppers(updates),
+                    });
                     "".into()
                 }
                 "inc-timestamp" => {
@@ -542,4 +531,73 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
     })
     .await;
     tf
+}
+
+/// A [`dataflow::Client`] implementation that intercepts responses from the
+/// dataflow server.
+///
+/// The implementation of the `send` method is unchanged. The implementation of
+/// `recv`, however, only presents the responses that have been explicitly
+/// forwarded via `forward_response`. To access the actual responses from
+/// the underlying dataflow client, call `try_intercepting_recv`.
+struct InterceptingDataflowClient<C> {
+    inner: Arc<TokioMutex<C>>,
+    feedback_tx: mpsc::UnboundedSender<dataflow::Response>,
+    feedback_rx: Arc<TokioMutex<mpsc::UnboundedReceiver<dataflow::Response>>>,
+}
+
+impl<C> Clone for InterceptingDataflowClient<C> {
+    fn clone(&self) -> InterceptingDataflowClient<C> {
+        InterceptingDataflowClient {
+            inner: self.inner.clone(),
+            feedback_tx: self.feedback_tx.clone(),
+            feedback_rx: self.feedback_rx.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl<C> dataflow::Client for InterceptingDataflowClient<C>
+where
+    C: dataflow::Client,
+{
+    fn num_workers(&self) -> usize {
+        1
+    }
+
+    async fn send(&mut self, cmd: dataflow::Command) {
+        self.inner.lock().await.send(cmd).await
+    }
+
+    async fn recv(&mut self) -> Option<dataflow::Response> {
+        let mut feedback_rx = self.feedback_rx.lock().await;
+        feedback_rx.recv().await
+    }
+}
+
+impl<C> InterceptingDataflowClient<C>
+where
+    C: dataflow::Client,
+{
+    /// Creates a new intercepting dataflow client that wraps the provided
+    /// dataflow client.
+    fn new(inner: C) -> InterceptingDataflowClient<C> {
+        let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
+        InterceptingDataflowClient {
+            inner: Arc::new(TokioMutex::new(inner)),
+            feedback_tx,
+            feedback_rx: Arc::new(TokioMutex::new(feedback_rx)),
+        }
+    }
+
+    /// Receives a response from the underlying dataflow client, if one is
+    /// immediately available.
+    async fn intercepting_recv(&mut self) -> Option<dataflow::Response> {
+        self.inner.lock().await.recv().now_or_never().flatten()
+    }
+
+    /// Makes the specified response available via the normal `recv` method.
+    fn forward_response(&self, response: dataflow::Response) {
+        self.feedback_tx.send(response).unwrap()
+    }
 }
