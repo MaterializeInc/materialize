@@ -206,9 +206,9 @@ impl CoordTest {
         self.with_sc_inner(Some(session_name), f).await
     }
 
-    fn drain_feedback_msgs(&mut self) {
+    async fn drain_feedback_msgs(&mut self) {
         loop {
-            if let Some(Some(msg)) = self.dataflow_client.intercepting_recv().now_or_never() {
+            if let Some(msg) = self.dataflow_client.intercepting_recv().await {
                 self.queued_feedback.push(msg);
             } else {
                 return;
@@ -219,7 +219,7 @@ impl CoordTest {
     // Drains messages from the queue into coord, extracting and requeueing
     // excluded uppers.
     async fn drain_skip_uppers(&mut self, exclude_uppers: &HashSet<GlobalId>) {
-        self.drain_feedback_msgs();
+        self.drain_feedback_msgs().await;
         let mut to_send = vec![];
         let mut to_queue = vec![];
         for mut msg in self.queued_feedback.drain(..) {
@@ -254,13 +254,13 @@ impl CoordTest {
             if let futures::task::Poll::Ready(rows) = futures::poll!(rows.as_mut()) {
                 return rows;
             }
-            self.drain_peek_response();
+            self.drain_peek_response().await;
         }
     }
 
     // Drains PeekResponse messages from the queue into coord.
-    fn drain_peek_response(&mut self) {
-        self.drain_feedback_msgs();
+    async fn drain_peek_response(&mut self) {
+        self.drain_feedback_msgs().await;
         let mut to_send = vec![];
         let mut to_queue = vec![];
         for msg in self.queued_feedback.drain(..) {
@@ -539,9 +539,9 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
 /// The implementation of the `send` method is unchanged. The implementation of
 /// `recv`, however, only presents the responses that have been explicitly
 /// forwarded via `forward_response`. To access the actual responses from
-/// the underlying dataflow client, call `intercepting_recv`.
+/// the underlying dataflow client, call `try_intercepting_recv`.
 struct InterceptingDataflowClient<C> {
-    inner: Arc<Mutex<C>>,
+    inner: Arc<TokioMutex<C>>,
     feedback_tx: mpsc::UnboundedSender<dataflow::Response>,
     feedback_rx: Arc<TokioMutex<mpsc::UnboundedReceiver<dataflow::Response>>>,
 }
@@ -562,11 +562,11 @@ where
     C: dataflow::Client,
 {
     fn num_workers(&self) -> usize {
-        self.inner.lock().unwrap().num_workers()
+        1
     }
 
-    fn send(&self, cmd: dataflow::Command) {
-        self.inner.lock().unwrap().send(cmd)
+    async fn send(&mut self, cmd: dataflow::Command) {
+        self.inner.lock().await.send(cmd).await
     }
 
     async fn recv(&mut self) -> Option<dataflow::Response> {
@@ -584,15 +584,16 @@ where
     fn new(inner: C) -> InterceptingDataflowClient<C> {
         let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
         InterceptingDataflowClient {
-            inner: Arc::new(Mutex::new(inner)),
+            inner: Arc::new(TokioMutex::new(inner)),
             feedback_tx,
             feedback_rx: Arc::new(TokioMutex::new(feedback_rx)),
         }
     }
 
-    /// Receives a response from the underlying dataflow client.
+    /// Receives a response from the underlying dataflow client, if one is
+    /// immediately available.
     async fn intercepting_recv(&mut self) -> Option<dataflow::Response> {
-        self.inner.lock().unwrap().recv().await
+        self.inner.lock().await.recv().now_or_never().flatten()
     }
 
     /// Makes the specified response available via the normal `recv` method.

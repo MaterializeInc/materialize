@@ -320,7 +320,7 @@ pub trait Client: Send {
     fn num_workers(&self) -> usize;
 
     /// Sends a command to the dataflow server.
-    fn send(&self, cmd: Command);
+    async fn send(&mut self, cmd: Command);
 
     /// Receives the next response from the dataflow server.
     ///
@@ -342,7 +342,7 @@ impl Client for LocalClient {
         self.worker_txs.len()
     }
 
-    fn send(&self, cmd: Command) {
+    async fn send(&mut self, cmd: Command) {
         trace!("Broadcasting dataflow command: {:?}", cmd);
         let num_workers = self.num_workers();
         if num_workers == 1 {

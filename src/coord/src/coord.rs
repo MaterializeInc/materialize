@@ -441,7 +441,7 @@ where
                 // the same multiple-build dataflow.
                 CatalogItem::Source(_) => {
                     // Inform the timestamper about this source.
-                    self.update_timestamper(entry.id(), true);
+                    self.update_timestamper(entry.id(), true).await;
                     let frontiers =
                         self.new_frontiers(entry.id(), Some(0), self.logical_compaction_window_ms);
                     self.sources.insert(entry.id(), frontiers);
@@ -469,7 +469,7 @@ where
                                 index_id,
                                 description,
                             );
-                            self.ship_dataflow(df);
+                            self.ship_dataflow(df).await;
                         }
                     }
                 }
@@ -490,13 +490,14 @@ where
                     let connector = sink_connector::build(builder.clone(), entry.id())
                         .await
                         .with_context(|| format!("recreating sink {}", entry.name()))?;
-                    self.handle_sink_connector_ready(entry.id(), entry.oid(), connector)?;
+                    self.handle_sink_connector_ready(entry.id(), entry.oid(), connector)
+                        .await?;
                 }
                 _ => (), // Handled in prior loop.
             }
         }
 
-        self.send_builtin_table_updates(builtin_table_updates);
+        self.send_builtin_table_updates(builtin_table_updates).await;
 
         // Announce primary and foreign key relationships.
         if self.logging_enabled {
@@ -524,7 +525,8 @@ where
                             })
                         })
                         .collect(),
-                );
+                )
+                .await;
 
                 self.send_builtin_table_updates(
                     log.variant
@@ -554,7 +556,8 @@ where
                             })
                         })
                         .collect(),
-                );
+                )
+                .await;
             }
         }
 
@@ -588,29 +591,32 @@ where
             };
 
             match msg {
-                Message::Command(cmd) => self.message_command(cmd),
-                Message::Worker(worker) => self.message_worker(worker),
+                Message::Command(cmd) => self.message_command(cmd).await,
+                Message::Worker(worker) => self.message_worker(worker).await,
                 Message::StatementReady(ready) => self.message_statement_ready(ready).await,
-                Message::SinkConnectorReady(ready) => self.message_sink_connector_ready(ready),
+                Message::SinkConnectorReady(ready) => {
+                    self.message_sink_connector_ready(ready).await
+                }
                 Message::WriteLockGrant(write_lock_guard) => {
                     // It's possible to have more incoming write lock grants
                     // than pending writes because of cancellations.
-                    self.write_lock_wait_group.pop_front().map(|mut ready| {
+                    if let Some(mut ready) = self.write_lock_wait_group.pop_front() {
                         ready.session.grant_write_lock(write_lock_guard);
-                        self.sequence_plan(ready.tx, ready.session, ready.plan);
-                    });
+                        self.sequence_plan(ready.tx, ready.session, ready.plan)
+                            .await;
+                    }
                     // N.B. if no deferred plans, write lock is released by drop
                     // here.
                 }
                 Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
                 Message::AdvanceSourceTimestamp(advance) => {
-                    self.message_advance_source_timestamp(advance)
+                    self.message_advance_source_timestamp(advance).await
                 }
-                Message::ScrapeMetrics => self.message_scrape_metrics(),
+                Message::ScrapeMetrics => self.message_scrape_metrics().await,
             }
 
             if self.need_advance {
-                self.advance_local_inputs();
+                self.advance_local_inputs().await;
             }
         }
     }
@@ -619,7 +625,7 @@ where
     // a time greater than any previous table read (if wall clock has gone
     // backward). This downgrades the capabilities of all tables, which means that
     // all tables can no longer produce new data before this timestamp.
-    fn advance_local_inputs(&mut self) {
+    async fn advance_local_inputs(&mut self) {
         let mut next_ts = self.get_ts();
         self.need_advance = false;
         if next_ts <= self.read_lower_bound {
@@ -652,12 +658,16 @@ where
 
             self.broadcast(dataflow::Command::AdvanceAllLocalInputs {
                 advance_to: next_ts,
-            });
+            })
+            .await;
             self.closed_up_to = next_ts;
         }
     }
 
-    fn message_worker(&mut self, dataflow::Response { worker_id, message }: dataflow::Response) {
+    async fn message_worker(
+        &mut self,
+        dataflow::Response { worker_id, message }: dataflow::Response,
+    ) {
         match message {
             WorkerFeedback::PeekResponse(conn_id, response) => {
                 let (channel, workers_responded) = self
@@ -713,7 +723,7 @@ where
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
                 }
-                self.maintenance();
+                self.maintenance().await;
             }
             WorkerFeedback::TimestampBindings(TimestampBindingFeedback { bindings, changes }) => {
                 self.catalog
@@ -779,7 +789,8 @@ where
                 if !durability_updates.is_empty() {
                     self.broadcast(dataflow::Command::DurabilityFrontierUpdates(
                         durability_updates,
-                    ));
+                    ))
+                    .await;
                 }
             }
         }
@@ -798,12 +809,12 @@ where
             .and_then(|stmt| self.handle_statement(&mut session, stmt, &params))
             .await
         {
-            Ok(plan) => self.sequence_plan(tx, session, plan),
+            Ok(plan) => self.sequence_plan(tx, session, plan).await,
             Err(e) => tx.send(Err(e), session),
         }
     }
 
-    fn message_sink_connector_ready(
+    async fn message_sink_connector_ready(
         &mut self,
         SinkConnectorReady {
             session,
@@ -825,6 +836,7 @@ where
                     // have an error bit, and an error here would set the error
                     // bit on the sink.
                     self.handle_sink_connector_ready(id, oid, connector)
+                        .await
                         .expect("marking sink ready should never fail");
                 } else {
                     // Another session dropped the sink while we were
@@ -839,6 +851,7 @@ where
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_by_id(id).is_some() {
                     self.catalog_transact(vec![catalog::Op::DropItem(id)], |_builder| Ok(()))
+                        .await
                         .expect("deleting placeholder sink cannot fail");
                 } else {
                     // Another session may have dropped the placeholder sink while we were
@@ -880,19 +893,21 @@ where
         }
     }
 
-    fn message_advance_source_timestamp(
+    async fn message_advance_source_timestamp(
         &mut self,
         AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
     ) {
-        self.broadcast(dataflow::Command::AdvanceSourceTimestamp { id, update });
+        self.broadcast(dataflow::Command::AdvanceSourceTimestamp { id, update })
+            .await;
     }
 
-    fn message_scrape_metrics(&mut self) {
+    async fn message_scrape_metrics(&mut self) {
         let scraped_metrics = self.metric_scraper.scrape_once();
-        self.send_builtin_table_updates_at_offset(scraped_metrics);
+        self.send_builtin_table_updates_at_offset(scraped_metrics)
+            .await;
     }
 
-    fn message_command(&mut self, cmd: Command) {
+    async fn message_command(&mut self, cmd: Command) {
         match cmd {
             Command::Startup {
                 session,
@@ -1137,7 +1152,7 @@ where
                 conn_id,
                 secret_key,
             } => {
-                self.handle_cancel(conn_id, secret_key);
+                self.handle_cancel(conn_id, secret_key).await;
             }
 
             Command::DumpCatalog { session, tx } => {
@@ -1162,7 +1177,7 @@ where
             }
 
             Command::Terminate { mut session } => {
-                self.handle_terminate(&mut session);
+                self.handle_terminate(&mut session).await;
             }
 
             Command::StartTransaction {
@@ -1187,7 +1202,7 @@ where
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx);
-                self.sequence_end_transaction(tx, session, action);
+                self.sequence_end_transaction(tx, session, action).await;
             }
 
             Command::VerifyPreparedStatement {
@@ -1371,7 +1386,7 @@ where
     ///
     /// Primarily, this involves sequencing compaction commands, which should be
     /// issued whenever available.
-    fn maintenance(&mut self) {
+    async fn maintenance(&mut self) {
         // Take this opportunity to drain `since_update` commands.
         // Don't try to compact to an empty frontier. There may be a good reason to do this
         // in principle, but not in any current Mz use case.
@@ -1385,7 +1400,8 @@ where
 
         if !since_updates.is_empty() {
             self.persisted_table_allow_compaction(&since_updates);
-            self.broadcast(dataflow::Command::AllowCompaction(since_updates));
+            self.broadcast(dataflow::Command::AllowCompaction(since_updates))
+                .await;
         }
     }
 
@@ -1539,7 +1555,7 @@ where
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
-    fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
+    async fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
@@ -1547,9 +1563,6 @@ where
             if conn_meta.secret_key != secret_key {
                 return;
             }
-
-            // Allow dataflow to cancel any pending peeks.
-            self.broadcast(dataflow::Command::CancelPeek { conn_id });
 
             // Cancel deferred writes. There is at most one pending write per session.
             if let Some(idx) = self
@@ -1563,16 +1576,20 @@ where
 
             // Inform the target session (if it asks) about the cancellation.
             let _ = conn_meta.cancel_tx.send(Cancelled::Cancelled);
+
+            // Allow dataflow to cancel any pending peeks.
+            self.broadcast(dataflow::Command::CancelPeek { conn_id })
+                .await;
         }
     }
 
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    fn handle_terminate(&mut self, session: &mut Session) {
-        self.clear_transaction(session);
+    async fn handle_terminate(&mut self, session: &mut Session) {
+        self.clear_transaction(session).await;
 
-        self.drop_temp_items(session.conn_id());
+        self.drop_temp_items(session.conn_id()).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
@@ -1581,9 +1598,9 @@ where
 
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
-    fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
+    async fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
         let (drop_sinks, txn) = session.clear_transaction();
-        self.drop_sinks(drop_sinks);
+        self.drop_sinks(drop_sinks).await;
 
         // Allow compaction of sources from this transaction.
         self.txn_reads.remove(&session.conn_id());
@@ -1593,13 +1610,14 @@ where
 
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
-    fn drop_temp_items(&mut self, conn_id: u32) {
+    async fn drop_temp_items(&mut self, conn_id: u32) {
         let ops = self.catalog.drop_temp_item_ops(conn_id);
         self.catalog_transact(ops, |_builder| Ok(()))
+            .await
             .expect("unable to drop temporary items for conn_id");
     }
 
-    fn handle_sink_connector_ready(
+    async fn handle_sink_connector_ready(
         &mut self,
         id: GlobalId,
         oid: u32,
@@ -1626,21 +1644,23 @@ where
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        let df = self.catalog_transact(ops, |mut builder| {
-            let sink_description = dataflow_types::SinkDesc {
-                from: sink.from,
-                from_desc: builder
-                    .catalog
-                    .get_by_id(&sink.from)
-                    .desc()
-                    .unwrap()
-                    .clone(),
-                connector: connector.clone(),
-                envelope: Some(sink.envelope),
-                as_of,
-            };
-            Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description))
-        })?;
+        let df = self
+            .catalog_transact(ops, |mut builder| {
+                let sink_description = dataflow_types::SinkDesc {
+                    from: sink.from,
+                    from_desc: builder
+                        .catalog
+                        .get_by_id(&sink.from)
+                        .desc()
+                        .unwrap()
+                        .clone(),
+                    connector: connector.clone(),
+                    envelope: Some(sink.envelope),
+                    as_of,
+                };
+                Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description))
+            })
+            .await?;
 
         // For some sinks, we need to block compaction of each timestamp binding
         // until all sinks that depend on a given source have finished writing out that timestamp.
@@ -1660,10 +1680,10 @@ where
             let sink_writes = SinkWrites::new(tokens);
             self.sink_writes.insert(id, sink_writes);
         }
-        Ok(self.ship_dataflow(df))
+        Ok(self.ship_dataflow(df).await)
     }
 
-    fn sequence_plan(
+    async fn sequence_plan(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
@@ -1671,46 +1691,55 @@ where
     ) {
         match plan {
             Plan::CreateDatabase(plan) => {
-                tx.send(self.sequence_create_database(plan), session);
+                tx.send(self.sequence_create_database(plan).await, session);
             }
             Plan::CreateSchema(plan) => {
-                tx.send(self.sequence_create_schema(plan), session);
+                tx.send(self.sequence_create_schema(plan).await, session);
             }
             Plan::CreateRole(plan) => {
-                tx.send(self.sequence_create_role(plan), session);
+                tx.send(self.sequence_create_role(plan).await, session);
             }
             Plan::CreateTable(plan) => {
-                tx.send(self.sequence_create_table(&mut session, plan), session);
+                tx.send(
+                    self.sequence_create_table(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::CreateSource(plan) => {
-                tx.send(self.sequence_create_source(&mut session, plan), session);
+                tx.send(
+                    self.sequence_create_source(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::CreateSink(plan) => {
-                self.sequence_create_sink(session, plan, tx);
+                self.sequence_create_sink(session, plan, tx).await;
             }
             Plan::CreateView(plan) => {
-                tx.send(self.sequence_create_view(&mut session, plan), session);
+                tx.send(self.sequence_create_view(&mut session, plan).await, session);
             }
             Plan::CreateViews(plan) => {
-                tx.send(self.sequence_create_views(&mut session, plan), session);
+                tx.send(
+                    self.sequence_create_views(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(plan), session);
+                tx.send(self.sequence_create_index(plan).await, session);
             }
             Plan::CreateType(plan) => {
-                tx.send(self.sequence_create_type(plan), session);
+                tx.send(self.sequence_create_type(plan).await, session);
             }
             Plan::DropDatabase(plan) => {
-                tx.send(self.sequence_drop_database(plan), session);
+                tx.send(self.sequence_drop_database(plan).await, session);
             }
             Plan::DropSchema(plan) => {
-                tx.send(self.sequence_drop_schema(plan), session);
+                tx.send(self.sequence_drop_schema(plan).await, session);
             }
             Plan::DropRoles(plan) => {
-                tx.send(self.sequence_drop_roles(plan), session);
+                tx.send(self.sequence_drop_roles(plan).await, session);
             }
             Plan::DropItems(plan) => {
-                tx.send(self.sequence_drop_items(plan), session);
+                tx.send(self.sequence_drop_items(plan).await, session);
             }
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);
@@ -1740,13 +1769,13 @@ where
                     Plan::AbortTransaction => EndTransactionAction::Rollback,
                     _ => unreachable!(),
                 };
-                self.sequence_end_transaction(tx, session, action);
+                self.sequence_end_transaction(tx, session, action).await;
             }
             Plan::Peek(plan) => {
-                tx.send(self.sequence_peek(&mut session, plan), session);
+                tx.send(self.sequence_peek(&mut session, plan).await, session);
             }
             Plan::Tail(plan) => {
-                tx.send(self.sequence_tail(&mut session, plan), session);
+                tx.send(self.sequence_tail(&mut session, plan).await, session);
             }
             Plan::SendRows(plan) => {
                 tx.send(Ok(send_immediate_rows(plan.rows)), session);
@@ -1769,10 +1798,10 @@ where
                 tx.send(self.sequence_send_diffs(&mut session, plan), session);
             }
             Plan::Insert(plan) => {
-                self.sequence_insert(tx, session, plan);
+                self.sequence_insert(tx, session, plan).await;
             }
             Plan::ReadThenWrite(plan) => {
-                self.sequence_read_then_write(tx, session, plan);
+                self.sequence_read_then_write(tx, session, plan).await;
             }
             Plan::AlterNoop(plan) => {
                 tx.send(
@@ -1781,7 +1810,7 @@ where
                 );
             }
             Plan::AlterItemRename(plan) => {
-                tx.send(self.sequence_alter_item_rename(plan), session);
+                tx.send(self.sequence_alter_item_rename(plan).await, session);
             }
             Plan::AlterIndexSetOptions(plan) => {
                 tx.send(self.sequence_alter_index_set_options(plan), session);
@@ -1790,17 +1819,17 @@ where
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
             Plan::AlterIndexEnable(plan) => {
-                tx.send(self.sequence_alter_index_enable(plan), session);
+                tx.send(self.sequence_alter_index_enable(plan).await, session);
             }
             Plan::DiscardTemp => {
-                self.drop_temp_items(session.conn_id());
+                self.drop_temp_items(session.conn_id()).await;
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
             }
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
-                    self.drop_temp_items(session.conn_id());
+                    self.drop_temp_items(session.conn_id()).await;
                     let drop_sinks = session.reset();
-                    self.drop_sinks(drop_sinks);
+                    self.drop_sinks(drop_sinks).await;
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(CoordError::OperationProhibitsTransaction(
@@ -1907,7 +1936,7 @@ where
         }
     }
 
-    fn sequence_create_database(
+    async fn sequence_create_database(
         &mut self,
         plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1924,7 +1953,7 @@ where
                 oid: schema_oid,
             },
         ];
-        match self.catalog_transact(ops, |_builder| Ok(())) {
+        match self.catalog_transact(ops, |_builder| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
@@ -1934,7 +1963,7 @@ where
         }
     }
 
-    fn sequence_create_schema(
+    async fn sequence_create_schema(
         &mut self,
         plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1944,7 +1973,7 @@ where
             schema_name: plan.schema_name,
             oid,
         };
-        match self.catalog_transact(vec![op], |_builder| Ok(())) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::SchemaAlreadyExists(_),
@@ -1954,7 +1983,7 @@ where
         }
     }
 
-    fn sequence_create_role(
+    async fn sequence_create_role(
         &mut self,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1964,10 +1993,11 @@ where
             oid,
         };
         self.catalog_transact(vec![op], |_builder| Ok(()))
+            .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
-    fn sequence_create_table(
+    async fn sequence_create_table(
         &mut self,
         session: &Session,
         plan: CreateTablePlan,
@@ -2016,36 +2046,38 @@ where
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
-        let df = self.catalog_transact(
-            vec![
-                catalog::Op::CreateItem {
-                    id: table_id,
-                    oid: table_oid,
-                    name,
-                    item: CatalogItem::Table(table),
+        let df = self
+            .catalog_transact(
+                vec![
+                    catalog::Op::CreateItem {
+                        id: table_id,
+                        oid: table_oid,
+                        name,
+                        item: CatalogItem::Table(table),
+                    },
+                    catalog::Op::CreateItem {
+                        id: index_id,
+                        oid: index_oid,
+                        name: index_name,
+                        item: CatalogItem::Index(index),
+                    },
+                ],
+                |mut builder| {
+                    if let Some((name, description)) =
+                        Self::prepare_index_build(builder.catalog, &index_id)
+                    {
+                        let df = builder.build_index_dataflow(name, index_id, description);
+                        Ok(Some(df))
+                    } else {
+                        Ok(None)
+                    }
                 },
-                catalog::Op::CreateItem {
-                    id: index_id,
-                    oid: index_oid,
-                    name: index_name,
-                    item: CatalogItem::Index(index),
-                },
-            ],
-            |mut builder| {
-                if let Some((name, description)) =
-                    Self::prepare_index_build(builder.catalog, &index_id)
-                {
-                    let df = builder.build_index_dataflow(name, index_id, description);
-                    Ok(Some(df))
-                } else {
-                    Ok(None)
-                }
-            },
-        );
+            )
+            .await;
         match df {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(df);
+                    self.ship_dataflow(df).await;
                 }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
@@ -2057,7 +2089,7 @@ where
         }
     }
 
-    fn sequence_create_source(
+    async fn sequence_create_source(
         &mut self,
         session: &mut Session,
         plan: CreateSourcePlan,
@@ -2082,33 +2114,36 @@ where
 
         let if_not_exists = plan.if_not_exists;
         let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
-        match self.catalog_transact(ops, move |mut builder| {
-            let mut dfs = Vec::new();
-            let mut source_ids = Vec::new();
-            for (source_id, idx_id) in metadata {
-                source_ids.push(source_id);
-                if let Some(index_id) = idx_id {
-                    if let Some((name, description)) =
-                        Self::prepare_index_build(builder.catalog, &index_id)
-                    {
-                        let df = builder.build_index_dataflow(name, index_id, description);
-                        dfs.push(df);
+        match self
+            .catalog_transact(ops, move |mut builder| {
+                let mut dfs = Vec::new();
+                let mut source_ids = Vec::new();
+                for (source_id, idx_id) in metadata {
+                    source_ids.push(source_id);
+                    if let Some(index_id) = idx_id {
+                        if let Some((name, description)) =
+                            Self::prepare_index_build(builder.catalog, &index_id)
+                        {
+                            let df = builder.build_index_dataflow(name, index_id, description);
+                            dfs.push(df);
+                        }
                     }
                 }
-            }
-            Ok((dfs, source_ids))
-        }) {
+                Ok((dfs, source_ids))
+            })
+            .await
+        {
             Ok((dfs, source_ids)) => {
                 // Do everything to instantiate the source at the coordinator and
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
                 for source_id in source_ids {
-                    self.update_timestamper(source_id, true);
+                    self.update_timestamper(source_id, true).await;
                     let frontiers =
                         self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
                     self.sources.insert(source_id, frontiers);
                 }
-                self.ship_dataflows(dfs);
+                self.ship_dataflows(dfs).await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2190,7 +2225,7 @@ where
         Ok((metadata, ops))
     }
 
-    fn sequence_create_sink(
+    async fn sequence_create_sink(
         &mut self,
         session: Session,
         plan: CreateSinkPlan,
@@ -2238,7 +2273,7 @@ where
                 depends_on: sink.depends_on,
             }),
         };
-        match self.catalog_transact(vec![op], |_builder| Ok(())) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())).await {
             Ok(()) => (),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -2339,7 +2374,7 @@ where
         Ok((ops, index_id))
     }
 
-    fn sequence_create_view(
+    async fn sequence_create_view(
         &mut self,
         session: &Session,
         plan: CreateViewPlan,
@@ -2353,20 +2388,23 @@ where
             plan.materialize,
         )?;
 
-        match self.catalog_transact(ops, |mut builder| {
-            if let Some(index_id) = index_id {
-                if let Some((name, description)) =
-                    Self::prepare_index_build(builder.catalog, &index_id)
-                {
-                    let df = builder.build_index_dataflow(name, index_id, description);
-                    return Ok(Some(df));
+        match self
+            .catalog_transact(ops, |mut builder| {
+                if let Some(index_id) = index_id {
+                    if let Some((name, description)) =
+                        Self::prepare_index_build(builder.catalog, &index_id)
+                    {
+                        let df = builder.build_index_dataflow(name, index_id, description);
+                        return Ok(Some(df));
+                    }
                 }
-            }
-            Ok(None)
-        }) {
+                Ok(None)
+            })
+            .await
+        {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(df);
+                    self.ship_dataflow(df).await;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2378,7 +2416,7 @@ where
         }
     }
 
-    fn sequence_create_views(
+    async fn sequence_create_views(
         &mut self,
         session: &mut Session,
         plan: CreateViewsPlan,
@@ -2395,20 +2433,23 @@ where
             }
         }
 
-        match self.catalog_transact(ops, |mut builder| {
-            let mut dfs = vec![];
-            for index_id in index_ids {
-                if let Some((name, description)) =
-                    Self::prepare_index_build(builder.catalog, &index_id)
-                {
-                    let df = builder.build_index_dataflow(name, index_id, description);
-                    dfs.push(df);
+        match self
+            .catalog_transact(ops, |mut builder| {
+                let mut dfs = vec![];
+                for index_id in index_ids {
+                    if let Some((name, description)) =
+                        Self::prepare_index_build(builder.catalog, &index_id)
+                    {
+                        let df = builder.build_index_dataflow(name, index_id, description);
+                        dfs.push(df);
+                    }
                 }
-            }
-            Ok(dfs)
-        }) {
+                Ok(dfs)
+            })
+            .await
+        {
             Ok(dfs) => {
-                self.ship_dataflows(dfs);
+                self.ship_dataflows(dfs).await;
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
@@ -2416,7 +2457,7 @@ where
         }
     }
 
-    fn sequence_create_index(
+    async fn sequence_create_index(
         &mut self,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2446,17 +2487,20 @@ where
             name,
             item: CatalogItem::Index(index),
         };
-        match self.catalog_transact(vec![op], |mut builder| {
-            if let Some((name, description)) = Self::prepare_index_build(builder.catalog, &id) {
-                let df = builder.build_index_dataflow(name, id, description);
-                Ok(Some(df))
-            } else {
-                Ok(None)
-            }
-        }) {
+        match self
+            .catalog_transact(vec![op], |mut builder| {
+                if let Some((name, description)) = Self::prepare_index_build(builder.catalog, &id) {
+                    let df = builder.build_index_dataflow(name, id, description);
+                    Ok(Some(df))
+                } else {
+                    Ok(None)
+                }
+            })
+            .await
+        {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(df);
+                    self.ship_dataflow(df).await;
                     self.set_index_options(id, options).expect("index enabled");
                 }
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
@@ -2469,7 +2513,7 @@ where
         }
     }
 
-    fn sequence_create_type(
+    async fn sequence_create_type(
         &mut self,
         plan: CreateTypePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2486,43 +2530,49 @@ where
             name: plan.name,
             item: CatalogItem::Type(typ),
         };
-        match self.catalog_transact(vec![op], |_builder| Ok(())) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
             Err(err) => Err(err),
         }
     }
 
-    fn sequence_drop_database(
+    async fn sequence_drop_database(
         &mut self,
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_database_ops(plan.name);
-        self.catalog_transact(ops, |_builder| Ok(()))?;
+        self.catalog_transact(ops, |_builder| Ok(())).await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
-    fn sequence_drop_schema(
+    async fn sequence_drop_schema(
         &mut self,
         plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_schema_ops(plan.name);
-        self.catalog_transact(ops, |_builder| Ok(()))?;
+        self.catalog_transact(ops, |_builder| Ok(())).await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
-    fn sequence_drop_roles(&mut self, plan: DropRolesPlan) -> Result<ExecuteResponse, CoordError> {
+    async fn sequence_drop_roles(
+        &mut self,
+        plan: DropRolesPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
         let ops = plan
             .names
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
-        self.catalog_transact(ops, |_builder| Ok(()))?;
+        self.catalog_transact(ops, |_builder| Ok(())).await?;
         Ok(ExecuteResponse::DroppedRole)
     }
 
-    fn sequence_drop_items(&mut self, plan: DropItemsPlan) -> Result<ExecuteResponse, CoordError> {
+    async fn sequence_drop_items(
+        &mut self,
+        plan: DropItemsPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
-        self.catalog_transact(ops, |_builder| Ok(()))?;
+        self.catalog_transact(ops, |_builder| Ok(())).await?;
         Ok(match plan.ty {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => ExecuteResponse::DroppedSource,
@@ -2576,7 +2626,7 @@ where
         Ok(ExecuteResponse::SetVariable { name: plan.name })
     }
 
-    fn sequence_end_transaction(
+    async fn sequence_end_transaction(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
@@ -2607,8 +2657,10 @@ where
             was_implicit: session.transaction().is_implicit(),
         };
 
-        // Synchronously do tasks that must be serialized in the coordinator.
-        let rx = self.sequence_end_transaction_inner(&mut session, action);
+        // Immediately do tasks that must be serialized in the coordinator.
+        let rx = self
+            .sequence_end_transaction_inner(&mut session, action)
+            .await;
 
         // We can now wait for responses or errors and do any session/transaction
         // finalization in a separate task.
@@ -2631,12 +2683,12 @@ where
         });
     }
 
-    fn sequence_end_transaction_inner(
+    async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
     ) -> Result<impl Future<Output = Result<(), CoordError>>, CoordError> {
-        let txn = self.clear_transaction(session);
+        let txn = self.clear_transaction(session).await;
 
         // Although the compaction frontier may have advanced, we do not need to
         // call `maintenance` here because it will soon be called after the next
@@ -2730,7 +2782,8 @@ where
                             );
                         } else {
                             for (id, updates) in volatile_updates {
-                                self.broadcast(dataflow::Command::Insert { id, updates });
+                                self.broadcast(dataflow::Command::Insert { id, updates })
+                                    .await;
                             }
                         }
                     }
@@ -2793,7 +2846,7 @@ where
     /// deploying the most efficient evaluation plan. The peek could evaluate to a constant,
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
-    fn sequence_peek(
+    async fn sequence_peek(
         &mut self,
         session: &mut Session,
         plan: PeekPlan,
@@ -2932,13 +2985,9 @@ where
         let fast_path = fast_path_peek::create_plan(dataflow_plan, view_id, index_id)?;
 
         // Implement the peek, and capture the response.
-        let resp = self.implement_fast_path_peek(
-            fast_path,
-            timestamp,
-            finishing,
-            conn_id,
-            source.arity(),
-        )?;
+        let resp = self
+            .implement_fast_path_peek(fast_path, timestamp, finishing, conn_id, source.arity())
+            .await?;
 
         match copy_to {
             None => Ok(resp),
@@ -2949,7 +2998,7 @@ where
         }
     }
 
-    fn sequence_tail(
+    async fn sequence_tail(
         &mut self,
         session: &mut Session,
         plan: TailPlan,
@@ -3010,7 +3059,7 @@ where
         let df = self
             .dataflow_builder()
             .build_sink_dataflow(sink_name, sink_id, sink_description);
-        self.ship_dataflow(df);
+        self.ship_dataflow(df).await;
 
         let resp = ExecuteResponse::Tailing { rx };
 
@@ -3411,7 +3460,7 @@ where
         })
     }
 
-    fn sequence_insert(
+    async fn sequence_insert(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
@@ -3460,7 +3509,8 @@ where
                     kind: MutationKind::Insert,
                 };
 
-                self.sequence_read_then_write(tx, session, read_then_write_plan);
+                self.sequence_read_then_write(tx, session, read_then_write_plan)
+                    .await;
             }
         }
     }
@@ -3525,7 +3575,7 @@ where
     // read. This works by doing a Peek then queuing a SendDiffs. No writes
     // or read-then-writes can occur between the Peek and SendDiff otherwise a
     // serializability violation could occur.
-    fn sequence_read_then_write(
+    async fn sequence_read_then_write(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
@@ -3570,15 +3620,18 @@ where
         }
 
         let ts = self.get_read_ts();
-        let peek_response = match self.sequence_peek(
-            &mut session,
-            PeekPlan {
-                source: selection,
-                when: PeekWhen::AtTimestamp(ts),
-                finishing,
-                copy_to: None,
-            },
-        ) {
+        let peek_response = match self
+            .sequence_peek(
+                &mut session,
+                PeekPlan {
+                    source: selection,
+                    when: PeekWhen::AtTimestamp(ts),
+                    finishing,
+                    copy_to: None,
+                },
+            )
+            .await
+        {
             Ok(resp) => resp,
             Err(e) => {
                 tx.send(Err(e.into()), session);
@@ -3651,7 +3704,7 @@ where
         });
     }
 
-    fn sequence_alter_item_rename(
+    async fn sequence_alter_item_rename(
         &mut self,
         plan: AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -3659,7 +3712,7 @@ where
             id: plan.id,
             to_name: plan.to_name,
         };
-        match self.catalog_transact(vec![op], |_builder| Ok(())) {
+        match self.catalog_transact(vec![op], |_builder| Ok(())).await {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
@@ -3690,7 +3743,7 @@ where
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    fn sequence_alter_index_enable(
+    async fn sequence_alter_index_enable(
         &mut self,
         plan: AlterIndexEnablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -3698,13 +3751,15 @@ where
 
         // If ops is not empty, index was disabled.
         if !ops.is_empty() {
-            let df = self.catalog_transact(ops, |mut builder| {
-                let (name, description) =
-                    Self::prepare_index_build(builder.catalog, &plan.id).expect("index enabled");
-                let df = builder.build_index_dataflow(name, plan.id, description);
-                Ok(df)
-            })?;
-            self.ship_dataflow(df);
+            let df = self
+                .catalog_transact(ops, |mut builder| {
+                    let (name, description) = Self::prepare_index_build(builder.catalog, &plan.id)
+                        .expect("index enabled");
+                    let df = builder.build_index_dataflow(name, plan.id, description);
+                    Ok(df)
+                })
+                .await?;
+            self.ship_dataflow(df).await;
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
@@ -3717,7 +3772,7 @@ where
     /// returned by this function. This allows callers to error while building
     /// [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called after this
     /// function successfully returns on any built `DataflowDesc`.
-    fn catalog_transact<F, T>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<T, CoordError>
+    async fn catalog_transact<F, T>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<T, CoordError>
     where
         F: FnOnce(DataflowBuilder) -> Result<T, CoordError>,
     {
@@ -3775,24 +3830,26 @@ where
             };
             f(builder)
         })?;
-        self.send_builtin_table_updates(builtin_table_updates);
+        self.send_builtin_table_updates(builtin_table_updates).await;
 
         if !sources_to_drop.is_empty() {
             for &id in &sources_to_drop {
-                self.update_timestamper(id, false);
+                self.update_timestamper(id, false).await;
                 self.catalog.delete_timestamp_bindings(id)?;
                 self.sources.remove(&id);
             }
-            self.broadcast(dataflow::Command::DropSources(sources_to_drop));
+            self.broadcast(dataflow::Command::DropSources(sources_to_drop))
+                .await;
         }
         if !sinks_to_drop.is_empty() {
             for id in sinks_to_drop.iter() {
                 self.sink_writes.remove(id);
             }
-            self.broadcast(dataflow::Command::DropSinks(sinks_to_drop));
+            self.broadcast(dataflow::Command::DropSinks(sinks_to_drop))
+                .await;
         }
         if !indexes_to_drop.is_empty() {
-            self.drop_indexes(indexes_to_drop);
+            self.drop_indexes(indexes_to_drop).await;
         }
 
         // We don't want to block the coordinator on an external postgres server, so
@@ -3814,7 +3871,7 @@ where
         Ok(result)
     }
 
-    fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {
+    async fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {
         // NB: This makes sure to send all records for the same id in the same
         // message so we can persist a record and its future retraction
         // atomically. Otherwise, we may end up with permanent orphans if a
@@ -3859,25 +3916,28 @@ where
                 let _ = tokio::spawn(write_fut);
             } else {
                 self.broadcast(dataflow::Command::Insert { id, updates })
+                    .await
             }
         }
     }
 
-    fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
+    async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
         let timestamped = TimestampedUpdate {
             updates,
             timestamp_offset: 0,
         };
         self.send_builtin_table_updates_at_offset(vec![timestamped])
+            .await
     }
 
-    fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
+    async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
-            self.broadcast(dataflow::Command::DropSinks(dataflow_names));
+            self.broadcast(dataflow::Command::DropSinks(dataflow_names))
+                .await;
         }
     }
 
-    fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
+    async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
         let mut trace_keys = Vec::new();
         for id in indexes {
             if self.indexes.remove(&id).is_some() {
@@ -3886,6 +3946,7 @@ where
         }
         if !trace_keys.is_empty() {
             self.broadcast(dataflow::Command::DropIndexes(trace_keys))
+                .await
         }
     }
 
@@ -3989,17 +4050,18 @@ where
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
     /// Utility method for the more general [Self::ship_dataflows]
-    fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
-        self.ship_dataflows(vec![dataflow])
+    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
+        self.ship_dataflows(vec![dataflow]).await
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
+    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
             dataflow_plans.push(self.finalize_dataflow(dataflow));
         }
-        self.broadcast(dataflow::Command::CreateDataflows(dataflow_plans));
+        self.broadcast(dataflow::Command::CreateDataflows(dataflow_plans))
+            .await;
     }
 
     /// Finalizes a dataflow.
@@ -4087,12 +4149,12 @@ where
             .expect("Dataflow planning failed; unrecoverable error")
     }
 
-    fn broadcast(&self, cmd: dataflow::Command) {
-        self.dataflow_client.send(cmd);
+    async fn broadcast(&mut self, cmd: dataflow::Command) {
+        self.dataflow_client.send(cmd).await;
     }
 
     // Notify the timestamper thread that a source has been created or dropped.
-    fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
+    async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
         if create {
             let bindings = self
                 .catalog
@@ -4103,18 +4165,21 @@ where
                     self.ts_tx
                         .send(TimestampMessage::Add(source_id, s.connector.clone()))
                         .expect("Failed to send CREATE Instance notice to timestamper");
+                    let connector = s.connector.clone();
                     self.broadcast(dataflow::Command::AddSourceTimestamping {
                         id: source_id,
-                        connector: s.connector.clone(),
+                        connector,
                         bindings,
-                    });
+                    })
+                    .await;
                 }
             }
         } else {
             self.ts_tx
                 .send(TimestampMessage::Drop(source_id))
                 .expect("Failed to send DROP Instance notice to timestamper");
-            self.broadcast(dataflow::Command::DropSourceTimestamping { id: source_id });
+            self.broadcast(dataflow::Command::DropSourceTimestamping { id: source_id })
+                .await;
         }
     }
 
@@ -4336,17 +4401,19 @@ where
                 write_lock_wait_group: VecDeque::new(),
             };
             if let Some(config) = &logging {
-                coord.broadcast(dataflow::Command::EnableLogging(DataflowLoggingConfig {
-                    granularity_ns: config.granularity.as_nanos(),
-                    active_logs: BUILTINS
-                        .logs()
-                        .map(|src| (src.variant.clone(), src.index_id))
-                        .collect(),
-                    log_logging: config.log_logging,
-                }));
+                handle.block_on(
+                    coord.broadcast(dataflow::Command::EnableLogging(DataflowLoggingConfig {
+                        granularity_ns: config.granularity.as_nanos(),
+                        active_logs: BUILTINS
+                            .logs()
+                            .map(|src| (src.variant.clone(), src.index_id))
+                            .collect(),
+                        log_logging: config.log_logging,
+                    })),
+                );
             }
             if let Some(persister) = persister {
-                coord.broadcast(dataflow::Command::EnablePersistence(persister));
+                handle.block_on(coord.broadcast(dataflow::Command::EnablePersistence(persister)));
             }
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
@@ -4648,7 +4715,7 @@ pub mod fast_path_peek {
         C: dataflow::Client + 'static,
     {
         /// Implements a peek plan produced by `create_plan` above.
-        pub fn implement_fast_path_peek(
+        pub async fn implement_fast_path_peek(
             &mut self,
             fast_path: Plan,
             timestamp: repr::Timestamp,
@@ -4713,7 +4780,8 @@ pub mod fast_path_peek {
                 ),
                 Plan::PeekDataflow(dataflow, index_id) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
-                    self.broadcast(dataflow::Command::CreateDataflows(vec![dataflow]));
+                    self.broadcast(dataflow::Command::CreateDataflows(vec![dataflow]))
+                        .await;
 
                     // Create an identity MFP operator.
                     let map_filter_project = expr::MapFilterProject::new(source_arity)
@@ -4749,7 +4817,7 @@ pub mod fast_path_peek {
             // Stash the response mechanism, and broadcast dataflow construction.
             self.pending_peeks
                 .insert(conn_id, (rows_tx, std::collections::HashSet::new()));
-            self.broadcast(peek_command);
+            self.broadcast(peek_command).await;
 
             use dataflow_types::PeekResponse;
             use futures::FutureExt;
@@ -4780,7 +4848,7 @@ pub mod fast_path_peek {
 
             // If it was created, drop the dataflow once the peek command is sent.
             if let Some(index_id) = drop_dataflow {
-                self.drop_indexes(vec![index_id]);
+                self.drop_indexes(vec![index_id]).await;
             }
 
             Ok(crate::ExecuteResponse::SendingRows(Box::pin(rows_rx)))
