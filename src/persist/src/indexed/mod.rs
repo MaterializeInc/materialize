@@ -1080,8 +1080,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         self.drain_pending()?;
         // Verify that id has been registered.
         let _ = self.sealed_frontier(id)?;
+        let snapshot = self.do_snapshot(id)?;
+        // NB: Keep this line after anything with an early return (aka anything
+        // fallible). Otherwise, we might register the listener internally, but
+        // fail the request.
         self.listeners.entry(id).or_default().push(listen_fn);
-        self.do_snapshot(id)
+        Ok(snapshot)
     }
 }
 

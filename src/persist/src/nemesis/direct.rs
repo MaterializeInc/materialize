@@ -9,23 +9,23 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::fmt;
-use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
+use std::{fmt, thread};
 
-use timely::communication::allocator::Thread;
+use timely::communication::WorkerGuards;
 use timely::dataflow::operators::capture::{Capture, Event as TimelyCaptureEvent};
-use timely::dataflow::operators::probe::{Handle as TimelyProbe, Probe};
+use timely::dataflow::operators::Probe;
+use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
-use timely::worker::Worker;
-use timely::WorkerConfig;
 
 use crate::error::Error;
 use crate::indexed::runtime::{
     self, DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
 use crate::indexed::SnapshotExt;
+use crate::nemesis::progress::{DataflowProgress, DataflowProgressHandle};
 use crate::nemesis::{
     AllowCompactionReq, FutureRes, FutureStep, Input, ReadOutputEvent, ReadOutputReq,
     ReadOutputRes, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq, SnapshotId,
@@ -36,6 +36,16 @@ use crate::pfuture::PFuture;
 use crate::storage::SeqNo;
 use crate::unreliable::UnreliableHandle;
 
+#[derive(Debug)]
+struct Dataflow {
+    write: StreamWriteHandle<String, ()>,
+    read: StreamReadHandle<String, ()>,
+    output: Receiver<TimelyCaptureEvent<u64, (Result<(String, ()), String>, u64, isize)>>,
+    workers: TimelyWorkers,
+    progress: DataflowProgress,
+    progress_handle: DataflowProgressHandle,
+}
+
 // TODO: With the recent addition of dataflows, this is much less "direct" than
 // it used to be. We should probably rename this to something like `Threads` (to
 // leave room for a future one that runs timely with processes and can stop them
@@ -44,26 +54,13 @@ use crate::unreliable::UnreliableHandle;
 pub struct Direct {
     start_fn: StartFn,
     pub persister: RuntimeClient,
-    worker: TimelyWorker,
     unreliable: UnreliableHandle,
-    streams: HashMap<
-        String,
-        (
-            StreamWriteHandle<String, ()>,
-            StreamReadHandle<String, ()>,
-            TimelyProbe<u64>,
-        ),
-    >,
-    output_by_stream_name: HashMap<
-        String,
-        Receiver<TimelyCaptureEvent<u64, (Result<(String, ()), String>, u64, isize)>>,
-    >,
+    dataflows: HashMap<String, Dataflow>,
     snapshots: HashMap<SnapshotId, DecodedSnapshot<String, ()>>,
 }
 
 impl Runtime for Direct {
     fn run(&mut self, i: Input) -> FutureStep {
-        log::debug!("{:?} req: {:?}", i.req_id, &i.req);
         let before = Instant::now();
         let res = match i.req {
             Req::Write(WriteReq::Single(req)) => {
@@ -106,10 +103,6 @@ impl Runtime for Direct {
             }
         };
 
-        // Poke the dataflows a bit. We really only need the one in seal (and
-        // stop) but it can't hurt and maybe we'll uncover something.
-        self.worker.0.step();
-
         FutureStep {
             req_id: i.req_id,
             before,
@@ -117,85 +110,85 @@ impl Runtime for Direct {
         }
     }
 
-    fn block_until(&mut self, stream: &str, ts: u64) {
-        if let Ok((_, _, probe)) = self.stream(stream) {
-            let probe = probe.clone();
-            self.worker.0.step_while(|| probe.less_than(&ts));
-        }
+    fn finish(mut self) {
+        let _ = self.stop();
     }
-
-    fn finish(self) {}
 }
 
 impl Direct {
+    const DATAFLOW_WORKERS: usize = 2;
+
     pub fn new<F: FnMut(UnreliableHandle) -> Result<RuntimeClient, Error> + 'static>(
         mut start_fn: F,
     ) -> Result<Self, Error> {
         let unreliable = UnreliableHandle::default();
         let persister = start_fn(unreliable.clone())?;
-        let worker = TimelyWorker(Worker::new(WorkerConfig::default(), Thread::new()));
         Ok(Direct {
             start_fn: StartFn(Box::new(start_fn)),
             persister,
-            worker,
             unreliable,
-            streams: HashMap::new(),
-            output_by_stream_name: HashMap::new(),
+            dataflows: HashMap::new(),
             snapshots: HashMap::new(),
         })
     }
 
-    fn stream(
-        &mut self,
-        name: &str,
-    ) -> Result<
-        &mut (
-            StreamWriteHandle<String, ()>,
-            StreamReadHandle<String, ()>,
-            TimelyProbe<u64>,
-        ),
-        Error,
-    > {
-        let (streams, persister, worker) =
-            (&mut self.streams, &mut self.persister, &mut self.worker);
-        match streams.entry(name.to_string()) {
+    fn stream(&mut self, name: &str) -> Result<&mut Dataflow, Error> {
+        match self.dataflows.entry(name.to_owned()) {
             Entry::Occupied(x) => Ok(x.into_mut()),
             Entry::Vacant(x) => {
-                // TODO: should we also do the "correct" thing here and not error out? Instead
-                // passing the Result to persisted_source().
-                let (write, read) = persister.create_or_load::<String, ()>(name)?;
-
+                let (write, read) = self.persister.create_or_load(name)?;
+                let dataflow_read = read.clone();
                 let (output_tx, output_rx) = mpsc::channel();
-                let previous_output = self
-                    .output_by_stream_name
-                    .insert(name.to_string(), output_rx);
-                // This is expected to have been cleared by start.
-                debug_assert!(previous_output.is_none());
+                let output_tx = Arc::new(Mutex::new(output_tx));
 
-                let probe = worker.0.dataflow(|scope| {
-                    let mut probe = TimelyProbe::new();
-                    let out = scope.persisted_source(Ok(read.clone()));
-                    out.probe_with(&mut probe).capture_into(output_tx);
-                    probe
-                });
-
-                Ok(x.insert((write, read, probe)))
+                let (progress_tx, progress_rx) = DataflowProgress::new();
+                let progress_handle = progress_tx.clone();
+                let workers = timely::execute(
+                    timely::Config::process(Self::DATAFLOW_WORKERS),
+                    move |worker| {
+                        let dataflow_read = dataflow_read.clone();
+                        let mut probe = ProbeHandle::new();
+                        worker.dataflow(|scope| {
+                            let output_tx = output_tx
+                                .lock()
+                                .expect("clone doesn't panic and poison lock")
+                                .clone();
+                            let data = scope.persisted_source(Ok(dataflow_read));
+                            data.probe_with(&mut probe).capture_into(output_tx);
+                        });
+                        while worker.step_or_park(None) {
+                            probe.with_frontier(|frontier| {
+                                progress_tx.maybe_progress(frontier);
+                            })
+                        }
+                        progress_tx.close();
+                    },
+                )?;
+                let dataflow = Dataflow {
+                    write: write,
+                    read: read,
+                    output: output_rx,
+                    progress: progress_rx,
+                    progress_handle,
+                    workers: TimelyWorkers(workers),
+                };
+                Ok(x.insert(dataflow))
             }
         }
     }
 
     fn write_single(&mut self, req: WriteReqSingle) -> Result<PFuture<SeqNo>, Error> {
-        let (write, _, _) = self.stream(&req.stream)?;
-        Ok(write.write(&[req.update]))
+        let stream = self.stream(&req.stream)?;
+        Ok(stream.write.write(&[req.update]))
     }
 
     fn write_multi(&mut self, req: WriteReqMulti) -> Result<PFuture<SeqNo>, Error> {
         let mut write_handles = Vec::new();
         let mut updates = Vec::new();
         for req in req.writes {
-            let (write, _, _) = self.stream(&req.stream)?;
-            updates.push((write.stream_id(), vec![req.update]));
-            write_handles.push(write.clone());
+            let stream = self.stream(&req.stream)?;
+            updates.push((stream.write.stream_id(), vec![req.update]));
+            write_handles.push(stream.write.clone());
         }
         let write_handles = write_handles.iter().collect::<Vec<_>>();
         let multi = MultiWriteHandle::new(&write_handles)?;
@@ -204,9 +197,10 @@ impl Direct {
     }
 
     fn read_output(&mut self, req: ReadOutputReq) -> Result<ReadOutputRes, Error> {
+        // TODO: This should probably be run async in a thread.
         let mut contents = Vec::new();
-        if let Some(output) = self.output_by_stream_name.get_mut(&req.stream) {
-            for e in output.try_iter() {
+        if let Some(dataflow) = self.dataflows.get_mut(&req.stream) {
+            for e in dataflow.output.try_iter() {
                 match e {
                     TimelyCaptureEvent::Progress(x) => {
                         // TODO: This isn't even a little bit right, but it
@@ -227,22 +221,40 @@ impl Direct {
     }
 
     fn seal(&mut self, req: SealReq) -> Result<PFuture<()>, Error> {
-        // NB: Once the caller resolves the returned future, it'd probably be
-        // good to wait until the output corresponding to this stream catches up
-        // to the sealed timestamp. Otherwise, we might end up testing the
-        // uninteresting but correct case of no output.
-        let (write, _, _) = self.stream(&req.stream)?;
-        Ok(write.seal(req.ts))
+        let stream = self.stream(&req.stream)?;
+        let seal_ts = req.ts;
+        let seal_res = stream.write.seal(seal_ts);
+        let progress = stream.progress.clone();
+        let (tx, rx) = PFuture::new();
+        let _ = thread::Builder::new()
+            .name("nemesis-seal".into())
+            .spawn(move || {
+                tx.fill(|| -> Result<(), Error> {
+                    // Wait for the seal to succeed or fail. Then, only if it
+                    // succeeded, also block until the output corresponding to this
+                    // stream catches up to the sealed timestamp. Otherwise, we
+                    // might end up testing the uninteresting but correct case of no
+                    // output.
+                    let _ = seal_res.recv()?;
+                    let output_progress = progress.wait(seal_ts);
+                    // NB: super subtle, return the original Ok() even if the
+                    // dataflow shuts down before we see it in the output.
+                    let _ = output_progress.recv();
+                    Ok(())
+                }())
+            })
+            .expect("thread name is valid");
+        Ok(rx)
     }
 
     fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<PFuture<()>, Error> {
-        let (write, _, _) = self.stream(&req.stream)?;
-        Ok(write.allow_compaction(Antichain::from_elem(req.ts)))
+        let stream = self.stream(&req.stream)?;
+        Ok(stream.write.allow_compaction(Antichain::from_elem(req.ts)))
     }
 
     fn take_snapshot(&mut self, req: TakeSnapshotReq) -> Result<(), Error> {
-        let (_, read, _) = self.stream(&req.stream)?;
-        let snap = read.snapshot()?;
+        let stream = self.stream(&req.stream)?;
+        let snap = stream.read.snapshot()?;
         match self.snapshots.entry(req.snap) {
             Entry::Occupied(x) => {
                 return Err(format!(
@@ -273,12 +285,9 @@ impl Direct {
     }
 
     fn start(&mut self) -> Result<(), Error> {
-        // The handles from the previous persister cannot be used after stop.
-        self.streams.clear();
-
-        // New dataflow means new output.
-        self.output_by_stream_name.clear();
-        self.worker = TimelyWorker(Worker::new(WorkerConfig::default(), Thread::new()));
+        let _ = self.stop()?;
+        // The self.stop call clears dataflows but do it again defensively.
+        self.dataflows.clear();
 
         let persister = (self.start_fn.0)(self.unreliable.clone())?;
         self.persister = persister;
@@ -289,9 +298,11 @@ impl Direct {
     fn stop(&mut self) -> Result<(), Error> {
         let res = self.persister.stop();
 
-        // Stopping the persister should allow the dataflows to finish.
-        while self.worker.0.step() {}
-
+        // Stopping the persister allows the dataflows to finish.
+        for (_, dataflow) in self.dataflows.drain() {
+            dataflow.progress_handle.close();
+            dataflow.workers.join();
+        }
         res
     }
 }
@@ -304,11 +315,17 @@ impl fmt::Debug for StartFn {
     }
 }
 
-struct TimelyWorker(Worker<Thread>);
+struct TimelyWorkers(WorkerGuards<()>);
 
-impl fmt::Debug for TimelyWorker {
+impl fmt::Debug for TimelyWorkers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TimelyWorker").finish_non_exhaustive()
+        f.debug_struct("TimelyWorkers").finish_non_exhaustive()
+    }
+}
+
+impl TimelyWorkers {
+    fn join(self) -> Vec<Result<(), String>> {
+        self.0.join()
     }
 }
 
