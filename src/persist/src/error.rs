@@ -24,6 +24,12 @@ pub enum Error {
     OutOfQuota(String),
     /// An unstructured persistence related error.
     String(String),
+    /// The associated write request was sequenced (given a SeqNo) and applied
+    /// to the persist state machine, but that application was deterministically
+    /// made into a no-op because it was contextually invalid (a write or seal
+    /// at a sealed timestamp, an allow_compactions at an unsealed timestamp,
+    /// etc).
+    Noop(SeqNo, String),
     /// An error returned when a command is sent to a persistence runtime that
     /// was previously stopped.
     RuntimeShutdown,
@@ -37,6 +43,7 @@ impl fmt::Display for Error {
             Error::IO(e) => fmt::Display::fmt(e, f),
             Error::OutOfQuota(e) => f.write_str(e),
             Error::String(e) => f.write_str(e),
+            Error::Noop(_, e) => f.write_str(e),
             Error::RuntimeShutdown => f.write_str("runtime shutdown"),
         }
     }

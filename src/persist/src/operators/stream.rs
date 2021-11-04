@@ -32,6 +32,7 @@ use timely::{Data as TimelyData, PartialOrder};
 use crate::error::Error;
 use crate::indexed::runtime::StreamWriteHandle;
 use crate::operators::async_ext::OperatorBuilderExt;
+use crate::storage::SeqNo;
 
 /// Extension trait for [`Stream`].
 pub trait Persist<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
@@ -481,7 +482,7 @@ where
                     match pending_future {
                         PendingSealFuture::ConditionSeal(mut pending_future) => {
                             match Pin::new(&mut pending_future.future).poll(&mut context) {
-                                std::task::Poll::Ready(Ok(())) => {
+                                std::task::Poll::Ready(Ok(_)) => {
                                     log::trace!(
                                         "In {}, finished sealing condition collection up to {}",
                                         &operator_name,
@@ -527,7 +528,7 @@ where
                         }
                         PendingSealFuture::PrimarySeal(mut pending_future) => {
                             match Pin::new(&mut pending_future.future).poll(&mut context) {
-                                std::task::Poll::Ready(Ok(())) => {
+                                std::task::Poll::Ready(Ok(_)) => {
                                     log::trace!(
                                         "In {}, finished sealing primary collection up to {}",
                                         &operator_name,
@@ -570,12 +571,12 @@ where
     }
 }
 
-enum PendingSealFuture<F: Future<Output = Result<(), Error>>> {
+enum PendingSealFuture<F: Future<Output = Result<SeqNo, Error>>> {
     PrimarySeal(SealFuture<F>),
     ConditionSeal(SealFuture<F>),
 }
 
-struct SealFuture<F: Future<Output = Result<(), Error>>> {
+struct SealFuture<F: Future<Output = Result<SeqNo, Error>>> {
     cap: Capability<u64>,
     future: F,
 }

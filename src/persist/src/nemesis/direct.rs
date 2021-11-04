@@ -220,7 +220,7 @@ impl Direct {
         Ok(ReadOutputRes { contents })
     }
 
-    fn seal(&mut self, req: SealReq) -> Result<PFuture<()>, Error> {
+    fn seal(&mut self, req: SealReq) -> Result<PFuture<SeqNo>, Error> {
         let stream = self.stream(&req.stream)?;
         let seal_ts = req.ts;
         let seal_res = stream.write.seal(seal_ts);
@@ -229,32 +229,33 @@ impl Direct {
         let _ = thread::Builder::new()
             .name("nemesis-seal".into())
             .spawn(move || {
-                tx.fill(|| -> Result<(), Error> {
+                tx.fill(|| -> Result<SeqNo, Error> {
                     // Wait for the seal to succeed or fail. Then, only if it
                     // succeeded, also block until the output corresponding to this
                     // stream catches up to the sealed timestamp. Otherwise, we
                     // might end up testing the uninteresting but correct case of no
                     // output.
-                    let _ = seal_res.recv()?;
+                    let seqno = seal_res.recv()?;
                     let output_progress = progress.wait(seal_ts);
                     // NB: super subtle, return the original Ok() even if the
                     // dataflow shuts down before we see it in the output.
                     let _ = output_progress.recv();
-                    Ok(())
+                    Ok(seqno)
                 }())
             })
             .expect("thread name is valid");
         Ok(rx)
     }
 
-    fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<PFuture<()>, Error> {
+    fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<PFuture<SeqNo>, Error> {
         let stream = self.stream(&req.stream)?;
         Ok(stream.write.allow_compaction(Antichain::from_elem(req.ts)))
     }
 
-    fn take_snapshot(&mut self, req: TakeSnapshotReq) -> Result<(), Error> {
+    fn take_snapshot(&mut self, req: TakeSnapshotReq) -> Result<SeqNo, Error> {
         let stream = self.stream(&req.stream)?;
         let snap = stream.read.snapshot()?;
+        let seqno = snap.seqno();
         match self.snapshots.entry(req.snap) {
             Entry::Occupied(x) => {
                 return Err(format!(
@@ -267,7 +268,7 @@ impl Direct {
                 x.insert(snap);
             }
         }
-        Ok(())
+        Ok(seqno)
     }
 
     fn read_snapshot(&mut self, req: ReadSnapshotReq) -> Result<ReadSnapshotRes, Error> {

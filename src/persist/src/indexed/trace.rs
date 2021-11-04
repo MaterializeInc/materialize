@@ -156,13 +156,13 @@ impl Trace {
 
     /// Checks whether the given seal would be valid to pass to
     /// [Trace::update_seal].
-    pub fn validate_seal(&self, ts: u64) -> Result<(), Error> {
+    pub fn validate_seal(&self, ts: u64) -> Result<(), String> {
         let prev = self.get_seal();
         if !prev.less_equal(&ts) {
-            return Err(Error::from(format!(
+            return Err(format!(
                 "invalid seal for {:?}: {:?} not at or in advance of current seal frontier {:?}",
                 self.id, ts, prev
-            )));
+            ));
         }
         Ok(())
     }
@@ -175,19 +175,19 @@ impl Trace {
 
     /// Checks whether the given since would be valid to pass to
     /// [Trace::allow_compaction].
-    pub fn validate_allow_compaction(&self, since: &Antichain<u64>) -> Result<(), Error> {
+    pub fn validate_allow_compaction(&self, since: &Antichain<u64>) -> Result<(), String> {
         if PartialOrder::less_equal(&self.seal, since) {
-            return Err(Error::from(format!(
+            return Err(format!(
                 "invalid compaction at or in advance of trace seal {:?}: {:?}",
                 self.seal, since,
-            )));
+            ));
         }
 
         if PartialOrder::less_than(since, &self.since) {
-            return Err(Error::from(format!(
+            return Err(format!(
                 "invalid compaction less than trace since {:?}: {:?}",
                 self.since, since
-            )));
+            ));
         }
 
         Ok(())
@@ -432,15 +432,15 @@ mod tests {
 
         // Regress since frontier.
         assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(5)),
-            Err(Error::from("invalid compaction less than trace since Antichain { elements: [6] }: Antichain { elements: [5] }")));
+            Err("invalid compaction less than trace since Antichain { elements: [6] }: Antichain { elements: [5] }".into()));
 
         // Advance since frontier to seal
         assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(10)),
-            Err(Error::from("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [10] }")));
+            Err("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [10] }".into()));
 
         // Advance since frontier beyond seal
         assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(11)),
-            Err(Error::from("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [11] }")));
+            Err("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [11] }".into()));
 
         Ok(())
     }
@@ -474,7 +474,7 @@ mod tests {
 
         // Regress seal frontier.
         assert_eq!(t.validate_seal(10),
-            Err(Error::from("invalid seal for Id(0): 10 not at or in advance of current seal frontier Antichain { elements: [11] }")));
+            Err("invalid seal for Id(0): 10 not at or in advance of current seal frontier Antichain { elements: [11] }".into()));
 
         Ok(())
     }

@@ -11,7 +11,7 @@
 
 use std::fmt;
 use std::io::Read;
-use std::ops::Range;
+use std::ops::{Add, Range};
 use std::str::FromStr;
 
 use async_trait::async_trait;
@@ -62,13 +62,33 @@ pub fn check_meta_version_maybe_delete_data<B: Blob>(b: &mut B) -> Result<(), Er
     }
 }
 
-/// A "sequence number", uniquely associated with an entry in a Log.
+/// The "sequence number" of a persist state change.
+///
+/// Persist is a state machine, with all mutating requests modeled as input
+/// state changes sequenced into a log. This reflects that ordering.
+///
+/// This ordering also includes requests that were sequenced and applied to the
+/// persist state machine, but that application was deterministically made into
+/// a no-op because it was contextually invalid (a write or seal at a sealed
+/// timestamp, an allow_compactions at an unsealed timestamp, etc).
+///
+/// Read-only requests are assigned the SeqNo of a write, indicating that all
+/// mutating requests up to and including that one are reflected in the read
+/// state.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SeqNo(pub u64);
 
 impl timely::PartialOrder for SeqNo {
     fn less_equal(&self, other: &Self) -> bool {
         self <= other
+    }
+}
+
+impl Add<u64> for SeqNo {
+    type Output = SeqNo;
+
+    fn add(self, rhs: u64) -> SeqNo {
+        SeqNo(self.0 + rhs)
     }
 }
 
