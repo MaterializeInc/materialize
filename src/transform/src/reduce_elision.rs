@@ -15,6 +15,7 @@
 
 use crate::TransformArgs;
 use expr::{func, MirRelationExpr, MirScalarExpr};
+use repr::{ColumnType, ScalarType};
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
@@ -93,12 +94,11 @@ impl ReduceElision {
                         }),
 
                         // StringAgg takes nested records of strings and outputs a string
-                        AggregateFunc::StringAgg { .. } => {
-                            if let MirScalarExpr::CallVariadic {
+                        AggregateFunc::StringAgg { .. } => match a.expr {
+                            MirScalarExpr::CallVariadic {
                                 func: VariadicFunc::RecordCreate { .. },
                                 ref exprs,
-                            } = a.expr
-                            {
+                            } => {
                                 if let MirScalarExpr::CallVariadic {
                                     func: VariadicFunc::RecordCreate { .. },
                                     ref exprs,
@@ -111,13 +111,29 @@ impl ReduceElision {
                                         a.expr,
                                     )))
                                 }
-                            } else {
-                                Err(crate::TransformError::Internal(format!(
-                                    "need RecordCreate as expr for StringAgg {:?}",
-                                    a.expr,
-                                )))
                             }
-                        }
+                            MirScalarExpr::Literal(Ok(ref row), ColumnType { .. }) => {
+                                let explain_failure_str =
+                                    "Expect LIST[LIST[RECORD[STRING, SEPARATOR]]] literal";
+
+                                let datum = row
+                                    .unpack_first()
+                                    .unwrap_list()
+                                    .iter()
+                                    .next()
+                                    .expect(explain_failure_str)
+                                    .unwrap_list()
+                                    .iter()
+                                    .next()
+                                    .expect(explain_failure_str);
+
+                                Ok(MirScalarExpr::literal(Ok(datum), ScalarType::String))
+                            }
+                            _ => Err(crate::TransformError::Internal(format!(
+                                "Unexpected expression for STRING_AGG: {:?}",
+                                a.expr,
+                            ))),
+                        },
 
                         // All other variants should return the argument to the aggregation.
                         _ => Ok(a.expr.clone()),
