@@ -8,9 +8,7 @@ aliases:
   - /sql/create-source/postgresql
 ---
 
-{{< beta />}}
-
-{{< version-added v0.8.0 />}}
+{{< beta v0.8.0 />}}
 
 {{% create-source/intro %}}
 This document details how to connect Materialize to a Postgres database for Postgres versions 10 and higher. Before you create the source in Materialize, you must perform [some prerequisite steps](#postgresql-source-details) in Postgres.
