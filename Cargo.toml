@@ -14,6 +14,7 @@ members = [
     "src/dataflow-bin",
     "src/dataflow-types",
     "src/dataflow",
+    "src/dataflowd",
     "src/expr",
     "src/expr-test-util",
     "src/http-proxy",

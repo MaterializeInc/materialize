@@ -40,6 +40,7 @@ compile-time-run = "0.2.12"
 coord = { path = "../coord" }
 crossbeam-channel = "0.5.1"
 dataflow = { path = "../dataflow" }
+dataflowd = { path = "../dataflowd" }
 dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { git = "https://github.com/tikv/fail-rs", features = ["failpoints"] }
