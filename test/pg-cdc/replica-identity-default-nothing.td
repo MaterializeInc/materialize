@@ -60,13 +60,13 @@ INSERT INTO identity_nothing VALUES (1, 1);
 > CREATE VIEWS FROM SOURCE mz_source;
 
 ! SELECT * FROM identity_default_key_update;
-full row missing from update
+Old row missing from replication stream for table with OID
 
 ! SELECT * FROM identity_default_nokey_update;
-full row missing from update
+Old row missing from replication stream for table with OID
 
 ! SELECT * FROM identity_default_delete;
-full row missing from update
+Old row missing from replication stream for table with OID
 
 ! SELECT * FROM identity_nothing;
-full row missing from update
+Old row missing from replication stream for table with OID

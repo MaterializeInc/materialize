@@ -249,7 +249,11 @@ impl PostgresSourceReader {
             for val in tuple_data.into_iter() {
                 let datum = match val {
                     TupleData::Null => Datum::Null,
-                    TupleData::UnchangedToast => bail!("Unsupported TOAST value"),
+                    TupleData::UnchangedToast => bail!(
+                        "Missing TOASTed value from table with OID = {}. \
+                        Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                        rel_id
+                    ),
                     TupleData::Text(b) => std::str::from_utf8(&b)?.into(),
                 };
                 packer.push(datum);
@@ -333,7 +337,8 @@ impl PostgresSourceReader {
                             let rel_id = update.rel_id();
                             let old_tuple = try_fatal!(update
                                 .old_tuple()
-                                .ok_or_else(|| anyhow!("full row missing from update")))
+                                .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
+                                        Did you forget to set REPLICA IDENTITY to FULL for your table?", rel_id)))
                             .tuple_data();
                             let old_row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
                             deletes.push(old_row);
@@ -356,7 +361,8 @@ impl PostgresSourceReader {
                             let rel_id = delete.rel_id();
                             let old_tuple = try_fatal!(delete
                                 .old_tuple()
-                                .ok_or_else(|| anyhow!("full row missing from delete")))
+                                .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
+                                        Did you forget to set REPLICA IDENTITY to FULL for your table?", rel_id)))
                             .tuple_data();
                             let row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
                             deletes.push(row);
