@@ -204,8 +204,11 @@ pub struct LoggingConfig {
 }
 
 /// Configures a coordinator.
-pub struct Config<'a> {
-    pub dataflow_client: dataflow::Client,
+pub struct Config<'a, C>
+where
+    C: dataflow::Client,
+{
+    pub dataflow_client: C,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
@@ -222,9 +225,12 @@ pub struct Config<'a> {
 }
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator {
+pub struct Coordinator<C>
+where
+    C: dataflow::Client,
+{
     /// A client to a running dataflow cluster.
-    dataflow_client: dataflow::Client,
+    dataflow_client: C,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -337,7 +343,10 @@ macro_rules! guard_write_critical_section {
     };
 }
 
-impl Coordinator {
+impl<C> Coordinator<C>
+where
+    C: dataflow::Client + 'static,
+{
     fn num_workers(&self) -> usize {
         self.dataflow_client.num_workers()
     }
@@ -1243,8 +1252,7 @@ impl Coordinator {
     fn update_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
         let num_workers = self.num_workers();
         if let Some(index_state) = self.indexes.get_mut(name) {
-            let changes =
-                Coordinator::validate_update_iter(&mut index_state.upper, changes, num_workers);
+            let changes = Self::validate_update_iter(&mut index_state.upper, changes, num_workers);
 
             if !changes.is_empty() {
                 // Advance the compaction frontier to trail the new frontier.
@@ -1276,8 +1284,7 @@ impl Coordinator {
                 }
             }
         } else if let Some(source_state) = self.sources.get_mut(name) {
-            let changes =
-                Coordinator::validate_update_iter(&mut source_state.upper, changes, num_workers);
+            let changes = Self::validate_update_iter(&mut source_state.upper, changes, num_workers);
 
             if !changes.is_empty() {
                 if let Some(compaction_window_ms) = source_state.compaction_window_ms {
@@ -1294,7 +1301,7 @@ impl Coordinator {
             }
         } else if let Some(sink_state) = self.sink_writes.get_mut(name) {
             // Only one dataflow worker should give updates for sinks
-            let changes = Coordinator::validate_update_iter(&mut sink_state.frontier, changes, 1);
+            let changes = Self::validate_update_iter(&mut sink_state.frontier, changes, 1);
 
             if !changes.is_empty() {
                 sink_state.advance_source_handles();
@@ -3258,7 +3265,7 @@ impl Coordinator {
 
         let optimize =
             |timings: &mut Timings,
-             coord: &mut Coordinator,
+             coord: &mut Self,
              decorrelated_plan: MirRelationExpr|
              -> Result<DataflowDescription<OptimizedMirRelationExpr>, CoordError> {
                 let start = Instant::now();
@@ -4224,7 +4231,7 @@ impl Coordinator {
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
-pub async fn serve(
+pub async fn serve<C>(
     Config {
         dataflow_client,
         symbiosis_url,
@@ -4239,8 +4246,11 @@ pub async fn serve(
         metrics_registry,
         persist,
         now,
-    }: Config<'_>,
-) -> Result<(Handle, Client), CoordError> {
+    }: Config<'_, C>,
+) -> Result<(Handle, Client), CoordError>
+where
+    C: dataflow::Client + 'static,
+{
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
@@ -4633,7 +4643,10 @@ pub mod fast_path_peek {
         return Ok(Plan::PeekDataflow(dataflow_plan, index_id));
     }
 
-    impl crate::coord::Coordinator {
+    impl<C> crate::coord::Coordinator<C>
+    where
+        C: dataflow::Client + 'static,
+    {
         /// Implements a peek plan produced by `create_plan` above.
         pub fn implement_fast_path_peek(
             &mut self,

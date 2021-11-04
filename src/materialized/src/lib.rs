@@ -231,7 +231,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         experimental_mode: config.experimental_mode,
         now: SYSTEM_TIME.clone(),
         metrics_registry: config.metrics_registry.clone(),
-        response_interceptor: None,
     })?;
 
     // Initialize coordinator.
