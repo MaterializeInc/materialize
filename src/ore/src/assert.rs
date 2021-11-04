@@ -155,12 +155,14 @@ macro_rules! soft_panic_or_log {
 #[macro_export]
 macro_rules! assert_contains {
     ($left:expr, $right:expr $(,)?) => {{
-        if !$left.contains(&$right) {
+        let left = $left;
+        let right = $right;
+        if !left.contains(&$right) {
             panic!(
                 r#"assertion failed: `left.contains(right)`:
   left: `{:?}`
  right: `{:?}`"#,
-                $left, $right
+                left, right
             );
         }
     }};

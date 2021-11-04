@@ -28,7 +28,9 @@ use log::info;
 use postgres::Row;
 use tempfile::NamedTempFile;
 
-use util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
+use ore::assert_contains;
+
+use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
@@ -87,10 +89,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
         // good measure.
         info!("test_no_block: joining thread");
         let slow_res = slow_thread.join().unwrap();
-        assert!(slow_res
-            .unwrap_err()
-            .to_string()
-            .contains("server error 503"));
+        assert_contains!(slow_res.unwrap_err().to_string(), "server error 503");
 
         info!("test_no_block: returning");
         Ok(())
