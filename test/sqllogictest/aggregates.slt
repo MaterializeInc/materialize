@@ -409,11 +409,11 @@ statement ok
 INSERT INTO a VALUES ('a'),('b')
 
 query T
-SELECT STRING_AGG(y, ', ') FROM (SELECT x as y FROM a);
+SELECT STRING_AGG(y, ',') FROM (SELECT x as y FROM a ORDER BY x);
 ----
-a, b
+a,b
 
 query T
-SELECT STRING_AGG(y, ', ') FROM (SELECT x as y FROM a limit 1);
+SELECT STRING_AGG(y, ',') FROM (SELECT x as y FROM a ORDER BY x limit 1);
 ----
 a
