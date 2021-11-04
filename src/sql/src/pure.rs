@@ -30,11 +30,11 @@ use sql_parser::parser::parse_columns;
 
 use crate::ast::{
     display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
-    CreateSourceKeyEnvelope, CreateSourceStatement, CreateViewsDefinitions,
-    CreateViewsSourceTarget, CreateViewsStatement, CsrConnector, CsrSeed, CsvColumns, DbzMode,
-    Envelope, Expr, Format, Ident, ProtobufSchema, Query, Raw, RawName, Select, SelectItem,
-    SetExpr, Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
-    WithOption, WithOptionValue,
+    CreateSourceStatement, CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement,
+    CsrConnector, CsrSeed, CsvColumns, DbzMode, Envelope, Expr, Format, Ident, ProtobufSchema,
+    Query, Raw, RawName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
+    SourceIncludeMetadataType, Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
+    ViewDefinition, WithOption, WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
@@ -80,8 +80,8 @@ pub fn purify(
             connector,
             format,
             envelope,
-            key_envelope,
             with_options,
+            include_metadata,
             ..
         }) = &mut stmt
         {
@@ -200,8 +200,15 @@ pub fn purify(
 
             purify_source_format(format, connector, &envelope, file, &config_options).await?;
 
-            if *key_envelope != CreateSourceKeyEnvelope::None
-                && !matches!(format, CreateSourceFormat::KeyValue { .. })
+            if include_metadata.iter().any(|i| {
+                matches!(
+                    i,
+                    SourceIncludeMetadata {
+                        ty: SourceIncludeMetadataType::Key,
+                        ..
+                    }
+                )
+            }) && !matches!(format, CreateSourceFormat::KeyValue { .. })
             {
                 bail!(
                     "INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT"

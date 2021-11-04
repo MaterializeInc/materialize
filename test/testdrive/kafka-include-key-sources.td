@@ -40,6 +40,37 @@ INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
   INCLUDE KEY AS key_col
 INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
+! CREATE SOURCE not_supported
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE TIMESTAMP
+INCLUDE TIMESTAMP not yet supported
+
+! CREATE SOURCE not_supported
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE TOPIC
+INCLUDE TOPIC not yet supported
+
+! CREATE SOURCE not_supported
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE PARTITION
+INCLUDE PARTITION not yet supported
+
+! CREATE SOURCE not_supported
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  KEY FORMAT AVRO USING SCHEMA '${schema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE KEY, TIMESTAMP, PARTITION, TOPIC
+INCLUDE TIMESTAMP not yet supported
+
+! CREATE SOURCE not_supported
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE TIMESTAMP as myts, PARTITION, TOPIC
+INCLUDE TIMESTAMP not yet supported
+
 > CREATE MATERIALIZED SOURCE avro_data_conflict
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
