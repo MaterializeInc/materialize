@@ -13,7 +13,8 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, IdGen, LocalId, MirRelationExpr};
+use expr::{Id, LocalId, MirRelationExpr};
+use ore::id_gen::IdGen;
 use repr::RelationType;
 
 /// Refreshes identifiers and types for local let bindings.

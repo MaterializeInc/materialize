@@ -36,6 +36,7 @@ pub mod fmt;
 pub mod future;
 pub mod hash;
 pub mod hint;
+pub mod id_gen;
 pub mod iter;
 pub mod lex;
 #[cfg(feature = "metrics")]

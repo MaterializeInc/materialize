@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use lowertest::{MzEnumReflect, MzStructReflect};
 use ore::collections::CollectionExt;
+use ore::id_gen::IdGen;
 use repr::{ColumnType, Datum, Diff, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
@@ -1477,21 +1478,6 @@ impl fmt::Display for ColumnOrder {
             self.column.to_string(),
             if self.desc { "desc" } else { "asc" }
         )
-    }
-}
-
-/// Manages the allocation of locally unique IDs when building a [`MirRelationExpr`].
-#[derive(Debug, Default)]
-pub struct IdGen {
-    id: u64,
-}
-
-impl IdGen {
-    /// Allocates a new identifier and advances the generator.
-    pub fn allocate_id(&mut self) -> u64 {
-        let id = self.id;
-        self.id += 1;
-        id
     }
 }
 

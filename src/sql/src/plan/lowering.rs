@@ -129,7 +129,7 @@ impl HirRelationExpr {
                 }
             }
             mut other => {
-                let mut id_gen = expr::IdGen::default();
+                let mut id_gen = ore::id_gen::IdGen::default();
                 transform_expr::split_subquery_predicates(&mut other);
                 transform_expr::try_simplify_quantified_comparisons(&mut other);
                 expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
@@ -154,7 +154,7 @@ impl HirRelationExpr {
     /// assignment of values to outer rows.
     fn applied_to(
         self,
-        id_gen: &mut expr::IdGen,
+        id_gen: &mut ore::id_gen::IdGen,
         get_outer: expr::MirRelationExpr,
         col_map: &ColumnMap,
     ) -> expr::MirRelationExpr {
@@ -547,7 +547,7 @@ impl HirScalarExpr {
     /// each of these references can be found.
     fn applied_to(
         self,
-        id_gen: &mut expr::IdGen,
+        id_gen: &mut ore::id_gen::IdGen,
         col_map: &ColumnMap,
         inner: &mut expr::MirRelationExpr,
         subquery_map: &Option<&HashMap<HirScalarExpr, usize>>,
@@ -710,7 +710,7 @@ impl HirScalarExpr {
     /// by the returned join that will hold their results.
     fn lower_subqueries(
         exprs: &[Self],
-        id_gen: &mut expr::IdGen,
+        id_gen: &mut ore::id_gen::IdGen,
         col_map: &ColumnMap,
         inner: expr::MirRelationExpr,
     ) -> (expr::MirRelationExpr, HashMap<HirScalarExpr, usize>) {
@@ -852,7 +852,7 @@ impl HirScalarExpr {
 /// The caller must supply the `apply` function that applies the rewritten
 /// `inner` to `outer`.
 fn branch<F>(
-    id_gen: &mut expr::IdGen,
+    id_gen: &mut ore::id_gen::IdGen,
     outer: expr::MirRelationExpr,
     col_map: &ColumnMap,
     mut inner: HirRelationExpr,
@@ -861,7 +861,7 @@ fn branch<F>(
 ) -> expr::MirRelationExpr
 where
     F: FnOnce(
-        &mut expr::IdGen,
+        &mut ore::id_gen::IdGen,
         HirRelationExpr,
         expr::MirRelationExpr,
         &ColumnMap,
@@ -990,7 +990,7 @@ where
 }
 
 fn apply_scalar_subquery(
-    id_gen: &mut expr::IdGen,
+    id_gen: &mut ore::id_gen::IdGen,
     outer: expr::MirRelationExpr,
     col_map: &ColumnMap,
     scalar_subquery: HirRelationExpr,
@@ -1044,7 +1044,7 @@ fn apply_scalar_subquery(
 }
 
 fn apply_existential_subquery(
-    id_gen: &mut expr::IdGen,
+    id_gen: &mut ore::id_gen::IdGen,
     outer: expr::MirRelationExpr,
     col_map: &ColumnMap,
     subquery_expr: HirRelationExpr,
@@ -1081,7 +1081,7 @@ fn apply_existential_subquery(
 impl AggregateExpr {
     fn applied_to(
         self,
-        id_gen: &mut expr::IdGen,
+        id_gen: &mut ore::id_gen::IdGen,
         col_map: &ColumnMap,
         inner: &mut expr::MirRelationExpr,
     ) -> expr::AggregateExpr {
@@ -1106,7 +1106,7 @@ fn attempt_outer_join(
     on: expr::MirScalarExpr,
     kind: JoinKind,
     oa: usize,
-    id_gen: &mut expr::IdGen,
+    id_gen: &mut ore::id_gen::IdGen,
 ) -> Option<expr::MirRelationExpr> {
     use expr::BinaryFunc;
 
