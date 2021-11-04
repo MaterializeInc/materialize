@@ -412,12 +412,12 @@ statement ok
 CREATE TABLE qs (q int not null)
 
 query T
-SELECT STRING_AGG(y, ',') FROM (SELECT x as y FROM a ORDER BY x);
+SELECT STRING_AGG(x, ',') FROM (SELECT * FROM a ORDER BY x);
 ----
 a,b
 
 query T
-SELECT STRING_AGG(y, ',') FROM (SELECT x as y FROM a ORDER BY x limit 1);
+SELECT STRING_AGG(x, ',') FROM (SELECT * FROM a ORDER BY x limit 1);
 ----
 a
 
