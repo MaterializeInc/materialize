@@ -125,22 +125,11 @@ id   mz_offset
 a    1
 b    2
 
-$ http-request method=POST url=${testdrive.schema-registry-url}subjects/testdrive-no-messages-${testdrive.seed}-value/versions content-type=application/json
+$ http-request method=POST url=${testdrive.schema-registry-url}subjects/no_messages.proto/versions content-type=application/json
 {
-    "schema": "syntax = \"proto3\"; enum Choices { ZERO = 0; ONE = 1; }",
+    "schema": "syntax = \"proto3\"; enum Choices { ZERO = 0; ONE = 1; TWO = 2;}",
     "schemaType": "PROTOBUF",
     "references": []
-}
-
-$ http-request method=POST url=${testdrive.schema-registry-url}subjects/testdrive-imported-${testdrive.seed}-value/versions content-type=application/json
-{
-    "schema": "syntax = \"proto3\"; import 'no_messages.proto'; message Imported { Choices choice = 1; }",
-    "schemaType": "PROTOBUF",
-    "references": [{
-        "name": "no_messages.proto",
-        "subject": "testdrive-no-messages-${testdrive.seed}-value",
-        "version": 1
-    }]
 }
 
 $ kafka-create-topic topic=imported
@@ -154,19 +143,13 @@ message Imported {
     Choices choice = 1;
 }
 
-$ kafka-ingest topic=imported format=protobuf schema=${schema} message=imported
+$ kafka-ingest topic=imported format=protobuf schema=${schema} message=imported publish=true
 {"choice": "ONE"}
-{"choice": "ONE"}
+{"choice": "TWO"}
 
-! CREATE MATERIALIZED SOURCE imported_csr
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-imported-${testdrive.seed}'
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-unsupported protobuf schema reference no_messages.proto
-
-# Tests that we do not error when the first available file descriptor does not contain a Message.
 > CREATE MATERIALIZED SOURCE imported_csr
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-imported-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Imported' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # Can't SELECT record types.
 > SELECT COUNT(*) FROM imported_csr
@@ -305,3 +288,41 @@ $ kafka-ingest format=protobuf topic=batch_proto message=batch timestamp=1
 ------------------------------------------------------------------
  1   2020-01-01_00:00:00  2020-01-01_00:00:09  1
  2   2020-01-01_00:00:10  2020-01-01_00:00:19  2
+
+$ http-request method=POST url=${testdrive.schema-registry-url}subjects/google%2Fprotobuf%2Ftimestamp.proto/versions content-type=application/json
+{
+    "schema": "syntax = \"proto3\"; package google.protobuf; message Timestamp{int64 seconds = 1; int32 nanos=2;}",
+    "schemaType": "PROTOBUF",
+    "references": []
+}
+
+$ kafka-create-topic topic=well-known-import
+
+$ set schema
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+message TimestampId {
+  string id = 1;
+  .google.protobuf.Timestamp ts = 2;
+}
+
+$ kafka-ingest topic=well-known-import format=protobuf schema=${schema} message=timestampid publish=true
+{"id": "a", "ts": {"seconds": 1234, "nanos": 5678}}
+{"id": "b", "ts": {"seconds": 4321, "nanos": 8765}}
+
+> CREATE MATERIALIZED SOURCE well_known_import
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-well-known-import-${testdrive.seed}'
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> SHOW COLUMNS FROM well_known_import
+id         true   text
+mz_offset  false  bigint
+ts         true   record
+
+> SELECT id, mz_offset FROM well_known_import WHERE ts IS NOT NULL
+id   mz_offset
+------------
+a    1
+b    2

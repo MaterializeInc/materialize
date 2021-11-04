@@ -14,10 +14,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::{FuturesUnordered, StreamExt};
+use lazy_static::lazy_static;
 use maplit::hashmap;
 use ore::display::DisplayExt;
 use ore::result::ResultExt;
 use rdkafka::producer::FutureRecord;
+use regex::Regex;
 use serde::de::DeserializeOwned;
 
 use crate::action::{substitute_vars, Action, State};
@@ -137,6 +139,10 @@ impl Transcoder {
                     }
                     protobuf::MessageType::Imported => {
                         Self::decode_json::<_, protobuf::gen::imported::Imported>(row)?.map(convert)
+                    }
+                    protobuf::MessageType::TimestampId => {
+                        Self::decode_json::<_, protobuf::gen::well_known_imports::TimestampId>(row)?
+                            .map(convert)
                     }
                 };
                 let val = if let Some(decoded) = val {
@@ -283,11 +289,40 @@ impl Action for IngestAction {
                 Format::Protobuf {
                     message, schema, ..
                 } => {
+                    // TODO(chae): once this is fixed https://github.com/stepancheg/rust-protobuf/issues/576,
+                    // use protobuf-codegen-pure, an actual parser, rather than a regex.  For now, this is
+                    // just used in testdrive so it's not worth hand-rolling something for now.
+                    lazy_static! {
+                        static ref PROTO_IMPORT_REGEX: Regex =
+                            Regex::new(r#"import\s+["'](.*)["']"#).unwrap();
+                    }
                     if self.publish {
                         let schema = schema.expect("schema");
                         let ccsr_subject = format!("{}-{}", topic_name, typ);
+                        let schema_refs: Vec<_> = PROTO_IMPORT_REGEX
+                            .captures_iter(&schema)
+                            .filter_map(|capture| {
+                                let imp = capture
+                                    .get(1)
+                                    .expect("REGEX HAS ONE GROUP")
+                                    .as_str()
+                                    .to_owned();
+                                futures::executor::block_on(ccsr_client.get_subject(&imp))
+                                    .map(|subject| ccsr::SchemaReference {
+                                        name: imp.clone(),
+                                        subject: imp.clone(),
+                                        version: subject.version,
+                                    })
+                                    .ok()
+                            })
+                            .collect();
                         ccsr_client
-                            .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Protobuf, &[])
+                            .publish_schema(
+                                &ccsr_subject,
+                                &schema,
+                                ccsr::SchemaType::Protobuf,
+                                &schema_refs,
+                            )
                             .await
                             .map_err(|e| format!("schema registry error: {}", e))?;
                     }

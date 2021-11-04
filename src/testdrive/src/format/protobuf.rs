@@ -24,6 +24,7 @@ pub enum MessageType {
     NestedOuter,
     SimpleNestedOuter,
     Imported,
+    TimestampId,
 }
 
 impl FromStr for MessageType {
@@ -38,6 +39,7 @@ impl FromStr for MessageType {
             "nested" => Ok(MessageType::NestedOuter),
             "simple-nested" => Ok(MessageType::SimpleNestedOuter),
             "imported" => Ok(MessageType::Imported),
+            "timestampid" => Ok(MessageType::TimestampId),
             _ => Err(format!(
                 "testdrive: unknown built-in protobuf message: {}",
                 s
