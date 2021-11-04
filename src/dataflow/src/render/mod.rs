@@ -1342,13 +1342,16 @@ pub mod plan {
 
         let (map, filter, project) = mfp.as_map_filter_project();
 
-        let map_filter_project = MapFilterProject::new(output_arity)
+        let mut map_filter_project = MapFilterProject::new(output_arity)
             .map(dummies)
             .project(demand_projection)
             .map(map)
             .filter(filter)
             .project(project);
 
+        mfp.optimize();
+        map_filter_project.optimize();
+        assert_eq!(*mfp, map_filter_project);
         *mfp = map_filter_project;
     }
 

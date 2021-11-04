@@ -248,7 +248,7 @@ impl<'a> ViewExplanation<'a> {
             Join {
                 inputs,
                 equivalences,
-                demand,
+                demand: _,
                 implementation,
             } => {
                 write!(
@@ -278,9 +278,9 @@ impl<'a> ViewExplanation<'a> {
                 writeln!(f)?;
                 write!(f, "| | implementation = ")?;
                 self.fmt_join_implementation(f, inputs, implementation)?;
-                if let Some(demand) = demand {
+                /*if let Some(demand) = demand {
                     writeln!(f, "| | demand = {}", bracketed("(", ")", Indices(demand)))?;
-                }
+                }*/
             }
             Reduce {
                 group_key,

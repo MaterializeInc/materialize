@@ -150,7 +150,7 @@ impl Demand {
             MirRelationExpr::Join {
                 inputs,
                 equivalences,
-                demand: _,
+                demand,
                 implementation: _,
             } => {
                 let input_mapper = JoinInputMapper::new(inputs);
@@ -174,6 +174,11 @@ impl Demand {
                     }
                 }
 
+                // Capture the external demand for the join. Use the permutation to intervene
+                // when an externally demanded column will be replaced with a copy of another.
+                let mut demand_vec = columns.iter().map(|c| permutation[*c]).collect::<Vec<_>>();
+                demand_vec.sort_unstable();
+                *demand = Some(demand_vec);
                 let should_permute = columns.iter().any(|c| permutation[*c] != *c);
 
                 // Each equivalence class imposes internal demand for columns.
