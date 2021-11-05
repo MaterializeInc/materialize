@@ -648,7 +648,6 @@ struct DownloadMetricUpdate {
 enum DownloadStatus {
     Ok,
     Failed {
-        bytes_read: usize,
         err: S3Error,
     },
     /// Unable to send data to the `get_next_message` function, dataflow has shut down
@@ -761,7 +760,6 @@ async fn download_object(
         Err(_) => {
             return (
                 DownloadStatus::Failed {
-                    bytes_read: 0,
                     err: S3Error::RetryFailed,
                 },
                 Default::default(),
@@ -827,7 +825,6 @@ where
             Err(_) => {
                 return (
                     DownloadStatus::Failed {
-                        bytes_read,
                         err: S3Error::RetryFailed,
                     },
                     Some(DownloadMetricUpdate {

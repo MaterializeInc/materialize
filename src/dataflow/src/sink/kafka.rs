@@ -60,12 +60,6 @@ where
         true
     }
 
-    fn get_key_desc(&self) -> Option<&RelationDesc> {
-        self.key_desc_and_indices
-            .as_ref()
-            .map(|(desc, _indices)| desc)
-    }
-
     fn get_key_indices(&self) -> Option<&[usize]> {
         self.key_desc_and_indices
             .as_ref()
@@ -74,10 +68,6 @@ where
 
     fn get_relation_key_indices(&self) -> Option<&[usize]> {
         self.relation_key_indices.as_deref()
-    }
-
-    fn get_value_desc(&self) -> &RelationDesc {
-        &self.value_desc
     }
 
     fn render_continuous_sink(

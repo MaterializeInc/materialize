@@ -315,14 +315,6 @@ pub enum DataEncoding {
 }
 
 impl SourceDataEncoding {
-    /// Return the encoding if this was a `SourceDataEncoding::Single`, else return an error
-    pub fn single(self) -> Option<DataEncoding> {
-        match self {
-            SourceDataEncoding::Single(encoding) => Some(encoding),
-            SourceDataEncoding::KeyValue { .. } => None,
-        }
-    }
-
     /// Return either the Single encoding if this was a `SourceDataEncoding::Single`, else return the value encoding
     pub fn value(self) -> DataEncoding {
         match self {
@@ -560,10 +552,6 @@ impl DataEncoding {
             DataEncoding::Postgres => "Postgres",
         }
     }
-
-    pub fn is_avro(&self) -> bool {
-        matches!(self, DataEncoding::Avro(_))
-    }
 }
 
 /// Encoding in Avro format.
@@ -591,12 +579,6 @@ pub struct ProtobufEncoding {
 pub struct CsvEncoding {
     pub columns: ColumnSpec,
     pub delimiter: u8,
-}
-
-impl CsvEncoding {
-    pub fn has_header(&self) -> bool {
-        matches!(self.columns, ColumnSpec::Header { .. })
-    }
 }
 
 /// Determines the RelationDesc and decoding of CSV objects
@@ -781,19 +763,6 @@ impl SourceConnector {
         match self {
             SourceConnector::External { connector, .. } => connector.name(),
             SourceConnector::Local { .. } => "local",
-        }
-    }
-
-    /// Returns true iff this connector uses BYO consistency
-    pub fn is_byo(&self) -> bool {
-        if let SourceConnector::External { consistency, .. } = self {
-            if let Consistency::BringYourOwn(_) = consistency {
-                true
-            } else {
-                false
-            }
-        } else {
-            false
         }
     }
 
