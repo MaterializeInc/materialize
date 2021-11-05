@@ -15,7 +15,6 @@
 
 use crate::TransformArgs;
 use expr::{func, MirRelationExpr, MirScalarExpr};
-use repr::{ColumnType, ScalarType};
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
