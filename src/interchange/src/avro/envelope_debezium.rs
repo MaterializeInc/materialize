@@ -14,28 +14,21 @@
 use std::collections::HashMap;
 use std::num::ParseIntError;
 
-use anyhow::anyhow;
-use anyhow::bail;
 use smallvec::SmallVec;
 
 use mz_avro::error::{DecodeError, Error as AvroError};
-use mz_avro::schema::{RecordField, SchemaNode, SchemaPiece};
 use mz_avro::types::{Scalar, Value};
 use mz_avro::{
-    define_unexpected, give_value, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess,
-    Schema, ValueOrReader,
+    define_unexpected, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, ValueOrReader,
 };
 use mz_avro::{TrivialDecoder, ValueDecoder};
-use ore::str::StrExt;
 use repr::{Datum, Row};
 
-use crate::avro::{AvroFlatDecoder, AvroStringDecoder, OptionalRecordDecoder};
+use crate::avro::{AvroStringDecoder, OptionalRecordDecoder};
 
 mod deduplication;
 
 pub use deduplication::DebeziumDeduplicationStrategy;
-
-use self::deduplication::DebeziumDeduplicationState;
 
 #[derive(Debug)]
 pub struct AvroDebeziumDecoder<'a> {
@@ -469,248 +462,5 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
     }
     define_unexpected! {
         union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct BinlogSchemaIndices {
-    /// Index of the "source" field in the payload schema
-    source_idx: usize,
-    /// Index of the "file" field in the source schema
-    source_file_idx: usize,
-    /// Index of the "pos" field in the source schema
-    source_pos_idx: usize,
-    /// Index of the "row" field in the source schema
-    source_row_idx: usize,
-    /// Index of the "snapshot" field in the source schema
-    source_snapshot_idx: usize,
-}
-
-impl BinlogSchemaIndices {
-    pub fn new_from_schema(top_node: SchemaNode) -> Option<Self> {
-        let top_indices = field_indices(top_node)?;
-        let source_idx = *top_indices.get("source")?;
-        let source_node = top_node.step(&unwrap_record_fields(top_node)[source_idx].schema);
-        let source_indices = field_indices(source_node)?;
-        let source_file_idx = *source_indices.get("file")?;
-        let source_pos_idx = *source_indices.get("pos")?;
-        let source_row_idx = *source_indices.get("row")?;
-        let source_snapshot_idx = *source_indices.get("snapshot")?;
-
-        Some(Self {
-            source_idx,
-            source_file_idx,
-            source_pos_idx,
-            source_row_idx,
-            source_snapshot_idx,
-        })
-    }
-}
-
-/// Extract a debezium-format Avro object by parsing it fully,
-/// i.e., when the record isn't laid out such that we can extract the `before` and
-/// `after` fields without decoding the entire record.
-fn unwrap_record_fields(n: SchemaNode) -> &[RecordField] {
-    if let SchemaPiece::Record { fields, .. } = n.inner {
-        fields
-    } else {
-        panic!("node is not a record!");
-    }
-}
-
-/// Additional context needed for decoding
-/// Debezium-formatted data.
-#[derive(Debug)]
-pub struct DebeziumDecodeState {
-    /// Index of the "before" field in the payload schema
-    before_idx: usize,
-    /// Index of the "after" field in the payload schema
-    after_idx: usize,
-    dedup: Option<DebeziumDeduplicationState>,
-    binlog_schema_indices: Option<BinlogSchemaIndices>,
-    /// Human-readable name used for printing debug information
-    debug_name: String,
-    /// Worker we are running on (used for printing debug information)
-    worker_idx: usize,
-    /// Map of binlog filenames to a unique index. Used to avoid having to write the full filename
-    /// in the output row.
-    filenames_to_indices: HashMap<Vec<u8>, usize>,
-}
-
-fn field_indices(node: SchemaNode) -> Option<HashMap<String, usize>> {
-    if let SchemaPiece::Record { fields, .. } = node.inner {
-        Some(
-            fields
-                .iter()
-                .enumerate()
-                .map(|(i, f)| (f.name.clone(), i))
-                .collect(),
-        )
-    } else {
-        None
-    }
-}
-
-fn take_field_by_index(
-    idx: usize,
-    expected_name: &str,
-    fields: &mut [(String, Value)],
-) -> anyhow::Result<Value> {
-    let (name, value) = fields.get_mut(idx).ok_or_else(|| -> anyhow::Error {
-        anyhow!(
-            "Value does not match schema: {} field not at index {}",
-            expected_name.quoted(),
-            idx
-        )
-    })?;
-    if name != expected_name {
-        bail!(
-            "Value does not match schema: expected {}, found {}",
-            expected_name.quoted(),
-            name.quoted()
-        );
-    }
-    Ok(std::mem::replace(value, Value::Null))
-}
-
-// TODO [btv] - this entire struct is ONLY used in the OCF code path. It should be deleted and merged with
-// `Decoder` as part of the source-orthogonality refactor.
-impl DebeziumDecodeState {
-    pub fn new(
-        schema: &Schema,
-        debug_name: String,
-        worker_idx: usize,
-        dedup_strat: DebeziumDeduplicationStrategy,
-    ) -> Option<Self> {
-        let top_node = schema.top_node();
-        let top_indices = field_indices(top_node)?;
-        let before_idx = *top_indices.get("before")?;
-        let after_idx = *top_indices.get("after")?;
-        let binlog_schema_indices = BinlogSchemaIndices::new_from_schema(top_node);
-
-        Some(Self {
-            before_idx,
-            after_idx,
-            dedup: DebeziumDeduplicationState::new(dedup_strat, None),
-            binlog_schema_indices,
-            debug_name,
-            worker_idx,
-            filenames_to_indices: Default::default(),
-        })
-    }
-
-    pub fn extract(
-        &mut self,
-        v: Value,
-        upstream_time_millis: Option<i64>,
-    ) -> anyhow::Result<Option<Row>> {
-        fn is_snapshot(v: Value) -> anyhow::Result<Option<bool>> {
-            let answer = match v {
-                Value::Union { inner, .. } => is_snapshot(*inner)?,
-                Value::Boolean(b) => Some(b),
-                // Since https://issues.redhat.com/browse/DBZ-1295 ,
-                // "snapshot" is three-valued. "last" is the last row
-                // in the snapshot, but still part of it.
-                Value::String(s) => Some(&s == "true" || &s == "last"),
-                Value::Null => None,
-                _ => bail!("\"snapshot\" is neither a boolean nor a string"),
-            };
-            Ok(answer)
-        }
-
-        match v {
-            Value::Record(mut fields) => {
-                let dedup_val = if let Some(schema_indices) = self.binlog_schema_indices {
-                    let source_val =
-                        take_field_by_index(schema_indices.source_idx, "source", &mut fields)?;
-                    let mut source_fields = match source_val {
-                        Value::Record(fields) => fields,
-                        _ => bail!("\"source\" is not a record: {:?}", source_val),
-                    };
-                    let snapshot_val = take_field_by_index(
-                        schema_indices.source_snapshot_idx,
-                        "snapshot",
-                        &mut source_fields,
-                    )?;
-
-                    if is_snapshot(snapshot_val)? != Some(true) {
-                        let file_val = take_field_by_index(
-                            schema_indices.source_file_idx,
-                            "file",
-                            &mut source_fields,
-                        )?
-                        .into_string()
-                        .ok_or_else(|| anyhow!("\"file\" is not a string"))?;
-                        let n_fnames = self.filenames_to_indices.len();
-                        let file_idx = *self
-                            .filenames_to_indices
-                            .entry(file_val.into_bytes())
-                            .or_insert(n_fnames);
-                        let pos_val = take_field_by_index(
-                            schema_indices.source_pos_idx,
-                            "pos",
-                            &mut source_fields,
-                        )?
-                        .into_integral()
-                        .ok_or_else(|| anyhow!("\"pos\" is not an integer"))?;
-                        let row_val = take_field_by_index(
-                            schema_indices.source_row_idx,
-                            "row",
-                            &mut source_fields,
-                        )?
-                        .into_integral()
-                        .ok_or_else(|| anyhow!("\"row\" is not an integer"))?;
-                        let pos = usize::try_from(pos_val)?;
-                        let row = usize::try_from(row_val)?;
-                        Some((file_idx, pos, row))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let before_idx = fields.iter().position(|(name, _value)| "before" == name);
-                let after_idx = fields.iter().position(|(name, _value)| "after" == name);
-                if let (Some(before_idx), Some(after_idx)) = (before_idx, after_idx) {
-                    let before = &fields[before_idx].1;
-                    let after = &fields[after_idx].1;
-                    let mut packer = Row::default();
-                    let mut buf = vec![];
-                    give_value(
-                        AvroFlatDecoder {
-                            packer: &mut packer,
-                            buf: &mut buf,
-                            is_top: false,
-                        },
-                        before,
-                    )?;
-                    give_value(
-                        AvroFlatDecoder {
-                            packer: &mut packer,
-                            buf: &mut buf,
-                            is_top: false,
-                        },
-                        after,
-                    )?;
-                    if let Some((file_idx, pos, row)) = dedup_val {
-                        packer.push_list_with(|packer| {
-                            packer.push(Datum::Int32(file_idx as i32));
-                            packer.push(Datum::Int64(pos as i64));
-                            packer.push(Datum::Int64(row as i64));
-                        });
-                    } else {
-                        packer.push(Datum::Null);
-                    }
-                    packer.push(match upstream_time_millis {
-                        Some(millis) => Datum::Int64(millis),
-                        None => Datum::Null,
-                    });
-                    Ok(Some(packer))
-                } else {
-                    bail!("avro envelope does not contain `before` and `after`");
-                }
-            }
-            _ => bail!("avro envelope had unexpected type: {:?}", v),
-        }
     }
 }
