@@ -42,7 +42,6 @@ impl ReduceElision {
         } = relation
         {
             let input_type = input.typ();
-
             if input_type.keys.iter().any(|keys| {
                 keys.iter()
                     .all(|k| group_key.contains(&expr::MirScalarExpr::Column(*k)))
