@@ -36,20 +36,12 @@ where
         false
     }
 
-    fn get_key_desc(&self) -> Option<&RelationDesc> {
-        None
-    }
-
     fn get_key_indices(&self) -> Option<&[usize]> {
         None
     }
 
     fn get_relation_key_indices(&self) -> Option<&[usize]> {
         None
-    }
-
-    fn get_value_desc(&self) -> &RelationDesc {
-        &self.value_desc
     }
 
     fn render_continuous_sink(
