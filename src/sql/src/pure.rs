@@ -27,6 +27,7 @@ use protobuf::Message;
 use protoc::Protoc;
 use regex::Regex;
 use reqwest::Url;
+use sql_parser::ast::CsrSeedCompiledOrLegacy;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
@@ -544,26 +545,35 @@ async fn purify_csr_connector_proto(
         seed,
         with_options: ccsr_options,
     } = csr_connector;
-    if seed.is_none() {
-        let url: Url = url.parse()?;
-        let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
-        let ccsr_config = kafka_util::generate_ccsr_client_config(
-            url,
-            &kafka_options,
-            normalize::options(&ccsr_options),
-        )?;
+    match seed {
+        None => {
+            let url: Url = url.parse()?;
+            let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
+            let ccsr_config = kafka_util::generate_ccsr_client_config(
+                url,
+                &kafka_options,
+                normalize::options(&ccsr_options),
+            )?;
 
-        let value =
-            compile_proto(&format!("{}-value", topic), ccsr_config.clone().build()?).await?;
-        let key = compile_proto(&format!("{}-key", topic), ccsr_config.build()?)
-            .await
-            .ok();
+            let value =
+                compile_proto(&format!("{}-value", topic), ccsr_config.clone().build()?).await?;
+            let key = compile_proto(&format!("{}-key", topic), ccsr_config.build()?)
+                .await
+                .ok();
 
-        if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) && key.is_none() {
-            bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+            if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) && key.is_none() {
+                bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+            }
+
+            *seed = Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled {
+                value,
+                key,
+            }));
         }
-
-        *seed = Some(CsrSeedCompiled { value, key });
+        Some(CsrSeedCompiledOrLegacy::Compiled(..)) => (),
+        Some(CsrSeedCompiledOrLegacy::Legacy(..)) => {
+            unreachable!("Should not be able to purify CsrCeedCompiledOrLegacy::Legacy")
+        }
     }
 
     Ok(())

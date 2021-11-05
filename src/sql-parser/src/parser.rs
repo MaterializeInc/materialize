@@ -1665,27 +1665,44 @@ impl<'a> Parser<'a> {
         let url = self.parse_literal_string()?;
 
         let seed = if self.parse_keyword(SEED) {
-            let key = if self.parse_keyword(KEY) {
-                self.expect_keyword(SCHEMA)?;
-                let message_name = self.parse_literal_string()?;
-                let schema = self.parse_comma_separated(|parser| parser.parse_literal_uint8())?;
-                Some(CsrSeedCompiledEncoding {
-                    schema,
-                    message_name,
-                })
+            if self.parse_keyword(COMPILED) {
+                let key = if self.parse_keyword(KEY) {
+                    self.expect_keyword(SCHEMA)?;
+                    let message_name = self.parse_literal_string()?;
+                    let schema =
+                        self.parse_comma_separated(|parser| parser.parse_literal_uint8())?;
+                    Some(CsrSeedCompiledEncoding {
+                        schema,
+                        message_name,
+                    })
+                } else {
+                    None
+                };
+                self.expect_keywords(&[VALUE, SCHEMA])?;
+                let value_message_name = self.parse_literal_string()?;
+                let value_schema =
+                    self.parse_comma_separated(|parser| parser.parse_literal_uint8())?;
+                Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled {
+                    value: CsrSeedCompiledEncoding {
+                        schema: value_schema,
+                        message_name: value_message_name,
+                    },
+                    key,
+                }))
             } else {
-                None
-            };
-            self.expect_keywords(&[VALUE, SCHEMA])?;
-            let value_message_name = self.parse_literal_string()?;
-            let value_schema = self.parse_comma_separated(|parser| parser.parse_literal_uint8())?;
-            Some(CsrSeedCompiled {
-                value: CsrSeedCompiledEncoding {
-                    schema: value_schema,
-                    message_name: value_message_name,
-                },
-                key,
-            })
+                let key_schema = if self.parse_keyword(KEY) {
+                    self.expect_keyword(SCHEMA)?;
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
+                self.expect_keywords(&[VALUE, SCHEMA])?;
+                let value_schema = self.parse_literal_string()?;
+                Some(CsrSeedCompiledOrLegacy::Legacy(CsrSeed {
+                    value_schema,
+                    key_schema,
+                }))
+            }
         } else {
             None
         };
