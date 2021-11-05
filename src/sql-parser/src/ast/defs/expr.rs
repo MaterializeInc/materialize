@@ -446,10 +446,6 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
 impl_display_t!(Expr);
 
 impl<T: AstInfo> Expr<T> {
-    pub fn is_string_literal(&self) -> bool {
-        matches!(self, Expr::Value(Value::String(_)))
-    }
-
     pub fn null() -> Expr<T> {
         Expr::Value(Value::Null)
     }
