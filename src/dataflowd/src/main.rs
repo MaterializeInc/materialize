@@ -45,7 +45,7 @@ struct Args {
     workers: usize,
     /// Number of this dataflow process
     #[structopt(
-        short,
+        short = "p",
         long,
         env = "DATAFLOWD_PROCESS",
         value_name = "P",
@@ -54,7 +54,7 @@ struct Args {
     process: usize,
     /// Number of dataflow processes.
     #[structopt(
-        short,
+        short = "n",
         long,
         env = "DATAFLOWD_PROCESSES",
         value_name = "N",
@@ -146,39 +146,26 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
     })?;
 
-    let mut listeners = Vec::new();
-    for i in 0..args.workers {
-        let mut addr = args.listen_addr;
-        addr.set_port(addr.port() + u16::try_from(i)?);
-        listeners.push(TcpListener::bind(addr).await?);
-    }
-    let mut handles = Vec::new();
-    for listener in listeners {
-        handles.push(tokio::spawn(async {
-            info!(
-                "listening for coordinator connection on {}...",
-                listeners[0].local_addr()?
-            );
+    info!("about to bind to args.listen_addr");
+    let listener = TcpListener::bind(args.listen_addr).await?;
 
-            let (conn, _addr) = listener.accept().await?;
-            info!("coordinator connection accepted");
+    info!(
+        "listening for coordinator connection on {}...",
+        listener.local_addr()?
+    );
 
-            let mut conn = dataflowd::framed_server(conn);
-            loop {
-                select! {
-                    cmd = conn.try_next() => match cmd? {
-                        None => break,
-                        Some(cmd) => client.send(cmd).await,
-                    },
-                    Some(response) = client.recv() => conn.send(response).await?,
-                }
-            }
-            Result::<(), anyhow::Error>::Ok(())
-        }));
-    }
+    let (conn, _addr) = listener.accept().await?;
+    info!("coordinator connection accepted");
 
-    for handle in handles {
-        handle.await.expect("Error-free termination");
+    let mut conn = dataflowd::framed_server(conn);
+    loop {
+        select! {
+            cmd = conn.try_next() => match cmd? {
+                None => break,
+                Some(cmd) => client.send(cmd).await,
+            },
+            Some(response) = client.recv() => conn.send(response).await?,
+        }
     }
 
     info!("coordinator connection gone; terminating");

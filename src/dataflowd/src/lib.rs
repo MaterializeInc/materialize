@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 
 use async_trait::async_trait;
 use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
+use futures::StreamExt;
 use log::trace;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -104,23 +104,14 @@ impl dataflow::Client for RemoteClient {
                     .expect("worker command receiver should not drop first")
             }
         }
-        // self.conn
-        //     .send(cmd)
-        //     .await
-        //     .expect("connection to dataflow server broken")
     }
 
     async fn recv(&mut self) -> Option<dataflow::Response> {
         // TODO: something better than panicking.
-        for conn in &mut self.conns {
-            if let Some(next) = conn
-                .try_next()
-                .await
-                .expect("connection to dataflow server broken")
-            {
-                return Some(next);
-            }
-        }
-        None
+        // Attempt to read from each of `self.conns`.
+        futures::stream::select_all(self.conns.iter_mut().map(|stream| stream.by_ref()))
+            .next()
+            .await
+            .map(|x| x.expect("connection to dataflow server broken"))
     }
 }
