@@ -7,17 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::net::SocketAddr;
+use futures::StreamExt;
 use std::path::PathBuf;
 use std::process;
-use std::sync::Arc;
 use std::time::Duration;
 
 use log::info;
 use structopt::StructOpt;
 use tokio::net::TcpListener;
+use tokio_stream::wrappers::TcpListenerStream;
 use tracing_subscriber::EnvFilter;
 
+use materialized::http;
+use materialized::mux::Mux;
+use materialized::server_metrics::Metrics;
 use ore::metrics::MetricsRegistry;
 use ore::now::SYSTEM_TIME;
 
@@ -31,7 +34,7 @@ struct Args {
         value_name = "HOST:PORT",
         default_value = "0.0.0.0:6875"
     )]
-    listen_addr: SocketAddr,
+    listen_addr: String,
     /// The address of the dataflowd server to connect to.
     #[structopt(
         short,
@@ -39,7 +42,7 @@ struct Args {
         env = "COORDD_DATAFLOWD_ADDR",
         default_value = "127.0.0.1:6876"
     )]
-    dataflowd_addr: Vec<SocketAddr>,
+    dataflowd_addr: Vec<String>,
     /// Number of dataflow worker threads. This must match the number of
     /// workers that the targeted dataflowd was started with.
     #[structopt(
@@ -83,8 +86,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let dataflow_client =
         dataflowd::RemoteClient::connect(args.workers, &args.dataflowd_addr).await?;
-    let metrics_registry = MetricsRegistry::new();
-    let (_coord_handle, coord_client) = coord::serve(coord::Config {
+    let mut metrics_registry = MetricsRegistry::new();
+    let (coord_handle, coord_client) = coord::serve(coord::Config {
         dataflow_client,
         symbiosis_url: None,
         logging: None,
@@ -101,23 +104,40 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     })
     .await?;
 
-    let listener = TcpListener::bind(&args.listen_addr).await?;
-    let pgwire_server = Arc::new(pgwire::Server::new(pgwire::Config {
-        tls: None,
-        coord_client,
-        metrics_registry: &metrics_registry,
-    }));
-
-    info!(
-        "listening for pgwire connections on {}...",
-        listener.local_addr()?
+    let metrics = Metrics::register_with(
+        &mut metrics_registry,
+        args.workers,
+        coord_handle.start_instant(),
     );
 
-    loop {
-        let (conn, _addr) = listener.accept().await?;
-        tokio::spawn({
-            let pgwire_server = pgwire_server.clone();
-            async move { pgwire_server.handle_connection(conn).await }
+    let listener = TcpListener::bind(&args.listen_addr).await?;
+
+    tokio::spawn({
+        let pgwire_server = pgwire::Server::new(pgwire::Config {
+            tls: None,
+            coord_client: coord_client.clone(),
+            metrics_registry: &metrics_registry,
         });
-    }
+        let http_server = http::Server::new(http::Config {
+            tls: None,
+            coord_client: coord_client,
+            metrics_registry: metrics_registry,
+            global_metrics: metrics,
+            pgwire_metrics: pgwire_server.metrics(),
+        });
+        let mut mux = Mux::new();
+        mux.add_handler(pgwire_server);
+        mux.add_handler(http_server);
+
+        info!(
+            "listening for pgwire connections on {}...",
+            listener.local_addr()?
+        );
+
+        async move {
+            let mut incoming = TcpListenerStream::new(listener);
+            mux.serve(incoming.by_ref()).await;
+        }
+    });
+    Ok(())
 }

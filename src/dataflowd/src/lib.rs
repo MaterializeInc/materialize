@@ -14,14 +14,12 @@
 
 #![deny(missing_docs)]
 
-use std::net::SocketAddr;
-
 use async_trait::async_trait;
 use futures::sink::SinkExt;
 use futures::StreamExt;
 use log::trace;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio_serde::formats::Bincode;
 use tokio_util::codec::LengthDelimitedCodec;
 
@@ -70,7 +68,7 @@ impl RemoteClient {
     /// Connects a remote client to the specified remote dataflow server.
     pub async fn connect(
         num_workers: usize,
-        addrs: &[SocketAddr],
+        addrs: &[impl ToSocketAddrs],
     ) -> Result<RemoteClient, anyhow::Error> {
         let mut conns = Vec::new();
         for addr in addrs {
