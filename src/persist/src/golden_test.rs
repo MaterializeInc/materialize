@@ -97,11 +97,14 @@ use crate::unreliable::UnreliableBlob;
 ///   wasn't changed), this is a red flag that something that should be
 ///   deterministic from the persist crate's external API is no longer
 ///   deterministic. This should be investigated.
-/// - The test prints out the new serialization of the golden data on every
-///   failure as a log line. Updating it is as simple as copying it in to the
-///   golden_test.json file as part of the commit (the formatting of the json
-///   shouldn't matter, but it should probably stay one line for space reasons,
-///   be careful when you save if your editor auto-formats).
+///
+/// HOW TO UPDATE "golden_test.json":
+/// 1. Truncate the file so that it exists but it's empty (e.g `truncate -s 0 golden_test.json`)
+/// 2. Run `cargo test golden_test`
+/// 3. The test will print out the new serialization of the golden data as a log line. To update
+///    the data, simply copy the printed JSON in to the golden_test.json file as part of the
+///    commit. The formatting of the json shouldn't matter, but it should probably stay one line
+///    for space reasons, be careful when you save if your editor auto-formats.
 #[test]
 fn golden() -> Result<(), Error> {
     init_logging();
