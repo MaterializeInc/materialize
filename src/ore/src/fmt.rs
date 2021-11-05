@@ -91,13 +91,6 @@ pub trait FormatBuffer: AsRef<[u8]> {
         self.len() == 0
     }
 
-    /// Truncates the buffer to the specified length.
-    ///
-    /// # Panics
-    ///
-    /// Implementors may panic if `len` does not lie on a character boundary.
-    fn truncate(&mut self, len: usize);
-
     /// Returns a mutable reference to the bytes in the buffer.
     ///
     /// # Safety
@@ -126,10 +119,6 @@ impl FormatBuffer for String {
         self.len()
     }
 
-    fn truncate(&mut self, len: usize) {
-        self.truncate(len)
-    }
-
     unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
         str::as_bytes_mut(self)
     }
@@ -150,10 +139,6 @@ impl FormatBuffer for Vec<u8> {
 
     fn len(&self) -> usize {
         self.len()
-    }
-
-    fn truncate(&mut self, len: usize) {
-        self.truncate(len)
     }
 
     unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
@@ -178,10 +163,6 @@ impl FormatBuffer for BytesMut {
 
     fn len(&self) -> usize {
         self.len()
-    }
-
-    fn truncate(&mut self, len: usize) {
-        self.truncate(len)
     }
 
     unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
