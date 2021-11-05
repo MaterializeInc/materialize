@@ -19,10 +19,12 @@ pub struct ProtobufDecoderState {
 }
 
 impl ProtobufDecoderState {
-    pub fn new(ProtobufEncoding {
-        descriptors,
-        message_name,
-    }: ProtobufEncoding) -> Self {
+    pub fn new(
+        ProtobufEncoding {
+            descriptors,
+            message_name,
+        }: ProtobufEncoding,
+    ) -> Self {
         let descriptors = DecodedDescriptors::from_bytes(&descriptors, message_name)
             .expect("descriptors provided to protobuf source are pre-validated");
         ProtobufDecoderState {

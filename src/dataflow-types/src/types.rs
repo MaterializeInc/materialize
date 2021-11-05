@@ -495,12 +495,14 @@ impl DataEncoding {
             DataEncoding::Protobuf(ProtobufEncoding {
                 descriptors,
                 message_name,
-            }) => protobuf::decode::DecodedDescriptors::from_bytes(descriptors, message_name.into())?
-                .validate()?
-                .into_iter()
-                .fold(key_desc, |desc, (name, ty)| {
-                    desc.with_named_column(name.unwrap(), ty)
-                }),
+            }) => {
+                protobuf::decode::DecodedDescriptors::from_bytes(descriptors, message_name.into())?
+                    .validate()?
+                    .into_iter()
+                    .fold(key_desc, |desc, (name, ty)| {
+                        desc.with_named_column(name.unwrap(), ty)
+                    })
+            }
             DataEncoding::Regex(RegexEncoding { regex }) => regex
                 .capture_names()
                 .enumerate()
