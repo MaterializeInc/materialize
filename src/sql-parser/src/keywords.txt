@@ -58,6 +58,7 @@ Collate
 Columns
 Commit
 Committed
+Compiled
 Compression
 Confluent
 Connection

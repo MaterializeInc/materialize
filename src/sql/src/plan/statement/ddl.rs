@@ -40,6 +40,7 @@ use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use sql_parser::ast::CsrSeedCompiledOrLegacy;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -1071,7 +1072,9 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
             ProtobufSchema::Csr {
                 csr_connector: CsrConnectorProto { seed, .. },
             } => {
-                if let Some(CsrSeedCompiled { key, value }) = seed {
+                if let Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled { key, value })) =
+                    seed
+                {
                     let value = DataEncoding::Protobuf(ProtobufEncoding {
                         descriptors: value.schema.clone(),
                         message_name: value.message_name.clone(),

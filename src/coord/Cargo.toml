@@ -34,6 +34,8 @@ pgrepr = { path = "../pgrepr" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
+protoc = { path = "../protoc" }
+protobuf = "2.23.0"
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
@@ -46,6 +48,7 @@ semver = { version = "1.0.4"}
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
 symbiosis = { path = "../symbiosis" }
+tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.13.0", features = ["rt"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
@@ -57,4 +60,3 @@ uuid = { version = "0.8.2", features = ["v4"] }
 
 [dev-dependencies]
 datadriven = "0.6.0"
-tempfile = "3.2.0"

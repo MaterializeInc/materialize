@@ -148,7 +148,7 @@ impl_display_t!(CsrConnectorAvro);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorProto<T: AstInfo> {
     pub url: String,
-    pub seed: Option<CsrSeedCompiled>,
+    pub seed: Option<CsrSeedCompiledOrLegacy>,
     pub with_options: Vec<SqlOption<T>>,
 }
 
@@ -192,13 +192,30 @@ impl AstDisplay for CsrSeed {
 impl_display!(CsrSeed);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CsrSeedCompiledOrLegacy {
+    Compiled(CsrSeedCompiled),
+    // Starting with version 0.9.13, Legacy should only be found when reading
+    // from the catalog and should be transformed during migration.
+    Legacy(CsrSeed),
+}
+impl AstDisplay for CsrSeedCompiledOrLegacy {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CsrSeedCompiledOrLegacy::Compiled(c) => f.write_node(c),
+            CsrSeedCompiledOrLegacy::Legacy(l) => f.write_node(l),
+        }
+    }
+}
+impl_display!(CsrSeedCompiledOrLegacy);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeedCompiled {
     pub key: Option<CsrSeedCompiledEncoding>,
     pub value: CsrSeedCompiledEncoding,
 }
 impl AstDisplay for CsrSeedCompiled {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SEED");
+        f.write_str("SEED COMPILED");
         if let Some(key) = &self.key {
             f.write_str(" KEY ");
             f.write_node(key);
