@@ -89,6 +89,15 @@ steps:
           composition: testdrive
           run: ci
 
+  - id: testdrive-cluster
+    label: ":racing_car: testdrive-cluster"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [test/cluster]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          run: cluster
 
   - id: testdrive-proxy
     label: ":squid: testdrive proxy"

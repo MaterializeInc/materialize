@@ -35,10 +35,10 @@ use pid_file::PidFile;
 use crate::mux::Mux;
 use crate::server_metrics::Metrics;
 
-mod http;
-mod mux;
-mod server_metrics;
-mod telemetry;
+pub mod http;
+pub mod mux;
+pub mod server_metrics;
+pub mod telemetry;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
