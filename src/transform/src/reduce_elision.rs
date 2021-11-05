@@ -94,46 +94,11 @@ impl ReduceElision {
                         }),
 
                         // StringAgg takes nested records of strings and outputs a string
-                        AggregateFunc::StringAgg { .. } => match a.expr {
-                            MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
-                                ref exprs,
-                            } => {
-                                if let MirScalarExpr::CallVariadic {
-                                    func: VariadicFunc::RecordCreate { .. },
-                                    ref exprs,
-                                } = exprs[0]
-                                {
-                                    Ok(exprs[0].clone())
-                                } else {
-                                    Err(crate::TransformError::Internal(format!(
-                                        "need nested RecordCreate as expr for StringAgg {:?}",
-                                        a.expr,
-                                    )))
-                                }
-                            }
-                            MirScalarExpr::Literal(Ok(ref row), ColumnType { .. }) => {
-                                let explain_failure_str =
-                                    "Expect LIST[LIST[RECORD[STRING, SEPARATOR]]] literal";
-
-                                let datum = row
-                                    .unpack_first()
-                                    .unwrap_list()
-                                    .iter()
-                                    .next()
-                                    .expect(explain_failure_str)
-                                    .unwrap_list()
-                                    .iter()
-                                    .next()
-                                    .expect(explain_failure_str);
-
-                                Ok(MirScalarExpr::literal(Ok(datum), ScalarType::String))
-                            }
-                            _ => Err(crate::TransformError::Internal(format!(
-                                "Unexpected expression for STRING_AGG: {:?}",
-                                a.expr,
-                            ))),
-                        },
+                        AggregateFunc::StringAgg { .. } => Ok(a
+                            .expr
+                            .clone()
+                            .call_unary(UnaryFunc::RecordGet(0))
+                            .call_unary(UnaryFunc::RecordGet(0))),
 
                         // All other variants should return the argument to the aggregation.
                         _ => Ok(a.expr.clone()),
