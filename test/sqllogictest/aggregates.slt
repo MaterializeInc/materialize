@@ -398,3 +398,40 @@ FROM
     v
 ----
 {"0":"c","1":"a","2":"b"}  {"0":"c","1":"a","2":"d"}  {"0":"c","1":"a","2":"d"}  {"0":"c","1":"a","2":"b"}
+
+
+# Test Reduction elision
+
+statement ok
+CREATE TABLE a (x text)
+
+statement ok
+INSERT INTO a VALUES ('a'),('b')
+
+statement ok
+CREATE TABLE qs (q int not null)
+
+query T
+SELECT STRING_AGG(x, ',') FROM (SELECT * FROM a ORDER BY x);
+----
+a,b
+
+query T
+SELECT STRING_AGG(x, ',') FROM (SELECT * FROM a ORDER BY x limit 1);
+----
+a
+
+query T
+SELECT STRING_AGG(x, ',') FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x)
+----
+a,b
+
+query T
+SELECT STRING_AGG(x, ',') FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x limit 1)
+----
+a
+
+query T
+SELECT STRING_AGG(x, ',') from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs))
+----
+true

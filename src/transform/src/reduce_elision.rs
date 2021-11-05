@@ -26,16 +26,13 @@ impl crate::Transform for ReduceElision {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
+        relation.try_visit_mut(&mut |e| self.action(e))
     }
 }
 
 impl ReduceElision {
     /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::Reduce {
             input,
             group_key,
@@ -57,7 +54,7 @@ impl ReduceElision {
                         // Count is one if non-null, and zero if null.
                         AggregateFunc::Count => {
                             let column_type = a.typ(&input_type);
-                            a.expr
+                            Ok(a.expr
                                 .clone()
                                 .call_unary(UnaryFunc::IsNull(func::IsNull))
                                 .if_then_else(
@@ -69,35 +66,42 @@ impl ReduceElision {
                                         Datum::Int64(1),
                                         column_type.scalar_type,
                                     ),
-                                )
+                                ))
                         }
 
                         // SumInt16 takes Int16s as input, but outputs Int64s.
                         AggregateFunc::SumInt16 => {
-                            a.expr.clone().call_unary(UnaryFunc::CastInt16ToInt64)
+                            Ok(a.expr.clone().call_unary(UnaryFunc::CastInt16ToInt64))
                         }
 
                         // SumInt32 takes Int32s as input, but outputs Int64s.
                         AggregateFunc::SumInt32 => {
-                            a.expr.clone().call_unary(UnaryFunc::CastInt32ToInt64)
+                            Ok(a.expr.clone().call_unary(UnaryFunc::CastInt32ToInt64))
                         }
 
                         // SumInt64 takes Int64s as input, but outputs numerics.
-                        AggregateFunc::SumInt64 => a
+                        AggregateFunc::SumInt64 => Ok(a
                             .expr
                             .clone()
-                            .call_unary(UnaryFunc::CastInt64ToNumeric(Some(0))),
+                            .call_unary(UnaryFunc::CastInt64ToNumeric(Some(0)))),
 
                         // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
-                        AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
+                        AggregateFunc::JsonbAgg { .. } => Ok(MirScalarExpr::CallVariadic {
                             func: VariadicFunc::JsonbBuildArray,
                             exprs: vec![a.expr.clone()],
-                        },
+                        }),
+
+                        // StringAgg takes nested records of strings and outputs a string
+                        AggregateFunc::StringAgg { .. } => Ok(a
+                            .expr
+                            .clone()
+                            .call_unary(UnaryFunc::RecordGet(0))
+                            .call_unary(UnaryFunc::RecordGet(0))),
 
                         // All other variants should return the argument to the aggregation.
-                        _ => a.expr.clone(),
+                        _ => Ok(a.expr.clone()),
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 let mut result = input.take_dangerous();
 
@@ -114,5 +118,7 @@ impl ReduceElision {
                 *relation = result;
             }
         }
+
+        Ok(())
     }
 }
