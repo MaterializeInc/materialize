@@ -226,21 +226,22 @@ mod tests {
         ));
         descriptors.add_message(m1);
 
-        let mut relation = decode::DecodedDescriptors::from_descriptors(
-            &descriptors,
-            ".test.message1".to_string(),
-        )
-        .validate()
-        .expect("Failed to parse descriptor");
+        let decoded_descriptors =
+            decode::DecodedDescriptors::from_descriptors(descriptors, ".test.message1".to_string());
+        let mut relation = decoded_descriptors
+            .validate()
+            .expect("Failed to parse descriptor");
 
         sanity_check_relation(
             &relation,
-            descriptors
+            decoded_descriptors
+                .descriptors()
                 .message_by_name(".test.message1")
                 .expect("message should be in the descriptor set"),
-            &descriptors,
+            &decoded_descriptors.descriptors(),
         )?;
 
+        let mut descriptors = decoded_descriptors.into_descriptors();
         let mut m2 = MessageDescriptor::new(".test.message2");
         m2.add_field(FieldDescriptor::new(
             "ids",
@@ -259,19 +260,19 @@ mod tests {
         ));
         descriptors.add_message(m2);
 
-        relation = decode::DecodedDescriptors::from_descriptors(
-            &descriptors,
-            ".test.message2".to_string(),
-        )
-        .validate()
-        .expect("Failed to parse descriptor");
+        let decoded_descriptors =
+            decode::DecodedDescriptors::from_descriptors(descriptors, ".test.message2".to_string());
+        relation = decoded_descriptors
+            .validate()
+            .expect("Failed to parse descriptor");
 
         sanity_check_relation(
             &relation,
-            descriptors
+            decoded_descriptors
+                .descriptors()
                 .message_by_name(".test.message2")
                 .expect("message should be in the descriptor set"),
-            &descriptors,
+            &decoded_descriptors.descriptors(),
         )?;
 
         Ok(())

@@ -8,8 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use dataflow_types::{DataflowError, DecodeError, ProtobufEncoding};
-use interchange::protobuf;
-use interchange::protobuf::decode::Decoder;
+use interchange::protobuf::decode::{DecodedDescriptors, Decoder};
 use repr::Row;
 
 #[derive(Debug)]
@@ -20,9 +19,11 @@ pub struct ProtobufDecoderState {
 }
 
 impl ProtobufDecoderState {
-    pub fn new(encoding: ProtobufEncoding) -> Self {
-        let descriptors = protobuf::decode::RawDescriptors::from(&encoding)
-            .decode()
+    pub fn new(ProtobufEncoding {
+        descriptors,
+        message_name,
+    }: ProtobufEncoding) -> Self {
+        let descriptors = DecodedDescriptors::from_bytes(&descriptors, message_name)
             .expect("descriptors provided to protobuf source are pre-validated");
         ProtobufDecoderState {
             decoder: Decoder::new(descriptors),

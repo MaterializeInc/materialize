@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Borrow;
 use std::collections::HashSet;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -26,66 +25,38 @@ use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, Scalar
 
 use crate::protobuf::proto_message_name;
 
-/// Manages required metadata to read protobuf
 #[derive(Debug)]
-pub struct RawDescriptors<'a> {
-    bytes: &'a [u8],
+pub struct DecodedDescriptors {
+    descriptors: Descriptors,
     message_name: String,
 }
 
-/// Note: Descriptors are not `Clone` so we're use generics here to be able to
-/// support the two following flows:
-///   1. RawDescriptor.decode() -> DecodedDescriptor where the Descriptor must
-///      be construced inline so we cannot hold a reference.
-///   2. Tests, where we would like to be able to construct from a pre-existing
-///      `Descriptor` a `DecodedDescriptor`.  We want to be able to keep the
-///      original `Descriptor` around so we can do some sanity checking with
-///      the result of `DecodedDescriptor.verify()`.  To do this, we want to
-///      pass a borrowed version of `Descriptor`.
-#[derive(Debug)]
-pub struct DecodedDescriptors<D: Borrow<Descriptors>> {
-    descriptors: D,
-    message_name: String,
-}
-
-impl<'a> RawDescriptors<'a> {
-    pub fn new(bytes: &'a [u8], message_name: String) -> Self {
+impl DecodedDescriptors {
+    pub fn from_descriptors(descriptors: Descriptors, message_name: String) -> Self {
         Self {
-            bytes,
+            descriptors,
             message_name,
         }
     }
 
-    pub fn decode(self) -> Result<DecodedDescriptors<Descriptors>> {
-        Ok(DecodedDescriptors {
-            descriptors: Descriptors::from_proto(
-                &protobuf::Message::parse_from_bytes(&self.bytes)
-                    .context("parsing encoded protobuf descriptors failed")?,
-            ),
-            message_name: self.message_name,
-        })
-    }
-}
-
-impl DecodedDescriptors<Descriptors> {
     pub fn from_fds(fds: &FileDescriptorSet, message_name: String) -> Self {
-        Self {
-            descriptors: Descriptors::from_proto(fds),
-            message_name,
-        }
+        Self::from_descriptors(Descriptors::from_proto(fds), message_name)
     }
-}
 
-impl<D: Borrow<Descriptors>> DecodedDescriptors<D> {
-    pub fn from_descriptors(desc: D, message_name: String) -> Self {
-        Self {
-            descriptors: desc,
-            message_name: message_name,
-        }
+    pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self> {
+        Ok(Self::from_fds(
+            &protobuf::Message::parse_from_bytes(bytes)
+                .context("parsing encoded protobuf descriptors failed")?,
+            message_name,
+        ))
     }
 
     pub fn descriptors(&self) -> &Descriptors {
-        self.descriptors.borrow()
+        &self.descriptors
+    }
+
+    pub fn into_descriptors(self) -> Descriptors {
+        self.descriptors
     }
 
     pub fn validate(&self) -> Result<RelationDesc> {
@@ -118,7 +89,7 @@ impl<D: Borrow<Descriptors>> DecodedDescriptors<D> {
                     scalar_type: super::derive_scalar_type_from_proto_field(
                         &mut seen_messages,
                         &f,
-                        self.descriptors.borrow(),
+                        &self.descriptors,
                     )?,
                 })
             })
@@ -135,13 +106,13 @@ impl<D: Borrow<Descriptors>> DecodedDescriptors<D> {
 /// Manages required metadata to read protobuf
 #[derive(Debug)]
 pub struct Decoder {
-    descriptors: DecodedDescriptors<Descriptors>,
+    descriptors: DecodedDescriptors,
     packer: Row,
 }
 
 impl Decoder {
     /// Build a decoder from a pre-validated message.
-    pub fn new(descriptors: DecodedDescriptors<Descriptors>) -> Self {
+    pub fn new(descriptors: DecodedDescriptors) -> Self {
         // TODO: verify that name exists
         Decoder {
             descriptors: descriptors,

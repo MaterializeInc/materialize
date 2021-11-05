@@ -492,8 +492,10 @@ impl DataEncoding {
                     }
                 }
             }
-            DataEncoding::Protobuf(encoding) => protobuf::decode::RawDescriptors::from(encoding)
-                .decode()?
+            DataEncoding::Protobuf(ProtobufEncoding {
+                descriptors,
+                message_name,
+            }) => protobuf::decode::DecodedDescriptors::from_bytes(descriptors, message_name.into())?
                 .validate()?
                 .into_iter()
                 .fold(key_desc, |desc, (name, ty)| {
@@ -580,12 +582,6 @@ pub struct AvroOcfEncoding {
 pub struct ProtobufEncoding {
     pub descriptors: Vec<u8>,
     pub message_name: String,
-}
-
-impl<'a> From<&'a ProtobufEncoding> for protobuf::decode::RawDescriptors<'a> {
-    fn from(pe: &'a ProtobufEncoding) -> protobuf::decode::RawDescriptors<'a> {
-        protobuf::decode::RawDescriptors::new(&pe.descriptors, pe.message_name.to_owned())
-    }
 }
 
 /// Arguments necessary to define how to decode from CSV format
