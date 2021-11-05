@@ -164,8 +164,6 @@ pub(crate) struct DebeziumDeduplicationState {
     last_position_and_offset: Option<(Row, Option<i64>)>,
     /// Whether or not to track every message we've ever seen
     full: Option<TrackFull>,
-    /// Whether we have printed a warning due to seeing unknown source coordinates
-    warned_on_unknown: bool,
     messages_processed: u64,
 }
 
@@ -294,7 +292,6 @@ impl DebeziumDeduplicationState {
         Some(DebeziumDeduplicationState {
             last_position_and_offset: Default::default(),
             full,
-            warned_on_unknown: false,
             messages_processed: 0,
         })
     }
