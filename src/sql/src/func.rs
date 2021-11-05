@@ -28,7 +28,7 @@ use repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, Sca
 use crate::names::PartialName;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirScalarExpr, NullaryFunc,
-    TableFunc, UnaryFunc, VariadicFunc,
+    ScalarWindowFunc, TableFunc, UnaryFunc, VariadicFunc,
 };
 use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
@@ -398,6 +398,12 @@ impl From<VariadicFunc> for Operation<HirScalarExpr> {
 impl From<AggregateFunc> for Operation<(HirScalarExpr, AggregateFunc)> {
     fn from(a: AggregateFunc) -> Operation<(HirScalarExpr, AggregateFunc)> {
         Operation::unary(move |_ecx, e| Ok((e, a.clone())))
+    }
+}
+
+impl From<ScalarWindowFunc> for Operation<ScalarWindowFunc> {
+    fn from(a: ScalarWindowFunc) -> Operation<ScalarWindowFunc> {
+        Operation::nullary(move |_ecx| Ok(a.clone()))
     }
 }
 
@@ -1220,6 +1226,7 @@ pub enum Func {
     Scalar(Vec<FuncImpl<HirScalarExpr>>),
     Aggregate(Vec<FuncImpl<(HirScalarExpr, AggregateFunc)>>),
     Table(Vec<FuncImpl<TableFuncPlan>>),
+    ScalarWindow(Vec<FuncImpl<ScalarWindowFunc>>),
 }
 
 impl Func {
@@ -1228,6 +1235,7 @@ impl Func {
             Func::Scalar(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
             Func::Aggregate(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
             Func::Table(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+            Func::ScalarWindow(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
         }
     }
 }
@@ -1884,6 +1892,11 @@ lazy_static! {
                     // Plus we will one day want to support this overload.
                     bail_unsupported!("sum(interval)");
                 }), 2113;
+            },
+
+            // Scalar window functions.
+            "row_number" => ScalarWindow {
+                params!() => ScalarWindowFunc::RowNumber, 3100;
             },
 
             // Table functions.

@@ -1,0 +1,153 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This test may seem simple, but it is surprisingly good at verifying that
+# logical timestamp handling for internal inputs is sane.
+
+mode cockroach
+
+statement error window function row_number requires an OVER clause
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT row_number() FROM t
+
+statement error aggregate window functions not yet supported
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT array_agg(x) OVER () FROM t
+
+query IT
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT row_number() OVER (ORDER BY x), x FROM t
+ORDER BY row_number
+----
+1  a
+2  b
+3  c
+
+query IT
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT row_number() OVER (ORDER BY x DESC), x FROM t
+ORDER BY row_number
+----
+1  c
+2  b
+3  a
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY y ORDER BY x), x FROM t
+ORDER BY row_number, x
+----
+1  a
+1  b
+2  c
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY y ORDER BY x DESC), x FROM t
+ORDER BY row_number, x
+----
+1  b
+1  c
+2  a
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
+ORDER BY row_number, x
+----
+1  a
+1  b
+1  c
+
+query IT
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
+FROM t AS a1, t AS a2
+ORDER BY q DESC
+----
+9  c
+8  c
+7  c
+6  b
+5  b
+4  b
+3  a
+2  a
+1  a
+
+# Make sure a non-column expression following the window function is correctly
+# handled.
+query ITT
+WITH t (x) AS (VALUES ('a'))
+SELECT row_number() OVER (PARTITION BY NULL) AS q, x, 'b'
+FROM t
+----
+1 a b
+
+# Blocked on #8963
+#query II
+#SELECT row_number() OVER (), row_number() OVER ()
+#----
+#1 1
+
+# Blocked on #8963
+#query II
+#WITH t (x) AS (VALUES ('a'), ('b'))
+#SELECT row_number() OVER (), row_number() OVER () from t
+#----
+#1 1
+#2 2
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
+ORDER BY row_number, x
+----
+%0 =
+| CallTable wrap2("a", 1, "b", 2, "c", 1)
+| Map row_number() over (#0) order by (#0)
+| Project (#2, #0)
+
+Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR
+WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
+ORDER BY row_number, x
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 = Let l1 =
+| Get %0 (l0)
+| FlatMap wrap2("a", 1, "b", 2, "c", 1)
+
+%2 = Let l2 =
+| Get %1 (l1)
+
+%3 =
+| Get %2 (l2)
+| Reduce group=(#0)
+| | agg row_number(record_create(list_create(record_create(#0, #1)), #0))
+| FlatMap unnest_list(#1)
+| Map record_get[0](record_get[1](#2))
+| Map record_get[1](record_get[1](#2))
+| Map record_get[0](#2)
+| Project (#3..#5)
+| Map #2
+| Project (#0, #1, #3)
+| Project (#2, #0)
+
+Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0, #1)
+
+EOF

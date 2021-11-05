@@ -129,6 +129,8 @@ List new features before bug fixes.
 
 - Fix a bug that caused a panic when using a query containing `STRING_AGG`
 
+- Support the `row_number` window function.
+
 {{% version-header v0.9.11 %}}
 
 - Disallow `UPDATE` and `DELETE` operations on tables when boot in

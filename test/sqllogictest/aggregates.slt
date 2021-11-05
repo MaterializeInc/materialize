@@ -243,7 +243,7 @@ query error Expected end of statement, found left parenthesis
 SELECT column1 FILTER (WHERE column1 = 1) FROM (VALUES (1))
 
 query error aggregate functions are not allowed in FILTER
-SELECT v, count(*) FILTER (WHERE count(*) > 5) FROM filter_test GROUP BY v
+SELECT v, count(*) FILTER (WHERE count(1) > 5) FROM filter_test GROUP BY v
 
 # These filter tests are Materialize-specific.
 

@@ -152,6 +152,164 @@ pub enum HirScalarExpr {
     ///   This is counter to the spec, but is consistent with eg postgres' treatment of multiple set-returning-functions
     ///   (see <https://tapoueh.org/blog/2017/10/set-returning-functions-and-postgresql-10/>).
     Select(Box<HirRelationExpr>),
+    Windowing(WindowExpr),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Represents the invocation of a window function over a partition with an optional
+/// order.
+pub struct WindowExpr {
+    pub func: WindowExprType,
+    pub partition: Vec<HirScalarExpr>,
+    pub order_by: Vec<HirScalarExpr>,
+}
+
+impl WindowExpr {
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
+        self.func.bind_parameters(params)?;
+        for p in self.partition.iter_mut() {
+            p.bind_parameters(params)?;
+        }
+        for p in self.order_by.iter_mut() {
+            p.bind_parameters(params)?;
+        }
+        Ok(())
+    }
+
+    pub fn visit_expressions<'a, F>(&'a self, f: &mut F)
+    where
+        F: FnMut(&'a HirScalarExpr),
+    {
+        self.func.visit_expressions(f);
+        for expr in self.partition.iter() {
+            f(expr)
+        }
+        for expr in self.order_by.iter() {
+            f(expr)
+        }
+    }
+
+    pub fn visit_expressions_mut<'a, F>(&'a mut self, f: &mut F)
+    where
+        F: FnMut(&'a mut HirScalarExpr),
+    {
+        self.func.visit_expressions_mut(f);
+        for expr in self.partition.iter_mut() {
+            f(expr)
+        }
+        for expr in self.order_by.iter_mut() {
+            f(expr)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// A window function with its parameters.
+///
+/// There are two types of window functions: scalar window functions, that
+/// return a different scalar value for each row within a partition, and
+/// aggregate window functions, that return the same value for all the tuples
+/// within the same partition. Aggregate window functions can be computed
+/// by joinining the input relation with a reduction over the same relation
+/// that computes the aggregation using the partition key as its grouping
+/// key.
+pub enum WindowExprType {
+    Scalar(ScalarWindowExpr),
+}
+
+impl WindowExprType {
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
+        match self {
+            Self::Scalar(expr) => expr.bind_parameters(params),
+        }
+    }
+
+    pub fn visit_expressions<'a, F>(&'a self, f: &mut F)
+    where
+        F: FnMut(&'a HirScalarExpr),
+    {
+        match self {
+            Self::Scalar(expr) => expr.visit_expressions(f),
+        }
+    }
+
+    pub fn visit_expressions_mut<'a, F>(&'a mut self, f: &mut F)
+    where
+        F: FnMut(&'a mut HirScalarExpr),
+    {
+        match self {
+            Self::Scalar(expr) => expr.visit_expressions_mut(f),
+        }
+    }
+
+    fn typ(
+        &self,
+        outers: &[RelationType],
+        inner: &RelationType,
+        params: &BTreeMap<usize, ScalarType>,
+    ) -> ColumnType {
+        match self {
+            Self::Scalar(expr) => expr.typ(outers, inner, params),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScalarWindowExpr {
+    pub func: ScalarWindowFunc,
+    pub order_by: Vec<ColumnOrder>,
+}
+
+impl ScalarWindowExpr {
+    pub fn bind_parameters(&mut self, _params: &Params) -> Result<(), anyhow::Error> {
+        match self.func {
+            ScalarWindowFunc::RowNumber => {}
+        }
+        Ok(())
+    }
+
+    pub fn visit_expressions<'a, F>(&'a self, _f: &mut F)
+    where
+        F: FnMut(&'a HirScalarExpr),
+    {
+        match self.func {
+            ScalarWindowFunc::RowNumber => {}
+        }
+    }
+
+    pub fn visit_expressions_mut<'a, F>(&'a mut self, _f: &mut F)
+    where
+        F: FnMut(&'a mut HirScalarExpr),
+    {
+        match self.func {
+            ScalarWindowFunc::RowNumber => {}
+        }
+    }
+
+    fn typ(
+        &self,
+        _outers: &[RelationType],
+        _inner: &RelationType,
+        _params: &BTreeMap<usize, ScalarType>,
+    ) -> ColumnType {
+        match self.func {
+            ScalarWindowFunc::RowNumber => ScalarType::Int64.nullable(false),
+        }
+    }
+
+    pub fn into_expr(self) -> expr::AggregateFunc {
+        match self.func {
+            ScalarWindowFunc::RowNumber => expr::AggregateFunc::RowNumber {
+                order_by: self.order_by,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Scalar Window functions
+pub enum ScalarWindowFunc {
+    RowNumber,
 }
 
 /// A `CoercibleScalarExpr` is a [`HirScalarExpr`] whose type is not fully
@@ -1135,6 +1293,7 @@ impl HirScalarExpr {
             HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
                 expr.bind_parameters(params)
             }
+            HirScalarExpr::Windowing(expr) => expr.bind_parameters(params),
         }
     }
 
@@ -1249,6 +1408,9 @@ impl HirScalarExpr {
                 f(els);
             }
             Exists(..) | Select(..) => (),
+            Windowing(expr) => {
+                expr.visit_expressions(&mut f);
+            }
         }
     }
 
@@ -1291,6 +1453,9 @@ impl HirScalarExpr {
                 f(els);
             }
             Exists(..) | Select(..) => (),
+            Windowing(expr) => {
+                expr.visit_expressions_mut(&mut f);
+            }
         }
     }
 
@@ -1346,6 +1511,11 @@ impl HirScalarExpr {
             }
             HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
                 expr.visit_columns(depth + 1, f);
+            }
+            HirScalarExpr::Windowing(expr) => {
+                expr.visit_expressions_mut(&mut |e| {
+                    e.visit_columns(depth, f);
+                });
             }
         }
     }
@@ -1442,6 +1612,7 @@ impl AbstractExpr for HirScalarExpr {
                     .into_element()
                     .nullable(true)
             }
+            HirScalarExpr::Windowing(expr) => expr.func.typ(outers, inner, params),
         }
     }
 }
