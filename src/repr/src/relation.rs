@@ -303,17 +303,6 @@ impl RelationDesc {
         let typ = RelationType::new(types);
         Self::new(typ, names)
     }
-    /// Concatenates a `RelationDesc` onto the end of this `RelationDesc`.
-    pub fn concat(mut self, other: Self) -> Self {
-        let self_len = self.typ.column_types.len();
-        self.names.extend(other.names);
-        self.typ.column_types.extend(other.typ.column_types);
-        for k in other.typ.keys {
-            let k = k.into_iter().map(|idx| idx + self_len).collect();
-            self = self.with_key(k);
-        }
-        self
-    }
 
     /// Appends an optionally named column with the specified column type.
     pub fn with_column<N>(mut self, name: Option<N>, column_type: ColumnType) -> Self

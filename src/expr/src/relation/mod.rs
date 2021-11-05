@@ -1345,19 +1345,6 @@ impl MirRelationExpr {
         std::mem::replace(self, empty)
     }
 
-    /// Replaces `self` with some logic applied to `self`.
-    pub fn replace_using<F>(&mut self, logic: F)
-    where
-        F: FnOnce(MirRelationExpr) -> MirRelationExpr,
-    {
-        let empty = MirRelationExpr::Constant {
-            rows: Ok(vec![]),
-            typ: RelationType::new(Vec::new()),
-        };
-        let expr = std::mem::replace(self, empty);
-        *self = logic(expr);
-    }
-
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
     pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> super::MirRelationExpr
     where

@@ -128,17 +128,6 @@ impl Ord for Row {
     }
 }
 
-/// A wrapper around a byte slice that guarantees the data are row-formatted.
-///
-/// This type exists to allow row-formatted data to be stored in types that
-/// need not contain a `Row`, for example large contiguous `[u8]` allocations.
-/// It is not expected that most users will use this type, especially as its
-/// only constructor is unsafe.
-#[derive(Debug)]
-pub struct RowRef<'a> {
-    data: &'a [u8],
-}
-
 #[derive(Debug)]
 pub struct DatumListIter<'a> {
     data: &'a [u8],
@@ -1048,43 +1037,6 @@ impl Row {
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data
-    }
-}
-
-impl<'a> RowRef<'a> {
-    /// Construct a `RowRef` from a byte slice.
-    ///
-    /// # Safety
-    ///
-    /// This method is unsafe because if the byte slice is not a valid
-    /// row encoding, then unpacking its contents can cause undefined
-    /// behavior.
-    pub unsafe fn from_bytes_unchecked(data: &'a [u8]) -> Self {
-        Self { data }
-    }
-
-    /// Unpack `self` into a `Vec<Datum>` for efficient random access.
-    pub fn unpack(&self) -> Vec<Datum> {
-        // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
-        let len = self.iter().count();
-        let mut vec = Vec::with_capacity(len);
-        vec.extend(self.iter());
-        vec
-    }
-
-    /// Return the first `Datum` in `self`
-    ///
-    /// Panics if the `Row` is empty.
-    pub fn unpack_first(&self) -> Datum {
-        self.iter().next().unwrap()
-    }
-
-    /// Iterate the `Datum` elements of the `Row`.
-    pub fn iter(&self) -> DatumListIter {
-        DatumListIter {
-            data: &self.data,
-            offset: 0,
-        }
     }
 }
 

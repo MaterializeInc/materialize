@@ -18,7 +18,6 @@ use std::fmt;
 use std::mem;
 
 use anyhow::bail;
-use expr::DummyHumanizer;
 use itertools::Itertools;
 
 use ore::collections::CollectionExt;
@@ -31,8 +30,6 @@ use crate::plan::Params;
 // these happen to be unchanged at the moment, but there might be additions later
 pub use expr::{BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc};
 use repr::adt::array::ArrayDimension;
-
-use super::Explanation;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Just like MirRelationExpr, except where otherwise noted below.
@@ -645,11 +642,6 @@ impl HirRelationExpr {
         }
     }
 
-    /// Pretty-print this HirRelationExpr to a string.
-    pub fn pretty(&self) -> String {
-        Explanation::new(self, &DummyHumanizer).to_string()
-    }
-
     pub fn is_join_identity(&self) -> bool {
         match self {
             HirRelationExpr::Constant { rows, .. } => rows.len() == 1 && self.arity() == 0,
@@ -714,23 +706,6 @@ impl HirRelationExpr {
             group_key,
             aggregates,
             expected_group_size,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn top_k(
-        self,
-        group_key: Vec<usize>,
-        order_key: Vec<ColumnOrder>,
-        limit: Option<usize>,
-        offset: usize,
-    ) -> Self {
-        HirRelationExpr::TopK {
-            input: Box::new(self),
-            group_key,
-            order_key,
-            limit,
-            offset,
         }
     }
 

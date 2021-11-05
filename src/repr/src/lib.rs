@@ -32,7 +32,7 @@ pub mod util;
 
 pub use relation::{ColumnName, ColumnType, NotNullViolation, RelationDesc, RelationType};
 pub use row::{
-    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena, RowRef,
+    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena,
 };
 pub use scalar::{Datum, FromTy, ScalarBaseType, ScalarType, WithArena};
 

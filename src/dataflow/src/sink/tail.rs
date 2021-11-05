@@ -29,7 +29,7 @@ use dataflow_types::{SinkAsOf, SinkDesc, TailResponse, TailSinkConnector};
 use expr::GlobalId;
 use ore::cast::CastFrom;
 use repr::adt::numeric::{self, Numeric};
-use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
+use repr::{Datum, Diff, Row, Timestamp};
 
 use crate::render::sinks::SinkRender;
 use crate::render::RenderState;
@@ -44,20 +44,12 @@ where
         false
     }
 
-    fn get_key_desc(&self) -> Option<&RelationDesc> {
-        None
-    }
-
     fn get_key_indices(&self) -> Option<&[usize]> {
         None
     }
 
     fn get_relation_key_indices(&self) -> Option<&[usize]> {
         None
-    }
-
-    fn get_value_desc(&self) -> &RelationDesc {
-        &self.value_desc
     }
 
     fn render_continuous_sink(

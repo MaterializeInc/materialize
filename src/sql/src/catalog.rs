@@ -20,7 +20,7 @@ use dataflow_types::SourceConnector;
 use lazy_static::lazy_static;
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use expr::{DummyHumanizer, ExprHumanizer, GlobalId};
 use ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use repr::{RelationDesc, ScalarType};
 use sql_parser::ast::{Expr, Raw};
@@ -265,10 +265,6 @@ pub trait CatalogItem {
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
-
-    /// Returns the index details associated with the catalog item, if the
-    /// catalog item is an index.
-    fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)>;
 
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table.

@@ -22,12 +22,12 @@ pub use self::encode::{
     encode_datums_as_avro, encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
     AvroEncoder, AvroSchemaGenerator,
 };
-pub use self::envelope_debezium::{DebeziumDecodeState, DebeziumDeduplicationStrategy};
+pub use self::envelope_debezium::DebeziumDeduplicationStrategy;
 pub use self::schema::{
     parse_schema, validate_key_schema, validate_value_schema, ConfluentAvroResolver,
 };
 
-use self::decode::{AvroFlatDecoder, AvroStringDecoder, OptionalRecordDecoder, RowWrapper};
+use self::decode::{AvroStringDecoder, OptionalRecordDecoder, RowWrapper};
 use self::envelope_debezium::{AvroDebeziumDecoder, RowCoordinates};
 use crate::json::build_row_schema_json;
 

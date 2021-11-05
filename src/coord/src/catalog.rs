@@ -2841,14 +2841,6 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         self.item().typ()
     }
 
-    fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)> {
-        if let CatalogItem::Index(Index { keys, on, .. }) = self.item() {
-            Some((keys, *on))
-        } else {
-            None
-        }
-    }
-
     fn table_details(&self) -> Option<&[Expr<Raw>]> {
         if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
             Some(defaults)

@@ -98,15 +98,6 @@ pub struct Jsonb {
 }
 
 impl Jsonb {
-    /// Constructs a new `Jsonb` from a [`serde_json::Value`].
-    ///
-    /// Errors if any of the contained integers cannot be represented exactly as
-    /// an [`f64`].
-    pub fn from_serde_json(val: serde_json::Value) -> Result<Self, anyhow::Error> {
-        let row = JsonbPacker::new(Row::default()).pack_serde_json(val)?;
-        Ok(Jsonb { row })
-    }
-
     /// Parses a `Jsonb` from a byte slice `buf`.
     ///
     /// Errors if the slice is not valid JSON or if any of the contained

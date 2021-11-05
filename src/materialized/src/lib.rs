@@ -259,7 +259,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Listen on the third-party metrics port if we are configured for it.
     if let Some(third_party_addr) = config.third_party_metrics_listen_addr {
         tokio::spawn({
-            let server = http::ThirdPartyServer::new(metrics_registry.clone(), metrics.clone());
+            let server = http::ThirdPartyServer::new(metrics_registry.clone());
             async move {
                 server.serve(third_party_addr).await;
             }

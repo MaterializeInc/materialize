@@ -14,15 +14,10 @@
 // limitations under the License.
 
 use prometheus::{
-    core::{
-        Atomic, Collector, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec,
-        MetricVec, MetricVecBuilder,
-    },
+    core::{Atomic, Collector, GenericCounter, GenericGauge, MetricVec, MetricVecBuilder},
     Error, Histogram,
 };
 use std::ops::Deref;
-
-use super::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, PromLabelsExt};
 
 /// A metric that can be made accessible to cloud infrastructure/orchestrators, that won't betray the
 /// contents of the materialize instance that it details.
@@ -69,36 +64,11 @@ impl<T: MetricVecBuilder> ThirdPartyMetric<MetricVec<T>> {
         self.inner.get_metric_with_label_values(vals)
     }
 
-    /// Removes a metric with the given label values.
-    pub fn remove_label_values(&self, vals: &[&str]) -> Result<(), Error> {
-        self.inner.remove_label_values(vals)
-    }
-
     /// Creates a metric that can be scraped by a third party, with the given label values.
     /// # Panics
     /// Panics if the metric can not be created.
     pub fn third_party_metric_with_label_values(&self, vals: &[&str]) -> T::M {
         self.get_third_party_metric_with_label_values(vals)
             .expect("creating a metric from values")
-    }
-}
-
-impl<P: Atomic> ThirdPartyMetric<GenericCounterVec<P>> {
-    /// Creates a delete-on-drop counter that can be scraped by third parties.
-    pub fn get_third_party_delete_on_drop_counter<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropCounter<'a, P, L> {
-        self.inner.get_delete_on_drop_counter(labels)
-    }
-}
-
-impl<P: Atomic> ThirdPartyMetric<GenericGaugeVec<P>> {
-    /// Creates a delete-on-drop gauge that can be scraped by third parties.
-    pub fn get_third_party_delete_on_drop_gauge<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropGauge<'a, P, L> {
-        self.inner.get_delete_on_drop_gauge(labels)
     }
 }

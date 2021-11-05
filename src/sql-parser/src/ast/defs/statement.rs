@@ -76,16 +76,6 @@ pub enum Statement<T: AstInfo> {
     Deallocate(DeallocateStatement),
 }
 
-impl<T: AstInfo> Statement<T> {
-    /// Reports whether the statement is cursor-related.
-    pub fn is_cursor(&self) -> bool {
-        matches!(
-            self,
-            Statement::Declare(_) | Statement::Fetch(_) | Statement::Close(_)
-        )
-    }
-}
-
 impl<T: AstInfo> AstDisplay for Statement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
