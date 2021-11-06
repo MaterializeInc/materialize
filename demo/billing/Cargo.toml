@@ -20,7 +20,6 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 protobuf = "2.23.0"
 rand = "0.8.4"
 rand_distr = "0.4.2"
-repr = { path = "../../src/repr" }
 structopt = "0.3.25"
 test-util = { path = "../../test/test-util" }
 tokio = "1.13.0"

@@ -45,6 +45,3 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 uncased = "0.9.6"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
-
-[dev-dependencies]
-datadriven = "0.6.0"
