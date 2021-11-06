@@ -131,6 +131,8 @@ List new features before bug fixes.
 
 - Support the `row_number` window function.
 
+- Support PgJDBC's `getColumns()` API.
+
 {{% version-header v0.9.11 %}}
 
 - Disallow `UPDATE` and `DELETE` operations on tables when boot in
