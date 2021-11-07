@@ -2012,9 +2012,9 @@ dependencies = [
 
 [[package]]
 name = "inotify"
-version = "0.9.5"
+version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e5fc8f41dbaa9c8492a96c8afffda4f76896ee041d6a57606e70581b80c901f"
+checksum = "f8069d3ec154eb856955c1c0fbffefbf5f3c40a104ec912d4797314c1801abff"
 dependencies = [
  "bitflags",
  "futures-core",
