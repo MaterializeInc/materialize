@@ -98,7 +98,7 @@ Because each of these three components have multiple implementations, the
 docs for `CREATE SOURCE` are too large to fit on a single page. To manage this,
 we've broken the `CREATE SOURCE` documentation into many pages (one page for
 each meaningfully distinct combination of connector and format), and leveraged
-Hugo partials and shortcodes to simplify page creation and resuse content across
+Hugo partials and shortcodes to simplify page creation and reuse content across
 pages.
 
 * You can find all of the `CREATE SOURCE` docs at
