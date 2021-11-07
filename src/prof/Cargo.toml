@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.44"
-backtrace = "0.3.62"
+backtrace = "0.3.63"
 tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
 lazy_static = "1.4.0"
 pprof = "0.6.1"
