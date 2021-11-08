@@ -97,9 +97,6 @@ unable to automatically determine a query timestamp
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk_indexes_disabled'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-# No data written to sink without indexes
-$ kafka-verify format=avro sink=materialize.public.snk_indexes_disabled sort-messages=true
-
 # 🔬🔬 Tables
 
 ! INSERT INTO t VALUES (1)

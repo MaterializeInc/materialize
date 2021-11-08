@@ -58,6 +58,13 @@ pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyA
 
     let sort_messages = cmd.args.opt_bool("sort-messages")?.unwrap_or(false);
     let expected_messages = cmd.input;
+    if expected_messages.len() == 0 {
+        // verify with 0 messages doesn't check that no messages have been written -
+        // it 'verifies' 0 messages and trivially returns true
+        return Err(String::from(
+            "kafka-verify requires a non-empty list of expected messages",
+        ));
+    }
     cmd.args.done()?;
     Ok(VerifyAction {
         sink,

@@ -234,8 +234,6 @@ $ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sor
 $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 {"before": {"row": {"a": 1, "b": 1}}, "after": null}
 
-$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
-
 $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 {"before": {"row": {"a": 1, "b": 2}}, "after": null}
 

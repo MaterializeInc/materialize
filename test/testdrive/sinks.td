@@ -180,8 +180,6 @@ $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITHOUT SNAPSHOT
 
-$ kafka-verify format=avro sink=materialize.public.sink9
-
 > CREATE SINK sink10 FROM foo
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink10'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
