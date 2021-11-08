@@ -16,14 +16,14 @@ stdenv.mkDerivation rec {
       rustup
       openssl
       pkg-config
-      lld
+      lld_13
       python38Packages.pip
     ];
 
   hardeningDisable = [ "fortify" ];
 
   MZ_DEV = 1;
-  RUSTFLAGS = "-C link-arg=-fuse-ld=lld -C debuginfo=0";
+  RUSTFLAGS = "-C link-arg=-fuse-ld=lld -C debuginfo=1";
   shellHook = ''
     export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${lib.makeLibraryPath buildInputs}"
    '';
