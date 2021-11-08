@@ -64,7 +64,7 @@ pub fn plan_insert(
 ) -> Result<Plan, anyhow::Error> {
     let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
     expr.bind_parameters(&params)?;
-    let expr = expr.lower();
+    let expr = expr.optimize_and_lower(&scx.into());
 
     Ok(Plan::Insert(InsertPlan { id, values: expr }))
 }
@@ -83,7 +83,7 @@ pub fn plan_delete(
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let rtw_plan = query::plan_delete_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Delete, params, rtw_plan)
+    plan_read_then_write(MutationKind::Delete, scx, params, rtw_plan)
 }
 
 pub fn describe_update(
@@ -100,11 +100,12 @@ pub fn plan_update(
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let rtw_plan = query::plan_update_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Update, params, rtw_plan)
+    plan_read_then_write(MutationKind::Update, scx, params, rtw_plan)
 }
 
 pub fn plan_read_then_write(
     kind: MutationKind,
+    scx: &StatementContext,
     params: &Params,
     query::ReadThenWritePlan {
         id,
@@ -114,7 +115,7 @@ pub fn plan_read_then_write(
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, anyhow::Error> {
     selection.bind_parameters(&params)?;
-    let selection = selection.lower();
+    let selection = selection.optimize_and_lower(&scx.into());
     let mut assignments_outer = HashMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(&params)?;
@@ -266,7 +267,7 @@ pub fn plan_query(
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
     Ok(query::PlannedQuery {
-        expr: expr.lower(),
+        expr: expr.optimize_and_lower(&scx.into()),
         desc,
         finishing,
         depends_on,

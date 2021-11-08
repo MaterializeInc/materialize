@@ -143,7 +143,7 @@ use sql::plan::{
     MutationKind, Params, PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan,
     SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
-use sql::plan::{StatementDesc, View};
+use sql::plan::{OptimizerConfig, StatementDesc, View};
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
@@ -3377,7 +3377,9 @@ where
 
         let decorrelate = |timings: &mut Timings, raw_plan: HirRelationExpr| -> MirRelationExpr {
             let start = Instant::now();
-            let decorrelated_plan = raw_plan.lower();
+            let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
+                qgm_optimizations: session.vars().qgm_optimizations(),
+            });
             timings.decorrelation = Some(start.elapsed());
             decorrelated_plan
         };
