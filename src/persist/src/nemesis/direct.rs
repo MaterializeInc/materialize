@@ -127,7 +127,7 @@ use crate::unreliable::UnreliableHandle;
 struct Ingest {
     write: StreamWriteHandle<String, ()>,
     read: StreamReadHandle<String, ()>,
-    progress: DataflowProgress,
+    progress_rx: DataflowProgress,
 }
 
 /// A handle to the "dataflowd" (output) side of a persisted collection.
@@ -138,26 +138,87 @@ struct Dataflow {
     progress_tx: DataflowProgressHandle,
 }
 
-pub trait StartRuntime: fmt::Debug + Send + 'static {
-    fn start_runtime(&mut self, unreliable: UnreliableHandle) -> Result<RuntimeClient, Error>;
-}
-
-// TODO: With the recent addition of dataflows, this is much less "direct" than
-// it used to be. We should probably rename this to something like `Threads` (to
-// leave room for a future one that runs timely with processes and can stop them
-// without graceful shutdown) and reimplement Direct using Indexed.
-#[derive(Debug)]
-pub struct Direct {
-    workers: usize,
-    shared: Arc<DirectShared>,
-}
-
 #[derive(Debug)]
 struct DirectCore {
     start_fn: Box<dyn StartRuntime>,
     unreliable: UnreliableHandle,
-    persister: RuntimeClient,
-    dataflows: HashMap<String, (Ingest, Dataflow)>,
+    runtime: RuntimeClient,
+    streams: HashMap<String, (Ingest, Dataflow)>,
+}
+
+impl DirectCore {
+    fn stream(&mut self, name: &str) -> Result<Ingest, Error> {
+        match self.streams.entry(name.to_owned()) {
+            Entry::Occupied(x) => {
+                let (ingest, _) = x.get();
+                Ok(ingest.clone())
+            }
+            Entry::Vacant(x) => {
+                let (write, read) = self.runtime.create_or_load(name)?;
+                let dataflow_read = read.clone();
+                let (output_tx, output_rx) = mpsc::channel();
+                let output_tx = Arc::new(Mutex::new(output_tx));
+
+                let (progress_tx, progress_rx) = DataflowProgress::new();
+                let progress_handle = progress_tx.clone();
+                let workers = timely::execute(
+                    timely::Config::process(NUM_DATAFLOW_WORKER_THREADS),
+                    move |worker| {
+                        let dataflow_read = dataflow_read.clone();
+                        let mut probe = ProbeHandle::new();
+                        worker.dataflow(|scope| {
+                            let output_tx = output_tx
+                                .lock()
+                                .expect("clone doesn't panic and poison lock")
+                                .clone();
+                            let data = scope.persisted_source(Ok(dataflow_read));
+                            data.probe_with(&mut probe).capture_into(output_tx);
+                        });
+                        while worker.step_or_park(None) {
+                            probe.with_frontier(|frontier| {
+                                progress_tx.maybe_progress(frontier);
+                            })
+                        }
+                        progress_tx.close();
+                    },
+                )?;
+                let input = Ingest {
+                    write,
+                    read,
+                    progress_rx,
+                };
+                let output = Dataflow {
+                    workers: TimelyWorkers(workers),
+                    output: output_rx,
+                    progress_tx: progress_handle,
+                };
+                x.insert((input.clone(), output));
+                Ok(input)
+            }
+        }
+    }
+
+    fn start(&mut self) -> Result<(), Error> {
+        let _ = self.stop()?;
+        // The self.stop call clears dataflows but do it again defensively.
+        self.streams.clear();
+
+        let runtime = self.start_fn.start_runtime(self.unreliable.clone())?;
+        self.runtime = runtime;
+
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<(), Error> {
+        let res = self.runtime.stop();
+
+        // Stopping the persister allows the compute dataflows to finish.
+        for (_, (_, dataflow)) in self.streams.drain() {
+            dataflow.progress_tx.close();
+            dataflow.workers.join();
+        }
+        res
+    }
 }
 
 #[derive(Debug)]
@@ -183,8 +244,8 @@ impl DirectShared {
         let core = DirectCore {
             start_fn,
             unreliable: unreliable.clone(),
-            persister: runtime,
-            dataflows: HashMap::new(),
+            runtime,
+            streams: HashMap::new(),
         };
         let initial_generation = 0;
         let shared = DirectShared {
@@ -198,6 +259,117 @@ impl DirectShared {
 
     fn generation(&self) -> usize {
         self.generation.load(Ordering::SeqCst)
+    }
+
+    fn read_output(&self, req: ReadOutputReq) -> Result<ReadOutputRes, Error> {
+        // TODO: This should probably be run async in a thread.
+        let mut contents = Vec::new();
+        if let Some((_, dataflow)) = self.core.lock()?.streams.get_mut(&req.stream) {
+            for e in dataflow.output.try_iter() {
+                match e {
+                    TimelyCaptureEvent::Progress(x) => {
+                        // TODO: This isn't even a little bit right, but it
+                        // happens to work.
+                        for (ts, ts_diff) in x {
+                            if ts_diff > 0 {
+                                contents.push(ReadOutputEvent::Sealed(ts));
+                            }
+                        }
+                    }
+                    TimelyCaptureEvent::Messages(_, x) => {
+                        contents.push(ReadOutputEvent::Records(x));
+                    }
+                }
+            }
+        };
+        Ok(ReadOutputRes { contents })
+    }
+
+    fn save_snapshot(
+        &self,
+        snap_id: SnapshotId,
+        snap: DecodedSnapshot<String, ()>,
+    ) -> Result<SeqNo, Error> {
+        let seqno = snap.seqno();
+        match self.snapshots.lock()?.entry(snap_id) {
+            Entry::Occupied(x) => {
+                return Err(format!(
+                    "internal nemesis error: duplicate snapshot id {:?}",
+                    x.key()
+                )
+                .into())
+            }
+            Entry::Vacant(x) => {
+                x.insert(snap);
+            }
+        }
+        Ok(seqno)
+    }
+
+    fn read_snapshot(&self, req: ReadSnapshotReq) -> Result<ReadSnapshotRes, Error> {
+        let snap = match self.snapshots.lock()?.remove(&req.snap) {
+            Some(snap) => snap,
+            None => return Err(format!("unknown snap: {:?}", req.snap).into()),
+        };
+        let (seqno, since) = (snap.seqno().0, snap.since());
+        let contents = snap.read_to_end()?;
+        Ok(ReadSnapshotRes {
+            seqno,
+            since,
+            contents,
+        })
+    }
+
+    pub fn start(&self) -> Result<(), Error> {
+        let res = self.core.lock()?.start();
+        let _ = self.generation.fetch_add(1, Ordering::SeqCst);
+        res
+    }
+
+    pub fn stop(&self) -> Result<(), Error> {
+        self.core.lock()?.stop()
+    }
+}
+
+// TODO: With the recent addition of dataflows, this is much less "direct" than
+// it used to be. We should probably rename this to something like `Threads` (to
+// leave room for a future one that runs timely with processes and can stop them
+// without graceful shutdown) and reimplement Direct using Indexed.
+#[derive(Debug)]
+pub struct Direct {
+    workers: usize,
+    shared: Arc<DirectShared>,
+}
+
+impl Runtime for Direct {
+    type Worker = DirectWorker;
+
+    fn add_worker(&mut self) -> DirectWorker {
+        let idx = self.workers;
+        self.workers += 1;
+        DirectWorker::new(idx, self.shared.clone())
+    }
+
+    fn finish(self) {
+        let _ = self.shared.stop();
+    }
+}
+
+pub trait StartRuntime: fmt::Debug + Send + 'static {
+    fn start_runtime(&mut self, unreliable: UnreliableHandle) -> Result<RuntimeClient, Error>;
+}
+
+impl Direct {
+    pub fn new<F: StartRuntime>(start_fn: F) -> Result<Self, Error> {
+        let shared = DirectShared::new(Box::new(start_fn))?;
+        Ok(Direct {
+            workers: 0,
+            shared: Arc::new(shared),
+        })
+    }
+
+    pub fn runtime(&self) -> Result<RuntimeClient, Error> {
+        Ok(self.shared.core.lock()?.runtime.clone())
     }
 }
 
@@ -221,19 +393,6 @@ pub struct DirectWorker {
     // of maximal concurrency in nemesis testing.
     handles_generation: usize,
     handles: HashMap<String, Ingest>,
-}
-
-impl DirectWorker {
-    fn new(worker_idx: usize, shared: Arc<DirectShared>) -> Self {
-        let unreliable = shared.unreliable.clone();
-        DirectWorker {
-            worker_idx,
-            shared,
-            unreliable,
-            handles_generation: 0,
-            handles: HashMap::new(),
-        }
-    }
 }
 
 impl RuntimeWorker for DirectWorker {
@@ -288,88 +447,18 @@ impl RuntimeWorker for DirectWorker {
     }
 }
 
-impl Runtime for Direct {
-    type Worker = DirectWorker;
-
-    fn add_worker(&mut self) -> DirectWorker {
-        let idx = self.workers;
-        self.workers += 1;
-        DirectWorker::new(idx, self.shared.clone())
-    }
-
-    fn finish(self) {
-        let _ = self.shared.stop();
-    }
-}
-
-impl Direct {
-    pub fn new<F: StartRuntime>(start_fn: F) -> Result<Self, Error> {
-        let shared = DirectShared::new(Box::new(start_fn))?;
-        Ok(Direct {
-            workers: 0,
-            shared: Arc::new(shared),
-        })
-    }
-
-    pub fn runtime(&self) -> Result<RuntimeClient, Error> {
-        Ok(self.shared.core.lock()?.persister.clone())
-    }
-}
-
-impl DirectCore {
-    fn stream(&mut self, name: &str) -> Result<Ingest, Error> {
-        match self.dataflows.entry(name.to_owned()) {
-            Entry::Occupied(x) => {
-                let (ingest, _) = x.get();
-                Ok(ingest.clone())
-            }
-            Entry::Vacant(x) => {
-                let (write, read) = self.persister.create_or_load(name)?;
-                let dataflow_read = read.clone();
-                let (output_tx, output_rx) = mpsc::channel();
-                let output_tx = Arc::new(Mutex::new(output_tx));
-
-                let (progress_tx, progress_rx) = DataflowProgress::new();
-                let progress_handle = progress_tx.clone();
-                let workers = timely::execute(
-                    timely::Config::process(NUM_DATAFLOW_WORKER_THREADS),
-                    move |worker| {
-                        let dataflow_read = dataflow_read.clone();
-                        let mut probe = ProbeHandle::new();
-                        worker.dataflow(|scope| {
-                            let output_tx = output_tx
-                                .lock()
-                                .expect("clone doesn't panic and poison lock")
-                                .clone();
-                            let data = scope.persisted_source(Ok(dataflow_read));
-                            data.probe_with(&mut probe).capture_into(output_tx);
-                        });
-                        while worker.step_or_park(None) {
-                            probe.with_frontier(|frontier| {
-                                progress_tx.maybe_progress(frontier);
-                            })
-                        }
-                        progress_tx.close();
-                    },
-                )?;
-                let input = Ingest {
-                    write,
-                    read,
-                    progress: progress_rx,
-                };
-                let output = Dataflow {
-                    workers: TimelyWorkers(workers),
-                    output: output_rx,
-                    progress_tx: progress_handle,
-                };
-                x.insert((input.clone(), output));
-                Ok(input)
-            }
+impl DirectWorker {
+    fn new(worker_idx: usize, shared: Arc<DirectShared>) -> Self {
+        let unreliable = shared.unreliable.clone();
+        DirectWorker {
+            worker_idx,
+            shared,
+            unreliable,
+            handles_generation: 0,
+            handles: HashMap::new(),
         }
     }
-}
 
-impl DirectWorker {
     fn stream(&mut self, name: &str) -> Result<Ingest, Error> {
         let shared_generation = self.shared.generation();
         if self.handles_generation != shared_generation {
@@ -402,40 +491,12 @@ impl DirectWorker {
 
         Ok(multi.write_atomic(updates))
     }
-}
 
-impl DirectShared {
-    fn read_output(&self, req: ReadOutputReq) -> Result<ReadOutputRes, Error> {
-        // TODO: This should probably be run async in a thread.
-        let mut contents = Vec::new();
-        if let Some((_, dataflow)) = self.core.lock()?.dataflows.get_mut(&req.stream) {
-            for e in dataflow.output.try_iter() {
-                match e {
-                    TimelyCaptureEvent::Progress(x) => {
-                        // TODO: This isn't even a little bit right, but it
-                        // happens to work.
-                        for (ts, ts_diff) in x {
-                            if ts_diff > 0 {
-                                contents.push(ReadOutputEvent::Sealed(ts));
-                            }
-                        }
-                    }
-                    TimelyCaptureEvent::Messages(_, x) => {
-                        contents.push(ReadOutputEvent::Records(x));
-                    }
-                }
-            }
-        };
-        Ok(ReadOutputRes { contents })
-    }
-}
-
-impl DirectWorker {
     fn seal(&mut self, req: SealReq) -> Result<PFuture<SeqNo>, Error> {
         let stream = self.stream(&req.stream)?;
         let seal_ts = req.ts;
         let seal_res = stream.write.seal(seal_ts);
-        let progress = stream.progress;
+        let progress = stream.progress_rx;
         let (tx, rx) = PFuture::new();
         let _ = thread::Builder::new()
             .name("nemesis-seal".into())
@@ -468,77 +529,6 @@ impl DirectWorker {
         let snap = stream.read.snapshot()?;
         // TODO: This should probably be run async in a thread.
         self.shared.save_snapshot(req.snap, snap)
-    }
-}
-
-impl DirectShared {
-    fn save_snapshot(
-        &self,
-        snap_id: SnapshotId,
-        snap: DecodedSnapshot<String, ()>,
-    ) -> Result<SeqNo, Error> {
-        let seqno = snap.seqno();
-        match self.snapshots.lock()?.entry(snap_id) {
-            Entry::Occupied(x) => {
-                return Err(format!(
-                    "internal nemesis error: duplicate snapshot id {:?}",
-                    x.key()
-                )
-                .into())
-            }
-            Entry::Vacant(x) => {
-                x.insert(snap);
-            }
-        }
-        Ok(seqno)
-    }
-
-    fn read_snapshot(&self, req: ReadSnapshotReq) -> Result<ReadSnapshotRes, Error> {
-        let snap = match self.snapshots.lock()?.remove(&req.snap) {
-            Some(snap) => snap,
-            None => return Err(format!("unknown snap: {:?}", req.snap).into()),
-        };
-        let (seqno, since) = (snap.seqno().0, snap.since());
-        let contents = snap.read_to_end()?;
-        Ok(ReadSnapshotRes {
-            seqno,
-            since,
-            contents,
-        })
-    }
-
-    pub fn start(&self) -> Result<(), Error> {
-        let res = self.core.lock()?.start();
-        let _ = self.generation.fetch_add(1, Ordering::SeqCst);
-        res
-    }
-
-    pub fn stop(&self) -> Result<(), Error> {
-        self.core.lock()?.stop()
-    }
-}
-
-impl DirectCore {
-    fn start(&mut self) -> Result<(), Error> {
-        let _ = self.stop()?;
-        // The self.stop call clears dataflows but do it again defensively.
-        self.dataflows.clear();
-
-        let persister = self.start_fn.start_runtime(self.unreliable.clone())?;
-        self.persister = persister;
-
-        Ok(())
-    }
-
-    fn stop(&mut self) -> Result<(), Error> {
-        let res = self.persister.stop();
-
-        // Stopping the persister allows the compute dataflows to finish.
-        for (_, (_, dataflow)) in self.dataflows.drain() {
-            dataflow.progress_tx.close();
-            dataflow.workers.join();
-        }
-        res
     }
 }
 
