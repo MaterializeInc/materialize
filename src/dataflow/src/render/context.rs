@@ -201,15 +201,19 @@ where
         }
     }
 
-    /// Applies logic to elements of `self` and returns the results.
+    /// Constructs and applies logic to elements of `self` and returns the results.
+    ///
+    /// `constructor` takes a permutation and produces the logic to apply on elements. The logic
+    /// conceptually receives `(&Row, &Row)` pairs in the form of a slice. Only after borrowing
+    /// the elements and applying the permutation the datums will be in the expected order.
     ///
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
     /// leap directly to exactly those records.
-    pub fn flat_map<I, L>(
+    pub fn flat_map<I, C, L>(
         &self,
         key: Option<Row>,
-        mut logic: L,
+        constructor: C,
     ) -> (
         timely::dataflow::Stream<S, I::Item>,
         Collection<S, DataflowError, Diff>,
@@ -217,47 +221,33 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(RefOrMut<'b, Row>, &'a S::Timestamp, &'a Diff) -> I + 'static,
+        C: FnOnce(Option<Permutation>) -> L,
+        L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
+            + 'static,
     {
         // Set a number of tuples after which the operator should yield.
         // This allows us to remain responsive even when enumerating a substantial
         // arrangement, as well as provides time to accumulate our produced output.
         let refuel = 1000000;
 
-        let mut datum_vec = DatumVec::new();
-        let mut row_builder = Row::default();
-
         match &self {
             ArrangementFlavor::Local(oks, errs, permutation) => {
-                let permutation = permutation.clone();
+                let mut logic = constructor(Some(permutation.clone()));
                 let oks = CollectionBundle::<S, Row, T>::flat_map_core(
                     &oks,
                     key,
-                    move |k, v, t, d| {
-                        let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
-                        permutation.permute_in_place(&mut borrow);
-                        // TODO: Change `logic` to take a `DatumVecBorrow`.
-                        row_builder.clear();
-                        row_builder.extend(&*borrow);
-                        logic(RefOrMut::Mut(&mut row_builder), t, d)
-                    },
+                    move |k, v, t, d| logic(&[&k, &v], t, d),
                     refuel,
                 );
                 let errs = errs.as_collection(|k, &()| k.clone());
                 return (oks, errs);
             }
             ArrangementFlavor::Trace(_, oks, errs, permutation) => {
-                let permutation = permutation.clone();
+                let mut logic = constructor(Some(permutation.clone()));
                 let oks = CollectionBundle::<S, Row, T>::flat_map_core(
                     &oks,
                     key,
-                    move |k, v, t, d| {
-                        let mut borrow = datum_vec.borrow_with_many(&[&k, &v]);
-                        permutation.permute_in_place(&mut borrow);
-                        row_builder.clear();
-                        row_builder.extend(&*borrow);
-                        logic(RefOrMut::Mut(&mut row_builder), t, d)
-                    },
+                    move |k, v, t, d| logic(&[&k, &v], t, d),
                     refuel,
                 );
                 let errs = errs.as_collection(|k, &()| k.clone());
@@ -349,7 +339,11 @@ where
         }
     }
 
-    /// Applies logic to elements of a collection and returns the results.
+    /// Constructs and applies logic to elements of a collection and returns the results.
+    ///
+    /// `constructor` takes a permutation and produces the logic to apply on elements. The logic
+    /// conceptually receives `(&Row, &Row)` pairs in the form of a slice. Only after borrowing
+    /// the elements and applying the permutation the datums will be in the expected order.
     ///
     /// If `key_val` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used when we
@@ -357,10 +351,10 @@ where
     /// It is important that `logic` still guard against data that does not satisfy
     /// this constraint, as this method does not statically know that it will have
     /// that arrangement.
-    pub fn flat_map<I, L>(
+    pub fn flat_map<I, C, L>(
         &self,
         key_val: Option<(Vec<MirScalarExpr>, Row)>,
-        mut logic: L,
+        constructor: C,
     ) -> (
         timely::dataflow::Stream<S, I::Item>,
         Collection<S, DataflowError, Diff>,
@@ -368,13 +362,15 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(RefOrMut<'b, Row>, &'a S::Timestamp, &'a Diff) -> I + 'static,
+        C: FnOnce(Option<Permutation>) -> L,
+        L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
+            + 'static,
     {
         // If `key_val` is set, and we have the arrangement by that key, we should
         // use that arrangement.
         if let Some((key, val)) = key_val {
             if let Some(flavor) = self.arrangement(&key) {
-                return flavor.flat_map(Some(val), logic);
+                return flavor.flat_map(Some(val), constructor);
             }
         }
 
@@ -383,13 +379,14 @@ where
         // We should now prefer to use an arrangement if available (avoids allocation),
         // and resort to using a collection if not available (copies all rows).
         if let Some(flavor) = self.arranged.values().next() {
-            flavor.flat_map(None, logic)
+            flavor.flat_map(None, constructor)
         } else {
             use timely::dataflow::operators::Map;
             let (oks, errs) = self.as_collection();
+            let mut logic = constructor(None);
             (
                 oks.inner
-                    .flat_map(move |(mut v, t, d)| logic(RefOrMut::Mut(&mut v), &t, &d)),
+                    .flat_map(move |(mut v, t, d)| logic(&[&RefOrMut::Mut(&mut v)], &t, &d)),
                 errs,
             )
         }
@@ -540,12 +537,15 @@ where
         } else {
             mfp.optimize();
             let mfp_plan = mfp.into_plan().unwrap();
-            let (stream, errors) = self.flat_map(key_val, {
-                let mut datums = crate::render::datum_vec::DatumVec::new();
+            let (stream, errors) = self.flat_map(key_val, |permutation| {
                 let mut row_builder = Row::default();
-                move |data, time, diff| {
-                    let temp_storage = repr::RowArena::new();
-                    let mut datums_local = datums.borrow_with(&data);
+                let mut datum_vec = DatumVec::new();
+                move |row_parts, time, diff| {
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datum_vec.borrow_with_many(row_parts);
+                    if let Some(permutation) = &permutation {
+                        permutation.permute_in_place(&mut datums_local);
+                    }
                     mfp_plan.evaluate(
                         &mut datums_local,
                         &temp_storage,
