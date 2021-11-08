@@ -129,7 +129,8 @@ List new features before bug fixes.
 
 - Fix a bug that caused a panic when using a query containing
   `STRING_AGG`, `JSON_AGG`, `JSON_OBJECT_AGG`, `LIST_AGG`, or `ARRAY_AGG`
-  on data sets containing exactly one record.
+  on data sets containing exactly one record
+  when that condition is known at optimization time.
 
 {{% version-header v0.9.11 %}}
 
