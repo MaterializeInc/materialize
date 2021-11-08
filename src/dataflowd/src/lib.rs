@@ -87,8 +87,8 @@ impl dataflow::Client for RemoteClient {
     async fn send(&mut self, cmd: dataflow::Command) {
         // TODO: something better than panicking.
         trace!("Broadcasting dataflow command: {:?}", cmd);
-        let num_workers = self.num_workers();
-        if num_workers == 1 {
+        let num_conns = self.conns.len();
+        if num_conns == 1 {
             // This special case avoids a clone of the whole plan.
             self.conns[0]
                 .send(cmd)
@@ -97,7 +97,7 @@ impl dataflow::Client for RemoteClient {
         } else {
             for (index, sendpoint) in self.conns.iter_mut().enumerate() {
                 sendpoint
-                    .send(cmd.clone_for_worker(index, num_workers))
+                    .send(cmd.clone_for_worker(index, num_conns))
                     .await
                     .expect("worker command receiver should not drop first")
             }
