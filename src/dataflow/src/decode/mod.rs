@@ -28,8 +28,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, IncludedColumnSource,
-    KeyEnvelope, LinearOperator, RegexEncoding, SourceEnvelope,
+    AvroEncoding, AvroOcfEncoding, DataEncoding, DecodeError, IncludedColumnSource,
+    LinearOperator, RegexEncoding, SourceEnvelope,
 };
 use interchange::avro::ConfluentAvroResolver;
 use log::error;
@@ -235,11 +235,7 @@ struct DataDecoder {
 }
 
 impl DataDecoder {
-    pub fn next(
-        &mut self,
-        bytes: &mut &[u8],
-        upstream_time_millis: Option<i64>,
-    ) -> Result<Option<Row>, DecodeError> {
+    pub fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
         match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
                 let delimiter = *delimiter;
@@ -251,7 +247,7 @@ impl DataDecoder {
                 *bytes = &bytes[chunk_idx + 1..];
                 format.decode(data)
             }
-            DataDecoderInner::Avro(avro) => avro.decode(bytes, upstream_time_millis),
+            DataDecoderInner::Avro(avro) => avro.decode(bytes),
             DataDecoderInner::Csv(csv) => csv.decode(bytes),
             DataDecoderInner::PreDelimited(format) => {
                 let result = format.decode(*bytes);
@@ -298,12 +294,10 @@ impl DataDecoder {
 fn get_decoder(
     encoding: DataEncoding,
     debug_name: &str,
-    envelope: &SourceEnvelope,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,
-    fast_forwarded: bool,
     is_connector_delimited: bool,
     metrics: Metrics,
 ) -> DataDecoder {
@@ -313,18 +307,9 @@ fn get_decoder(
             schema_registry_config,
             confluent_wire_format,
         }) => {
-            let reject_non_inserts = match envelope {
-                SourceEnvelope::Debezium(_, mode) => {
-                    // `start_offset` should work fine for `DEBEZIUM UPSERT`
-                    fast_forwarded && !matches!(mode, DebeziumMode::Upsert)
-                }
-                _ => false,
-            };
             let state = avro::AvroDecoderState::new(
                 &schema,
                 schema_registry_config,
-                envelope.get_avro_envelope_type(),
-                reject_non_inserts,
                 debug_name.to_string(),
                 confluent_wire_format,
             )
@@ -362,39 +347,15 @@ fn get_decoder(
             };
             DataDecoder { inner, metrics }
         }
-        DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => match envelope {
-            SourceEnvelope::Debezium(..) => {
-                let state = avro::AvroDecoderState::new(
-                    &reader_schema,
-                    None,
-                    envelope.get_avro_envelope_type(),
-                    fast_forwarded,
-                    debug_name.to_string(),
-                    false,
-                )
-                .expect("Schema was verified to be correct during purification");
-                DataDecoder {
-                    inner: DataDecoderInner::Avro(state),
-                    metrics,
-                }
+        DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
+            let state =
+                avro::AvroDecoderState::new(&reader_schema, None, debug_name.to_string(), false)
+                    .expect("Schema was verified to be correct during purification");
+            DataDecoder {
+                inner: DataDecoderInner::Avro(state),
+                metrics,
             }
-
-            _ => {
-                let state = avro::AvroDecoderState::new(
-                    &reader_schema,
-                    None,
-                    envelope.get_avro_envelope_type(),
-                    false,
-                    debug_name.to_string(),
-                    false,
-                )
-                .expect("Schema was verified to be correct during purification");
-                DataDecoder {
-                    inner: DataDecoderInner::Avro(state),
-                    metrics,
-                }
-            }
-        },
+        }
         DataEncoding::Csv(enc) => {
             let state = CsvDecoderState::new(enc, operators);
             DataDecoder {
@@ -411,10 +372,9 @@ fn get_decoder(
 fn try_decode(
     decoder: &mut DataDecoder,
     value: Option<&Vec<u8>>,
-    upstream_time: Option<i64>,
 ) -> Option<Result<Row, DecodeError>> {
     let value_buf = &mut value?.as_slice();
-    let value = decoder.next(value_buf, upstream_time);
+    let value = decoder.next(value_buf);
     if value.is_ok() && !value_buf.is_empty() {
         let err = format!(
             "Unexpected bytes remaining for decoded value: {:?}",
@@ -450,7 +410,6 @@ pub fn render_decode_delimited<G>(
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,
-    fast_forwarded: bool,
     metrics: Metrics,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
 where
@@ -465,30 +424,15 @@ where
         value_encoding.op_name()
     );
     let mut key_decoder = key_encoding.map(|key_encoding| {
-        get_decoder(
-            key_encoding,
-            debug_name,
-            &SourceEnvelope::None(KeyEnvelope::None),
-            operators,
-            false,
-            true,
-            metrics.clone(),
-        )
+        get_decoder(key_encoding, debug_name, operators, true, metrics.clone())
     });
 
-    let mut value_decoder = get_decoder(
-        value_encoding,
-        debug_name,
-        envelope,
-        operators,
-        fast_forwarded,
-        true,
-        metrics,
-    );
+    let mut value_decoder = get_decoder(value_encoding, debug_name, operators, true, metrics);
 
     // The Debezium deduplication and upsert logic rely on elements for the same key going to the same worker.
     // Other decoders don't care; so we distribute things round-robin (i.e., by "position"), and
     // fall back to arbitrarily hashing by value if the upstream didn't give us a position.
+    // TODO(petrosagg): this function should accept a pact from the caller
     let use_key_contract = matches!(envelope, SourceEnvelope::Debezium(..));
     let results = stream.unary_frontier(
         Exchange::new(move |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>| {
@@ -511,15 +455,15 @@ where
                         key,
                         value,
                         position,
-                        upstream_time_millis: upstream_time,
+                        upstream_time_millis,
                         partition,
                     } in data.iter()
                     {
                         let key = key_decoder
                             .as_mut()
-                            .and_then(|decoder| try_decode(decoder, key.as_ref(), *upstream_time));
+                            .and_then(|decoder| try_decode(decoder, key.as_ref()));
 
-                        let value = try_decode(&mut value_decoder, value.as_ref(), *upstream_time);
+                        let value = try_decode(&mut value_decoder, value.as_ref());
 
                         if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
                             n_errors += 1;
@@ -535,7 +479,7 @@ where
                                 &metadata_items,
                                 partition.clone(),
                                 *position,
-                                *upstream_time,
+                                *upstream_time_millis,
                             ),
                         });
                     }
@@ -572,13 +516,11 @@ pub fn render_decode<G>(
     stream: &Stream<G, SourceOutput<(), MessagePayload>>,
     value_encoding: DataEncoding,
     debug_name: &str,
-    envelope: &SourceEnvelope,
     metadata_items: Vec<IncludedColumnSource>,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,
-    fast_forwarded: bool,
     metrics: Metrics,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
 where
@@ -586,15 +528,7 @@ where
 {
     let op_name = format!("{}Decode", value_encoding.op_name());
 
-    let mut value_decoder = get_decoder(
-        value_encoding,
-        debug_name,
-        envelope,
-        operators,
-        fast_forwarded,
-        false,
-        metrics,
-    );
+    let mut value_decoder = get_decoder(value_encoding, debug_name, operators, false, metrics);
 
     let mut value_buf = vec![];
 
@@ -691,9 +625,7 @@ where
                         // and break manually.
                         loop {
                             let old_value_cursor = *value_bytes_remaining;
-                            let value = match value_decoder
-                                .next(value_bytes_remaining, *upstream_time_millis)
-                            {
+                            let value = match value_decoder.next(value_bytes_remaining) {
                                 Err(e) => Err(e),
                                 Ok(None) => {
                                     let leftover = value_bytes_remaining.to_vec();

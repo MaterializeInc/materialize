@@ -27,6 +27,7 @@ pub use self::schema::{parse_schema, schema_to_relationdesc, ConfluentAvroResolv
 
 use self::decode::{AvroStringDecoder, OptionalRecordDecoder, RowWrapper};
 use self::envelope_debezium::{AvroDebeziumDecoder, RowCoordinates};
+use crate::json::build_row_schema_json;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EnvelopeType {

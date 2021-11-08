@@ -192,13 +192,6 @@ where
                     _ => None,
                 };
 
-                let fast_forwarded = match &connector {
-                    ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                        start_offsets, ..
-                    }) => start_offsets.values().any(|&val| val > 0),
-                    _ => false,
-                };
-
                 // All workers are responsible for reading in Kafka sources. Other sources
                 // support single-threaded ingestion only. Note that in all cases we want all
                 // readers of the same source or same partition to reside on the same worker,
@@ -372,17 +365,14 @@ where
                                     &envelope,
                                     metadata_columns,
                                     &mut linear_operators,
-                                    fast_forwarded,
                                     render_state.metrics.clone(),
                                 ),
                                 SourceType::ByteStream(source) => render_decode(
                                     &source,
                                     value_encoding,
                                     &self.debug_name,
-                                    &envelope,
                                     metadata_columns,
                                     &mut linear_operators,
-                                    fast_forwarded,
                                     render_state.metrics.clone(),
                                 ),
                             };

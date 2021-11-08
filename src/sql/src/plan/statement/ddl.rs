@@ -372,7 +372,7 @@ fn plan_source_envelope(
     };
     let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_, _) = envelope {
         // Debezium sources produce a diff in their last column.
-        // Thus we need to select all rows but the last, which we repeat by.
+        // Thus we need to select all columns but the last, which we repeat by.
         // I.e., for a source with four columns, we do
         // SELECT a.column1, a.column2, a.column3 FROM a, repeat(a.column4)
         //
