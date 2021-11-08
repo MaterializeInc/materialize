@@ -24,7 +24,8 @@
 //! or if we are not certain that the input is non-empty (e.g. join).
 //!
 //! ```rust
-//! use expr::{BinaryFunc, IdGen, MirRelationExpr, MirScalarExpr};
+//! use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
+//! use ore::id_gen::IdGen;
 //! use repr::{ColumnType, Datum, RelationType, ScalarType};
 //!
 //! use transform::predicate_pushdown::PredicatePushdown;

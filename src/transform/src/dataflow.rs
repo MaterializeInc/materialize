@@ -15,7 +15,8 @@
 //! in which the views will be executed.
 
 use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{GlobalId, Id, IdGen, LocalId, MirRelationExpr, MirScalarExpr};
+use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
+use ore::id_gen::IdGen;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::Optimizer;

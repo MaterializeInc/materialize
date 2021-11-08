@@ -37,7 +37,7 @@ pub use relation::func::{AggregateFunc, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
-    compare_columns, AggregateExpr, ColumnOrder, IdGen, JoinImplementation, MirRelationExpr,
+    compare_columns, AggregateExpr, ColumnOrder, JoinImplementation, MirRelationExpr,
     RowSetFinishing,
 };
 pub use scalar::func::{self, BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};

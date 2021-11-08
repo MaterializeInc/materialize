@@ -25,9 +25,10 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
+use expr::GlobalId;
 use expr::MirRelationExpr;
 use expr::MirScalarExpr;
-use expr::{GlobalId, IdGen};
+use ore::id_gen::IdGen;
 
 pub mod canonicalize_mfp;
 pub mod column_knowledge;

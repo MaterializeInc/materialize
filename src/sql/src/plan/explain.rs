@@ -22,7 +22,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use expr::explain::Indices;
-use expr::{ExprHumanizer, Id, IdGen, RowSetFinishing};
+use expr::{ExprHumanizer, Id, RowSetFinishing};
+use ore::id_gen::IdGen;
 use ore::str::{bracketed, separated};
 use repr::{RelationType, ScalarType};
 

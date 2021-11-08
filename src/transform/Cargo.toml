@@ -10,6 +10,7 @@ dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 itertools = "0.10.1"
+ore = { path = "../../src/ore" }
 repr = { path = "../repr" }
 
 [dev-dependencies]
