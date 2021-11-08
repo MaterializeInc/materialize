@@ -12,18 +12,19 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::iter;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use aws_arn::ARN;
+use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
 use regex::Regex;
 use reqwest::Url;
-use tracing::{debug, error};
+use tracing::debug;
 
 use dataflow_types::{
     sinks::{
@@ -36,18 +37,18 @@ use dataflow_types::{
             DataEncoding, ProtobufEncoding, RegexEncoding, SourceDataEncoding,
         },
         persistence::{BringYourOwn, Consistency},
-        provide_default_metadata, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
-        IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
-        PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector, SourceConnector,
-        SourceEnvelope, Timeline,
+        provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
+        DebeziumSourceProjection, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
+        KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
+        PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
     },
 };
-use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
-use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
+use expr::GlobalId;
+use interchange::avro::{self, AvroSchemaGenerator};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
-use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
 use sql_parser::ast::{CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
 
 use crate::ast::display::AstDisplay;
@@ -68,7 +69,6 @@ use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
 use crate::plan::query::{resolve_names_data_type, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
@@ -276,149 +276,6 @@ pub fn describe_create_source(
     _: CreateSourceStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
-}
-
-// Flatten one Debezium entry ("before" or "after")
-// into its corresponding data fields, plus an extra column for the diff.
-fn plan_dbz_flatten_one(
-    input: HirRelationExpr,
-    bare_column: usize,
-    diff: i64,
-    n_flattened_cols: usize,
-) -> HirRelationExpr {
-    HirRelationExpr::Map {
-        input: Box::new(HirRelationExpr::Filter {
-            input: Box::new(input),
-            predicates: vec![HirScalarExpr::CallUnary {
-                func: UnaryFunc::Not(func::Not),
-                expr: Box::new(HirScalarExpr::CallUnary {
-                    func: UnaryFunc::IsNull(func::IsNull),
-                    expr: Box::new(HirScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: bare_column,
-                    })),
-                }),
-            }],
-        }),
-        scalars: (0..n_flattened_cols)
-            .into_iter()
-            .map(|idx| HirScalarExpr::CallUnary {
-                func: UnaryFunc::RecordGet(idx),
-                expr: Box::new(HirScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: bare_column,
-                })),
-            })
-            .chain(iter::once(HirScalarExpr::Literal(
-                Row::pack(iter::once(Datum::Int64(diff))),
-                ColumnType {
-                    nullable: false,
-                    scalar_type: ScalarType::Int64,
-                },
-            )))
-            .collect(),
-    }
-}
-
-fn plan_dbz_flatten(
-    bare_desc: &RelationDesc,
-    input: HirRelationExpr,
-) -> Result<(HirRelationExpr, Vec<ColumnName>), anyhow::Error> {
-    // This looks horrible, but it is basically pretty simple:
-    // It aims to flatten rows of the shape
-    // (before, after)
-    // into rows whose columns are the individual fields of the before or after record,
-    // plus a "diff" column whose value is -1 for before, and +1 for after.
-    //
-    // They will then be joined with `repeat(diff)` to get the correct stream out.
-    let before_idx = bare_desc
-        .iter_names()
-        .position(|name| name.as_str() == "before")
-        .ok_or_else(|| anyhow!("Debezium-formatted data must contain a `before` field."))?;
-    let after_idx = bare_desc
-        .iter_names()
-        .position(|name| name.as_str() == "after")
-        .ok_or_else(|| anyhow!("Debezium-formatted data must contain an `after` field."))?;
-    let before_flattened_cols = match &bare_desc.typ().column_types[before_idx].scalar_type {
-        ScalarType::Record { fields, .. } => fields.clone(),
-        _ => unreachable!(), // This was verified in `Encoding::desc`
-    };
-    let after_flattened_cols = match &bare_desc.typ().column_types[after_idx].scalar_type {
-        ScalarType::Record { fields, .. } => fields.clone(),
-        _ => unreachable!(), // This was verified in `Encoding::desc`
-    };
-    assert!(before_flattened_cols == after_flattened_cols);
-    let n_flattened_cols = before_flattened_cols.len();
-    let old_arity = input.arity();
-    let before_expr = plan_dbz_flatten_one(input.clone(), before_idx, -1, n_flattened_cols);
-    let after_expr = plan_dbz_flatten_one(input, after_idx, 1, n_flattened_cols);
-    let new_arity = before_expr.arity();
-    assert!(new_arity == after_expr.arity());
-    let before_expr = before_expr.project((old_arity..new_arity).collect());
-    let after_expr = after_expr.project((old_arity..new_arity).collect());
-    let united_expr = HirRelationExpr::Union {
-        base: Box::new(before_expr),
-        inputs: vec![after_expr],
-    };
-    let mut col_names = before_flattened_cols
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect::<Vec<_>>();
-    col_names.push("diff".into());
-    Ok((united_expr, col_names))
-}
-
-fn plan_source_envelope(
-    bare_desc: &RelationDesc,
-    envelope: &SourceEnvelope,
-    post_transform_key: Option<Vec<usize>>,
-) -> Result<(MirRelationExpr, Vec<ColumnName>), anyhow::Error> {
-    let get_expr = HirRelationExpr::Get {
-        id: expr::Id::LocalBareSource,
-        typ: bare_desc.typ().clone(),
-    };
-    let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_, _) = envelope {
-        // Debezium sources produce a diff in their last column.
-        // Thus we need to select all rows but the last, which we repeat by.
-        // I.e., for a source with four columns, we do
-        // SELECT a.column1, a.column2, a.column3 FROM a, repeat(a.column4)
-        //
-        // [btv] - Maybe it would be better to write these in actual SQL and call into the planner,
-        // rather than writing out the expr by hand? Then we would get some nice things; for
-        // example, automatic tracking of column names.
-        //
-        // For this simple case, it probably doesn't matter
-
-        let (flattened, mut column_names) = plan_dbz_flatten(bare_desc, get_expr)?;
-
-        let diff_col = flattened.arity() - 1;
-        let expr = HirRelationExpr::Join {
-            left: Box::new(flattened),
-            right: Box::new(HirRelationExpr::CallTable {
-                func: TableFunc::Repeat,
-                exprs: vec![HirScalarExpr::Column(ColumnRef {
-                    level: 1,
-                    column: diff_col,
-                })],
-            }),
-            on: HirScalarExpr::literal_true(),
-            kind: JoinKind::Inner,
-        }
-        .project((0..diff_col).collect());
-        let expr = if let Some(post_transform_key) = post_transform_key {
-            expr.declare_keys(vec![post_transform_key])
-        } else {
-            expr
-        };
-        column_names.pop();
-        (expr, column_names)
-    } else {
-        (get_expr, bare_desc.iter_names().cloned().collect())
-    };
-
-    let mir_expr = hir_expr.lower();
-
-    Ok((mir_expr, column_names))
 }
 
 pub fn plan_create_source(
@@ -741,22 +598,9 @@ pub fn plan_create_source(
             (connector, encoding)
         }
     };
-    let key_envelope = get_key_envelope(&include_metadata, envelope, &encoding)?;
+    let (key_desc, value_desc) = encoding.desc()?;
 
-    // TODO (materialize#2537): cleanup format validation
-    // Avro format validation is different for the Debezium envelope
-    // vs the Upsert envelope.
-    //
-    // For the Debezium envelope, the key schema is not meant to be
-    // used to decode records; it is meant to be a subset of the
-    // value schema so we can identify what the primary key is.
-    //
-    // When using the Upsert envelope, we delete the key schema
-    // from the value encoding because the key schema is not
-    // necessarily a subset of the value schema. Also, we shift
-    // the key schema, if it exists, over to the value schema position
-    // in the Upsert envelope's key_format so it can be validated like
-    // a schema used to decode records.
+    let key_envelope = get_key_envelope(include_metadata, envelope, &encoding)?;
 
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
@@ -766,65 +610,120 @@ pub fn plan_create_source(
         }
         sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
-            let is_avro = match encoding.value_ref() {
-                DataEncoding::Avro(_) => true,
-                DataEncoding::AvroOcf(_) => true,
-                _ => false,
-            };
-            if !is_avro {
-                bail!("non-Avro Debezium sources are not supported");
-            }
-            let dedup_strat = match with_options.remove("deduplication") {
-                None => match mode {
-                    sql_parser::ast::DbzMode::Plain => DebeziumDeduplicationStrategy::Ordered,
-                    sql_parser::ast::DbzMode::Upsert => DebeziumDeduplicationStrategy::None,
+            let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
+
+            let dbz_envelope = match mode {
+                DbzMode::Upsert => DebeziumEnvelope {
+                    before_idx,
+                    after_idx,
+                    mode: DebeziumMode::Upsert,
                 },
-                Some(Value::String(s)) => {
-                    match s.as_str() {
-                        "none" => DebeziumDeduplicationStrategy::None,
-                        "full" => DebeziumDeduplicationStrategy::Full,
-                        "ordered" => DebeziumDeduplicationStrategy::Ordered,
+                DbzMode::Plain => {
+                    let dedup_projection = typecheck_debezium_dedup(&value_desc);
+
+                    let dedup_mode = match with_options.remove("deduplication") {
+                        None => match dedup_projection {
+                            Ok(_) => Cow::from("ordered"),
+                            Err(_) => Cow::from("none"),
+                        },
+                        Some(Value::String(s)) => Cow::from(s),
+                        _ => bail!("deduplication option must be a string"),
+                    };
+
+                    match dedup_mode.as_ref() {
+                        "ordered" => DebeziumEnvelope {
+                            before_idx,
+                            after_idx,
+                            mode: DebeziumMode::Ordered(dedup_projection?),
+                        },
+                        "full" => DebeziumEnvelope {
+                            before_idx,
+                            after_idx,
+                            mode: DebeziumMode::Full(dedup_projection?),
+                        },
+                        "none" => DebeziumEnvelope {
+                            before_idx,
+                            after_idx,
+                            mode: DebeziumMode::None,
+                        },
                         "full_in_range" => {
-                            match (
-                                with_options.remove("deduplication_start"),
-                                with_options.remove("deduplication_end"),
-                            ) {
-                                (Some(Value::String(start)), Some(Value::String(end))) => {
-                                    let deduplication_pad_start = match with_options.remove("deduplication_pad_start") {
-                                        Some(Value::String(start)) => Some(start),
-                                        Some(v) => bail!("Expected string for deduplication_pad_start, got: {:?}", v),
-                                        None => None
-                                    };
-                                    DebeziumDeduplicationStrategy::full_in_range(
-                                        &start,
-                                        &end,
-                                        deduplication_pad_start.as_deref(),
-                                    )
-                                    .map_err(|e| {
-                                        anyhow!("Unable to create deduplication strategy: {}", e)
-                                    })?
+                            let parse_datetime = |s: &str| {
+                                let formats = ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"];
+                                for format in formats {
+                                    if let Ok(dt) = NaiveDateTime::parse_from_str(s, format) {
+                                        return Ok(dt);
+                                    }
                                 }
-                                (_, _) => bail!(
+                                if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    return Ok(d.and_hms(0, 0, 0));
+                                }
+
+                                bail!(
+                                    "UTC DateTime specifier '{}' should match \
+                                    'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS' \
+                                    or 'YYYY-MM-DD HH:MM:SS.FF",
+                                    s
+                                )
+                            };
+
+                            let dedup_start = match with_options.remove("deduplication_start") {
+                                None => None,
+                                Some(Value::String(start)) => Some(parse_datetime(&start)?),
+                                _ => bail!("deduplication_start option must be a string"),
+                            };
+
+                            let dedup_end = match with_options.remove("deduplication_end") {
+                                None => None,
+                                Some(Value::String(end)) => Some(parse_datetime(&end)?),
+                                _ => bail!("deduplication_end option must be a string"),
+                            };
+
+                            match dedup_start.zip(dedup_end) {
+                                Some((start, end)) => {
+                                    if start >= end {
+                                        bail!(
+                                            "Debezium deduplication start {} is not before end {}",
+                                            start,
+                                            end
+                                        );
+                                    }
+
+                                    let pad_start =
+                                        match with_options.remove("deduplication_pad_start") {
+                                            None => None,
+                                            Some(Value::String(pad_start)) => {
+                                                Some(parse_datetime(&pad_start)?)
+                                            }
+                                            _ => bail!(
+                                                "deduplication_pad_start option must be a string"
+                                            ),
+                                        };
+
+                                    DebeziumEnvelope {
+                                        before_idx,
+                                        after_idx,
+                                        mode: DebeziumMode::FullInRange {
+                                            start,
+                                            end,
+                                            pad_start,
+                                            projection: dedup_projection?,
+                                        }
+                                    }
+                                }
+                                _ => bail!(
                                     "deduplication full_in_range requires both \
                                  'deduplication_start' and 'deduplication_end' parameters"
                                 ),
                             }
                         }
                         _ => bail!(
-                            "deduplication must be one of 'ordered' 'full', or 'full_in_range'."
+                            "deduplication must be one of 'none', 'ordered', 'full' or 'full_in_range'."
                         ),
                     }
                 }
-                _ => bail!("deduplication must be one of 'ordered', 'full' or 'full_in_range'."),
             };
-            let mode = match mode {
-                sql_parser::ast::DbzMode::Plain => DebeziumMode::Plain,
-                sql_parser::ast::DbzMode::Upsert => DebeziumMode::Upsert,
-            };
-            if mode == DebeziumMode::Upsert && dedup_strat != DebeziumDeduplicationStrategy::None {
-                bail!("Debezium deduplication does not make sense with upsert sources");
-            }
-            SourceEnvelope::Debezium(dedup_strat, mode)
+
+            SourceEnvelope::Debezium(dbz_envelope)
         }
         sql_parser::ast::Envelope::Upsert => {
             if encoding.key_ref().is_none() {
@@ -852,13 +751,11 @@ pub fn plan_create_source(
         }
     };
 
-    // TODO(petrosagg): remove this inconsistency once INCLUDE (offset)
-    // syntax is implemented
+    // TODO(petrosagg): remove this inconsistency once INCLUDE (offset) syntax is implemented
     let include_defaults = provide_default_metadata(&envelope, encoding.value_ref());
     let metadata_columns = external_connector.metadata_columns(include_defaults);
-    let (key_desc, value_desc) = encoding.desc()?;
     let metadata_desc = included_column_desc(metadata_columns.clone());
-    let mut bare_desc = envelope.desc(key_desc.clone(), value_desc, metadata_desc)?;
+    let mut desc = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
     // Append default metadata columns if column aliases were provided but do not include them.
     //
@@ -873,9 +770,9 @@ pub fn plan_create_source(
     let tmp_col;
     let col_names = if include_defaults
         && !col_names.is_empty()
-        && metadata_columns.len() + col_names.len() == bare_desc.arity()
+        && metadata_columns.len() + col_names.len() == desc.arity()
     {
-        let mut tmp = Vec::with_capacity(bare_desc.arity());
+        let mut tmp = Vec::with_capacity(desc.arity());
         tmp.extend(col_names.iter().cloned());
         tmp.push(Ident::from(
             external_connector.default_metadata_column_name().unwrap(),
@@ -893,39 +790,10 @@ pub fn plan_create_source(
     };
 
     if ignore_source_keys {
-        bare_desc = bare_desc.without_keys();
+        desc = desc.without_keys();
     }
 
-    let post_transform_key = if let SourceEnvelope::Debezium(_, _) = &envelope {
-        if ignore_source_keys {
-            None
-        } else {
-            match key_desc {
-                Some(key_desc) => match &bare_desc.typ().column_types[0].scalar_type {
-                    ScalarType::Record { fields, .. } => {
-                        let row_desc = RelationDesc::from_names_and_types(fields.clone());
-                        let key_schema_indices = match dataflow_types::sources::match_key_indices(
-                            &key_desc, &row_desc,
-                        ) {
-                            Err(e) => bail!("Cannot use key due to error: {}", e),
-                            Ok(indices) => Some(indices),
-                        };
-                        key_schema_indices
-                    }
-                    _ => {
-                        error!("Not using key: expected `before` record in first column");
-                        None
-                    }
-                },
-                None => None,
-            }
-        }
-    } else {
-        None
-    };
-
-    bare_desc =
-        plan_utils::maybe_rename_columns(format!("source {}", name), bare_desc, &col_names)?;
+    desc = plan_utils::maybe_rename_columns(format!("source {}", name), desc, &col_names)?;
 
     // Apply user-specified key constraint
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
@@ -944,21 +812,21 @@ pub fn plan_create_source(
         let key_indices = key_columns
             .iter()
             .map(|col| -> anyhow::Result<usize> {
-                let name_idx = bare_desc
+                let name_idx = desc
                     .get_by_name(col)
                     .map(|(idx, _type)| idx)
                     .ok_or_else(|| anyhow!("No such column in source key constraint: {}", col))?;
-                if bare_desc.get_unambiguous_name(name_idx).is_none() {
+                if desc.get_unambiguous_name(name_idx).is_none() {
                     bail!("Ambiguous column in source key constraint: {}", col);
                 }
                 Ok(name_idx)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        if !bare_desc.typ().keys.is_empty() {
-            return Err(key_constraint_err(&bare_desc, &key_columns));
+        if !desc.typ().keys.is_empty() {
+            return Err(key_constraint_err(&desc, &key_columns));
         } else {
-            bare_desc = bare_desc.with_key(key_indices);
+            desc = desc.with_key(key_indices);
         }
     }
 
@@ -985,7 +853,12 @@ pub fn plan_create_source(
         }
     };
 
-    let (expr, column_names) = plan_source_envelope(&bare_desc, &envelope, post_transform_key)?;
+    let expr = HirRelationExpr::Get {
+        id: expr::Id::LocalBareSource,
+        typ: desc.typ().clone(),
+    }
+    .lower();
+
     let source = Source {
         create_sql,
         connector: SourceConnector::External {
@@ -998,8 +871,7 @@ pub fn plan_create_source(
             persist: None,
         },
         expr,
-        bare_desc,
-        column_names,
+        desc,
     };
 
     normalize::ensure_empty_options(&with_options, "CREATE SOURCE")?;
@@ -1010,6 +882,106 @@ pub fn plan_create_source(
         if_not_exists,
         materialized,
     }))
+}
+
+fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), anyhow::Error> {
+    let (before_idx, before_ty) = value_desc
+        .get_by_name(&"before".into())
+        .ok_or_else(|| anyhow!("'before' column missing from debezium input"))?;
+    let (after_idx, after_ty) = value_desc
+        .get_by_name(&"after".into())
+        .ok_or_else(|| anyhow!("'after' column missing from debezium input"))?;
+    if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
+        bail!("'before' column must be of type record");
+    }
+    if before_ty != after_ty {
+        bail!("'before' type differs from 'after' column");
+    }
+    Ok((before_idx, after_idx))
+}
+
+fn typecheck_debezium_dedup(
+    value_desc: &RelationDesc,
+) -> Result<DebeziumDedupProjection, anyhow::Error> {
+    let (source_idx, source_ty) = value_desc
+        .get_by_name(&"source".into())
+        .ok_or_else(|| anyhow!("'source' column missing from debezium input"))?;
+
+    let source_fields = match &source_ty.scalar_type {
+        ScalarType::Record { fields, .. } => fields,
+        _ => bail!("'source' column must be of type record"),
+    };
+
+    let snapshot = source_fields
+        .iter()
+        .enumerate()
+        .find(|(_, f)| f.0.as_str() == "snapshot");
+    let snapshot_idx = match snapshot {
+        Some((idx, (_, ty))) => match &ty.scalar_type {
+            ScalarType::String | ScalarType::Bool => idx,
+            _ => bail!("'snapshot' column must be a string or boolean"),
+        },
+        None => bail!("'snapshot' field missing from source record"),
+    };
+
+    let mut mysql = (None, None, None);
+    let mut postgres = (None, None);
+    let mut sqlserver = (None, None);
+
+    for (idx, (name, _)) in source_fields.iter().enumerate() {
+        // TODO: verify the types of these fields
+        match name.as_str() {
+            "file" => mysql.0 = Some(idx),
+            "pos" => mysql.1 = Some(idx),
+            "row" => mysql.2 = Some(idx),
+            "sequence" => postgres.0 = Some(idx),
+            "lsn" => postgres.1 = Some(idx),
+            "change_lsn" => sqlserver.0 = Some(idx),
+            "event_serial_no" => sqlserver.1 = Some(idx),
+            _ => {}
+        }
+    }
+
+    let source_projection = if let Some(((file, pos), row)) = mysql.0.zip(mysql.1).zip(mysql.2) {
+        DebeziumSourceProjection::MySql { file, pos, row }
+    } else if let (sequence, Some(lsn)) = postgres {
+        DebeziumSourceProjection::Postgres { sequence, lsn }
+    } else if let Some((change_lsn, event_serial_no)) = sqlserver.0.zip(sqlserver.1) {
+        DebeziumSourceProjection::SqlServer {
+            change_lsn,
+            event_serial_no,
+        }
+    } else {
+        bail!("unknown type of upstream database")
+    };
+
+    let (transaction_idx, transaction_ty) = value_desc
+        .get_by_name(&"transaction".into())
+        .ok_or_else(|| anyhow!("'transaction' column missing from debezium input"))?;
+
+    let tx_fields = match &transaction_ty.scalar_type {
+        ScalarType::Record { fields, .. } => fields,
+        _ => bail!("'transaction' column must be of type record"),
+    };
+
+    let total_order = tx_fields
+        .iter()
+        .enumerate()
+        .find(|(_, f)| f.0.as_str() == "total_order");
+    let total_order_idx = match total_order {
+        Some((idx, (_, ty))) => match &ty.scalar_type {
+            ScalarType::Int64 => idx,
+            _ => bail!("'total_order' column must be an bigint"),
+        },
+        None => bail!("'total_order' field missing from tx record"),
+    };
+    Ok(DebeziumDedupProjection {
+        source_idx,
+        snapshot_idx,
+        source_projection,
+        transaction_idx,
+        total_order_idx,
+    })
 }
 
 fn get_encoding<T: sql_parser::ast::AstInfo>(

@@ -133,6 +133,7 @@ use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
 
 mod context;
+mod debezium;
 mod envelope_none;
 mod flat_map;
 mod join;

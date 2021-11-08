@@ -1395,6 +1395,7 @@ dependencies = [
  "aws-types",
  "bytes",
  "ccsr",
+ "chrono",
  "crossbeam-channel",
  "enum-iterator",
  "enum-kinds",

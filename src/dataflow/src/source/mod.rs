@@ -171,6 +171,8 @@ pub struct DecodeResult {
     pub value: Option<Result<Row, DecodeError>>,
     /// The index of the decoded value in the stream
     pub position: Option<i64>,
+    /// The time the record was created in the upstream systsem, as milliseconds since the epoch
+    pub upstream_time_millis: Option<i64>,
     /// If this is a Kafka stream, the appropriate metadata
     // TODO(bwm): This should probably be statically different for different streams, or we should
     // propagate whether metadata is requested into the decoder
