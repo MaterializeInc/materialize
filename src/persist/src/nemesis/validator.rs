@@ -19,7 +19,7 @@ use crate::nemesis::validator::uptime::Uptime;
 use crate::nemesis::{
     AllowCompactionReq, ReadOutputEvent, ReadOutputReq, ReadOutputRes, ReadSnapshotReq,
     ReadSnapshotRes, Res, SealReq, SnapshotId, Step, StepMeta, TakeSnapshotReq, WriteReq,
-    WriteReqMulti, WriteReqSingle, WriteRes,
+    WriteReqMulti, WriteReqSingle,
 };
 use crate::storage::SeqNo;
 
@@ -70,7 +70,7 @@ impl Validator {
     }
 
     fn step(&mut self, s: Step) {
-        log::debug!("step: {:?}", &s);
+        log::info!("step: {:?}", &s);
         match s.res {
             Res::Write(WriteReq::Single(req), res) => self.step_write_single(&s.meta, req, res),
             Res::Write(WriteReq::Multi(req), res) => self.step_write_multi(&s.meta, req, res),
@@ -139,7 +139,7 @@ impl Validator {
         &mut self,
         meta: &StepMeta,
         req: WriteReqSingle,
-        res: Result<WriteRes, Error>,
+        res: Result<SeqNo, Error>,
     ) {
         let req_ok = req.update.1
             >= self
@@ -154,18 +154,13 @@ impl Validator {
         self.check_failure(meta, &res, !req_ok);
         if let Ok(res) = res {
             self.writes_by_seqno
-                .entry((req.stream, SeqNo(res.seqno)))
+                .entry((req.stream, res))
                 .or_default()
                 .push(req.update);
         }
     }
 
-    fn step_write_multi(
-        &mut self,
-        meta: &StepMeta,
-        req: WriteReqMulti,
-        res: Result<WriteRes, Error>,
-    ) {
+    fn step_write_multi(&mut self, meta: &StepMeta, req: WriteReqMulti, res: Result<SeqNo, Error>) {
         let req_ok = req.writes.len() > 0
             && req.writes.iter().all(|req| {
                 req.update.1
@@ -183,7 +178,7 @@ impl Validator {
         if let Ok(res) = res {
             for req in req.writes {
                 self.writes_by_seqno
-                    .entry((req.stream, SeqNo(res.seqno)))
+                    .entry((req.stream, res))
                     .or_default()
                     .push(req.update);
             }

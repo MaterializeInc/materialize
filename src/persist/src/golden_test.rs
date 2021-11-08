@@ -18,9 +18,9 @@ use crate::error::{Error, ErrorLog};
 use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use crate::indexed::Snapshot;
 use crate::mem::{MemBlob, MemRegistry};
-use crate::nemesis::direct::Direct;
+use crate::nemesis::direct::{Direct, StartRuntime};
 use crate::nemesis::generator::{Generator, GeneratorConfig};
-use crate::nemesis::{Input, Runtime};
+use crate::nemesis::{Input, Runtime, RuntimeWorker};
 use crate::storage::Blob;
 use crate::unreliable::UnreliableBlob;
 
@@ -155,25 +155,35 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
 }
 
 fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
+    #[derive(Debug)]
+    struct GoldenStartRuntime(MemRegistry);
+
+    impl StartRuntime for GoldenStartRuntime {
+        fn start_runtime(
+            &mut self,
+            unreliable: crate::unreliable::UnreliableHandle,
+        ) -> Result<RuntimeClient, Error> {
+            let blob = self.0.blob_no_reentrance()?;
+            let blob = UnreliableBlob::from_handle(blob, unreliable);
+            runtime::start(
+                RuntimeConfig::for_tests(),
+                ErrorLog,
+                blob,
+                &MetricsRegistry::new(),
+                None,
+            )
+        }
+    }
+
     let runtime = Arc::new(tokio::runtime::Runtime::new()?);
     let reg = MemRegistry::new();
-    let runtime_reg = reg.clone();
-    let runtime_closure = Arc::clone(&runtime);
-    let mut persist = Direct::new(move |unreliable| {
-        let blob = runtime_reg.blob_no_reentrance()?;
-        let blob = UnreliableBlob::from_handle(blob, unreliable);
-        runtime::start(
-            RuntimeConfig::for_tests(),
-            ErrorLog,
-            blob,
-            &MetricsRegistry::new(),
-            Some(Arc::clone(&runtime_closure)),
-        )
-    })?;
+    let start_fn = GoldenStartRuntime(reg.clone());
+    let mut persist = Direct::new(start_fn)?;
+    let mut persist_worker = persist.add_worker();
     for req in reqs.iter() {
-        let _ = persist.run(req.clone()).recv();
+        let _ = persist_worker.run(req.clone()).recv();
     }
-    let persist_state = PersistState::slurp_from(&persist.persister)?;
+    let persist_state = PersistState::slurp_from(&persist.runtime()?)?;
     persist.finish();
 
     let mut blob = reg.blob_no_reentrance()?;
