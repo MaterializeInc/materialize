@@ -148,15 +148,26 @@ impl Action for VerifyAction {
         // instead get an error message about the expected messages that
         // were missing.
         let mut actual_bytes = vec![];
-        while let Some(Ok(message)) = message_stream.next().await {
-            let message = message.map_err_to_string()?;
-            consumer
-                .store_offset_from_message(&message)
-                .map_err(|e| format!("storing message offset: {:#}", e))?;
-            actual_bytes.push((
-                message.key().and_then(|bytes| Some(bytes.to_owned())),
-                message.payload().and_then(|bytes| Some(bytes.to_owned())),
-            ));
+        loop {
+            match message_stream.next().await {
+                Some(Ok(message)) => {
+                    let message = message.map_err_to_string()?;
+                    consumer
+                        .store_offset_from_message(&message)
+                        .map_err(|e| format!("storing message offset: {:#}", e))?;
+                    actual_bytes.push((
+                        message.key().and_then(|bytes| Some(bytes.to_owned())),
+                        message.payload().and_then(|bytes| Some(bytes.to_owned())),
+                    ));
+                }
+                Some(Err(e)) => {
+                    println!("Received error from Kafka stream consumer: {}", e);
+                    break;
+                }
+                None => {
+                    break;
+                }
+            }
         }
 
         match &self.format {
