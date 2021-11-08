@@ -184,7 +184,6 @@ impl Pending {
 ///   any other type of request.
 #[derive(Debug)]
 pub struct Indexed<L: Log, B: Blob> {
-    next_stream_id: Id,
     saved_seqno: SeqNo,
     highest_assigned_seqno: SeqNo,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
@@ -246,9 +245,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             .map(|meta| (meta.id, Trace::new(meta)))
             .collect();
         let indexed = Indexed {
-            next_stream_id: meta.next_stream_id,
-            saved_seqno: meta.unsealeds_seqno_upper,
-            highest_assigned_seqno: meta.unsealeds_seqno_upper,
+            saved_seqno: meta.seqno,
+            highest_assigned_seqno: meta.seqno,
             id_mapping: meta.id_mapping,
             graveyard: meta.graveyard,
             log,
@@ -276,8 +274,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn restore(&mut self) {
         let meta = self.prev_meta.clone();
 
-        self.next_stream_id = meta.next_stream_id;
-        debug_assert_eq!(self.saved_seqno, meta.unsealeds_seqno_upper);
+        debug_assert_eq!(self.saved_seqno, meta.seqno);
         self.highest_assigned_seqno = self.saved_seqno;
         self.id_mapping = meta.id_mapping;
         self.graveyard = meta.graveyard;
@@ -311,7 +308,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             self.restore();
             return Err(e);
         } else {
-            self.saved_seqno = new_meta.unsealeds_seqno_upper;
+            self.saved_seqno = new_meta.seqno;
             self.prev_meta = new_meta;
         }
 
@@ -411,14 +408,13 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 s.id
             }
             None => {
-                let id = self.next_stream_id;
+                let id = self.serialize_meta().next_stream_id();
                 self.id_mapping.push(StreamRegistration {
                     name: id_str.to_owned(),
                     id,
                     key_codec_name: key_codec_name.to_owned(),
                     val_codec_name: val_codec_name.to_owned(),
                 });
-                self.next_stream_id = Id(id.0 + 1);
                 id
             }
         };
@@ -1010,8 +1006,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
     fn serialize_meta(&self) -> BlobMeta {
         BlobMeta {
-            next_stream_id: self.next_stream_id,
-            unsealeds_seqno_upper: self.highest_assigned_seqno,
+            seqno: self.highest_assigned_seqno,
             id_mapping: self.id_mapping.clone(),
             graveyard: self.graveyard.clone(),
             unsealeds: self

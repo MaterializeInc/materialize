@@ -66,16 +66,19 @@ pub struct LogEntry {
 /// - id_mapping.len() + graveyard.len() is == next_stream_id.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BlobMeta {
-    /// The next internal stream id to assign.
-    pub next_stream_id: Id,
-    /// The position of log the last time data was step'd into unsealeds.
+    /// Which mutations are included in the represented state.
+    ///
+    /// Persist is a state machine, with all mutating requests modeled as input
+    /// state changes sequenced into a log. Periodically those state changes are
+    /// applied and the resulting state is written out to blob storage. This
+    /// field indicates which prefix of the log (`0..=self.seqno`) has been
+    /// included in the state represented by this BlobMeta. SeqNo(0) represents
+    /// the initial empty state, the first mutation is SeqNo(1).
     ///
     /// Invariant: For each UnsealedMeta in `unsealeds`, this is >= the last
     /// batch's upper. If they are not equal, there is logically an empty batch
-    /// between [last batch's upper, unsealeds_seqno_upper).
-    ///
-    /// TODO: Rename this to seqno.
-    pub unsealeds_seqno_upper: SeqNo,
+    /// between [last batch's upper, self.seqno).
+    pub seqno: SeqNo,
     /// Internal stream id indexed by external stream name.
     ///
     /// Invariant: Each stream name and stream id are in here at most once.
@@ -262,8 +265,7 @@ impl LogEntry {
 impl Default for BlobMeta {
     fn default() -> Self {
         BlobMeta {
-            next_stream_id: Id(0),
-            unsealeds_seqno_upper: SeqNo(0),
+            seqno: SeqNo(0),
             id_mapping: Vec::new(),
             graveyard: Vec::new(),
             unsealeds: Vec::new(),
@@ -350,7 +352,7 @@ impl Codec for BlobMeta {
 
 impl BlobMeta {
     const MAGIC: &'static [u8] = b"mz";
-    const CURRENT_VERSION: u8 = 3;
+    const CURRENT_VERSION: u8 = 4;
 
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
@@ -358,13 +360,6 @@ impl BlobMeta {
         let mut ids = HashSet::new();
         let mut names = HashSet::new();
         for r in self.id_mapping.iter() {
-            if r.id >= self.next_stream_id {
-                return Err(format!(
-                    "contained stream id {:?} >= next_stream_id: {:?}",
-                    r.id, self.next_stream_id
-                )
-                .into());
-            }
             if names.contains(&r.name) {
                 return Err(format!("duplicate external stream name: {}", r.name).into());
             }
@@ -379,14 +374,6 @@ impl BlobMeta {
         let mut deleted_names = HashSet::new();
 
         for r in self.graveyard.iter() {
-            if r.id >= self.next_stream_id {
-                return Err(format!(
-                    "graveyard contained stream id {:?} >= next_stream_id: {:?}",
-                    r.id, self.next_stream_id
-                )
-                .into());
-            }
-
             if names.contains(&r.name) {
                 return Err(format!(
                     "duplicate external stream name {} across deleted and registered streams",
@@ -414,10 +401,11 @@ impl BlobMeta {
             deleted_ids.insert(r.id);
         }
 
-        if u64::cast_from(deleted_ids.len() + ids.len()) != self.next_stream_id.0 {
+        let next_stream_id = self.next_stream_id();
+        if u64::cast_from(deleted_ids.len() + ids.len()) != next_stream_id.0 {
             return Err(format!(
                 "next stream {:?}, but only registered {} ids and deleted {} ids",
-                self.next_stream_id,
+                next_stream_id,
                 ids.len(),
                 deleted_ids.len()
             )
@@ -460,10 +448,10 @@ impl BlobMeta {
                 Error::from(format!("id_mapping id {:?} not present in traces", id))
             })?;
             let unsealed_seqno_upper = unsealed.seqno_upper();
-            if !unsealed_seqno_upper.less_equal(&self.unsealeds_seqno_upper) {
+            if !unsealed_seqno_upper.less_equal(&self.seqno) {
                 return Err(Error::from(format!(
-                    "id {:?} unsealed seqno_upper {:?} is not less or equal to the blob's unsealed_seqno_upper {:?}",
-                    id, unsealed_seqno_upper, self.unsealeds_seqno_upper,
+                    "id {:?} unsealed seqno_upper {:?} is not less or equal to the blob's seqno {:?}",
+                    id, unsealed_seqno_upper, self.seqno,
                 )));
             }
             let trace_ts_upper = trace.ts_upper();
@@ -475,6 +463,17 @@ impl BlobMeta {
             }
         }
         Ok(())
+    }
+
+    /// The next Id to issue for a stream being added to id_mapping.
+    pub fn next_stream_id(&self) -> Id {
+        let current_highest = self
+            .id_mapping
+            .iter()
+            .chain(self.graveyard.iter())
+            .map(|s| s.id)
+            .max();
+        current_highest.map_or(Id(0), |id| Id(id.0 + 1))
     }
 
     /// Current encoding version that BlobMeta can be read and written as.
@@ -1248,7 +1247,6 @@ mod tests {
 
         // Normal case
         let b = BlobMeta {
-            next_stream_id: Id(2),
             id_mapping: vec![("0", Id(0)).into(), ("1", Id(1)).into()],
             unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(1))],
             traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(1))],
@@ -1258,7 +1256,6 @@ mod tests {
 
         // Duplicate external stream id
         let b = BlobMeta {
-            next_stream_id: Id(2),
             id_mapping: vec![("1", Id(0)).into(), ("1", Id(1)).into()],
             unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(1))],
             traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(1))],
@@ -1271,7 +1268,6 @@ mod tests {
 
         // Duplicate internal stream id
         let b = BlobMeta {
-            next_stream_id: Id(2),
             id_mapping: vec![("0", Id(1)).into(), ("1", Id(1)).into()],
             unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(1))],
             traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(1))],
@@ -1282,24 +1278,8 @@ mod tests {
             Err(Error::from("duplicate internal stream id: Id(1)"))
         );
 
-        // Invalid next_stream_id
-        let b = BlobMeta {
-            next_stream_id: Id(1),
-            id_mapping: vec![("0", Id(0)).into(), ("1", Id(1)).into()],
-            unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(1))],
-            traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(1))],
-            ..Default::default()
-        };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from(
-                "contained stream id Id(1) >= next_stream_id: Id(1)"
-            ))
-        );
-
         // Missing unsealed
         let b = BlobMeta {
-            next_stream_id: Id(1),
             id_mapping: vec![("0", Id(0)).into()],
             unsealeds: vec![],
             traces: vec![TraceMeta::new(Id(0))],
@@ -1312,7 +1292,6 @@ mod tests {
 
         // Missing trace
         let b = BlobMeta {
-            next_stream_id: Id(1),
             id_mapping: vec![("0", Id(0)).into()],
             unsealeds: vec![UnsealedMeta::new(Id(0))],
             traces: vec![],
@@ -1325,7 +1304,6 @@ mod tests {
 
         // Extra unsealed
         let b = BlobMeta {
-            next_stream_id: Id(0),
             id_mapping: vec![],
             unsealeds: vec![UnsealedMeta::new(Id(0))],
             traces: vec![],
@@ -1338,7 +1316,6 @@ mod tests {
 
         // Extra trace
         let b = BlobMeta {
-            next_stream_id: Id(0),
             id_mapping: vec![],
             unsealeds: vec![],
             traces: vec![TraceMeta::new(Id(0))],
@@ -1351,7 +1328,6 @@ mod tests {
 
         // Duplicate in unsealeds
         let b = BlobMeta {
-            next_stream_id: Id(1),
             id_mapping: vec![("0", Id(0)).into()],
             unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(0))],
             traces: vec![TraceMeta::new(Id(0))],
@@ -1361,7 +1337,6 @@ mod tests {
 
         // Duplicate in traces
         let b = BlobMeta {
-            next_stream_id: Id(1),
             id_mapping: vec![("0", Id(0)).into()],
             unsealeds: vec![UnsealedMeta::new(Id(0))],
             traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(0))],
@@ -1371,7 +1346,6 @@ mod tests {
 
         // Normal case: unsealed ts_lower < ts_upper
         let b = BlobMeta {
-            next_stream_id: Id(1),
             id_mapping: vec![("0", Id(0)).into()],
             unsealeds: vec![UnsealedMeta {
                 id: Id(0),
@@ -1392,7 +1366,6 @@ mod tests {
 
         // Normal case: unsealed ts_lower at ts_upper
         let b = BlobMeta {
-            next_stream_id: Id(1),
             id_mapping: vec![("0", Id(0)).into()],
             unsealeds: vec![UnsealedMeta {
                 id: Id(0),
@@ -1413,7 +1386,6 @@ mod tests {
 
         // Unsealed ts_lower in advance of ts_upper
         let b = BlobMeta {
-            next_stream_id: Id(1),
             id_mapping: vec![("0", Id(0)).into()],
             unsealeds: vec![UnsealedMeta {
                 id: Id(0),
@@ -1437,11 +1409,10 @@ mod tests {
             ))
         );
 
-        // unsealed_seqno_upper less than one of the unsealed seqno uppers
+        // seqno less than one of the unsealed seqno uppers
         let b = BlobMeta {
-            next_stream_id: Id(1),
             id_mapping: vec![("0", Id(0)).into()],
-            unsealeds_seqno_upper: SeqNo(2),
+            seqno: SeqNo(2),
             unsealeds: vec![UnsealedMeta {
                 id: Id(0),
                 batches: vec![unsealed_batch_meta(0, 3)],
@@ -1454,13 +1425,12 @@ mod tests {
         assert_eq!(
             b.validate(),
             Err(Error::from(
-                "id Id(0) unsealed seqno_upper Antichain { elements: [SeqNo(3)] } is not less or equal to the blob's unsealed_seqno_upper SeqNo(2)"
+                "id Id(0) unsealed seqno_upper Antichain { elements: [SeqNo(3)] } is not less or equal to the blob's seqno SeqNo(2)"
             ))
         );
 
         // Duplicate id in graveyard.
         let b = BlobMeta {
-            next_stream_id: Id(1),
             graveyard: vec![("deleted", Id(0)).into(), ("1", Id(0)).into()],
             ..Default::default()
         };
@@ -1472,7 +1442,6 @@ mod tests {
 
         // Duplicate stream name in graveyard.
         let b = BlobMeta {
-            next_stream_id: Id(2),
             graveyard: vec![("deleted", Id(0)).into(), ("deleted", Id(1)).into()],
             ..Default::default()
         };
@@ -1486,7 +1455,6 @@ mod tests {
 
         // Duplicate id across graveyard and id_mapping.
         let b = BlobMeta {
-            next_stream_id: Id(2),
             id_mapping: vec![("deleted", Id(0)).into()],
             graveyard: vec![("1", Id(0)).into()],
             ..Default::default()
@@ -1501,7 +1469,6 @@ mod tests {
 
         // Duplicate stream name across graveyard and id_mapping.
         let b = BlobMeta {
-            next_stream_id: Id(2),
             id_mapping: vec![("name", Id(1)).into()],
             graveyard: vec![("name", Id(0)).into()],
             ..Default::default()
@@ -1516,8 +1483,7 @@ mod tests {
 
         // Next stream id != id_mapping + deleted
         let b = BlobMeta {
-            next_stream_id: Id(2),
-            id_mapping: vec![("name", Id(0)).into()],
+            id_mapping: vec![("name", Id(1)).into()],
             ..Default::default()
         };
 
@@ -1534,8 +1500,7 @@ mod tests {
         // Sanity check that encode/decode roundtrips and that we don't panic
         // (or erroneously succeed) on invalid data.
         let original = BlobMeta {
-            next_stream_id: Id(1),
-            unsealeds_seqno_upper: SeqNo(2),
+            seqno: SeqNo(2),
             // This is not a test of bincode's roundtrip-ability, so don't
             // bother too much with the test data.
             id_mapping: vec![],
