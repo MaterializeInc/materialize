@@ -25,9 +25,10 @@ hex = "0.4.3"
 itertools = "0.10.1"
 lazy_static = "1.4.0"
 lowertest = { path = "../lowertest"}
+num_enum = "0.5.1"
 num-traits = "0.2.14"
 ordered-float = { version = "2.8.0", features = ["serde"] }
-ore = { path = "../ore", features = ["bytes"] }
+ore = { path = "../ore", features = ["bytes", "smallvec"] }
 persist-types = { path = "../persist-types" }
 regex = "1.5.4"
 ryu = "1.0.5"

@@ -13,9 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Vector utilities
+//! Vector utilities.
 
 use std::mem::{align_of, size_of};
+
+#[cfg(feature = "smallvec")]
+use smallvec::SmallVec;
 
 /// Create a new vector that re-uses the same allocation as an old one.
 /// The element types must have the same size and alignment.
@@ -30,4 +33,45 @@ pub fn repurpose_allocation<T1, T2>(mut v: Vec<T1>) -> Vec<T2> {
     // `p`'s allocation is no longer owned by `v` (since that has been forgotten),
     // and `p` was previously allocated with capacity `cap`.
     unsafe { Vec::from_raw_parts(p, 0, cap) }
+}
+
+/// A trait for objects that behave like vectors.
+pub trait Vector<T> {
+    /// Appends an element to the vector.
+    fn push(&mut self, value: T);
+
+    /// Copies and appends all elements in a slice to the vector.
+    fn extend_from_slice(&mut self, other: &[T])
+    where
+        T: Copy;
+}
+
+impl<T> Vector<T> for Vec<T> {
+    fn push(&mut self, value: T) {
+        Vec::push(self, value)
+    }
+
+    fn extend_from_slice(&mut self, other: &[T])
+    where
+        T: Copy,
+    {
+        Vec::extend_from_slice(self, other)
+    }
+}
+
+#[cfg(feature = "smallvec")]
+impl<A> Vector<A::Item> for SmallVec<A>
+where
+    A: smallvec::Array,
+{
+    fn push(&mut self, value: A::Item) {
+        SmallVec::push(self, value)
+    }
+
+    fn extend_from_slice(&mut self, other: &[A::Item])
+    where
+        A::Item: Copy,
+    {
+        SmallVec::extend_from_slice(self, other)
+    }
 }
