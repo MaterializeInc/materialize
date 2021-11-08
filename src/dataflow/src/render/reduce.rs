@@ -691,10 +691,10 @@ where
             timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
             _,
         ) = input.flat_map(None, |permutation| {
-            move |row, time, diff| {
+            move |row_parts, time, diff| {
                 let temp_storage = RowArena::new();
 
-                let mut row_datums = row_datums.borrow_with_many(row);
+                let mut row_datums = row_datums.borrow_with_many(row_parts);
                 if let Some(permutation) = &permutation {
                     permutation.permute_in_place(&mut row_datums);
                 }
