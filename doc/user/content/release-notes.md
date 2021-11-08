@@ -127,7 +127,9 @@ List new features before bug fixes.
   [`mz_kafka_source_statistics`](/sql/system-catalog#mz_kafka_source_statistics),
   containing raw statistics from the underlying librdkafka library.
 
-- Fix a bug that caused a panic when using a query containing `STRING_AGG`
+- Fix a bug that caused a panic when using a query containing
+  `STRING_AGG`, `JSON_AGG`, `JSON_OBJECT_AGG`, `LIST_AGG`, or `ARRAY_AGG`
+  on data sets containing exactly one record.
 
 {{% version-header v0.9.11 %}}
 
