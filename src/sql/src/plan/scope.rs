@@ -41,6 +41,9 @@
 //! I've tried to refactor this code several times to no avail. It works better
 //! than you might expect. But you have been warned. Tread carefully!
 
+use std::collections::HashSet;
+
+use anyhow::bail;
 use itertools::Itertools;
 
 use repr::ColumnName;
@@ -302,15 +305,26 @@ impl Scope {
             })
     }
 
-    pub fn product(self, right: Self) -> Self {
-        Scope {
+    pub fn product(self, right: Self) -> Result<Self, anyhow::Error> {
+        let mut l_tables = self.table_names().into_iter().collect::<Vec<_>>();
+        // Make ordering deterministic for testing
+        l_tables.sort_by(|l, r| l.item.cmp(&r.item));
+        let r_tables = right.table_names();
+        for l in l_tables {
+            for r in &r_tables {
+                if l.matches(r) {
+                    bail!("table name \"{}\" specified more than once", l.item)
+                }
+            }
+        }
+        Ok(Scope {
             items: self
                 .items
                 .into_iter()
                 .chain(right.items.into_iter())
                 .collect(),
             outer_scope: self.outer_scope,
-        }
+        })
     }
 
     pub fn project(&self, columns: &[usize]) -> Self {
@@ -318,5 +332,13 @@ impl Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
             outer_scope: self.outer_scope.clone(),
         }
+    }
+
+    fn table_names(&self) -> HashSet<&PartialName> {
+        self.items
+            .iter()
+            .flat_map(|item| &item.names)
+            .filter_map(|name| name.table_name.as_ref())
+            .collect::<HashSet<&PartialName>>()
     }
 }

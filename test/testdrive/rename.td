@@ -684,7 +684,7 @@ materialize.public.space_dependent "CREATE VIEW \"materialize\".\"public\".\"spa
 # 🔬 Keyword
 
 > CREATE VIEW natural AS
-  SELECT * FROM t1 NATURAL JOIN t1;
+  SELECT * FROM t1 NATURAL JOIN t1 AS a;
 
 # ✅ Keywords are never trapped in a rename
 > ALTER VIEW natural RENAME TO unnatural
@@ -692,9 +692,9 @@ materialize.public.space_dependent "CREATE VIEW \"materialize\".\"public\".\"spa
 > SHOW CREATE VIEW unnatural
 View                         "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.unnatural "CREATE VIEW \"materialize\".\"public\".\"unnatural\" AS SELECT * FROM \"materialize\".\"public\".\"t1\" NATURAL JOIN \"materialize\".\"public\".\"t1\""
+materialize.public.unnatural "CREATE VIEW \"materialize\".\"public\".\"unnatural\" AS SELECT * FROM \"materialize\".\"public\".\"t1\" NATURAL JOIN \"materialize\".\"public\".\"t1\" AS \"a\""
 
-> CREATE VIEW "materialize"."public"."unnatural_test" AS SELECT * FROM "materialize"."public"."t1" NATURAL JOIN "materialize"."public"."t1"
+> CREATE VIEW "materialize"."public"."unnatural_test" AS SELECT * FROM "materialize"."public"."t1" NATURAL JOIN "materialize"."public"."t1" AS "a"
 
 # 🔬 Function names
 

@@ -15,8 +15,8 @@
 
 > CREATE TABLE t3 (f1 INTEGER);
 
-# Ambiguous table name - currently succeeds due to #4756
-> DELETE FROM t1 USING t1;
+! DELETE FROM t1 USING t1;
+table name "t1" specified more than once
 
 # Ambiguous column name
 ! DELETE FROM t1 USING t2 WHERE f1 = 1;

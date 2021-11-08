@@ -914,6 +914,10 @@ fn handle_mutation_using_clause(
         // this filters the `USING` tables, _not_ the joined `USING..., FROM`
         // relation.
         using_rel_expr = using_rel_expr.filter(vec![expr]);
+    } else {
+        // Check that scopes are at compatible (i.e. do not double-reference
+        // same table), despite lack of selection
+        let _joined_scope = using_scope.product(outer_scope)?;
     }
     // From pg: Since the result [of EXISTS (<subquery>)] depends only on
     // whether any rows are returned, and not on the contents of those rows,
@@ -2387,7 +2391,7 @@ fn plan_join_operator(
                     kind: JoinKind::Inner { lateral },
                 }
             };
-            Ok((join, left_scope.product(right_scope)))
+            Ok((join, left_scope.product(right_scope)?))
         }
     }
 }
@@ -2405,7 +2409,7 @@ fn plan_join_constraint<'a>(
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
     let (expr, scope) = match constraint {
         JoinConstraint::On(expr) => {
-            let mut product_scope = left_scope.product(right_scope);
+            let mut product_scope = left_scope.product(right_scope)?;
             let ecx = &ExprContext {
                 qcx: &right_qcx,
                 name: "ON clause",
@@ -2509,7 +2513,7 @@ fn plan_using_constraint(
     let mut new_items = vec![];
     let mut dropped_columns = HashSet::new();
 
-    let mut both_scope = left_scope.clone().product(right_scope.clone());
+    let mut both_scope = left_scope.clone().product(right_scope.clone())?;
 
     let ecx = &ExprContext {
         qcx: &right_qcx,
