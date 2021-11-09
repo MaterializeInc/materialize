@@ -59,7 +59,7 @@ You can now include the diagram on a page using:
 
 ### Checking links locally
 
-You can check links locally with [htmltest](https://github.com/wjdp/htmltest).
+You can check links locally with [`htmltest`](https://github.com/wjdp/htmltest).
 
 Visit their website for installation instructions, or, if you have installed [Homebrew](https://brew.sh/)
 on a Mac or on Linux, run
