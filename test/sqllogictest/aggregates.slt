@@ -535,3 +535,31 @@ query T
 SELECT JSONB_OBJECT_AGG(a,b) from (SELECT TRUE::text as a, FALSE::text as b FROM(SELECT AVG(0) FROM qs))
 ----
 {"true":"false"}
+
+query TI
+SELECT a.*, ROW_NUMBER() over () FROM (SELECT * FROM a ORDER BY x) a
+----
+a  1
+b  2
+
+query TI
+SELECT a.*, ROW_NUMBER() over () FROM (SELECT * FROM a ORDER BY x limit 1) a
+----
+a  1
+
+
+query TI
+SELECT a.*, ROW_NUMBER() OVER() FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x) a
+----
+a  1
+b  2
+
+query TI
+SELECT a.*, ROW_NUMBER() OVER() FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x limit 1) a
+----
+a  1
+
+query TI
+SELECT a.*, ROW_NUMBER() OVER() from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs)) a
+----
+true 1
