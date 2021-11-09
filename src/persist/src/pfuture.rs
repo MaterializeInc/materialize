@@ -9,6 +9,7 @@
 
 //! Public concrete implementation of [std::future::Future].
 
+use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -21,8 +22,13 @@ use crate::error::Error;
 ///
 /// Unlike [std::future::Future], the computation will complete even if this is
 /// dropped.
-#[derive(Debug)]
 pub struct PFuture<T>(oneshot::Receiver<Result<T, Error>>);
+
+impl<T> fmt::Debug for PFuture<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PFuture").finish_non_exhaustive()
+    }
+}
 
 impl<T> PFuture<T> {
     /// Create a new instance of [PFuture], and the corresponding
@@ -54,12 +60,17 @@ impl<T> std::future::Future for PFuture<T> {
 }
 
 /// A handle for filling the result of an asynchronous computation.
-#[derive(Debug)]
 pub struct PFutureHandle<T>(oneshot::Sender<Result<T, Error>>);
 
 impl<T> PFutureHandle<T> {
     pub(crate) fn fill(self, res: Result<T, Error>) {
         // Don't care if the receiver hung up.
         let _ = self.0.send(res);
+    }
+}
+
+impl<T> fmt::Debug for PFutureHandle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PFutureHandle").finish_non_exhaustive()
     }
 }
