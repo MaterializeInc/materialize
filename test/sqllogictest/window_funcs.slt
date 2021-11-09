@@ -39,7 +39,7 @@ ORDER BY row_number
 3  a
 
 query IT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
+WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98))
 SELECT row_number() OVER (PARTITION BY y ORDER BY x), x FROM t
 ORDER BY row_number, x
 ----
