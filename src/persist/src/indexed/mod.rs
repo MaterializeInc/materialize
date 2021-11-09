@@ -76,42 +76,17 @@ struct Pending {
     writes: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>>,
     responses: Vec<PendingResponse>,
     seals: HashMap<Id, u64>,
+    durable_meta: BlobMeta,
 }
 
 impl Pending {
-    fn new() -> Self {
+    fn new(durable_meta: BlobMeta) -> Self {
         Self {
             writes: HashMap::new(),
             responses: Vec::new(),
             seals: HashMap::new(),
+            durable_meta,
         }
-    }
-
-    // Validate that there are no pending writes, seals or responses.
-    #[cfg(any(debug_assertions, test))]
-    fn validate_empty(&self) -> Result<(), Error> {
-        if !self.writes.is_empty() {
-            return Err(Error::from(format!(
-                "still have {} pending writes after draining pending writes, expected 0.",
-                self.writes.len()
-            )));
-        }
-
-        if !self.responses.is_empty() {
-            return Err(Error::from(format!(
-                "still have {} pending responses after draining pending responses, expected 0.",
-                self.responses.len()
-            )));
-        }
-
-        if !self.seals.is_empty() {
-            return Err(Error::from(format!(
-                "still have {} pending seals after draining pending seals, expected 0.",
-                self.seals.len()
-            )));
-        }
-
-        Ok(())
     }
 
     fn add_writes(&mut self, updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>) {
@@ -128,30 +103,6 @@ impl Pending {
         for id in ids {
             self.seals.insert(id, seal);
         }
-    }
-
-    /// Take the set of pending writes out of [Pending], leaving an empty hashmap.
-    fn take_writes(&mut self) -> HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> {
-        std::mem::take(&mut self.writes)
-    }
-
-    /// Take the set of pending responses out of [Pending], leaving an empty vector.
-    fn take_responses(&mut self) -> Vec<PendingResponse> {
-        std::mem::take(&mut self.responses)
-    }
-
-    /// Take the set of pending seals out of [Pending], leaving an empty hashmap.
-    fn take_seals(&mut self) -> HashMap<Id, u64> {
-        std::mem::take(&mut self.seals)
-    }
-
-    /// Return true if [Pending] has at least one pending response.
-    ///
-    /// TODO: It's unclear whether this API is worth doing. We could alternatively
-    /// just make writes and responses public and avoid having this function and
-    /// the various getter functions.
-    fn has_responses(&self) -> bool {
-        !self.responses.is_empty()
     }
 }
 
@@ -199,7 +150,7 @@ pub struct Indexed<L: Log, B: Blob> {
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
     metrics: Metrics,
     state: AppliedState,
-    pending: Pending,
+    pending: Option<Pending>,
 }
 
 /// The cumulative state that results from applying some prefix of the persist
@@ -218,7 +169,6 @@ struct AppliedState {
     graveyard: Vec<StreamRegistration>,
     unsealeds: BTreeMap<Id, Unsealed>,
     traces: BTreeMap<Id, Trace>,
-    prev_meta: BlobMeta,
 }
 
 impl<L: Log, B: Blob> Indexed<L, B> {
@@ -256,7 +206,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             listeners: HashMap::new(),
             metrics,
             state,
-            pending: Pending::new(),
+            pending: None,
         };
 
         Ok(indexed)
@@ -265,7 +215,6 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
 impl AppliedState {
     fn new(meta: BlobMeta) -> Self {
-        let meta_copy = meta.clone();
         let unsealeds = meta
             .unsealeds
             .into_iter()
@@ -284,20 +233,35 @@ impl AppliedState {
             graveyard: meta.graveyard,
             unsealeds,
             traces,
-            prev_meta: meta_copy,
         }
+    }
+
+    fn assign_seqno(&mut self) -> SeqNo {
+        let seqno = self.highest_assigned_seqno + 1;
+        self.highest_assigned_seqno = seqno;
+        seqno
     }
 }
 
 impl<L: Log, B: Blob> Indexed<L, B> {
-    /// Attempt to commit the current in-memory metadata state to durable storage,
-    /// and if not, revert back to a previous version.
+    /// Serializes and attempt to commit the current in-memory AppliedState to
+    /// durable storage, and if not, reverts back to the given previous version
+    /// (which is expected to match what's in durable storage).
+    ///
+    /// Precondition: pending has been emptied
     fn try_set_meta(&mut self, prev_meta: BlobMeta) -> Result<(), Error> {
-        debug_assert_eq!(self.validate_matches_storage(&prev_meta), Ok(()));
+        // NB: This validate_pending_empty is intentionally a returned error
+        // instead of an assert because it's a precondition (and so a violation
+        // means a usage error by the caller of this).
+        self.validate_pending_empty()?;
+        debug_assert_eq!(
+            Self::validate_matches_storage(&self.blob, &prev_meta),
+            Ok(())
+        );
 
-        let new_meta = self.state.serialize_meta();
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
+        let new_meta = self.state.serialize_meta();
         if let Err(e) = self.blob.set_meta(&new_meta) {
             // We were unable to durably commit the in-memory state. Revert back to the
             // previous version of meta.
@@ -305,7 +269,6 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             return Err(e);
         } else {
             self.state.saved_seqno = new_meta.unsealeds_seqno_upper;
-            self.state.prev_meta = new_meta.clone();
         }
 
         self.metrics
@@ -347,10 +310,10 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         work_fn: WorkFn,
     ) -> Result<T, Error> {
         debug_assert_eq!(self.validate(), Ok(()));
-        // NB: This validate_empty is intentionally a returned error instead of
-        // an assert because it's a precondition (and so a violation means a
-        // usage error by the caller of this).
-        self.pending.validate_empty()?;
+        // NB: This validate_pending_empty is intentionally a returned error
+        // instead of an assert because it's a precondition (and so a violation
+        // means a usage error by the caller of this).
+        self.validate_pending_empty()?;
 
         let meta_before = self.state.serialize_meta();
         let work_ret = match work_fn(&mut self.state, &mut self.blob, &mut self.maintainer) {
@@ -362,8 +325,28 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         };
         self.try_set_meta(meta_before)?;
 
+        debug_assert_eq!(self.validate_pending_empty(), Ok(()));
         debug_assert_eq!(self.validate(), Ok(()));
         Ok(work_ret)
+    }
+
+    fn apply_batched_cmd<WorkFn: FnOnce(&mut AppliedState, &mut Pending)>(
+        &mut self,
+        work_fn: WorkFn,
+    ) {
+        debug_assert_eq!(self.validate(), Ok(()));
+
+        let pending = self.pending.get_or_insert_with(|| {
+            let durable_meta = self.state.serialize_meta();
+            debug_assert_eq!(
+                Self::validate_matches_storage(&self.blob, &durable_meta),
+                Ok(())
+            );
+            Pending::new(durable_meta)
+        });
+        work_fn(&mut self.state, pending);
+
+        debug_assert_eq!(self.validate(), Ok(()));
     }
 
     /// Releases exclusive-writer locks and causes all future commands to error.
@@ -505,18 +488,20 @@ impl AppliedState {
 
 impl<L: Log, B: Blob> Indexed<L, B> {
     fn validate(&self) -> Result<(), Error> {
-        self.validate_matches_storage(&self.state.prev_meta)?;
+        if let Some(pending) = self.pending.as_ref() {
+            Self::validate_matches_storage(&self.blob, &pending.durable_meta)?;
+        }
         self.validate_referenced_keys_exist()?;
         Ok(())
     }
 
     /// Validates that the meta we might roll back to must be equal to the
     /// durably persisted meta.
-    fn validate_matches_storage(&self, meta: &BlobMeta) -> Result<(), Error> {
+    fn validate_matches_storage(blob: &BlobCache<B>, meta: &BlobMeta) -> Result<(), Error> {
         // We can only check this invariant when blob is available, as otherwise
         // we fail to make progress on draining pending requests and writes
         // during nemesis tests.
-        match self.blob.get_meta() {
+        match blob.get_meta() {
             Ok(m) => {
                 let persisted_meta = m.unwrap_or_default();
                 if &persisted_meta != meta {
@@ -568,15 +553,36 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         Ok(())
     }
 
+    fn validate_pending_empty(&self) -> Result<(), Error> {
+        if let Some(pending) = self.pending.as_ref() {
+            return Err(Error::from(format!(
+                "still have pending, expected None: {:?}",
+                pending
+            )));
+        }
+        Ok(())
+    }
+
+    /// Return true if Pending has at least one pending response.
+    pub fn has_pending_responses(&self) -> bool {
+        self.pending
+            .as_ref()
+            .map_or(false, |p| !p.responses.is_empty())
+    }
+
     /// Commit any pending in-memory changes to persistent storage, respond to clients
     /// and notify any listeners.
     fn drain_pending(&mut self) -> Result<(), Error> {
         debug_assert_eq!(self.validate(), Ok(()));
 
-        let meta_before = self.state.prev_meta.clone();
+        let pending = match self.pending.take() {
+            Some(pending) => pending,
+            None => return Ok(()),
+        };
 
-        let updates_by_id = self.pending.take_writes();
-        let seals_for_listeners = self.pending.take_seals();
+        let meta_before = pending.durable_meta;
+        let updates_by_id = pending.writes;
+        let seals_for_listeners = pending.seals;
         let updates_for_listeners = updates_by_id.clone();
 
         let ret = (|| {
@@ -595,13 +601,13 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
         let ret = match ret {
             Ok(()) => {
-                let mut responses = self.pending.take_responses();
+                let mut responses = pending.responses;
                 responses.drain(..).for_each(|r| r.fill());
                 self.update_listeners(updates_for_listeners, seals_for_listeners);
                 Ok(())
             }
             Err(e) => {
-                let mut responses = self.pending.take_responses();
+                let mut responses = pending.responses;
                 self.metrics
                     .cmd_failed_count
                     .inc_by(u64::cast_from(responses.len()));
@@ -611,7 +617,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         };
 
         debug_assert_eq!(self.validate(), Ok(()));
-        debug_assert_eq!(self.pending.validate_empty(), Ok(()));
+        debug_assert_eq!(self.validate_pending_empty(), Ok(()));
 
         ret
     }
@@ -655,10 +661,10 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// currently sealed time. We will need to revisit the unsealed compaction if
     /// that assumption stops being true.
     fn compact(&mut self) -> Result<(), Error> {
-        // NB: This validate_empty is intentionally a returned error instead of
-        // an assert because it's a precondition (and so a violation means a
-        // usage error by the caller of this).
-        self.pending.validate_empty()?;
+        // NB: This validate_pending_empty is intentionally a returned error
+        // instead of an assert because it's a precondition (and so a violation
+        // means a usage error by the caller of this).
+        self.validate_pending_empty()?;
 
         let compaction_start = Instant::now();
         let ret = self.apply_unbatched_cmd(|state, _, maintainer| state.compact_inner(maintainer));
@@ -739,18 +745,18 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
         res: PFutureHandle<SeqNo>,
     ) {
-        let seqno = self.state.highest_assigned_seqno + 1;
-        self.state.highest_assigned_seqno = seqno;
-        let resp = self
-            .state
-            .validate_write(&updates)
-            .map(|_| seqno)
-            .map_err(|err| Error::Noop(seqno, err));
+        self.apply_batched_cmd(|state, pending| {
+            let seqno = state.assign_seqno();
+            let resp = state
+                .validate_write(&updates)
+                .map(|_| seqno)
+                .map_err(|err| Error::Noop(seqno, err));
 
-        if resp.is_ok() {
-            self.pending.add_writes(updates);
-        }
-        self.pending.add_response(PendingResponse::SeqNo(res, resp));
+            if resp.is_ok() {
+                pending.add_writes(updates);
+            }
+            pending.add_response(PendingResponse::SeqNo(res, resp));
+        })
     }
 }
 
@@ -965,17 +971,17 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// what times can later be sealed and written for that id. See
     /// `sealed_frontier` for details.
     pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: PFutureHandle<SeqNo>) {
-        let seqno = self.state.highest_assigned_seqno + 1;
-        self.state.highest_assigned_seqno = seqno;
-        let resp = self
-            .state
-            .do_seal(&ids, seal_ts)
-            .map(|_| seqno)
-            .map_err(|err| Error::Noop(seqno, err));
-        if resp.is_ok() {
-            self.pending.add_seals(ids, seal_ts);
-        }
-        self.pending.add_response(PendingResponse::SeqNo(res, resp));
+        self.apply_batched_cmd(|state, pending| {
+            let seqno = state.assign_seqno();
+            let resp = state
+                .do_seal(&ids, seal_ts)
+                .map(|_| seqno)
+                .map_err(|err| Error::Noop(seqno, err));
+            if resp.is_ok() {
+                pending.add_seals(ids, seal_ts);
+            }
+            pending.add_response(PendingResponse::SeqNo(res, resp));
+        })
     }
 }
 
@@ -1010,15 +1016,14 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         id_sinces: Vec<(Id, Antichain<u64>)>,
         res: PFutureHandle<SeqNo>,
     ) {
-        let seqno = self.state.highest_assigned_seqno + 1;
-        self.state.highest_assigned_seqno = seqno;
-        let response = self
-            .state
-            .do_allow_compaction(id_sinces)
-            .map(|_| seqno)
-            .map_err(|err| Error::Noop(seqno, err));
-        self.pending
-            .add_response(PendingResponse::SeqNo(res, response));
+        self.apply_batched_cmd(|state, pending| {
+            let seqno = state.assign_seqno();
+            let response = state
+                .do_allow_compaction(id_sinces)
+                .map(|_| seqno)
+                .map_err(|err| Error::Noop(seqno, err));
+            pending.add_response(PendingResponse::SeqNo(res, response));
+        })
     }
 }
 
