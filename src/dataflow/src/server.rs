@@ -783,6 +783,9 @@ where
             self.process_tails();
         }
         self.render_state.traces.del_all_traces();
+        for dataflow in self.timely_worker.installed_dataflows() {
+            self.timely_worker.drop_dataflow(dataflow);
+        }
         self.shutdown_logging();
     }
 
