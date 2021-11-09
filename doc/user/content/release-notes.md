@@ -101,6 +101,9 @@ List new features before bug fixes.
 
 {{< /comment >}}
 
+{{% version-header v0.9.13 %}}
+
+
 {{% version-header v0.9.12 %}}
 
 - **Breaking change**: Disallow ambiguous table references in queries. For
