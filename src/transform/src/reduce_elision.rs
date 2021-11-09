@@ -14,7 +14,8 @@
 //! can be simplified to a map operation.
 
 use crate::TransformArgs;
-use expr::{func, MirRelationExpr, MirScalarExpr};
+use expr::MirRelationExpr;
+use itertools::Itertools;
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
@@ -26,13 +27,14 @@ impl crate::Transform for ReduceElision {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.try_visit_mut(&mut |e| self.action(e))
+        relation.visit_mut(&mut |e| self.action(e));
+        Ok(())
     }
 }
 
 impl ReduceElision {
     /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Reduce {
             input,
             group_key,
@@ -46,62 +48,10 @@ impl ReduceElision {
                 keys.iter()
                     .all(|k| group_key.contains(&expr::MirScalarExpr::Column(*k)))
             }) {
-                use expr::{AggregateFunc, UnaryFunc, VariadicFunc};
-                use repr::Datum;
                 let map_scalars = aggregates
                     .iter()
-                    .map(|a| match a.func {
-                        // Count is one if non-null, and zero if null.
-                        AggregateFunc::Count => {
-                            let column_type = a.typ(&input_type);
-                            Ok(a.expr
-                                .clone()
-                                .call_unary(UnaryFunc::IsNull(func::IsNull))
-                                .if_then_else(
-                                    MirScalarExpr::literal_ok(
-                                        Datum::Int64(0),
-                                        column_type.scalar_type.clone(),
-                                    ),
-                                    MirScalarExpr::literal_ok(
-                                        Datum::Int64(1),
-                                        column_type.scalar_type,
-                                    ),
-                                ))
-                        }
-
-                        // SumInt16 takes Int16s as input, but outputs Int64s.
-                        AggregateFunc::SumInt16 => {
-                            Ok(a.expr.clone().call_unary(UnaryFunc::CastInt16ToInt64))
-                        }
-
-                        // SumInt32 takes Int32s as input, but outputs Int64s.
-                        AggregateFunc::SumInt32 => {
-                            Ok(a.expr.clone().call_unary(UnaryFunc::CastInt32ToInt64))
-                        }
-
-                        // SumInt64 takes Int64s as input, but outputs numerics.
-                        AggregateFunc::SumInt64 => Ok(a
-                            .expr
-                            .clone()
-                            .call_unary(UnaryFunc::CastInt64ToNumeric(Some(0)))),
-
-                        // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
-                        AggregateFunc::JsonbAgg { .. } => Ok(MirScalarExpr::CallVariadic {
-                            func: VariadicFunc::JsonbBuildArray,
-                            exprs: vec![a.expr.clone()],
-                        }),
-
-                        // StringAgg takes nested records of strings and outputs a string
-                        AggregateFunc::StringAgg { .. } => Ok(a
-                            .expr
-                            .clone()
-                            .call_unary(UnaryFunc::RecordGet(0))
-                            .call_unary(UnaryFunc::RecordGet(0))),
-
-                        // All other variants should return the argument to the aggregation.
-                        _ => Ok(a.expr.clone()),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .map(|a| a.on_unique(&input_type))
+                    .collect_vec();
 
                 let mut result = input.take_dangerous();
 
@@ -118,7 +68,5 @@ impl ReduceElision {
                 *relation = result;
             }
         }
-
-        Ok(())
     }
 }

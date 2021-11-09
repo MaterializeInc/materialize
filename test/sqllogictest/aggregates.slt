@@ -435,3 +435,103 @@ query T
 SELECT STRING_AGG(x, ',') from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs))
 ----
 true
+
+query T
+SELECT LIST_AGG(x)::text FROM (SELECT * FROM a ORDER BY x)
+----
+{a,b}
+
+query T
+SELECT LIST_AGG(x)::text FROM (SELECT * FROM a ORDER BY x limit 1)
+----
+{a}
+
+query T
+SELECT LIST_AGG(x)::text FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x)
+----
+{a,b}
+
+query T
+SELECT LIST_AGG(x)::text FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x limit 1)
+----
+{a}
+
+query T
+SELECT LIST_AGG(x)::text from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs))
+----
+{true}
+
+query T
+SELECT ARRAY_AGG(x) FROM (SELECT * FROM a ORDER BY x)
+----
+{a,b}
+
+query T
+SELECT ARRAY_AGG(x) FROM (SELECT * FROM a ORDER BY x limit 1)
+----
+{a}
+
+query T
+SELECT ARRAY_AGG(x) FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x)
+----
+{a,b}
+
+query T
+SELECT ARRAY_AGG(x) FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x limit 1)
+----
+{a}
+
+query T
+SELECT ARRAY_AGG(x) from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs))
+----
+{true}
+
+query T
+SELECT JSONB_AGG(x) FROM (SELECT * FROM a ORDER BY x)
+----
+["a","b"]
+
+query T
+SELECT JSONB_AGG(x) FROM (SELECT * FROM a ORDER BY x limit 1)
+----
+["a"]
+
+query T
+SELECT JSONB_AGG(x) FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x)
+----
+["a","b"]
+
+query T
+SELECT JSONB_AGG(x) FROM (SELECT * FROM (SELECT 'a' as x UNION ALL SELECT 'b' as x) ORDER BY x limit 1)
+----
+["a"]
+
+query T
+SELECT JSONB_AGG(x) from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs))
+----
+["true"]
+
+query T
+SELECT JSONB_OBJECT_AGG(a,b) FROM (SELECT * FROM t ORDER BY a)
+----
+{"1":2,"2":3,"3":1}
+
+query T
+SELECT JSONB_OBJECT_AGG(a,b) FROM (SELECT * FROM t ORDER BY a limit 1)
+----
+{"1":1}
+
+query T
+SELECT JSONB_OBJECT_AGG(a,b) FROM (SELECT * FROM (SELECT 'a' as a,'b' as b UNION ALL SELECT 'c' as a,'d' as b) ORDER by a)
+----
+{"a":"b","c":"d"}
+
+query T
+SELECT JSONB_OBJECT_AGG(a,b) FROM (SELECT * FROM (SELECT 'a' as a,'b' as b UNION ALL SELECT 'c' as a,'d' as b) ORDER by a limit 1)
+----
+{"a":"b"}
+
+query T
+SELECT JSONB_OBJECT_AGG(a,b) from (SELECT TRUE::text as a, FALSE::text as b FROM(SELECT AVG(0) FROM qs))
+----
+{"true":"false"}

@@ -25,7 +25,7 @@ use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
 use crate::{
     func as scalar_func, DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId,
-    MirScalarExpr, UnaryFunc,
+    MirScalarExpr, UnaryFunc, VariadicFunc,
 };
 
 pub mod canonicalize;
@@ -1526,6 +1526,94 @@ impl AggregateExpr {
             | AggregateFunc::All => self.expr.is_literal(),
             AggregateFunc::Count => self.expr.is_literal_null(),
             _ => self.expr.is_literal_err(),
+        }
+    }
+
+    /// Extracts unique input from aggregate type
+    pub fn on_unique(&self, input_type: &RelationType) -> MirScalarExpr {
+        match self.func {
+            // Count is one if non-null, and zero if null.
+            AggregateFunc::Count => {
+                let column_type = self.typ(&input_type);
+                self.expr
+                    .clone()
+                    .call_unary(UnaryFunc::IsNull(crate::func::IsNull))
+                    .if_then_else(
+                        MirScalarExpr::literal_ok(Datum::Int64(0), column_type.scalar_type.clone()),
+                        MirScalarExpr::literal_ok(Datum::Int64(1), column_type.scalar_type),
+                    )
+            }
+
+            // SumInt16 takes Int16s as input, but outputs Int64s.
+            AggregateFunc::SumInt16 => self.expr.clone().call_unary(UnaryFunc::CastInt16ToInt64),
+
+            // SumInt32 takes Int32s as input, but outputs Int64s.
+            AggregateFunc::SumInt32 => self.expr.clone().call_unary(UnaryFunc::CastInt32ToInt64),
+
+            // SumInt64 takes Int64s as input, but outputs numerics.
+            AggregateFunc::SumInt64 => self
+                .expr
+                .clone()
+                .call_unary(UnaryFunc::CastInt64ToNumeric(Some(0))),
+
+            // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
+            AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
+                func: VariadicFunc::JsonbBuildArray,
+                exprs: vec![self.expr.clone().call_unary(UnaryFunc::RecordGet(0))],
+            },
+
+            // JsonbAgg takes _anything_ as input, but must output a Jsonb object.
+            AggregateFunc::JsonbObjectAgg { .. } => {
+                let record = self.expr.clone().call_unary(UnaryFunc::RecordGet(0));
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::JsonbBuildObject,
+                    exprs: (0..2)
+                        .map(|i| record.clone().call_unary(UnaryFunc::RecordGet(i)))
+                        .collect(),
+                }
+            }
+
+            // StringAgg takes nested records of strings and outputs a string
+            AggregateFunc::StringAgg { .. } => self
+                .expr
+                .clone()
+                .call_unary(UnaryFunc::RecordGet(0))
+                .call_unary(UnaryFunc::RecordGet(0)),
+
+            // ListConcat and ArrayConcat take a single level of records and output a list containing exactly 1 element
+            AggregateFunc::ListConcat { .. } | AggregateFunc::ArrayConcat { .. } => {
+                self.expr.clone().call_unary(UnaryFunc::RecordGet(0))
+            }
+
+            // All other variants should return the argument to the aggregation.
+            AggregateFunc::MaxNumeric
+            | AggregateFunc::MaxInt16
+            | AggregateFunc::MaxInt32
+            | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxFloat32
+            | AggregateFunc::MaxFloat64
+            | AggregateFunc::MaxBool
+            | AggregateFunc::MaxString
+            | AggregateFunc::MaxDate
+            | AggregateFunc::MaxTimestamp
+            | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MinNumeric
+            | AggregateFunc::MinInt16
+            | AggregateFunc::MinInt32
+            | AggregateFunc::MinInt64
+            | AggregateFunc::MinFloat32
+            | AggregateFunc::MinFloat64
+            | AggregateFunc::MinBool
+            | AggregateFunc::MinString
+            | AggregateFunc::MinDate
+            | AggregateFunc::MinTimestamp
+            | AggregateFunc::MinTimestampTz
+            | AggregateFunc::SumFloat32
+            | AggregateFunc::SumFloat64
+            | AggregateFunc::SumNumeric
+            | AggregateFunc::Any
+            | AggregateFunc::All
+            | AggregateFunc::Dummy => self.expr.clone(),
         }
     }
 }
