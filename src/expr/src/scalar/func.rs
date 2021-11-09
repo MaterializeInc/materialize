@@ -34,7 +34,6 @@ use lowertest::MzEnumReflect;
 use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
-use ore::soft_assert;
 use ore::str::StrExt;
 use pgrepr::Type;
 use repr::adt::array::ArrayDimension;
@@ -5752,10 +5751,12 @@ impl VariadicFunc {
             }
             ArrayToString { .. } => ScalarType::String.nullable(true),
             ListCreate { elem_type } => {
-                soft_assert!(
-                    input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
-                    "Args to ListCreate should have types that are compatible with the elem_type"
-                );
+                // commented out to work around
+                // https://github.com/MaterializeInc/materialize/issues/8963
+                // soft_assert!(
+                //     input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
+                //     "{}", format!("Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{:#?}\nelem_type:{:#?}", input_types, elem_type)
+                // );
                 ScalarType::List {
                     element_type: Box::new(elem_type.clone()),
                     custom_oid: None,
