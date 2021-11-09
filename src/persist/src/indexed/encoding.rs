@@ -197,10 +197,6 @@ pub struct TraceBatchMeta {
 ///
 /// Invariants:
 /// - The [lower, upper) interval of sequence numbers in desc is non-empty.
-/// - The values in updates are sorted by (time, key, value).
-/// - The values in updates are "consolidated", i.e. (time, key, value) is
-///   unique.
-/// - All entries have a non-zero diff.
 /// - The updates field is non-empty.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BlobUnsealedBatch {
@@ -656,28 +652,6 @@ impl BlobUnsealedBatch {
             return Err("updates is empty".into());
         }
 
-        let mut prev: Option<(&u64, PrettyBytes<'_>, PrettyBytes<'_>)> = None;
-        for update in self.updates.iter() {
-            let ((key, val), ts, diff) = update;
-            // Check ordering.
-            let this = (ts, PrettyBytes(key), PrettyBytes(val));
-            if let Some(prev) = prev {
-                match prev.cmp(&this) {
-                    Ordering::Less => {} // Correct.
-                    Ordering::Equal => return Err(format!("unconsolidated: {:?}", this).into()),
-                    Ordering::Greater => {
-                        return Err(format!("unsorted: {:?} was before {:?}", prev, this).into())
-                    }
-                }
-            }
-            prev = Some(this);
-
-            // Check data invariants.
-            if *diff == 0 {
-                return Err(format!("update with 0 diff: {:?}", PrettyRecord(update)).into());
-            }
-        }
-
         Ok(())
     }
 }
@@ -893,38 +867,6 @@ mod tests {
             Err(Error::from(
                 "invalid desc: Description { lower: Antichain { elements: [SeqNo(0)] }, upper: Antichain { elements: [SeqNo(0)] }, since: Antichain { elements: [SeqNo(0)] } }"
             ))
-        );
-
-        // Not sorted by time
-        let b = BlobUnsealedBatch {
-            desc: seqno_desc(0, 2),
-            updates: vec![update_with_ts(1), update_with_ts(0)],
-        };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from(
-                "unsorted: (1, \"\", \"\") was before (0, \"\", \"\")"
-            ))
-        );
-
-        // Not consolidated
-        let b = BlobUnsealedBatch {
-            desc: seqno_desc(0, 2),
-            updates: vec![update_with_ts(0), update_with_ts(0)],
-        };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from("unconsolidated: (0, \"\", \"\")"))
-        );
-
-        // Invalid update
-        let b: BlobUnsealedBatch = BlobUnsealedBatch {
-            desc: seqno_desc(0, 1),
-            updates: vec![(("0".into(), "0".into()), 0, 0)],
-        };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from("update with 0 diff: ((\"0\", \"0\"), 0, 0)"))
         );
     }
 
