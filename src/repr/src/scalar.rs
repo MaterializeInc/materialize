@@ -1228,6 +1228,65 @@ impl<'a> ScalarType {
         }
     }
 
+    /// Whether the current type is contained by the given type.
+    ///
+    /// This is a variant of `base_eq` where we allow the nullability information
+    /// of the fields within a record to be more restrictive in the current type.
+    pub fn is_covered_by(&self, other: &ScalarType) -> bool {
+        use ScalarType::*;
+        match (self, other) {
+            (
+                List {
+                    element_type: l,
+                    custom_oid: oid_l,
+                },
+                List {
+                    element_type: r,
+                    custom_oid: oid_r,
+                },
+            )
+            | (
+                Map {
+                    value_type: l,
+                    custom_oid: oid_l,
+                },
+                Map {
+                    value_type: r,
+                    custom_oid: oid_r,
+                },
+            ) => l.is_covered_by(r) && oid_l == oid_r,
+
+            (Array(a), Array(b)) => a.is_covered_by(b),
+            (
+                Record {
+                    fields: fields_a,
+                    custom_oid: oid_a,
+                    custom_name: name_a,
+                },
+                Record {
+                    fields: fields_b,
+                    custom_oid: oid_b,
+                    custom_name: name_b,
+                },
+            ) => {
+                ((fields_a.is_empty() && fields_b.is_empty())
+                    || (fields_a.len() == fields_b.len()
+                        && fields_a.iter().zip(fields_b.iter()).all(
+                            |((name_a, type_a), (name_b, type_b))| {
+                                name_a == name_b
+                                    && type_a.scalar_type.is_covered_by(&type_b.scalar_type)
+                                    // Either the flag matches or B is less restrictive.
+                                    && (type_a.nullable == type_b.nullable
+                                        || (!type_a.nullable && type_b.nullable))
+                            },
+                        )))
+                    && oid_a == oid_b
+                    && name_a == name_b
+            }
+            (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
+        }
+    }
+
     pub fn is_string_like(&self) -> bool {
         match self {
             ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => true,

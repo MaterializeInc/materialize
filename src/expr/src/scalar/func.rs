@@ -34,6 +34,7 @@ use lowertest::MzEnumReflect;
 use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
+use ore::soft_assert;
 use ore::str::StrExt;
 use pgrepr::Type;
 use repr::adt::array::ArrayDimension;
@@ -5740,8 +5741,10 @@ impl VariadicFunc {
             Replace => ScalarType::String.nullable(true),
             JsonbBuildArray | JsonbBuildObject => ScalarType::Jsonb.nullable(true),
             ArrayCreate { elem_type } => {
-                debug_assert!(
-                    input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
+                soft_assert!(
+                    input_types
+                        .iter()
+                        .all(|t| t.scalar_type.is_covered_by(elem_type)),
                     "Args to ArrayCreate should have types that are compatible with the elem_type"
                 );
                 match elem_type {
@@ -5751,12 +5754,12 @@ impl VariadicFunc {
             }
             ArrayToString { .. } => ScalarType::String.nullable(true),
             ListCreate { elem_type } => {
-                // commented out to work around
-                // https://github.com/MaterializeInc/materialize/issues/8963
-                // soft_assert!(
-                //     input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
-                //     "{}", format!("Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{:#?}\nelem_type:{:#?}", input_types, elem_type)
-                // );
+                soft_assert!(
+                    input_types
+                        .iter()
+                        .all(|t| t.scalar_type.is_covered_by(elem_type)),
+                    "Args to ListCreate should have types that are compatible with the elem_type"
+                );
                 ScalarType::List {
                     element_type: Box::new(elem_type.clone()),
                     custom_oid: None,
