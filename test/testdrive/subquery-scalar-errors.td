@@ -90,10 +90,10 @@ Evaluation error: more than one record produced in subquery
 ! SELECT * FROM two_rows AS o WHERE (SELECT f1 FROM two_rows AS i WHERE o.f2 = i.f2) = 1 AND f1 = 2;
 Evaluation error: more than one record produced in subquery
 
-! SELECT * FROM two_rows JOIN two_rows ON (SELECT TRUE FROM two_rows);
+! SELECT * FROM two_rows JOIN two_rows AS r ON (SELECT TRUE FROM two_rows);
 Evaluation error: more than one record produced in subquery
 
-! SELECT * FROM two_rows LEFT JOIN two_rows ON (SELECT f1 = 1 FROM two_rows);
+! SELECT * FROM two_rows LEFT JOIN two_rows AS r ON (SELECT f1 = 1 FROM two_rows);
 Evaluation error: more than one record produced in subquery
 
 ! SELECT f1, COUNT(*) as C FROM two_rows GROUP BY f1 HAVING COUNT(*) > (SELECT f1 FROM two_rows);

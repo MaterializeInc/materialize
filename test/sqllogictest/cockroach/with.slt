@@ -19,9 +19,8 @@
 
 mode cockroach
 
-# https://github.com/MaterializeInc/materialize/issues/4756
-# query error unsupported multiple use of CTE clause "a"
-# WITH a AS (SELECT 1) SELECT * FROM a CROSS JOIN a
+query error table name "a" specified more than once
+WITH a AS (SELECT 1) SELECT * FROM a CROSS JOIN a
 
 statement ok
 CREATE TABLE x (a int)

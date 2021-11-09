@@ -103,6 +103,29 @@ List new features before bug fixes.
 
 {{% version-header v0.9.12 %}}
 
+- **Breaking change**: Disallow ambiguous table references in queries. For
+  example:
+
+  ```sql
+  SELECT * FROM a, a;
+  SELECT * FROM a, b AS a;
+  SELECT * FROM a, generate_series(1,3) AS a;
+  ```
+
+  These queries previously worked, but will now throw the error:
+
+  ```
+  table name "a" specified more than once
+  ```
+
+  However, you can always work around this limitation using aliases, e.g.
+
+  ```sql
+  SELECT * FROM a, a AS b;
+  ```
+
+  {{% gh 4756 %}}
+
 - Deduplicate columns in [arrangements](/overview/arrangements) that are
   shared between keys and values. This can result in memory savings of up to a
   factor of two for arrangements indexed by the whole row.
@@ -169,7 +192,8 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 - Format dates before AD 1 with the BC notation instead of using negative dates.
 
-- Fix some sources of crashes and incorrect results from optimizing queries involving constants ({{% gh 8713 %}} and {{% gh 8717 %}}).
+- Fix some sources of crashes and incorrect results from optimizing queries
+  involving constants {{% gh 8713 8717 %}}.
 
 - Support alternative `SUBSTRING(<string> [FROM <int>]? [FOR <int>]?)` syntax.
 

@@ -165,8 +165,8 @@ true
 > SELECT count(*)
   FROM
       mz_sources s JOIN mz_kafka_source_statistics stats ON s.id = split_part(stats.source_id, '/', 1),
-      jsonb_each(statistics->'topics') _ (topic, topic_statistics),
-      jsonb_each(topic_statistics->'partitions') _ (partition, partition_statistics)
+      jsonb_each(statistics->'topics') topics (topic, topic_statistics),
+      jsonb_each(topic_statistics->'partitions') partitions (partition, partition_statistics)
   WHERE s.name = 'kafka_ingest_no_partition' AND (partition_statistics->'rxmsgs')::integer > 0
 2
 
