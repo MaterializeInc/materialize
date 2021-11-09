@@ -169,16 +169,20 @@ impl Pending {
 ///   [Trace]. Trace is logically append-only, so data is transferred to it once
 ///   all the data for some timestamp has arrived. On read, [Indexed] uses this
 ///   frontier to ignore any data in Unsealed that exists in in Trace.
-/// - Writes, seals, and allow_compaction requests are not committed to durable
-///   storage immediately because we want to amortize the cost of writing to
-///   durable storage across many of those requests. Instead, those requests are
-///   applied to the in-memory Indexed object, and their responses are stored in
-///   `pending_responses`. Later pending writes and serialized metadata are
-///   committed to durable storage in `drain_pending` which flushes all pending
-///   writes to [Unsealed], commits the current serialized metadata to durable
-///   storage, and clears and responds to all pending responses.
-/// - Pending writes, seals, and allow_compactions are drained before processing
-///   any other type of request.
+/// - Requests are split into two types: _unbatched_ and _batched_. An unbatched
+///   command is run entirely by itself (the applied state has just been written
+///   to durable storage, then the command is run, then the resulting state is
+///   immediately written to durable storage). A batched command is applied to
+///   the machine state, but instead of immediately serializing the state to
+///   storage, we buffer the command response in Pending. Any other batched
+///   command can also be run and similarly buffered in Pending. Then, the next
+///   time we get an unbatched command (or `step` is called), all pending
+///   batched commands are made durable at once (and responses filled, listeners
+///   updated, etc). This is a performance optimization to amortize the cost of
+///   writing to durable storage across many of those requests. The most common
+///   requests (write, seal, allow_compaction) are all _batched_ to exploit
+///   this. All unbatched commands are expected to be relatively infrequent (to
+///   avoid excessive barriers in our pipelining).
 /// - When evaluating a request, the work of updating the state is given to
 ///   AppliedState (which has no knowledge of storage, etc). Then, if this was
 ///   successful, Indexed will serialize AppliedState and durably write it down.
@@ -291,63 +295,84 @@ impl AppliedState {
         let meta = self.prev_meta.clone();
         *self = AppliedState::new(meta);
     }
+}
 
+impl<L: Log, B: Blob> Indexed<L, B> {
     /// Attempt to commit the current in-memory metadata state to durable storage,
     /// and if not, revert back to a previous version.
-    fn try_set_meta<B: Blob>(
-        &mut self,
-        blob: &mut BlobCache<B>,
-        metrics: &Metrics,
-    ) -> Result<(), Error> {
-        let new_meta = self.serialize_meta();
+    fn try_set_meta(&mut self) -> Result<(), Error> {
+        debug_assert_eq!(self.validate_matches_storage(&self.state.prev_meta), Ok(()));
+
+        let new_meta = self.state.serialize_meta();
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
-        if let Err(e) = blob.set_meta(&new_meta) {
+        if let Err(e) = self.blob.set_meta(&new_meta) {
             // We were unable to durably commit the in-memory state. Revert back to the
             // previous version of meta.
-            self.restore();
+            self.state.restore();
             return Err(e);
         } else {
-            self.saved_seqno = new_meta.unsealeds_seqno_upper;
-            self.prev_meta = new_meta;
+            self.state.saved_seqno = new_meta.unsealeds_seqno_upper;
+            self.state.prev_meta = new_meta.clone();
         }
 
-        metrics
+        self.metrics
             .stream_count
-            .set(u64::cast_from(self.prev_meta.id_mapping.len()));
-        let unsealed_blob_count: usize = self
-            .prev_meta
-            .unsealeds
-            .iter()
-            .map(|x| x.batches.len())
-            .sum();
-        metrics
+            .set(u64::cast_from(new_meta.id_mapping.len()));
+        let unsealed_blob_count: usize = new_meta.unsealeds.iter().map(|x| x.batches.len()).sum();
+        self.metrics
             .unsealed_blob_count
             .set(u64::cast_from(unsealed_blob_count));
-        let unsealed_blob_bytes: u64 = self
-            .prev_meta
+        let unsealed_blob_bytes: u64 = new_meta
             .unsealeds
             .iter()
             .flat_map(|x| x.batches.iter().map(|x| x.size_bytes))
             .sum();
-        metrics.unsealed_blob_bytes.set(unsealed_blob_bytes);
-        let trace_blob_count: usize = self.prev_meta.traces.iter().map(|x| x.batches.len()).sum();
-        metrics
+        self.metrics.unsealed_blob_bytes.set(unsealed_blob_bytes);
+        let trace_blob_count: usize = new_meta.traces.iter().map(|x| x.batches.len()).sum();
+        self.metrics
             .trace_blob_count
             .set(u64::cast_from(trace_blob_count));
-        let trace_blob_bytes: u64 = self
-            .prev_meta
+        let trace_blob_bytes: u64 = new_meta
             .traces
             .iter()
             .flat_map(|x| x.batches.iter().map(|x| x.size_bytes))
             .sum();
-        metrics.trace_blob_bytes.set(trace_blob_bytes);
+        self.metrics.trace_blob_bytes.set(trace_blob_bytes);
 
         Ok(())
     }
-}
 
-impl<L: Log, B: Blob> Indexed<L, B> {
+    /// Applies an unbatched cmd to the machine state and snapshots the result
+    /// to durable storage.
+    ///
+    /// Precondition: pending has been emptied
+    fn apply_unbatched_cmd<
+        T,
+        WorkFn: FnOnce(&mut AppliedState, &mut BlobCache<B>, &mut Maintainer<B>) -> Result<T, Error>,
+    >(
+        &mut self,
+        work_fn: WorkFn,
+    ) -> Result<T, Error> {
+        debug_assert_eq!(self.validate(), Ok(()));
+        // NB: This validate_empty is intentionally a returned error instead of
+        // an assert because it's a precondition (and so a violation means a
+        // usage error by the caller of this).
+        self.pending.validate_empty()?;
+
+        let work_ret = match work_fn(&mut self.state, &mut self.blob, &mut self.maintainer) {
+            Ok(work_ret) => work_ret,
+            Err(err) => {
+                self.state.restore();
+                return Err(err);
+            }
+        };
+        self.try_set_meta()?;
+
+        debug_assert_eq!(self.validate(), Ok(()));
+        Ok(work_ret)
+    }
+
     /// Releases exclusive-writer locks and causes all future commands to error.
     ///
     /// This method is idempotent.
@@ -376,25 +401,19 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ) {
         res.fill((|| {
             self.drain_pending()?;
-            self.state.do_register(
-                id_str,
-                key_codec_name,
-                val_codec_name,
-                &mut self.blob,
-                &self.metrics,
-            )
+            self.apply_unbatched_cmd(|state, _, _| {
+                state.do_register(id_str, key_codec_name, val_codec_name)
+            })
         })());
     }
 }
 
 impl AppliedState {
-    fn do_register<B: Blob>(
+    fn do_register(
         &mut self,
         id_str: &str,
         key_codec_name: &str,
         val_codec_name: &str,
-        blob: &mut BlobCache<B>,
-        metrics: &Metrics,
     ) -> Result<Id, Error> {
         if self.graveyard.iter().any(|r| r.name == id_str) {
             return Err(Error::from(format!(
@@ -438,7 +457,6 @@ impl AppliedState {
         self.traces
             .entry(id)
             .or_insert_with_key(|id| Trace::new(TraceMeta::new(*id)));
-        self.try_set_meta(blob, metrics)?;
         Ok(id)
     }
 }
@@ -452,18 +470,13 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     pub fn destroy(&mut self, id_str: &str, res: PFutureHandle<bool>) {
         res.fill((|| {
             self.drain_pending()?;
-            self.state.do_destroy(id_str, &mut self.blob, &self.metrics)
+            self.apply_unbatched_cmd(|state, _, _| state.do_destroy(id_str))
         })());
     }
 }
 
 impl AppliedState {
-    fn do_destroy<B: Blob>(
-        &mut self,
-        id_str: &str,
-        blob: &mut BlobCache<B>,
-        metrics: &Metrics,
-    ) -> Result<bool, Error> {
+    fn do_destroy(&mut self, id_str: &str) -> Result<bool, Error> {
         if self.graveyard.iter().any(|r| r.name == id_str) {
             return Ok(false);
         }
@@ -492,8 +505,6 @@ impl AppliedState {
         debug_assert!(trace.is_some());
 
         self.graveyard.push(mapping);
-
-        self.try_set_meta(blob, metrics)?;
 
         Ok(true)
     }
@@ -607,7 +618,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             deleted_trace_batches.extend(deleted_batches);
         }
 
-        self.state.try_set_meta(&mut self.blob, &self.metrics)?;
+        self.try_set_meta()?;
 
         if !deleted_unsealed_batches.is_empty() || !deleted_trace_batches.is_empty() {
             self.metrics.compaction_count.inc();
@@ -671,7 +682,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// but it's exposed this way so we can write deterministic tests.
     pub fn step(&mut self) -> Result<(), Error> {
         self.drain_pending()?;
-        self.state.drain_unsealed(&mut self.blob, &self.metrics)?;
+        self.apply_unbatched_cmd(|state, blob, _| state.drain_unsealed(blob))?;
         self.compact()?;
         Ok(())
     }
@@ -780,14 +791,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
 
         // TODO: only update meta if something has changed, instead of unconditionally.
-        self.state
-            .try_set_meta(&mut self.blob, &self.metrics)
-            .map_err(|e| {
-                format!(
-                    "failed to commit metadata after appending to unsealed: {}",
-                    e
-                )
-            })?;
+        self.try_set_meta().map_err(|e| {
+            format!(
+                "failed to commit metadata after appending to unsealed: {}",
+                e
+            )
+        })?;
 
         self.update_listeners(updates_for_listeners, seals_for_listeners);
         Ok(())
@@ -871,11 +880,7 @@ impl AppliedState {
     /// Atomically moves all writes in unsealed not in advance of the trace's
     /// seal frontier into the trace and does any necessary resulting eviction
     /// work to remove uneccessary batches.
-    fn drain_unsealed<B: Blob>(
-        &mut self,
-        blob: &mut BlobCache<B>,
-        metrics: &Metrics,
-    ) -> Result<(), Error> {
+    fn drain_unsealed<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<(), Error> {
         let mut updates_by_id = vec![];
         for (id, trace) in self.traces.iter_mut() {
             // If this unsealed is already properly sealed then we don't need
@@ -927,11 +932,6 @@ impl AppliedState {
                 return Err(format!("failed to append to trace: {}", e).into());
             }
         }
-
-        // We need to update metadata before we do any notification or unsealed
-        // truncation because that's the final step of ensuring that things
-        // get appended to trace.
-        self.try_set_meta(blob, metrics)?;
         Ok(())
     }
 
@@ -1077,11 +1077,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 }
 
 impl AppliedState {
-    fn do_snapshot<B: Blob>(
-        &mut self,
-        id: Id,
-        blob: &BlobCache<B>,
-    ) -> Result<IndexedSnapshot, Error> {
+    fn do_snapshot<B: Blob>(&self, id: Id, blob: &BlobCache<B>) -> Result<IndexedSnapshot, Error> {
         let unsealed = self
             .unsealeds
             .get(&id)
@@ -1113,8 +1109,10 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
         res: PFutureHandle<IndexedSnapshot>,
     ) {
-        let resp = self.do_listen(id, listen_fn);
-        res.fill(resp);
+        res.fill((|| {
+            self.drain_pending()?;
+            self.do_listen(id, listen_fn)
+        })());
     }
 
     fn do_listen(
@@ -1122,7 +1120,6 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         id: Id,
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
     ) -> Result<IndexedSnapshot, Error> {
-        self.drain_pending()?;
         // Verify that id has been registered.
         let _ = self.state.sealed_frontier(id)?;
         let snapshot = self.state.do_snapshot(id, &self.blob)?;
