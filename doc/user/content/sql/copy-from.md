@@ -20,7 +20,7 @@ _table_name_ | Copy values to this table.
 Supported `option` values:
 
 Name | Permitted values| Default value | Description
------|---------------|------------
+-----|-----------------|---------------|------------
 `FORMAT` | `TEXT`, `CSV` | `TEXT` | Sets the input formatting method. For more information see [Text formatting](#text-formatting), [CSV formatting](#csv-formatting).
 `DELIMITER` | Single-quoted one-byte character | Format-dependent | Overrides the format's default column delimiter.
 `NULL` | Single-quoted strings | Format-dependent | Specifies the string that represents a _NULL_ value.
