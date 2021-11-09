@@ -15,4 +15,3 @@ message TimestampId {
     string id = 1;
     google.protobuf.Timestamp ts = 2;
 }
-
