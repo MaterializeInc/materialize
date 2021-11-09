@@ -13,11 +13,10 @@ pub mod decode;
 
 use std::collections::HashSet;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Result};
 use serde_protobuf::descriptor::{Descriptors, FieldDescriptor, FieldLabel, FieldType};
 
-use ore::str::StrExt;
-use repr::{ColumnName, ColumnType, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnName, ColumnType, ScalarType};
 
 fn proto_message_name(message_name: &str) -> String {
     // Prepend a . (following the serde-protobuf naming scheme to list root paths
@@ -105,65 +104,6 @@ fn derive_scalar_type<'a>(
         FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
         FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
     })
-}
-
-pub fn decode_descriptors(descriptors: &[u8]) -> Result<decode::DecodedDescriptors> {
-    let proto: protobuf::descriptor::FileDescriptorSet =
-        protobuf::Message::parse_from_bytes(descriptors)
-            .context("parsing encoded protobuf descriptors failed")?;
-
-    // Iterate through the FileDescriptors to get the first Message name,
-    // which might not be in the first file!
-    for file in proto.file.iter() {
-        if let Some(message) = file.get_message_type().iter().next() {
-            return Ok(decode::DecodedDescriptors {
-                descriptors: Descriptors::from_proto(&proto),
-                first_message_name: format!(".{}", message.get_name().to_owned()),
-            });
-        }
-    }
-
-    Err(anyhow!("file descriptor set must have a message"))
-}
-
-pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Result<RelationDesc> {
-    let proto_name = proto_message_name(message_name);
-    let message = descriptors.message_by_name(&proto_name).ok_or_else(|| {
-        // TODO(benesch): the error message here used to include the names of
-        // all messages in the descriptor set, but that one feature required
-        // maintaining a fork of serde_protobuf. I sent the patch upstream [0],
-        // and we can add the error message improvement back if that patch is
-        // accepted.
-        // [0]: https://github.com/dflemstr/serde-protobuf/pull/9
-        anyhow!(
-            "Message {} not found in file descriptor set",
-            proto_name.quoted()
-        )
-    })?;
-    let mut seen_messages = HashSet::new();
-    seen_messages.insert(message.name());
-    let column_types = message
-        .fields()
-        .iter()
-        .map(|f| {
-            Ok(ColumnType {
-                /// All the fields have to be optional, so mark a field as
-                /// nullable if it doesn't have any defaults
-                nullable: f.default_value().is_none(),
-                scalar_type: derive_scalar_type_from_proto_field(
-                    &mut seen_messages,
-                    &f,
-                    descriptors,
-                )?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let column_names = message.fields().iter().map(|f| Some(f.name().to_string()));
-    Ok(RelationDesc::new(
-        RelationType::new(column_types),
-        column_names,
-    ))
 }
 
 #[cfg(test)]
@@ -286,17 +226,22 @@ mod tests {
         ));
         descriptors.add_message(m1);
 
-        let mut relation = super::validate_descriptors(".test.message1", &descriptors)
+        let decoded_descriptors =
+            decode::DecodedDescriptors::from_descriptors(descriptors, ".test.message1".to_string());
+        let mut relation = decoded_descriptors
+            .validate()
             .expect("Failed to parse descriptor");
 
         sanity_check_relation(
             &relation,
-            descriptors
+            decoded_descriptors
+                .descriptors()
                 .message_by_name(".test.message1")
                 .expect("message should be in the descriptor set"),
-            &descriptors,
+            &decoded_descriptors.descriptors(),
         )?;
 
+        let mut descriptors = decoded_descriptors.into_descriptors();
         let mut m2 = MessageDescriptor::new(".test.message2");
         m2.add_field(FieldDescriptor::new(
             "ids",
@@ -315,34 +260,41 @@ mod tests {
         ));
         descriptors.add_message(m2);
 
-        relation = super::validate_descriptors(".test.message2", &descriptors)
+        let decoded_descriptors =
+            decode::DecodedDescriptors::from_descriptors(descriptors, ".test.message2".to_string());
+        relation = decoded_descriptors
+            .validate()
             .expect("Failed to parse descriptor");
 
         sanity_check_relation(
             &relation,
-            descriptors
+            decoded_descriptors
+                .descriptors()
                 .message_by_name(".test.message2")
                 .expect("message should be in the descriptor set"),
-            &descriptors,
+            &decoded_descriptors.descriptors(),
         )?;
 
         Ok(())
     }
 
     fn get_decoder(message_name: &str) -> decode::Decoder {
-        let descriptors = Descriptors::from_proto(&gen::file_descriptor_set());
-        let relation = super::validate_descriptors(message_name, &descriptors)
-            .expect("Failed to parse descriptor");
+        let descriptors = decode::DecodedDescriptors::from_fds(
+            &gen::file_descriptor_set(),
+            message_name.to_string(),
+        );
+        let relation = descriptors.validate().expect("Failed to parse descriptor");
 
         sanity_check_relation(
             &relation,
             descriptors
+                .descriptors()
                 .message_by_name(message_name)
                 .expect("message should be in the descriptor set"),
-            &descriptors,
+            descriptors.descriptors(),
         )
         .expect("Sanity checking descriptors failed");
-        decode::Decoder::new(descriptors, message_name)
+        decode::Decoder::new(descriptors)
     }
 
     #[test]

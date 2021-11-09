@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dataflow_types::{DataflowError, DecodeError};
-use interchange::protobuf;
+use dataflow_types::{DataflowError, DecodeError, ProtobufEncoding};
 use interchange::protobuf::decode::{DecodedDescriptors, Decoder};
 use repr::Row;
 
@@ -20,15 +19,16 @@ pub struct ProtobufDecoderState {
 }
 
 impl ProtobufDecoderState {
-    pub fn new(descriptors: &[u8], message_name: Option<String>) -> Self {
-        let DecodedDescriptors {
+    pub fn new(
+        ProtobufEncoding {
             descriptors,
-            first_message_name,
-        } = protobuf::decode_descriptors(descriptors)
+            message_name,
+        }: ProtobufEncoding,
+    ) -> Self {
+        let descriptors = DecodedDescriptors::from_bytes(&descriptors, message_name)
             .expect("descriptors provided to protobuf source are pre-validated");
-        let message_name = message_name.as_ref().unwrap_or_else(|| &first_message_name);
         ProtobufDecoderState {
-            decoder: Decoder::new(descriptors, &message_name),
+            decoder: Decoder::new(descriptors),
             events_success: 0,
             events_error: 0,
         }

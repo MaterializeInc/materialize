@@ -1083,22 +1083,14 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                     value_schema,
                 }) = seed
                 {
-                    let descriptors = compile_proto(&value_schema)?;
-                    let value = DataEncoding::Protobuf(ProtobufEncoding {
-                        descriptors,
-                        message_name: None,
-                    });
+                    let value = DataEncoding::Protobuf(compile_proto(value_schema)?);
                     if let Some(key_schema) = key_schema {
                         return Ok(SourceDataEncoding::KeyValue {
-                            key: DataEncoding::Protobuf(ProtobufEncoding {
-                                descriptors: compile_proto(&key_schema)?,
-                                message_name: None,
-                            }),
+                            key: DataEncoding::Protobuf(compile_proto(key_schema)?),
                             value,
                         });
-                    } else {
-                        value
                     }
+                    value
                 } else {
                     unreachable!("CSR seed resolution should already have been called")
                 }
@@ -1116,7 +1108,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
 
                 DataEncoding::Protobuf(ProtobufEncoding {
                     descriptors,
-                    message_name: Some(message_name.to_owned()),
+                    message_name: message_name.to_owned(),
                 })
             }
         },
@@ -1149,10 +1141,11 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
     }))
 }
 
-fn compile_proto(schema: &str) -> Result<Vec<u8>, anyhow::Error> {
+fn compile_proto(schema: &str) -> Result<ProtobufEncoding, anyhow::Error> {
     // Compiling a protobuf schema requires writing the schema to disk.
+    const DEFAULT_TEMP_SCHEMA_NAME: &str = "schema.proto";
     let include_dir = tempfile::tempdir()?;
-    let schema_path = include_dir.path().join("schema.proto");
+    let schema_path = include_dir.path().join(DEFAULT_TEMP_SCHEMA_NAME);
     let schema_bytes = strconv::parse_bytes(schema)?;
     fs::write(&schema_path, &schema_bytes)?;
 
@@ -1161,7 +1154,20 @@ fn compile_proto(schema: &str) -> Result<Vec<u8>, anyhow::Error> {
         .input(schema_path)
         .parse()
     {
-        Ok(fds) => Ok(fds.write_to_bytes()?),
+        Ok(fds) => {
+            let message_name = fds
+                .get_file()
+                .iter()
+                .find(|f| f.get_name() == DEFAULT_TEMP_SCHEMA_NAME)
+                .map(|file| file.get_message_type().iter().next())
+                .flatten()
+                .map(|message| format!(".{}", message.get_name()))
+                .ok_or_else(|| anyhow!("protobuf compilation error"))?;
+            Ok(ProtobufEncoding {
+                descriptors: fds.write_to_bytes()?,
+                message_name,
+            })
+        }
         Err(e) => {
             lazy_static! {
                 static ref MISSING_IMPORT_ERROR: Regex = Regex::new(

@@ -101,6 +101,8 @@ $ kafka-create-topic topic=simple
 $ set schema
 syntax = "proto3";
 
+import 'google/protobuf/timestamp.proto';
+
 message SimpleId {
   string id = 1;
 }

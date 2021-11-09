@@ -7,79 +7,150 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashSet;
+
 use anyhow::{anyhow, bail, Context, Result};
 
 use ordered_float::OrderedFloat;
+use protobuf::descriptor::FileDescriptorSet;
 use serde::de::Deserialize;
 use serde_protobuf::de::Deserializer;
 use serde_protobuf::descriptor::{Descriptors, FieldDescriptor, FieldType, MessageDescriptor};
 use serde_protobuf::value::Value as ProtoValue;
 use serde_value::Value as SerdeValue;
 
+use ore::str::StrExt;
 use repr::adt::numeric::Numeric;
-use repr::{ColumnType, Datum, DatumList, Row, ScalarType};
+use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, ScalarType};
 
-use crate::protobuf::{proto_message_name, validate_descriptors};
+use crate::protobuf::proto_message_name;
+
+#[derive(Debug)]
+pub struct DecodedDescriptors {
+    descriptors: Descriptors,
+    message_name: String,
+}
+
+impl DecodedDescriptors {
+    pub fn from_descriptors(descriptors: Descriptors, message_name: String) -> Self {
+        Self {
+            descriptors,
+            message_name,
+        }
+    }
+
+    pub fn from_fds(fds: &FileDescriptorSet, message_name: String) -> Self {
+        Self::from_descriptors(Descriptors::from_proto(fds), message_name)
+    }
+
+    pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self> {
+        Ok(Self::from_fds(
+            &protobuf::Message::parse_from_bytes(bytes)
+                .context("parsing encoded protobuf descriptors failed")?,
+            message_name,
+        ))
+    }
+
+    pub fn descriptors(&self) -> &Descriptors {
+        &self.descriptors
+    }
+
+    pub fn into_descriptors(self) -> Descriptors {
+        self.descriptors
+    }
+
+    pub fn validate(&self) -> Result<RelationDesc> {
+        let proto_name = proto_message_name(&self.message_name);
+        let message = self
+            .descriptors()
+            .message_by_name(&proto_name)
+            .ok_or_else(|| {
+                // TODO(benesch): the error message here used to include the names of
+                // all messages in the descriptor set, but that one feature required
+                // maintaining a fork of serde_protobuf. I sent the patch upstream [0],
+                // and we can add the error message improvement back if that patch is
+                // accepted.
+                // [0]: https://github.com/dflemstr/serde-protobuf/pull/9
+                anyhow!(
+                    "Message {} not found in file descriptor set",
+                    proto_name.quoted()
+                )
+            })?;
+        let mut seen_messages = HashSet::new();
+        seen_messages.insert(message.name());
+        let column_types = message
+            .fields()
+            .iter()
+            .map(|f| {
+                Ok(ColumnType {
+                    /// All the fields have to be optional, so mark a field as
+                    /// nullable if it doesn't have any defaults
+                    nullable: f.default_value().is_none(),
+                    scalar_type: super::derive_scalar_type_from_proto_field(
+                        &mut seen_messages,
+                        &f,
+                        &self.descriptors,
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let column_names = message.fields().iter().map(|f| Some(f.name().to_string()));
+        Ok(RelationDesc::new(
+            RelationType::new(column_types),
+            column_names,
+        ))
+    }
+}
 
 /// Manages required metadata to read protobuf
 #[derive(Debug)]
 pub struct Decoder {
-    descriptors: Descriptors,
-    message_name: String,
+    descriptors: DecodedDescriptors,
     packer: Row,
 }
 
 impl Decoder {
     /// Build a decoder from a pre-validated message.
-    ///
-    /// The message `message_name` must exist in the descriptor set and be
-    /// valid.
-    pub fn new(descriptors: Descriptors, message_name: &str) -> Decoder {
+    pub fn new(descriptors: DecodedDescriptors) -> Self {
         // TODO: verify that name exists
         Decoder {
-            descriptors,
-            message_name: proto_message_name(message_name),
+            descriptors: descriptors,
             packer: Row::default(),
         }
     }
 
     pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>> {
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
-        let mut deserializer =
-            Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream)
-                .map_err(|e| anyhow!("Creating an input stream to parse protobuf: {}", e))?;
+        let mut deserializer = Deserializer::for_named_message(
+            &self.descriptors.descriptors,
+            &self.descriptors.message_name,
+            input_stream,
+        )
+        .map_err(|e| anyhow!("Creating an input stream to parse protobuf: {}", e))?;
         let deserialized_message =
             SerdeValue::deserialize(&mut deserializer).context("Deserializing into rust object")?;
-        let relation_type = validate_descriptors(&self.message_name, &self.descriptors)?;
+        let relation_type = self.descriptors.validate()?;
 
-        let msg_name = &self.message_name;
+        let msg_name = &self.descriptors.message_name;
         let mut packer = &mut self.packer;
         extract_row_into(
             deserialized_message,
-            &self.descriptors,
-            self.descriptors.message_by_name(&msg_name).ok_or_else(|| {
-                anyhow!(
-                    "Message should be included in the descriptor set {:?}",
-                    msg_name
-                )
-            })?,
+            &self.descriptors.descriptors,
+            self.descriptors
+                .descriptors
+                .message_by_name(msg_name)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Message should be included in the descriptor set {:?}",
+                        msg_name
+                    )
+                })?,
             &relation_type.typ().column_types,
             &mut packer,
         )?;
         Ok(Some(packer.finish_and_reuse()))
     }
-}
-
-#[derive(Debug)]
-pub struct DecodedDescriptors {
-    pub descriptors: Descriptors,
-    // Confluent Schema Registry uses the first Message defined in a .proto file
-    // if multiple Messages are present. If the user is using protobuf + CSR,
-    // we should match this behavior.
-    //
-    // Link to internal discussion:
-    // https://materializeinc.slack.com/archives/C01CFKM1QRF/p1629920709406300
-    pub first_message_name: String,
 }
 
 fn extract_row_into(

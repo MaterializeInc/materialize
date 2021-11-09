@@ -31,7 +31,7 @@ use uuid::Uuid;
 use aws_util::aws;
 use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, PartitionId};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
-use interchange::protobuf::{decode_descriptors, validate_descriptors};
+use interchange::protobuf;
 use kafka_util::KafkaAddrs;
 use repr::{ColumnName, ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
 
@@ -496,11 +496,8 @@ impl DataEncoding {
                 descriptors,
                 message_name,
             }) => {
-                let descriptors = decode_descriptors(descriptors)?;
-                let message_name = message_name
-                    .as_ref()
-                    .unwrap_or_else(|| &descriptors.first_message_name);
-                validate_descriptors(message_name, &descriptors.descriptors)?
+                protobuf::decode::DecodedDescriptors::from_bytes(descriptors, message_name.into())?
+                    .validate()?
                     .into_iter()
                     .fold(key_desc, |desc, (name, ty)| {
                         desc.with_named_column(name.unwrap(), ty)
@@ -586,7 +583,7 @@ pub struct AvroOcfEncoding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProtobufEncoding {
     pub descriptors: Vec<u8>,
-    pub message_name: Option<String>,
+    pub message_name: String,
 }
 
 /// Arguments necessary to define how to decode from CSV format
