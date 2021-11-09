@@ -1019,8 +1019,6 @@ EXPLAIN TYPED DECORRELATED PLAN FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 
 | Get %2 (l1)
 | | types = ()
 | | keys = (())
-| | types = ()
-| | keys = (())
 
 %4 = Let l3 =
 | Constant ()
@@ -1040,8 +1038,6 @@ EXPLAIN TYPED DECORRELATED PLAN FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 
 
 %7 = Let l5 =
 | Get %6 (l4)
-| | types = ()
-| | keys = (())
 | | types = ()
 | | keys = (())
 | Map 1
@@ -1071,8 +1067,6 @@ EXPLAIN TYPED DECORRELATED PLAN FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 
 
 %9 = Let l6 =
 | Union %7 %8
-| | types = (integer)
-| | keys = ()
 | | types = (integer)
 | | keys = ()
 
@@ -1124,8 +1118,6 @@ EXPLAIN TYPED DECORRELATED PLAN FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 
 | Union %9 %15
 | | types = (integer?)
 | | keys = ()
-| | types = (integer?)
-| | keys = ()
 
 %17 =
 | Join %3 %16
@@ -1135,10 +1127,6 @@ EXPLAIN TYPED DECORRELATED PLAN FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 
 | Project (#0)
 | | types = (integer?)
 | | keys = ()
-| | types = (integer?)
-| | keys = ()
-| | types = (integer?)
-| | keys = ()
 | Map if (#0 = 1) then {0} else {2}
 | | types = (integer?, integer)
 | | keys = ()
@@ -1146,8 +1134,6 @@ EXPLAIN TYPED DECORRELATED PLAN FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 
 | | types = (integer?, integer, text)
 | | keys = ()
 | Project (#1, #2)
-| | types = (integer, text)
-| | keys = ()
 | | types = (integer, text)
 | | keys = ()
 

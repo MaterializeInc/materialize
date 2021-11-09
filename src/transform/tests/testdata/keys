@@ -95,10 +95,6 @@ Applied RelationCSE:
 | Get %1 (l1)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
-| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
 
 ====
 Applied InlineLet { inline_mfp: false }:

@@ -112,8 +112,6 @@ build format=types
 | Union %1 %0
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ()
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
 ----
 ----
 
@@ -132,8 +130,6 @@ build format=types
 
 %1 =
 | Union %0 %0
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ()
 ----

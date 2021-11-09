@@ -183,8 +183,16 @@ impl<'a> ViewExplanation<'a> {
     /// Attach type information into the explanation.
     pub fn explain_types(&mut self) {
         for node in &mut self.nodes {
-            // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
-            node.typ = Some(node.expr.typ());
+            if let MirRelationExpr::Let { .. } = &node.expr {
+                // Skip.
+                // Since we don't print out Let nodes in the explanation,
+                // types of Let nodes should not be attached to the
+                // explanation. The type information of a Let is always the
+                // same as the the type of the body.
+            } else {
+                // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
+                node.typ = Some(node.expr.typ());
+            }
         }
     }
 
