@@ -161,7 +161,6 @@ mod tests {
     use crate::error::Error;
     use crate::mem::MemRegistry;
     use crate::operators::split_ok_err;
-    use crate::unreliable::UnreliableHandle;
 
     use super::*;
 
@@ -336,22 +335,15 @@ mod tests {
 
     #[test]
     fn error_stream() -> Result<(), Error> {
-        let mut unreliable = UnreliableHandle::default();
-        let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
+        let mut p = MemRegistry::new().runtime_no_reentrance()?;
         let read = p.create_or_load::<(), ()>("1").map(|(_write, read)| read);
-        unreliable.make_unavailable();
+        p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {
             let recv = worker.dataflow(|scope| {
                 let (_, err_stream) = scope.persisted_source(read).ok_err(|x| split_ok_err(x));
                 err_stream.capture()
             });
-
-            unreliable.make_available();
-            // TODO: think through the error handling more. Ideally, we could make
-            // this test work without this call to seal.
-            let (write, _) = p.create_or_load::<(), ()>("1").unwrap();
-            write.seal(1).recv().expect("seal was successful");
             recv
         });
 
@@ -361,13 +353,11 @@ mod tests {
             .flat_map(|(_, xs)| xs.into_iter())
             .collect::<Vec<_>>();
 
-        let expected = vec![
-        (
-            "replaying persisted data: failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
+        let expected = vec![(
+            "replaying persisted data: runtime shutdown".to_string(),
             0,
             1,
-        ),
-        ];
+        )];
         assert_eq!(actual, expected);
 
         Ok(())
