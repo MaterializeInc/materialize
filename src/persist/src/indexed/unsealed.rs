@@ -123,22 +123,38 @@ impl Unsealed {
     ) -> Result<UnsealedBatchMeta, Error> {
         let key = Unsealed::new_blob_key();
         let desc = batch.desc.clone();
-        let ts_upper = match batch.updates.last() {
-            Some(upper) => upper.1,
-            None => {
-                return Err(Error::from(
-                    "invalid unsealed batch: trying to write empty batch",
-                ))
+
+        let (ts_upper, ts_lower) = {
+            let mut upper_lower = None;
+
+            for (_, ts, _) in batch.updates.iter() {
+                upper_lower = match upper_lower {
+                    None => Some((*ts, *ts)),
+                    Some((mut upper, mut lower)) => {
+                        if *ts > upper {
+                            upper = *ts;
+                        }
+
+                        if *ts < lower {
+                            lower = *ts;
+                        }
+
+                        Some((upper, lower))
+                    }
+                };
+            }
+
+            match upper_lower {
+                None => {
+                    return Err(Error::from(
+                        "invalid unsealed batch: trying to write empty batch",
+                    ))
+                }
+                Some((upper, lower)) => (upper, lower),
             }
         };
-        let ts_lower = match batch.updates.first() {
-            Some(lower) => lower.1,
-            None => {
-                return Err(Error::from(
-                    "invalid unsealed batch: trying to write empty batch",
-                ))
-            }
-        };
+
+        debug_assert!(ts_upper >= ts_lower);
         let size_bytes = blob.set_unsealed_batch(key.clone(), batch)?;
         Ok(UnsealedBatchMeta {
             key,
@@ -528,6 +544,42 @@ mod tests {
             updates: vec![(("k".into(), "v".into()), 2, 1)],
         };
         assert_eq!(f.append(batch, &mut blob), Ok(()));
+    }
+
+    /// This test checks whether we correctly determine the min/max times stored
+    /// in a unsealed batch consisting of unsorted updates.
+    #[test]
+    fn append_detect_min_max_times() {
+        let mut blob = BlobCache::new(
+            Metrics::default(),
+            MemBlob::new_no_reentrance("append_ts_lower_invariant"),
+        );
+        let mut f = Unsealed::new(UnsealedMeta {
+            id: Id(0),
+            ts_lower: Antichain::from_elem(0),
+            batches: vec![],
+            next_blob_id: 0,
+        });
+
+        // Construct a unsealed batch where the updates are not sorted by time.
+        let batch = BlobUnsealedBatch {
+            desc: Description::new(
+                Antichain::from_elem(SeqNo(0)),
+                Antichain::from_elem(SeqNo(1)),
+                Antichain::from_elem(SeqNo(0)),
+            ),
+            updates: vec![
+                (("k".into(), "v".into()), 3, 1),
+                (("k".into(), "v".into()), 2, 1),
+            ],
+        };
+
+        assert_eq!(f.append(batch, &mut blob), Ok(()));
+
+        // Check that the batch has the correct min/max time bounds.
+        let batch = &f.batches[0];
+        assert_eq!(batch.ts_lower, 2);
+        assert_eq!(batch.ts_upper, 3);
     }
 
     #[test]

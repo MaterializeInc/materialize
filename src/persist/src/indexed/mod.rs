@@ -812,25 +812,13 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn drain_pending_writes_inner(
         &mut self,
         id: Id,
-        mut updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+        updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
         desc: &Range<SeqNo>,
     ) -> Result<(), Error> {
-        let mut updates: Vec<_> = updates
-            .drain(..)
-            .map(|((k, v), t, d)| (t, (k, v), d))
-            .collect();
-        // Unsealed batches are required to be sorted and consolidated by ((ts, (k, v)).
-        differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
         if updates.is_empty() {
             return Ok(());
         }
 
-        // Reshape updates back to the desired type.
-        let updates: Vec<_> = updates
-            .drain(..)
-            .map(|(t, (k, v), d)| ((k, v), t, d))
-            .collect();
         let batch = BlobUnsealedBatch {
             desc: Description::new(
                 Antichain::from_elem(desc.start),
@@ -1381,10 +1369,7 @@ mod tests {
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
         let id = block_on(|res| i.register("0", "", "", res))?;
 
-        // Write the data and move it into the unsealed part of the index, which
-        // consolidates updates to identical ((k, v), t). Since the writes are
-        // not already consolidated this test will fail if the consolidation
-        // code does not work.
+        // Write the data and move it into the unsealed part of the index.
         block_on_drain(&mut i, |i, handle| {
             i.write(vec![(id, updates.clone())], handle)
         })?;
@@ -1395,10 +1380,22 @@ mod tests {
             i.write(vec![(id, updates.clone())], handle)
         })?;
 
+        // Sanity check that the data is all in unsealed and none of it is in trace.
+        let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
+        assert_eq!(
+            unsealed.read_to_end()?,
+            vec![
+                (("1".into(), "".into()), 1, 1),
+                (("1".into(), "".into()), 1, 1),
+                (("1".into(), "".into()), 1, 1),
+                (("1".into(), "".into()), 1, 1)
+            ]
+        );
+        assert_eq!(trace.read_to_end()?, vec![]);
+
         // Now move the data to the trace part of the index, which consolidates
-        // updates at identical ((k, v), t). Since the writes are only consolidated
-        // within individual unsealed batches this test will fail if trace batch
-        // consolidation does not work.
+        // updates at identical ((k, v), t). Since the writes are unconsolidated
+        // this test will fail if trace batch consolidation does not work.
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 2, handle))?;
         i.step()?;
 
@@ -1407,30 +1404,6 @@ mod tests {
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, vec![(("1".into(), "".into()), 1, 4)]);
 
-        Ok(())
-    }
-
-    #[test]
-    fn batch_unsealed_empty() -> Result<(), Error> {
-        let mut i = MemRegistry::new().indexed_no_reentrance()?;
-        let id = block_on(|res| i.register("0", "", "", res))?;
-
-        // Write an empty set of updates and try to move it into the unsealed part
-        // of the index.
-        block_on_drain(&mut i, |i, handle| i.write(vec![(id, vec![])], handle))?;
-
-        // Sending updates with dif = 0.
-        let updates = vec![(("1".into(), "".into()), 1, 0)];
-        block_on_drain(&mut i, |i, handle| i.write(vec![(id, updates)], handle))?;
-
-        // Now try again with a set of updates that consolidates down to the empty
-        // set.
-        let updates = vec![
-            (("1".into(), "".into()), 1, 2),
-            (("1".into(), "".into()), 1, -2),
-        ];
-
-        block_on_drain(&mut i, |i, handle| i.write(vec![(id, updates)], handle))?;
         Ok(())
     }
 

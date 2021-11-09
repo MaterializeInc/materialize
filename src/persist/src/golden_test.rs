@@ -231,7 +231,8 @@ impl PersistState {
             let (_, read) = persist.create_or_load(&name)?;
             let snap = read.snapshot()?;
             let (seal, since) = (snap.get_seal(), snap.since());
-            let snap_data = snap.into_iter().collect::<Result<Vec<_>, Error>>()?;
+            let mut snap_data = snap.into_iter().collect::<Result<Vec<_>, Error>>()?;
+            differential_dataflow::consolidation::consolidate_updates(&mut snap_data);
             streams.push(PersistStreamState {
                 name,
                 seal,
