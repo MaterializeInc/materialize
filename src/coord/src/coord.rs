@@ -73,7 +73,6 @@ use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
-use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, NowFn};
 use ore::retry::Retry;
@@ -3421,38 +3420,30 @@ where
     fn sequence_send_diffs(
         &mut self,
         session: &mut Session,
-        plan: SendDiffsPlan,
+        mut plan: SendDiffsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         if self.catalog.config().disable_user_indexes {
             self.catalog.ensure_default_index_enabled(plan.id)?;
         }
 
-        // Take a detour through ChangeBatch so we can consolidate updates. Useful
-        // especially for UPDATE where a row shouldn't change.
-        let mut rows = ChangeBatch::with_capacity(plan.updates.len());
-        rows.extend(
-            plan.updates
-                .into_iter()
-                .map(|(v, sz)| (v, i64::cast_from(sz))),
-        );
+        // Consolidate rows. This is useful e.g. for an UPDATE where the row
+        // doesn't change.
+        differential_dataflow::consolidation::consolidate(&mut plan.updates);
 
         // The number of affected rows is not the number of rows we see, but the
         // sum of the abs of their diffs, i.e. we see `INSERT INTO t VALUES (1),
         // (1)` as a row with a value of 1 and a diff of +2.
         let mut affected_rows = 0isize;
-        let rows = rows
-            .into_inner()
-            .into_iter()
-            .map(|(v, sz)| {
-                let diff = isize::cast_from(sz);
-                affected_rows += diff.abs();
-                (v, diff)
-            })
-            .collect();
+        for (_, diff) in plan.updates.iter() {
+            affected_rows += diff.abs();
+        }
 
         let affected_rows = usize::try_from(affected_rows).expect("positive isize must fit");
 
-        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id: plan.id, rows }]))?;
+        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+            id: plan.id,
+            rows: plan.updates,
+        }]))?;
         Ok(match plan.kind {
             MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
             MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
