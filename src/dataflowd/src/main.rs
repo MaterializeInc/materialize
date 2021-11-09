@@ -138,14 +138,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     }
     let timely_config = create_timely_config(&args)?;
 
-    let (_server, mut client) = dataflow::serve(dataflow::Config {
-        workers: args.workers,
-        timely_config,
-        experimental_mode: false,
-        metrics_registry: MetricsRegistry::new(),
-        now: SYSTEM_TIME.clone(),
-    })?;
-
     info!("about to bind to args.listen_addr");
     let listener = TcpListener::bind(args.listen_addr).await?;
 
@@ -156,6 +148,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let (conn, _addr) = listener.accept().await?;
     info!("coordinator connection accepted");
+
+    let (_server, mut client) = dataflow::serve(dataflow::Config {
+        workers: args.workers,
+        timely_config,
+        experimental_mode: false,
+        metrics_registry: MetricsRegistry::new(),
+        now: SYSTEM_TIME.clone(),
+    })?;
 
     let mut conn = dataflowd::framed_server(conn);
     loop {
