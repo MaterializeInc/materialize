@@ -121,6 +121,7 @@ services:
         --schema-registry-url=http://schema-registry:8081
         --materialized-url=postgres://materialize@materialized:6875
         --validate-catalog=/share/mzdata/catalog
+        --default-timeout=30
         $$*
       - bash
     environment:

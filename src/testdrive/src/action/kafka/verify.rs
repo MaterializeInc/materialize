@@ -58,6 +58,13 @@ pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyA
 
     let sort_messages = cmd.args.opt_bool("sort-messages")?.unwrap_or(false);
     let expected_messages = cmd.input;
+    if expected_messages.len() == 0 {
+        // verify with 0 messages doesn't check that no messages have been written -
+        // it 'verifies' 0 messages and trivially returns true
+        return Err(String::from(
+            "kafka-verify requires a non-empty list of expected messages",
+        ));
+    }
     cmd.args.done()?;
     Ok(VerifyAction {
         sink,
@@ -148,15 +155,26 @@ impl Action for VerifyAction {
         // instead get an error message about the expected messages that
         // were missing.
         let mut actual_bytes = vec![];
-        while let Some(Ok(message)) = message_stream.next().await {
-            let message = message.map_err_to_string()?;
-            consumer
-                .store_offset_from_message(&message)
-                .map_err(|e| format!("storing message offset: {:#}", e))?;
-            actual_bytes.push((
-                message.key().and_then(|bytes| Some(bytes.to_owned())),
-                message.payload().and_then(|bytes| Some(bytes.to_owned())),
-            ));
+        loop {
+            match message_stream.next().await {
+                Some(Ok(message)) => {
+                    let message = message.map_err_to_string()?;
+                    consumer
+                        .store_offset_from_message(&message)
+                        .map_err(|e| format!("storing message offset: {:#}", e))?;
+                    actual_bytes.push((
+                        message.key().and_then(|bytes| Some(bytes.to_owned())),
+                        message.payload().and_then(|bytes| Some(bytes.to_owned())),
+                    ));
+                }
+                Some(Err(e)) => {
+                    println!("Received error from Kafka stream consumer: {}", e);
+                    break;
+                }
+                None => {
+                    break;
+                }
+            }
         }
 
         match &self.format {
