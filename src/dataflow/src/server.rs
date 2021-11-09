@@ -367,6 +367,16 @@ impl Client for LocalClient {
     }
 }
 
+// We implement `Drop` so that we can wake each of the workers and have them notice the drop.
+impl Drop for LocalClient {
+    fn drop(&mut self) {
+        self.worker_txs.clear();
+        for thread in &self.worker_threads {
+            thread.unpark()
+        }
+    }
+}
+
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     assert!(config.workers > 0);
