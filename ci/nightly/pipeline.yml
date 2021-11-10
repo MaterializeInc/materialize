@@ -54,4 +54,4 @@
     - ./ci/plugins/mzcompose:
         composition: limits
         run: limits
-  timeout_in_minutes: 40
+  timeout_in_minutes: 50
