@@ -29,8 +29,7 @@ use crate::render::Permutation;
 use crate::replay::MzReplay;
 use expr::{GlobalId, SourceInstanceId};
 use repr::adt::jsonb::Jsonb;
-use repr::DatumVec;
-use repr::{Datum, Row, Timestamp};
+use repr::{Datum, DatumVec, Row, Timestamp};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;

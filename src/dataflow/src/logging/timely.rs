@@ -27,8 +27,7 @@ use crate::logging::ConsolidateBuffer;
 use crate::render::Permutation;
 use crate::replay::MzReplay;
 use dataflow_types::logging::LoggingConfig;
-use repr::DatumVec;
-use repr::{datum_list_size, datum_size, Datum, Row, Timestamp};
+use repr::{datum_list_size, datum_size, Datum, DatumVec, Row, Timestamp};
 
 /// Constructs the logging dataflow for timely logs.
 ///

@@ -32,8 +32,7 @@ use crate::operator::CollectionExt;
 use crate::render::Permutation;
 use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
-use repr::DatumVec;
-use repr::{Diff, Row, RowArena};
+use repr::{DatumVec, Diff, Row, RowArena};
 
 // Local type definition to avoid the horror in signatures.
 pub type Arrangement<S, V> = Arranged<S, TraceRowHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
