@@ -24,57 +24,70 @@ use serde_value::Value as SerdeValue;
 
 use ore::str::StrExt;
 use repr::adt::numeric::Numeric;
-use repr::{ColumnName, ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, DatumList, Row, ScalarType};
 
+/// A decoded description of the schema of a Protobuf message.
 #[derive(Debug)]
 pub struct DecodedDescriptors {
     descriptors: Descriptors,
     message_name: String,
+    columns: Vec<(ColumnName, ColumnType)>,
 }
 
 impl DecodedDescriptors {
+    /// Builds a `DecodedDescriptors` from an encoded [`FileDescriptorSet`]
+    /// and the fully qualified name of a message inside that file descriptor
+    /// set.
     pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self, anyhow::Error> {
-        let fds = FileDescriptorSet::parse_from_bytes(bytes)
-            .context("parsing encoded protobuf descriptors failed")?;
-        Ok(Self {
-            descriptors: Descriptors::from_proto(&fds),
+        let fds =
+            FileDescriptorSet::parse_from_bytes(bytes).context("parsing file descriptor set")?;
+        let descriptors = Descriptors::from_proto(&fds);
+
+        let message = descriptors.message_by_name(&message_name).ok_or_else(|| {
+            // TODO(benesch): the error message here used to include the names of
+            // all messages in the descriptor set, but that one feature required
+            // maintaining a fork of serde_protobuf. I sent the patch upstream [0],
+            // and we can add the error message improvement back if that patch is
+            // accepted.
+            // [0]: https://github.com/dflemstr/serde-protobuf/pull/9
+            anyhow!(
+                "Message {} not found in file descriptor set",
+                message_name.quoted()
+            )
+        })?;
+        let mut seen_messages = HashSet::new();
+        seen_messages.insert(message.name());
+        let mut columns = vec![];
+        for field in message.fields() {
+            let name = ColumnName::from(field.name());
+            let ty = derive_column_type(&mut seen_messages, &field, &descriptors)?;
+            columns.push((name, ty))
+        }
+
+        Ok(DecodedDescriptors {
+            descriptors,
             message_name,
+            columns,
         })
     }
 
-    pub fn validate(&self) -> Result<RelationDesc, anyhow::Error> {
-        let message = self
-            .descriptors
-            .message_by_name(&self.message_name)
-            .ok_or_else(|| {
-                // TODO(benesch): the error message here used to include the names of
-                // all messages in the descriptor set, but that one feature required
-                // maintaining a fork of serde_protobuf. I sent the patch upstream [0],
-                // and we can add the error message improvement back if that patch is
-                // accepted.
-                // [0]: https://github.com/dflemstr/serde-protobuf/pull/9
-                anyhow!(
-                    "Message {} not found in file descriptor set",
-                    self.message_name.quoted()
-                )
-            })?;
-        let mut seen_messages = HashSet::new();
-        seen_messages.insert(message.name());
-        let column_types = message
-            .fields()
-            .iter()
-            .map(|f| derive_column_type(&mut seen_messages, &f, &self.descriptors))
-            .collect::<Result<Vec<_>, anyhow::Error>>()?;
+    /// Describes the columns in the message.
+    ///
+    /// In other words, the return value describes the shape of the rows that
+    /// will be produced by a [`Decoder`] constructed from this
+    /// `DecodedDescriptors`.
+    pub fn columns(&self) -> &[(ColumnName, ColumnType)] {
+        &self.columns
+    }
 
-        let column_names = message.fields().iter().map(|f| Some(f.name().to_string()));
-        Ok(RelationDesc::new(
-            RelationType::new(column_types),
-            column_names,
-        ))
+    fn message_descriptor(&self) -> &MessageDescriptor {
+        self.descriptors
+            .message_by_name(&self.message_name)
+            .expect("message validated to exist")
     }
 }
 
-/// Manages required metadata to read protobuf
+/// Decodes a particular Protobuf message from its wire format.
 #[derive(Debug)]
 pub struct Decoder {
     descriptors: DecodedDescriptors,
@@ -82,72 +95,47 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    /// Build a decoder from a pre-validated message.
+    /// Constructs a decoder for a particular Protobuf message.
     pub fn new(descriptors: DecodedDescriptors) -> Self {
-        // TODO: verify that name exists
         Decoder {
-            descriptors: descriptors,
+            descriptors,
             packer: Row::default(),
         }
     }
 
+    /// Decodes the encoded Protobuf message into a [`Row`].
     pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, anyhow::Error> {
+        let message = self.descriptors.message_descriptor();
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
-        let mut deserializer = Deserializer::for_named_message(
-            &self.descriptors.descriptors,
-            &self.descriptors.message_name,
-            input_stream,
-        )
-        .map_err(|e| anyhow!("Creating an input stream to parse protobuf: {}", e))?;
+        let mut deserializer =
+            Deserializer::new(&self.descriptors.descriptors, message, input_stream);
         let deserialized_message =
             SerdeValue::deserialize(&mut deserializer).context("Deserializing into rust object")?;
-        let relation_type = self.descriptors.validate()?;
 
-        let msg_name = &self.descriptors.message_name;
-        let mut packer = &mut self.packer;
-        extract_row_into(
-            deserialized_message,
-            &self.descriptors.descriptors,
-            self.descriptors
-                .descriptors
-                .message_by_name(msg_name)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Message should be included in the descriptor set {:?}",
-                        msg_name
-                    )
-                })?,
-            &relation_type.typ().column_types,
-            &mut packer,
-        )?;
-        Ok(Some(packer.finish_and_reuse()))
-    }
-}
+        let deserialized_message = match deserialized_message {
+            SerdeValue::Map(deserialized_message) => deserialized_message,
+            _ => bail!("Deserialization failed with an unsupported top level object type"),
+        };
 
-fn extract_row_into(
-    deserialized_message: SerdeValue,
-    descriptors: &Descriptors,
-    message_descriptors: &MessageDescriptor,
-    column_types: &[ColumnType],
-    packer: &mut Row,
-) -> Result<(), anyhow::Error> {
-    let deserialized_message = match deserialized_message {
-        SerdeValue::Map(deserialized_message) => deserialized_message,
-        _ => bail!("Deserialization failed with an unsupported top level object type"),
-    };
-
-    // TODO: This is actually unpacking a row, it should always return json
-    for (f, column_type) in message_descriptors.fields().iter().zip(column_types) {
-        let key = SerdeValue::String(f.name().to_string());
-        let value = deserialized_message.get(&key);
-        if let Some(value) = value {
-            json_from_serde_value(&value, packer, f, descriptors, column_type)?;
-        } else {
-            packer.push(default_datum_from_field(f, descriptors)?);
+        for (f, (_name, ty)) in message.fields().iter().zip(self.descriptors.columns()) {
+            let key = SerdeValue::String(f.name().to_string());
+            let value = deserialized_message.get(&key);
+            if let Some(value) = value {
+                json_from_serde_value(
+                    &value,
+                    &mut self.packer,
+                    f,
+                    &self.descriptors.descriptors,
+                    ty,
+                )?;
+            } else {
+                self.packer
+                    .push(default_datum_from_field(f, &self.descriptors.descriptors)?);
+            }
         }
-    }
 
-    Ok(())
+        Ok(Some(self.packer.finish_and_reuse()))
+    }
 }
 
 /// Convert an arbitrary [`SerdeValue`] into a [`Datum`], possibly creating a jsonb value
