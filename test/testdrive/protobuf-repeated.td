@@ -51,15 +51,15 @@ $ kafka-ingest topic=repeated format=protobuf descriptor-file=repeated.pb messag
 > SHOW COLUMNS FROM repeated
 name       nullable  type
 ----------------------------
-bool       true      list
-int32      true      list
-int64      true      list
-float      true      list
-double     true      list
-# bytes      true      list
-string     true      list
-enum       true      list
-message    true      list
+bool       false     list
+int32      false     list
+int64      false     list
+float      false     list
+double     false     list
+# bytes      false     list
+string     false     list
+enum       false     list
+message    false     list
 mz_offset  false     bigint
 
 > SELECT bool::text, int32::text, int64::text, float::text, double::text, string::text, enum::text, message::text, mz_offset FROM repeated

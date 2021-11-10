@@ -64,18 +64,7 @@ impl DecodedDescriptors {
         let column_types = message
             .fields()
             .iter()
-            .map(|f| {
-                Ok(ColumnType {
-                    /// All the fields have to be optional, so mark a field as
-                    /// nullable if it doesn't have any defaults
-                    nullable: f.default_value().is_none(),
-                    scalar_type: derive_scalar_type_from_proto_field(
-                        &mut seen_messages,
-                        &f,
-                        &self.descriptors,
-                    )?,
-                })
-            })
+            .map(|f| derive_column_type(&mut seen_messages, &f, &self.descriptors))
             .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
         let column_names = message.fields().iter().map(|f| Some(f.name().to_string()));
@@ -440,38 +429,12 @@ fn proto_message_name(message_name: &str) -> String {
     }
 }
 
-fn derive_scalar_type_from_proto_field<'a>(
+fn derive_column_type<'a>(
     seen_messages: &mut HashSet<&'a str>,
     field: &'a FieldDescriptor,
     descriptors: &'a Descriptors,
-) -> Result<ScalarType, anyhow::Error> {
-    let field_type = field.field_type(descriptors);
-    match field.field_label() {
-        FieldLabel::Required => bail!("Required field {} not supported", field.name()),
-        FieldLabel::Repeated => {
-            if let FieldType::Bytes = field_type {
-                bail!("Arrays or nested messages with bytes objects are not currently supported")
-            }
-        }
-        FieldLabel::Optional => (),
-    }
-
-    let typ = derive_scalar_type(seen_messages, field, descriptors)?;
-    Ok(match field.field_label() {
-        FieldLabel::Repeated => ScalarType::List {
-            element_type: Box::new(typ),
-            custom_oid: None,
-        },
-        _ => typ,
-    })
-}
-
-fn derive_scalar_type<'a>(
-    seen_messages: &mut HashSet<&'a str>,
-    field: &'a FieldDescriptor,
-    descriptors: &'a Descriptors,
-) -> Result<ScalarType, anyhow::Error> {
-    Ok(match field.field_type(descriptors) {
+) -> Result<ColumnType, anyhow::Error> {
+    let scalar_type = match field.field_type(descriptors) {
         FieldType::Bool => ScalarType::Bool,
         FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,
         FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => ScalarType::Int64,
@@ -492,16 +455,7 @@ fn derive_scalar_type<'a>(
             let mut fields = Vec::with_capacity(m.fields().len());
             for field in m.fields() {
                 let column_name = ColumnName::from(field.name());
-                let scalar_type =
-                    derive_scalar_type_from_proto_field(seen_messages, field, descriptors)?;
-                let nullable = match field.field_label() {
-                    FieldLabel::Optional => true,
-                    FieldLabel::Repeated | FieldLabel::Required => false,
-                };
-                let column_type = ColumnType {
-                    scalar_type,
-                    nullable,
-                };
+                let column_type = derive_column_type(seen_messages, field, descriptors)?;
                 fields.push((column_name, column_type))
             }
             seen_messages.remove(m.name());
@@ -514,5 +468,20 @@ fn derive_scalar_type<'a>(
         FieldType::Group => bail!("Unions are currently not supported"),
         FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
         FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
-    })
+    };
+
+    match field.field_label() {
+        FieldLabel::Required => bail!("Required field {} not supported", field.name()),
+        FieldLabel::Repeated => Ok(ColumnType {
+            nullable: false,
+            scalar_type: ScalarType::List {
+                element_type: Box::new(scalar_type),
+                custom_oid: None,
+            },
+        }),
+        FieldLabel::Optional => Ok(ColumnType {
+            nullable: field.default_value().is_none(),
+            scalar_type,
+        }),
+    }
 }
