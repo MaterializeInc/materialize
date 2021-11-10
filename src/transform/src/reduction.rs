@@ -507,9 +507,9 @@ impl FoldConstants {
         let mut lhs_datum_vec = repr::DatumVec::new();
         let mut rhs_datum_vec = repr::DatumVec::new();
         let mut cmp_order_key = |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
-            let lhs = &lhs_datum_vec.borrow_with(&lhs.0);
-            let rhs = &rhs_datum_vec.borrow_with(&rhs.0);
-            expr::compare_columns(order_key, &lhs, &rhs, || lhs.cmp(&rhs))
+            let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
+            let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
+            expr::compare_columns(order_key, &lhs_datums, &rhs_datums, || lhs.cmp(&rhs))
         };
         let mut cmp_group_key = {
             let group_key = group_key
@@ -522,9 +522,9 @@ impl FoldConstants {
             let mut lhs_datum_vec = repr::DatumVec::new();
             let mut rhs_datum_vec = repr::DatumVec::new();
             move |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
-                let lhs = &lhs_datum_vec.borrow_with(&lhs.0);
-                let rhs = &rhs_datum_vec.borrow_with(&rhs.0);
-                expr::compare_columns(&group_key, lhs, rhs, || Ordering::Equal)
+                let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
+                let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
+                expr::compare_columns(&group_key, lhs_datums, rhs_datums, || Ordering::Equal)
             }
         };
 

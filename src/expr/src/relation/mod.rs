@@ -1707,9 +1707,11 @@ impl RowSetFinishing {
         let mut left_datum_vec = repr::DatumVec::new();
         let mut right_datum_vec = repr::DatumVec::new();
         let mut sort_by = |left: &Row, right: &Row| {
-            let left = left_datum_vec.borrow_with(left);
-            let right = right_datum_vec.borrow_with(right);
-            compare_columns(&self.order_by, &left, &right, || left.cmp(&right))
+            let left_datums = left_datum_vec.borrow_with(left);
+            let right_datums = right_datum_vec.borrow_with(right);
+            compare_columns(&self.order_by, &left_datums, &right_datums, || {
+                left.cmp(&right)
+            })
         };
         let offset = self.offset;
         if offset > rows.len() {

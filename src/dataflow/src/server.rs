@@ -1498,12 +1498,12 @@ impl PendingPeek {
                                 // inner test (as we prefer not to maintain `Vec<Datum>`
                                 // in the other case).
                                 results.sort_by(|left, right| {
-                                    let left = l_datum_vec.borrow_with(left);
-                                    let right = r_datum_vec.borrow_with(right);
+                                    let left_datums = l_datum_vec.borrow_with(left);
+                                    let right_datums = r_datum_vec.borrow_with(right);
                                     expr::compare_columns(
                                         &self.finishing.order_by,
-                                        &left,
-                                        &right,
+                                        &left_datums,
+                                        &right_datums,
                                         || left.cmp(&right),
                                     )
                                 });
