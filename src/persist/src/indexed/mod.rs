@@ -19,7 +19,7 @@ pub mod runtime;
 pub mod trace;
 pub mod unsealed;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -478,26 +478,25 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         Ok(true)
     }
 
-    /// Validates the following preconditions for draining pending requests:
-    ///
-    /// - The meta we might roll back to must be equal to the durably
-    ///   persisted meta.
-    /// - All of the referenced blob keys in all unsealeds and traces actually exist
-    ///   in blob's key-val map.
-    #[cfg(any(debug_assertions, test))]
-    fn validate_drain_pending_preconditions(&self) -> Result<(), Error> {
-        use std::collections::HashSet;
+    fn validate(&self) -> Result<(), Error> {
+        self.validate_matches_storage(&self.prev_meta)?;
+        self.validate_referenced_keys_exist()?;
+        Ok(())
+    }
 
+    /// Validates that the meta we might roll back to must be equal to the
+    /// durably persisted meta.
+    fn validate_matches_storage(&self, meta: &BlobMeta) -> Result<(), Error> {
         // We can only check this invariant when blob is available, as otherwise
-        // we fail to make progress on draining pending requests and writes during nemesis
-        // tests.
+        // we fail to make progress on draining pending requests and writes
+        // during nemesis tests.
         match self.blob.get_meta() {
             Ok(m) => {
                 let persisted_meta = m.unwrap_or_default();
-                if persisted_meta != self.prev_meta {
+                if &persisted_meta != meta {
                     return Err(Error::from(format!(
-                        "different prev {:?} and persisted metadata {:?}",
-                        self.prev_meta, persisted_meta
+                        "meta {:?} did not match the one in storage {:?}",
+                        meta, persisted_meta
                     )));
                 }
             }
@@ -505,9 +504,15 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 log::error!("unable to read back persisted metadata: {:?}", e);
             }
         }
+        Ok(())
+    }
 
+    /// Validates that all of the referenced blob keys in all unsealeds and
+    /// traces actually exist in blob's key-val map.
+    fn validate_referenced_keys_exist(&self) -> Result<(), Error> {
         match self.blob.list_keys() {
-            // Same as above, we can only check this invariant if blob is available.
+            // Same as validate_matches_storage, we can only check this
+            // invariant if blob is available.
             Ok(list) => {
                 let mut keys = HashSet::new();
                 keys.extend(list);
@@ -537,27 +542,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         Ok(())
     }
 
-    /// Validates the following postconditions for draining pending requests:
-    ///
-    /// - The meta we might roll back to must be equal to the durably
-    ///   persisted meta.
-    /// - There are no more pending responses or pending writes.
-    #[cfg(any(debug_assertions, test))]
-    fn validate_drain_pending_postconditions(&self) -> Result<(), Error> {
-        // The postconditions are strictly more general than the preconditions so validate those as well.
-        self.validate_drain_pending_preconditions()?;
-
-        self.pending.validate_empty()?;
-        Ok(())
-    }
-
     /// Commit any pending in-memory changes to persistent storage, respond to clients
     /// and notify any listeners.
     fn drain_pending(&mut self) -> Result<(), Error> {
-        #[cfg(any(debug_assertions, test))]
-        {
-            assert_eq!(self.validate_drain_pending_preconditions(), Ok(()));
-        }
+        debug_assert_eq!(self.validate(), Ok(()));
+
         let ret = match self.drain_pending_inner() {
             Ok(_) => {
                 let mut responses = self.pending.take_responses();
@@ -574,10 +563,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             }
         };
 
-        #[cfg(any(debug_assertions, test))]
-        {
-            assert_eq!(self.validate_drain_pending_postconditions(), Ok(()));
-        }
+        debug_assert_eq!(self.validate(), Ok(()));
+        debug_assert_eq!(self.pending.validate_empty(), Ok(()));
 
         ret
     }
