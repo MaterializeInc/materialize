@@ -3426,19 +3426,38 @@ where
             self.catalog.ensure_default_index_enabled(plan.id)?;
         }
 
-        // Consolidate rows. This is useful e.g. for an UPDATE where the row
-        // doesn't change.
-        differential_dataflow::consolidation::consolidate(&mut plan.updates);
+        let affected_rows = {
+            let mut affected_rows = 0isize;
+            let mut all_positive_diffs = true;
+            // If all diffs are positive, the number of affected rows is just the
+            // sum of all unconsolidated diffs.
+            for (_, diff) in plan.updates.iter() {
+                if *diff < 0 {
+                    all_positive_diffs = false;
+                    break;
+                }
 
-        // The number of affected rows is not the number of rows we see, but the
-        // sum of the abs of their diffs, i.e. we see `INSERT INTO t VALUES (1),
-        // (1)` as a row with a value of 1 and a diff of +2.
-        let mut affected_rows = 0isize;
-        for (_, diff) in plan.updates.iter() {
-            affected_rows += diff.abs();
-        }
+                affected_rows += diff;
+            }
 
-        let affected_rows = usize::try_from(affected_rows).expect("positive isize must fit");
+            if all_positive_diffs == false {
+                // Consolidate rows. This is useful e.g. for an UPDATE where the row
+                // doesn't change, and we need to reflect that in the number of
+                // affected rows.
+                differential_dataflow::consolidation::consolidate(&mut plan.updates);
+
+                affected_rows = 0;
+                // With retractions, the number of affected rows is not the number
+                // of rows we see, but the sum of the absolute value of their diffs,
+                // e.g. if one row is retracted and another is added, the total
+                // number of rows affected is 2.
+                for (_, diff) in plan.updates.iter() {
+                    affected_rows += diff.abs();
+                }
+            }
+
+            usize::try_from(affected_rows).expect("positive isize must fit")
+        };
 
         session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
             id: plan.id,
