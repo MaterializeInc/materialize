@@ -1704,10 +1704,12 @@ impl RowSetFinishing {
     }
     /// Applies finishing actions to a row set.
     pub fn finish(&self, rows: &mut Vec<Row>) {
+        let mut left_datum_vec = repr::DatumVec::new();
+        let mut right_datum_vec = repr::DatumVec::new();
         let mut sort_by = |left: &Row, right: &Row| {
-            compare_columns(&self.order_by, &left.unpack(), &right.unpack(), || {
-                left.cmp(right)
-            })
+            let left = left_datum_vec.borrow_with(left);
+            let right = right_datum_vec.borrow_with(right);
+            compare_columns(&self.order_by, &left, &right, || left.cmp(&right))
         };
         let offset = self.offset;
         if offset > rows.len() {
@@ -1726,10 +1728,13 @@ impl RowSetFinishing {
             }
             rows.sort_by(&mut sort_by);
             let mut row_packer = Row::default();
-            for row in rows {
-                let datums = row.unpack();
-                row_packer.extend(self.project.iter().map(|i| &datums[*i]));
-                *row = row_packer.finish_and_reuse();
+            let mut datum_vec = repr::DatumVec::new();
+            for row in rows.iter_mut() {
+                *row = {
+                    let datums = datum_vec.borrow_with(&row);
+                    row_packer.extend(self.project.iter().map(|i| &datums[*i]));
+                    row_packer.finish_and_reuse()
+                };
             }
         }
     }

@@ -143,13 +143,13 @@ pub struct RowRef {
     data: [u8],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DatumListIter<'a> {
     data: &'a [u8],
     offset: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DatumDictIter<'a> {
     data: &'a [u8],
     offset: usize,

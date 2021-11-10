@@ -3535,8 +3535,8 @@ where
             MirRelationExpr::Constant { rows, typ: _ } => {
                 let rows = rows?;
                 for (row, _) in &rows {
-                    for (i, datum) in row.unpack().iter().enumerate() {
-                        desc.constraints_met(i, datum)?;
+                    for (i, datum) in row.iter().enumerate() {
+                        desc.constraints_met(i, &datum)?;
                     }
                 }
                 let diffs_plan = SendDiffsPlan {
@@ -3648,13 +3648,14 @@ where
                         |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
                             // Use 2x row len incase there's some assignments.
                             let mut diffs = Vec::with_capacity(rows.len() * 2);
+                            let mut datum_vec = repr::DatumVec::new();
                             for row in rows {
                                 if !assignments.is_empty() {
                                     assert!(
                                         matches!(kind, MutationKind::Update),
                                         "only updates support assignments"
                                     );
-                                    let mut datums = row.unpack();
+                                    let mut datums = datum_vec.borrow_with(&row);
                                     let mut updates = vec![];
                                     for (idx, expr) in &assignments {
                                         let updated = match expr.eval(&datums, &arena) {

@@ -167,6 +167,7 @@ impl FoldConstants {
                             .iter()
                             .cloned()
                             .map(|(input_row, diff)| {
+                                // TODO: reduce allocations to zero.
                                 let mut unpacked = input_row.unpack();
                                 let temp_storage = RowArena::new();
                                 for scalar in scalars.iter() {
@@ -254,6 +255,7 @@ impl FoldConstants {
                         Ok(rows) => Ok(rows
                             .iter()
                             .map(|(input_row, diff)| {
+                                // TODO: reduce allocations to zero.
                                 let datums = input_row.unpack();
                                 row_packer.extend(outputs.iter().map(|i| &datums[*i]));
                                 (row_packer.finish_and_reuse(), *diff)
@@ -323,8 +325,9 @@ impl FoldConstants {
                     }
 
                     // Now throw away anything that doesn't satisfy the requisite constraints.
+                    let mut datum_vec = repr::DatumVec::new();
                     old_rows.retain(|(row, _count)| {
-                        let datums = row.unpack();
+                        let datums = datum_vec.borrow_with(&row);
                         let temp_storage = RowArena::new();
                         equivalences.iter().all(|equivalence| {
                             let mut values =
@@ -501,12 +504,14 @@ impl FoldConstants {
         rows: &'a mut [(Row, Diff)],
     ) {
         // helper functions for comparing elements by order_key and group_key
-        let cmp_order_key = |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
-            let lhs = lhs.0.unpack();
-            let rhs = rhs.0.unpack();
+        let mut lhs_datum_vec = repr::DatumVec::new();
+        let mut rhs_datum_vec = repr::DatumVec::new();
+        let mut cmp_order_key = |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
+            let lhs = &lhs_datum_vec.borrow_with(&lhs.0);
+            let rhs = &rhs_datum_vec.borrow_with(&rhs.0);
             expr::compare_columns(order_key, &lhs, &rhs, || lhs.cmp(&rhs))
         };
-        let cmp_group_key = {
+        let mut cmp_group_key = {
             let group_key = group_key
                 .iter()
                 .map(|column| ColumnOrder {
@@ -514,22 +519,25 @@ impl FoldConstants {
                     desc: false,
                 })
                 .collect::<Vec<ColumnOrder>>();
+            let mut lhs_datum_vec = repr::DatumVec::new();
+            let mut rhs_datum_vec = repr::DatumVec::new();
             move |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
-                let lhs = &lhs.0.unpack();
-                let rhs = &rhs.0.unpack();
+                let lhs = &lhs_datum_vec.borrow_with(&lhs.0);
+                let rhs = &rhs_datum_vec.borrow_with(&rhs.0);
                 expr::compare_columns(&group_key, lhs, rhs, || Ordering::Equal)
             }
         };
-        let same_group_key =
-            |lhs: &(Row, Diff), rhs: &(Row, Diff)| cmp_group_key(lhs, rhs) == Ordering::Equal;
 
         // compute Ordering based on the sort_key, otherwise consider all rows equal
-        rows.sort_by(&cmp_order_key);
+        rows.sort_by(&mut cmp_order_key);
 
         // sort by the grouping key if not empty, keeping order_key as a secondary sort
         if !group_key.is_empty() {
-            rows.sort_by(&cmp_group_key);
+            rows.sort_by(&mut cmp_group_key);
         };
+
+        let mut same_group_key =
+            |lhs: &(Row, Diff), rhs: &(Row, Diff)| cmp_group_key(lhs, rhs) == Ordering::Equal;
 
         let mut cursor = 0;
         while cursor < rows.len() {
@@ -572,8 +580,9 @@ impl FoldConstants {
         let limit = limit.unwrap_or(usize::MAX);
         let mut new_rows = Vec::new();
         let mut row_packer = Row::default();
+        let mut datum_vec = repr::DatumVec::new();
         for (input_row, diff) in rows {
-            let datums = input_row.unpack();
+            let datums = datum_vec.borrow_with(&input_row);
             let temp_storage = RowArena::new();
             let datums = exprs
                 .iter()
@@ -598,8 +607,9 @@ impl FoldConstants {
         rows: &[(Row, Diff)],
     ) -> Result<Vec<(Row, Diff)>, EvalError> {
         let mut new_rows = Vec::new();
+        let mut datum_vec = repr::DatumVec::new();
         'outer: for (row, diff) in rows {
-            let datums = row.unpack();
+            let datums = datum_vec.borrow_with(&row);
             let temp_storage = RowArena::new();
             for p in &*predicates {
                 if p.eval(&datums, &temp_storage)? != Datum::True {

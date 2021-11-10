@@ -523,12 +523,15 @@ where
             Some((expr, order_row))
         })
         .collect();
+
+    let mut left_datum_vec = repr::DatumVec::new();
+    let mut right_datum_vec = repr::DatumVec::new();
     let mut sort_by = |left: &(_, Row), right: &(_, Row)| {
         let left = &left.1;
         let right = &right.1;
-        compare_columns(&order_by, &left.unpack(), &right.unpack(), || {
-            left.cmp(&right)
-        })
+        let left = left_datum_vec.borrow_with(left);
+        let right = right_datum_vec.borrow_with(right);
+        compare_columns(&order_by, &left, &right, || left.cmp(&right))
     };
     rows.sort_by(&mut sort_by);
     rows.into_iter().map(|(expr, _order_row)| expr)

@@ -583,12 +583,12 @@ where
                                         .into_plan()
                                         .unwrap_or_else(|e| panic!("{}", e));
                                 // Reusable allocation for unpacking datums.
-                                let mut datums = repr::DatumVec::new();
+                                let mut datum_vec = repr::DatumVec::new();
                                 let mut row_builder = Row::default();
                                 // Closure that applies the linear operators to each `input_row`.
                                 move |(input_row, time, diff)| {
                                     let arena = repr::RowArena::new();
-                                    let mut datums_local = datums.borrow_with(&input_row);
+                                    let mut datums_local = datum_vec.borrow_with(&input_row);
                                     linear_op_mfp.evaluate(
                                         &mut datums_local,
                                         &arena,

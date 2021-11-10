@@ -1425,6 +1425,8 @@ impl PendingPeek {
 
         let mut row_builder = Row::default();
         let mut datum_vec = DatumVec::new();
+        let mut l_datum_vec = DatumVec::new();
+        let mut r_datum_vec = DatumVec::new();
 
         while cursor.key_valid(&storage) {
             while cursor.val_valid(&storage) {
@@ -1496,11 +1498,13 @@ impl PendingPeek {
                                 // inner test (as we prefer not to maintain `Vec<Datum>`
                                 // in the other case).
                                 results.sort_by(|left, right| {
+                                    let left = l_datum_vec.borrow_with(left);
+                                    let right = r_datum_vec.borrow_with(right);
                                     expr::compare_columns(
                                         &self.finishing.order_by,
-                                        &left.unpack(),
-                                        &right.unpack(),
-                                        || left.cmp(right),
+                                        &left,
+                                        &right,
+                                        || left.cmp(&right),
                                     )
                                 });
                                 results.truncate(max_results);

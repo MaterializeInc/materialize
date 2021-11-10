@@ -54,8 +54,9 @@ impl NonNullRequirements {
         match relation {
             MirRelationExpr::Constant { rows, .. } => {
                 if let Ok(rows) = rows {
+                    let mut datum_vec = repr::DatumVec::new();
                     rows.retain(|(row, _)| {
-                        let datums = row.unpack();
+                        let datums = datum_vec.borrow_with(&row);
                         columns.iter().all(|c| datums[*c] != repr::Datum::Null)
                     })
                 }
