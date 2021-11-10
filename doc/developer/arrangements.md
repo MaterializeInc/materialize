@@ -275,12 +275,12 @@ If a `Join` is implemented by a Delta Join pattern, it will create zero addition
 
 ## Caveats: Demand Analysis
 
-> Obsolete as of v0.9.4. We now delete fields that are not required
-> instead of blanking them out. Plans prior to v0.9.4 will show something like
-> `| | demand = (#6, #8, #12, #15, #22, #23, #27)` for the `Join` and `FlatMap`
-> operators, listing which field will be blanked out.
+> Obsolete for `Join` and `FlatMap` as of v0.9.4. We now delete fields that are
+> not required instead of blanking them out. Plans prior to v0.9.4 will show
+> something like `| | demand = (#6, #8, #12, #15, #22, #23, #27)` for the
+> `Join` and `FlatMap` operators, listing which field will be blanked out.
 
-When users present queries and views to us, we can determine that some fields are not required.
-We blank out any field that is not required.
-This can reduce the number of distinct `data` in an arrangement, which will
-reduce the size of the arrangement.
+When users present queries and views to us, we can determine that some fields
+are not required and blank out them out. This can reduce the number of distinct
+`data` in an arrangement, which will reduce the size of the arrangement.
+Currently, we blank out fields not required when importing sources.
