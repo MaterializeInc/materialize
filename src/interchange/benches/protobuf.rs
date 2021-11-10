@@ -10,7 +10,7 @@
 use criterion::{black_box, Criterion, Throughput};
 use protobuf::{Message, MessageField};
 
-use interchange::protobuf::decode::{DecodedDescriptors, Decoder};
+use interchange::protobuf::{DecodedDescriptors, Decoder};
 
 use gen::benchmark::{Connector, Record, Value};
 
@@ -63,10 +63,10 @@ pub fn bench_protobuf(c: &mut Criterion) {
         .write_to_bytes()
         .expect("record failed to serialize to bytes");
     let len = buf.len() as u64;
-    let mut decoder = Decoder::new(DecodedDescriptors::from_fds(
-        &gen::file_descriptor_set(),
-        ".bench.Record".to_string(),
-    ));
+    let mut decoder = Decoder::new(
+        DecodedDescriptors::from_bytes(gen::FILE_DESCRIPTOR_SET_DATA, ".bench.Record".to_string())
+            .unwrap(),
+    );
 
     let mut bg = c.benchmark_group("protobuf");
     bg.throughput(Throughput::Bytes(len));

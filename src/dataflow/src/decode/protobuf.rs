@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use dataflow_types::{DecodeError, ProtobufEncoding};
-use interchange::protobuf::decode::{DecodedDescriptors, Decoder};
+use interchange::protobuf::{DecodedDescriptors, Decoder};
 use repr::Row;
 
 #[derive(Debug)]
