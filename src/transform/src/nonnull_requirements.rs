@@ -111,12 +111,7 @@ impl NonNullRequirements {
                     self.action(input, columns, gets);
                 }
             }
-            MirRelationExpr::FlatMap {
-                input,
-                func,
-                exprs,
-                demand: _,
-            } => {
+            MirRelationExpr::FlatMap { input, func, exprs } => {
                 // Columns whose number is smaller than arity refer to
                 // columns of `input`. Columns whose number is
                 // greater than or equal to the arity refer to columns created

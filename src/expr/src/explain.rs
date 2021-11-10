@@ -233,22 +233,13 @@ impl<'a> ViewExplanation<'a> {
                 writeln!(f, "| Project {}", bracketed("(", ")", Indices(outputs)))?
             }
             Map { scalars, .. } => writeln!(f, "| Map {}", separated(", ", scalars))?,
-            FlatMap {
-                func,
-                exprs,
-                demand,
-                ..
-            } => {
+            FlatMap { func, exprs, .. } => {
                 writeln!(f, "| FlatMap {}({})", func, separated(", ", exprs))?;
-                if let Some(demand) = demand {
-                    writeln!(f, "| | demand = {}", bracketed("(", ")", Indices(demand)))?;
-                }
             }
             Filter { predicates, .. } => writeln!(f, "| Filter {}", separated(", ", predicates))?,
             Join {
                 inputs,
                 equivalences,
-                demand,
                 implementation,
             } => {
                 write!(
@@ -278,9 +269,6 @@ impl<'a> ViewExplanation<'a> {
                 writeln!(f)?;
                 write!(f, "| | implementation = ")?;
                 self.fmt_join_implementation(f, inputs, implementation)?;
-                if let Some(demand) = demand {
-                    writeln!(f, "| | demand = {}", bracketed("(", ")", Indices(demand)))?;
-                }
             }
             Reduce {
                 group_key,

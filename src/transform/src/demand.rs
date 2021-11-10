@@ -126,11 +126,7 @@ impl Demand {
                 input,
                 func: _,
                 exprs,
-                demand,
             } => {
-                let mut sorted = columns.iter().cloned().collect::<Vec<_>>();
-                sorted.sort_unstable();
-                *demand = Some(sorted);
                 // A FlatMap which returns zero rows acts like a filter
                 // so we always need to execute it
                 for expr in exprs {
@@ -150,7 +146,6 @@ impl Demand {
             MirRelationExpr::Join {
                 inputs,
                 equivalences,
-                demand: _,
                 implementation: _,
             } => {
                 let input_mapper = JoinInputMapper::new(inputs);

@@ -90,7 +90,6 @@ impl RedundantJoin {
             MirRelationExpr::Join {
                 inputs,
                 equivalences,
-                demand,
                 implementation,
             } => {
                 // This logic first applies what it has learned about its input provenance,
@@ -169,8 +168,7 @@ impl RedundantJoin {
                     }
                     expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
 
-                    // Unset demand and implementation, as irrevocably hosed by this transformation.
-                    *demand = None;
+                    // Unset implementation, as irrevocably hosed by this transformation.
                     *implementation = expr::JoinImplementation::Unimplemented;
 
                     *relation = relation.take_dangerous().project(projection);

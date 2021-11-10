@@ -190,7 +190,6 @@ impl JoinBuilder {
             _ => MirRelationExpr::Join {
                 inputs: self.inputs,
                 equivalences: self.equivalences,
-                demand: None,
                 implementation: expr::JoinImplementation::Unimplemented,
             },
         };

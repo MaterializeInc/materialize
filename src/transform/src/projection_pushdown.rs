@@ -144,12 +144,7 @@ impl ProjectionPushdown {
 
                 columns_to_pushdown.into_iter().collect()
             }
-            MirRelationExpr::FlatMap {
-                input,
-                func,
-                exprs,
-                demand: _,
-            } => {
+            MirRelationExpr::FlatMap { input, func, exprs } => {
                 let inner_arity = input.arity();
                 // A FlatMap which returns zero rows acts like a filter
                 // so we always need to execute it

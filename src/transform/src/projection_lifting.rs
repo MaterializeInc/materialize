@@ -100,20 +100,13 @@ impl ProjectionLifting {
                         .project(new_outputs);
                 }
             }
-            MirRelationExpr::FlatMap {
-                input,
-                func,
-                exprs,
-                demand,
-            } => {
+            MirRelationExpr::FlatMap { input, func, exprs } => {
                 self.action(input, gets);
                 if let MirRelationExpr::Project {
                     input: inner,
                     outputs,
                 } = &mut **input
                 {
-                    // TODO: Preserve demand.
-                    *demand = None;
                     // Retain projected columns and scalar columns.
                     let mut new_outputs = outputs.clone();
                     let inner_arity = inner.arity();
@@ -150,7 +143,6 @@ impl ProjectionLifting {
             MirRelationExpr::Join {
                 inputs,
                 equivalences,
-                demand,
                 implementation,
             } => {
                 for input in inputs.iter_mut() {
@@ -176,15 +168,10 @@ impl ProjectionLifting {
                 }
 
                 if projection.len() != temp_arity || (0..temp_arity).any(|i| projection[i] != i) {
-                    // Update equivalences, demand, and implementation.
+                    // Update equivalences and implementation.
                     for equivalence in equivalences.iter_mut() {
                         for expr in equivalence {
                             expr.permute(&projection[..]);
-                        }
-                    }
-                    if let Some(demand) = demand {
-                        for column in demand.iter_mut() {
-                            *column = projection[*column];
                         }
                     }
 

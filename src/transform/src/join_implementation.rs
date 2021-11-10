@@ -208,7 +208,6 @@ mod delta_queries {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
-            demand: _,
             implementation,
         } = &mut new_join
         {
@@ -277,7 +276,6 @@ mod differential {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
-            demand: _,
             implementation,
         } = &mut new_join
         {

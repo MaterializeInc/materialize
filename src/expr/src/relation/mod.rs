@@ -97,15 +97,6 @@ pub enum MirRelationExpr {
         func: TableFunc,
         /// The argument to the table func
         exprs: Vec<MirScalarExpr>,
-        /// Output columns demanded by the surrounding expression.
-        ///
-        /// The input columns are often discarded and can be very
-        /// expensive to reproduce, so restricting what we produce
-        /// as output can be a substantial win.
-        ///
-        /// See `transform::Demand` for more details.
-        #[serde(default)]
-        demand: Option<Vec<usize>>,
     },
     /// Keep rows from a dataflow where all the predicates are true
     ///
@@ -136,15 +127,6 @@ pub enum MirRelationExpr {
         /// inputs, but more general cases exist (e.g. complex functions of multiple columns
         /// from multiple inputs, or just constant literals).
         equivalences: Vec<Vec<MirScalarExpr>>,
-        /// This optional field is a hint for which columns are
-        /// actually used by operators that use this collection. Although the
-        /// join does not have permission to change the schema, it can introduce
-        /// dummy values at the end of its computation, avoiding the maintenance of values
-        /// not present in this list (when it is non-None).
-        ///
-        /// See `transform::Demand` for more details.
-        #[serde(default)]
-        demand: Option<Vec<usize>>,
         /// Join implementation information.
         #[serde(default)]
         implementation: JoinImplementation,
@@ -755,7 +737,6 @@ impl MirRelationExpr {
             input: Box::new(self),
             func,
             exprs,
-            demand: None,
         }
     }
 
@@ -843,7 +824,6 @@ impl MirRelationExpr {
         MirRelationExpr::Join {
             inputs,
             equivalences,
-            demand: None,
             implementation: JoinImplementation::Unimplemented,
         }
     }
@@ -1227,7 +1207,6 @@ impl MirRelationExpr {
                 exprs,
                 input: _,
                 func: _,
-                demand: _,
             } => {
                 for expr in exprs {
                     f(expr)?;
@@ -1237,7 +1216,6 @@ impl MirRelationExpr {
             MirRelationExpr::Join {
                 equivalences: keys,
                 inputs: _,
-                demand: _,
                 implementation: _,
             }
             | MirRelationExpr::ArrangeBy { input: _, keys } => {
