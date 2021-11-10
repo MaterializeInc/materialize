@@ -13,8 +13,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
+use std::iter;
 use std::path::PathBuf;
-use std::{fs, iter};
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
@@ -507,13 +507,13 @@ async fn purify_source_format_single(
             }
             ProtobufSchema::InlineSchema {
                 message_name: _,
-                schema: inline_schema,
+                schema,
             } => {
-                if let sql_parser::ast::Schema::File(path) = inline_schema {
+                if let sql_parser::ast::Schema::File(path) = schema {
                     let descriptors = tokio::fs::read(path).await?;
                     let mut buf = String::new();
                     strconv::format_bytes(&mut buf, &descriptors);
-                    *inline_schema = sql_parser::ast::Schema::Inline(buf);
+                    *schema = sql_parser::ast::Schema::Inline(buf);
                 }
             }
         },
@@ -810,11 +810,11 @@ async fn compile_proto(
         }
         let subject_pb = PathBuf::from(subject.name);
         if let Some(parent) = subject_pb.parent() {
-            fs::create_dir_all(include_dir.path().join(parent))?;
+            tokio::fs::create_dir_all(include_dir.path().join(parent)).await?;
         }
         let path = include_dir.path().join(subject_pb);
         let bytes = strconv::parse_bytes(&subject.schema.raw)?;
-        fs::write(&path, &bytes)?;
+        tokio::fs::write(&path, &bytes).await?;
     }
 
     match Protoc::new()

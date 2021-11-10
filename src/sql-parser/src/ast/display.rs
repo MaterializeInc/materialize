@@ -165,12 +165,6 @@ impl AstDisplay for u64 {
     }
 }
 
-impl AstDisplay for u8 {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(self);
-    }
-}
-
 pub struct EscapeSingleQuoteString<'a>(&'a str);
 
 impl<'a> AstDisplay for EscapeSingleQuoteString<'a> {

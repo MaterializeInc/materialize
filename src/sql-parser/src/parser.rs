@@ -28,6 +28,7 @@ use log::{debug, warn};
 
 use ore::collections::CollectionExt;
 use ore::option::OptionExt;
+use repr::strconv;
 
 use crate::ast::*;
 use crate::keywords::*;
@@ -1669,8 +1670,7 @@ impl<'a> Parser<'a> {
                 let key = if self.parse_keyword(KEY) {
                     self.expect_keyword(SCHEMA)?;
                     let message_name = self.parse_literal_string()?;
-                    let schema =
-                        self.parse_comma_separated(|parser| parser.parse_literal_uint8())?;
+                    let schema = self.parse_byte_string()?;
                     Some(CsrSeedCompiledEncoding {
                         schema,
                         message_name,
@@ -1680,8 +1680,7 @@ impl<'a> Parser<'a> {
                 };
                 self.expect_keywords(&[VALUE, SCHEMA])?;
                 let value_message_name = self.parse_literal_string()?;
-                let value_schema =
-                    self.parse_comma_separated(|parser| parser.parse_literal_uint8())?;
+                let value_schema = self.parse_byte_string()?;
                 Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled {
                     value: CsrSeedCompiledEncoding {
                         schema: value_schema,
@@ -2894,24 +2893,23 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_literal_uint8(&mut self) -> Result<u8, ParserError> {
-        match self.next_token() {
-            Some(Token::Number(s)) => s.parse::<u8>().map_err(|e| {
-                self.error(
-                    self.peek_prev_pos(),
-                    format!("Could not parse '{}' as u64: {}", s, e),
-                )
-            }),
-            other => self.expected(self.peek_prev_pos(), "literal int", other),
-        }
-    }
-
     /// Parse a literal string
     fn parse_literal_string(&mut self) -> Result<String, ParserError> {
         match self.next_token() {
             Some(Token::String(ref s)) => Ok(s.clone()),
             other => self.expected(self.peek_prev_pos(), "literal string", other),
         }
+    }
+
+    fn parse_byte_string(&mut self) -> Result<Vec<u8>, ParserError> {
+        let raw_string = self.parse_literal_string()?;
+        strconv::parse_bytes_hex(&raw_string).or_else(|_| {
+            self.expected(
+                self.peek_prev_pos(),
+                "byte string",
+                Some(Token::String(raw_string)),
+            )
+        })
     }
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
