@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use criterion::{black_box, Criterion, Throughput};
-use protobuf::Message;
+use protobuf::{Message, MessageField};
 
 use interchange::protobuf::decode::{DecodedDescriptors, Decoder};
 
@@ -20,44 +20,44 @@ mod gen {
 
 pub fn bench_protobuf(c: &mut Criterion) {
     let mut value = Value::new();
-    value.set_l_orderkey(1);
-    value.set_l_orderkey(155_190);
-    value.set_l_suppkey(7706);
-    value.set_l_linenumber(1);
-    value.set_l_quantity(17.0);
-    value.set_l_extendedprice(21168.23);
-    value.set_l_discount(0.04);
-    value.set_l_tax(0.02);
-    value.set_l_returnflag("N".into());
-    value.set_l_linestatus("O".into());
-    value.set_l_shipdate(9567);
-    value.set_l_commitdate(9537);
-    value.set_l_receiptdate(9537);
-    value.set_l_shipinstruct("DELIVER IN PERSON".into());
-    value.set_l_shipmode("TRUCK".into());
-    value.set_l_comment("egular courts above the".into());
+    value.l_orderkey = 1;
+    value.l_orderkey = 155_190;
+    value.l_suppkey = 7706;
+    value.l_linenumber = 1;
+    value.l_quantity = 17.0;
+    value.l_extendedprice = 21168.23;
+    value.l_discount = 0.04;
+    value.l_tax = 0.02;
+    value.l_returnflag = "N".into();
+    value.l_linestatus = "O".into();
+    value.l_shipdate = 9567;
+    value.l_commitdate = 9537;
+    value.l_receiptdate = 9537;
+    value.l_shipinstruct = "DELIVER IN PERSON".into();
+    value.l_shipmode = "TRUCK".into();
+    value.l_comment = "egular courts above the".into();
 
     let mut connector = Connector::new();
-    connector.set_version("0.9.5.Final".into());
-    connector.set_connector("mysql".into());
-    connector.set_name("tcph".into());
-    connector.set_server_id(0);
-    connector.set_ts_sec(0);
-    connector.set_gtid("".into());
-    connector.set_file("binlog.000004".into());
-    connector.set_pos(951_896_181);
-    connector.set_row(0);
-    connector.set_snapshot(true);
-    connector.set_thread(0);
-    connector.set_db("tcph".into());
-    connector.set_table("lineitem".into());
-    connector.set_query("".into());
+    connector.version = "0.9.5.Final".into();
+    connector.connector = "mysql".into();
+    connector.name = "tcph".into();
+    connector.server_id = 0;
+    connector.ts_sec = 0;
+    connector.gtid = "".into();
+    connector.file = "binlog.000004".into();
+    connector.pos = 951_896_181;
+    connector.row = 0;
+    connector.snapshot = true;
+    connector.thread = 0;
+    connector.db = "tcph".into();
+    connector.table = "lineitem".into();
+    connector.query = "".into();
 
     let mut record = Record::new();
-    record.set_tcph_tcph_lineitem_value(value);
-    record.set_source(connector);
-    record.set_op("c".into());
-    record.set_ts_ms(1_560_886_948_093);
+    record.tcph_tcph_lineitem_value = MessageField::some(value);
+    record.source = MessageField::some(connector);
+    record.op = "c".into();
+    record.ts_ms = 1_560_886_948_093;
 
     let buf = record
         .write_to_bytes()

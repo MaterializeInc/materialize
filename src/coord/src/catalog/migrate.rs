@@ -13,13 +13,13 @@ use anyhow::{anyhow, bail};
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use protobuf::Message;
-use protoc::Protoc;
 use regex::Regex;
 use repr::strconv;
 use semver::Version;
 use tempfile;
 use tokio::fs::File;
 
+use mz_protoc::Protoc;
 use ore::collections::CollectionExt;
 use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::{self, VisitMut};
@@ -154,10 +154,10 @@ fn ast_rewrite_kafka_protobuf_source_text_to_compiled_0_9_13(
         {
             Ok(fds) => {
                 let message_name = fds
-                    .get_file()
+                    .file
                     .iter()
                     .find(|f| f.get_name() == temp_schema_name)
-                    .map(|file| file.get_message_type().iter().next())
+                    .map(|file| file.message_type.first())
                     .flatten()
                     .map(|message| format!(".{}", message.get_name()))
                     .ok_or_else(|| anyhow!("unable to compile temporary schema"))?;

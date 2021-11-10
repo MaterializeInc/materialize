@@ -10,7 +10,7 @@
 use chrono::prelude::*;
 use chrono::DateTime;
 use protobuf::well_known_types::Timestamp;
-use protobuf::RepeatedField;
+use protobuf::MessageField;
 use rand::distributions::Distribution;
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -31,8 +31,8 @@ pub struct RecordState {
 
 fn protobuf_timestamp(time: DateTime<Utc>) -> Timestamp {
     let mut ret = Timestamp::new();
-    ret.set_seconds(time.timestamp());
-    ret.set_nanos(time.timestamp_subsec_nanos() as i32);
+    ret.seconds = time.timestamp();
+    ret.nanos = time.timestamp_subsec_nanos() as i32;
     ret
 }
 
@@ -50,17 +50,17 @@ pub fn random_batch(rng: &mut impl Rng, state: &mut RecordState) -> Batch {
     state.last_time = state.last_time.checked_add_signed(dur).unwrap();
     let interval_end = protobuf_timestamp(state.last_time);
 
-    let mut records = RepeatedField::<Record>::new();
+    let mut records = vec![];
 
     for _ in 0..rng.gen_range(1..50) {
         records.push(random_record(rng, interval_start_time, dur_val));
     }
 
     let mut batch = Batch::new();
-    batch.set_id(id.to_string());
-    batch.set_interval_start(interval_start);
-    batch.set_interval_end(interval_end);
-    batch.set_records(records);
+    batch.id = id.to_string();
+    batch.interval_start = MessageField::some(interval_start);
+    batch.interval_end = MessageField::some(interval_end);
+    batch.records = records;
 
     batch
 }
@@ -89,12 +89,12 @@ fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> 
     }
 
     let mut record = Record::new();
-    record.set_id(Uuid::new_v4().to_string());
-    record.set_interval_start(protobuf_timestamp(interval_start));
-    record.set_interval_end(protobuf_timestamp(interval_end));
-    record.set_meter(meter);
-    record.set_value(val as i32);
-    record.set_info(ResourceInfo::random(rng));
+    record.id = Uuid::new_v4().to_string();
+    record.interval_start = MessageField::some(protobuf_timestamp(interval_start));
+    record.interval_end = MessageField::some(protobuf_timestamp(interval_end));
+    record.meter = meter;
+    record.value = val as i32;
+    record.info = MessageField::some(ResourceInfo::random(rng));
 
     record
 }
@@ -106,11 +106,11 @@ impl Randomizer for ResourceInfo {
         static POSSIBLE_DISK: &[i32] = &[128];
 
         let mut resource_info = ResourceInfo::new();
-        resource_info.set_cpu_num(*POSSIBLE_CPUS.choose(rng).unwrap());
-        resource_info.set_memory_gb(*POSSIBLE_MEM.choose(rng).unwrap());
-        resource_info.set_disk_gb(*POSSIBLE_DISK.choose(rng).unwrap());
-        resource_info.set_client_id(rng.gen_range(1..NUM_CLIENTS as i32));
-        resource_info.set_vm_id(rng.gen_range(1000..2000));
+        resource_info.cpu_num = *POSSIBLE_CPUS.choose(rng).unwrap();
+        resource_info.memory_gb = *POSSIBLE_MEM.choose(rng).unwrap();
+        resource_info.disk_gb = *POSSIBLE_DISK.choose(rng).unwrap();
+        resource_info.client_id = rng.gen_range(1..NUM_CLIENTS as i32);
+        resource_info.vm_id = rng.gen_range(1000..2000);
 
         resource_info
     }

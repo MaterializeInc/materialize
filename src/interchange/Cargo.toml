@@ -28,10 +28,10 @@ mz-avro = { path = "../avro", features = ["snappy"] }
 num-traits = "0.2.14"
 ordered-float = { version = "2.8.0", features = ["serde"] }
 ore = { path = "../ore" }
-protobuf = "2.23.0"
+protobuf = "3.0.0-alpha.2"
 repr = { path = "../repr" }
 serde = { version = "1.0.130", features = ["derive"] }
-serde-protobuf = "0.8.2"
+serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git" }
 serde-value = "0.7.0"
 serde_json = "1.0.71"
 sha2 = "0.9.8"
@@ -44,4 +44,4 @@ uuid = { version = "0.8.2", features = ["serde"] }
 criterion = "0.3.5"
 
 [build-dependencies]
-protoc = { path = "../protoc" }
+mz-protoc = { path = "../protoc" }

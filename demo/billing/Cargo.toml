@@ -17,7 +17,7 @@ hex = "0.4.3"
 log = "0.4.13"
 ore = { path = "../../src/ore" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-protobuf = "2.23.0"
+protobuf = "3.0.0-alpha.2"
 rand = "0.8.4"
 rand_distr = "0.4.2"
 structopt = "0.3.25"
@@ -27,4 +27,4 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [build-dependencies]
-protoc = { path = "../../src/protoc" }
+mz-protoc = { path = "../../src/protoc" }

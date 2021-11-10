@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 fn main() {
-    protoc::Protoc::new()
+    mz_protoc::Protoc::new()
         .serde(true)
         .include("src/format/protobuf")
         .input("src/format/protobuf/no_messages.proto")

@@ -110,7 +110,7 @@ fn derive_scalar_type<'a>(
 mod tests {
     use anyhow::{bail, Error};
     use ordered_float::OrderedFloat;
-    use protobuf::{Message, RepeatedField};
+    use protobuf::{Message, MessageField, ProtobufEnumOrUnknown};
     use serde_protobuf::descriptor::{
         Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor,
     };
@@ -301,12 +301,12 @@ mod tests {
     fn test_decode() {
         let mut test_record = TestRecord::new();
 
-        test_record.set_int_field(1);
-        test_record.set_string_field("one".to_string());
-        test_record.set_int64_field(10000);
-        test_record.set_color_field(Color::BLUE);
-        test_record.set_float_field(5.456);
-        test_record.set_double_field(99.99);
+        test_record.int_field = 1;
+        test_record.string_field = "one".to_string();
+        test_record.int64_field = 10000;
+        test_record.color_field = ProtobufEnumOrUnknown::new(Color::BLUE);
+        test_record.float_field = 5.456;
+        test_record.double_field = 99.99;
 
         let bytes = test_record
             .write_to_bytes()
@@ -335,7 +335,7 @@ mod tests {
     fn test_decode_with_null() {
         let mut test_record = TestRecord::new();
 
-        test_record.set_int_field(1);
+        test_record.int_field = 1;
         let bytes = test_record
             .write_to_bytes()
             .expect("test failed to serialize to bytes");
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn test_repeated() {
         let mut test_record = TestRepeatedRecord::new();
-        test_record.set_int_field(vec![1, 2, 3]);
+        test_record.int_field = vec![1, 2, 3];
         let bytes = test_record
             .write_to_bytes()
             .expect("test failed to serialize to bytes");
@@ -396,11 +396,11 @@ mod tests {
     fn test_nested() {
         let mut test_record = TestRecord::new();
 
-        test_record.set_int_field(1);
-        test_record.set_string_field("one".to_string());
+        test_record.int_field = 1;
+        test_record.string_field = "one".to_string();
 
         let mut test_nested_record = TestNestedRecord::new();
-        test_nested_record.set_test_record(test_record);
+        test_nested_record.test_record = MessageField::some(test_record);
         let bytes = test_nested_record
             .write_to_bytes()
             .expect("test failed to serialize to bytes");
@@ -433,12 +433,10 @@ mod tests {
         assert_eq!(datums[1], Datum::Null);
 
         let mut test_repeated_record = TestRepeatedRecord::new();
-        let mut repeated_strings = RepeatedField::<String>::new();
-        repeated_strings.push("start".to_string());
-        repeated_strings.push("two".to_string());
-        repeated_strings.push("three".to_string());
-        test_repeated_record.set_string_field(repeated_strings);
-        test_nested_record.set_test_repeated_record(test_repeated_record);
+        test_repeated_record.string_field.push("start".to_string());
+        test_repeated_record.string_field.push("two".to_string());
+        test_repeated_record.string_field.push("three".to_string());
+        test_nested_record.test_repeated_record = MessageField::some(test_repeated_record);
 
         let bytes = test_nested_record
             .write_to_bytes()
@@ -485,13 +483,10 @@ mod tests {
         let mut record = TestRepeatedNestedRecord::new();
 
         let mut test_record = TestRecord::new();
-        let mut repeated_test_records = RepeatedField::<TestRecord>::new();
+        test_record.int_field = 1;
+        record.test_record.push(test_record.clone());
+        record.test_record.push(test_record);
 
-        test_record.set_int_field(1);
-        repeated_test_records.push(test_record.clone());
-        repeated_test_records.push(test_record);
-
-        record.set_test_record(repeated_test_records);
         let bytes = record
             .write_to_bytes()
             .expect("test failed to serialize to bytes");

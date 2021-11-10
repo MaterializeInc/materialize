@@ -111,8 +111,8 @@ impl Transcoder {
                 }
             }
             Transcoder::Protobuf { message } => {
-                fn convert<T: protobuf::Message>(decoded: T) -> Box<dyn protobuf::Message> {
-                    let d: Box<dyn protobuf::Message> = Box::new(decoded);
+                fn convert<T: protobuf::Message>(decoded: T) -> Box<dyn protobuf::MessageDyn> {
+                    let d: Box<dyn protobuf::MessageDyn> = Box::new(decoded);
                     d
                 }
                 let val = match message {
@@ -153,7 +153,7 @@ impl Transcoder {
                 } else {
                     return Ok(None);
                 };
-                Ok(Some(val.write_to_bytes().map_err_to_string()?))
+                Ok(Some(val.write_to_bytes_dyn().map_err_to_string()?))
             }
             Transcoder::Bytes { terminator } => {
                 let mut out = vec![];

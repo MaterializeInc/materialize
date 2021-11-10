@@ -33,10 +33,11 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use protobuf::descriptor::FileDescriptorSet;
 use protobuf::Message;
-use protobuf_codegen_pure::{Customize, ParsedAndTypechecked};
+use protobuf_codegen_pure::Customize;
+use protobuf_parse::ParsedAndTypechecked;
 
 /// A builder for a protobuf compilation.
 #[derive(Default, Debug)]
@@ -83,14 +84,7 @@ impl Protoc {
             }
         }
 
-        let includes: Vec<_> = self.includes.iter().map(|p| p.as_path()).collect();
-        let inputs: Vec<_> = self.inputs.iter().map(|p| p.as_path()).collect();
-        protobuf_codegen_pure::parse_and_typecheck(&includes, &inputs).map_err(|e| {
-            // The `fmt::Display` implementation for `e` is hopelessly broken
-            // and displays no useful information. Use the debug implementation
-            // instead.
-            anyhow!("{:#?}", e)
-        })
+        protobuf_parse::pure::parse_and_typecheck(&self.includes, &self.inputs)
     }
 
     /// Parses the inputs into a file descriptor set.
@@ -130,6 +124,7 @@ impl Protoc {
 
         protobuf_codegen::gen_and_write(
             &parsed.file_descriptors,
+            "mz-protoc",
             &parsed.relative_paths,
             &out_dir,
             &self.customize,
@@ -145,16 +140,6 @@ impl Protoc {
                     entry.path().display()
                 ),
                 Some(m) => mods.push(m.to_string_lossy().into_owned()),
-            }
-
-            // rust-protobuf assumes 2015-style `#[macro_use] extern crate` and
-            // so doesn't `use` the serde macros it requires. Add them in.
-            // This is fixed in the unreleased v3.0 of rust-protobuf.
-            if self.customize.serde_derive == Some(true) {
-                fs::OpenOptions::new()
-                    .append(true)
-                    .open(entry.path())?
-                    .write_all(b"use serde::{Deserialize, Serialize};\n")?;
             }
         }
 
@@ -231,14 +216,6 @@ impl Protoc {
             // files change.
             for input in &self.inputs {
                 println!("cargo:rerun-if-changed={}", input.display());
-            }
-
-            // rust-protobuf v2.12 inexplicably puts the derive attributes
-            // behind the `with-serde` feature. This is fixed on master. For
-            // now, just force that feature to be true in the crate we're
-            // compiling.
-            if self.customize.serde_derive == Some(true) {
-                println!("cargo:rustc-cfg=feature=\"with-serde\"");
             }
 
             // Destroy and recreate the build directory, in case any inputs have
