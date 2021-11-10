@@ -1,6 +1,7 @@
 {{ if not (.Params.disable_toc) }}
 <aside class="toc-wrapper">
     <div class="toc">
+        <p>Last modified {{ .Lastmod | time.Format ":date_medium" }}</p>
         <h2 class="gradient_text dark">On this page</h2>
         {{ .TableOfContents }}
     </div>
