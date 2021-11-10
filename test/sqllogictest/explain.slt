@@ -208,14 +208,10 @@ EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 | Get %2 (l1)
 | | types = ()
 | | keys = (())
-| | types = ()
-| | keys = (())
 | Map 1
 | | types = (integer)
 | | keys = (())
 | Project (#0)
-| | types = (integer)
-| | keys = (())
 | | types = (integer)
 | | keys = (())
 
