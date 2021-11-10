@@ -327,7 +327,7 @@ get a chance to see how Materialize can handle queries on our data.
    a few views that represent some queries you might want to perform with this
    data.
 
-    See the views we've created with `SHOW VIEW'S`:
+    See the views we've created with `SHOW VIEWS`:
 
     ```sql
     SHOW VIEWS;
