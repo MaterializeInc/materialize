@@ -108,6 +108,8 @@ List new features before bug fixes.
 - Fix a crash or incorrect results when a join consumes data from a distinct
   operation. {{% gh 9027 %}}
 
+- Support protobuf sources that contain imported messages and enums.
+
 {{% version-header v0.9.12 %}}
 
 - **Breaking change**: Disallow ambiguous table references in queries. For
@@ -165,8 +167,6 @@ List new features before bug fixes.
 - Support the `row_number` window function.
 
 - Support PgJDBC's `getColumns()` API.
-
-- Support protobuf sources that contain imported messages and enums.
 
 {{% version-header v0.9.11 %}}
 
