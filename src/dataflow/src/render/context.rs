@@ -491,8 +491,10 @@ where
                 let (oks, errs) = self.as_collection();
                 let mut row_packer = Row::default();
 
+                let mut datums = DatumVec::new();
                 let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
-                    let datums = row.unpack();
+                    // TODO: Consider reusing the `row` allocation; probably in *next* invocation.
+                    let datums = datums.borrow_with(&row);
                     let temp_storage = RowArena::new();
                     row_packer.try_extend(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
                     let key_row = row_packer.finish_and_reuse();
