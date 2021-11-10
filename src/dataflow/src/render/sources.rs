@@ -583,7 +583,7 @@ where
                                         .into_plan()
                                         .unwrap_or_else(|e| panic!("{}", e));
                                 // Reusable allocation for unpacking datums.
-                                let mut datums = crate::render::datum_vec::DatumVec::new();
+                                let mut datums = repr::DatumVec::new();
                                 let mut row_builder = Row::default();
                                 // Closure that applies the linear operators to each `input_row`.
                                 move |(input_row, time, diff)| {

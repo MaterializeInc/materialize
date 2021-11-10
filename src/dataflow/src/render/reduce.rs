@@ -87,8 +87,8 @@ use repr::{Datum, DatumList, Row, RowArena};
 use super::context::Context;
 use crate::render::context::Arrangement;
 use crate::render::context::CollectionBundle;
-use crate::render::datum_vec::DatumVec;
 use crate::render::{ArrangementFlavor, Permutation};
+use repr::DatumVec;
 
 use crate::arrangement::manager::RowSpine;
 

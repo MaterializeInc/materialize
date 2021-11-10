@@ -29,10 +29,10 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use crate::operator::CollectionExt;
-use crate::render::datum_vec::DatumVec;
 use crate::render::Permutation;
 use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
+use repr::DatumVec;
 use repr::{Diff, Row, RowArena};
 
 // Local type definition to avoid the horror in signatures.

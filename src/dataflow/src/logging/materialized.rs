@@ -25,11 +25,11 @@ use super::{LogVariant, MaterializedLog};
 use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
-use crate::render::datum_vec::DatumVec;
 use crate::render::Permutation;
 use crate::replay::MzReplay;
 use expr::{GlobalId, SourceInstanceId};
 use repr::adt::jsonb::Jsonb;
+use repr::DatumVec;
 use repr::{Datum, Row, Timestamp};
 
 /// Type alias for logging of materialized events.

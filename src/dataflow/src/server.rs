@@ -62,7 +62,7 @@ use crate::source::timestamp::TimestampBindingRc;
 
 use self::metrics::{ServerMetrics, WorkerMetrics};
 use crate::activator::RcActivator;
-use crate::render::datum_vec::DatumVec;
+use repr::DatumVec;
 
 mod metrics;
 
