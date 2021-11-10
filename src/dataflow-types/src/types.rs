@@ -389,15 +389,15 @@ fn insert_named_key(
                     custom_oid: None,
                     custom_name: None,
                 },
-            }])
-            // The entire record is a key
-            .with_key(vec![0]);
+            }]);
 
             RelationDesc::new(key_as_record, vec![Some(key_name.to_string())])
         } else {
             key_desc.with_names(vec![Some(key_name.to_string())])
         }
     };
+    // In all cases the first column is the key
+    let key_desc = key_desc.with_key(vec![0]);
 
     value.desc(envelope, key_desc, None)
 }
