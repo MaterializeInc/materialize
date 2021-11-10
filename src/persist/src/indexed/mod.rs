@@ -35,7 +35,8 @@ use crate::error::Error;
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{
-    BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration, TraceMeta, UnsealedMeta,
+    BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration, TraceBatchMeta, TraceMeta,
+    UnsealedBatchMeta, UnsealedMeta,
 };
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::trace::{Trace, TraceSnapshot, TraceSnapshotIter};
@@ -286,22 +287,13 @@ impl AppliedState {
             prev_meta: meta_copy,
         }
     }
-
-    /// Revert the in-memory state back to a previously serialized version.
-    ///
-    /// Used to keep the in-memory and durably stored data structures consistent
-    /// in the presence of errors.
-    fn restore(&mut self) {
-        let meta = self.prev_meta.clone();
-        *self = AppliedState::new(meta);
-    }
 }
 
 impl<L: Log, B: Blob> Indexed<L, B> {
     /// Attempt to commit the current in-memory metadata state to durable storage,
     /// and if not, revert back to a previous version.
-    fn try_set_meta(&mut self) -> Result<(), Error> {
-        debug_assert_eq!(self.validate_matches_storage(&self.state.prev_meta), Ok(()));
+    fn try_set_meta(&mut self, prev_meta: BlobMeta) -> Result<(), Error> {
+        debug_assert_eq!(self.validate_matches_storage(&prev_meta), Ok(()));
 
         let new_meta = self.state.serialize_meta();
         // TODO: Instead of fully overwriting META each time, this should be
@@ -309,7 +301,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         if let Err(e) = self.blob.set_meta(&new_meta) {
             // We were unable to durably commit the in-memory state. Revert back to the
             // previous version of meta.
-            self.state.restore();
+            self.state = AppliedState::new(prev_meta);
             return Err(e);
         } else {
             self.state.saved_seqno = new_meta.unsealeds_seqno_upper;
@@ -360,14 +352,15 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         // usage error by the caller of this).
         self.pending.validate_empty()?;
 
+        let meta_before = self.state.serialize_meta();
         let work_ret = match work_fn(&mut self.state, &mut self.blob, &mut self.maintainer) {
             Ok(work_ret) => work_ret,
             Err(err) => {
-                self.state.restore();
+                self.state = AppliedState::new(meta_before);
                 return Err(err);
             }
         };
-        self.try_set_meta()?;
+        self.try_set_meta(meta_before)?;
 
         debug_assert_eq!(self.validate(), Ok(()));
         Ok(work_ret)
@@ -580,10 +573,31 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn drain_pending(&mut self) -> Result<(), Error> {
         debug_assert_eq!(self.validate(), Ok(()));
 
-        let ret = match self.drain_pending_inner() {
-            Ok(_) => {
+        let meta_before = self.state.prev_meta.clone();
+
+        let updates_by_id = self.pending.take_writes();
+        let seals_for_listeners = self.pending.take_seals();
+        let updates_for_listeners = updates_by_id.clone();
+
+        let ret = (|| {
+            // TODO: The following error handling took a while to debug, see if
+            // we can make this more obvious.
+            if let Err(err) = self
+                .state
+                .drain_pending_writes(updates_by_id, &mut self.blob)
+            {
+                self.state = AppliedState::new(meta_before);
+                Err(err)
+            } else {
+                self.try_set_meta(meta_before)
+            }
+        })();
+
+        let ret = match ret {
+            Ok(()) => {
                 let mut responses = self.pending.take_responses();
                 responses.drain(..).for_each(|r| r.fill());
+                self.update_listeners(updates_for_listeners, seals_for_listeners);
                 Ok(())
             }
             Err(e) => {
@@ -601,25 +615,60 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
         ret
     }
+}
 
-    fn compact_inner(&mut self) -> Result<(), Error> {
+impl AppliedState {
+    fn compact_inner<B: Blob>(
+        &mut self,
+        maintainer: &Maintainer<B>,
+    ) -> Result<(u64, Vec<UnsealedBatchMeta>, Vec<TraceBatchMeta>), Error> {
         let mut total_written_bytes = 0;
         let mut deleted_unsealed_batches = vec![];
         let mut deleted_trace_batches = vec![];
-        for (id, trace) in self.state.traces.iter_mut() {
+        for (id, trace) in self.traces.iter_mut() {
             let unsealed = self
-                .state
                 .unsealeds
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
             deleted_unsealed_batches.extend(unsealed.truncate(trace.ts_upper())?);
-            let (written_bytes, deleted_batches) = trace.step(&self.maintainer)?;
+            let (written_bytes, deleted_batches) = trace.step(maintainer)?;
             total_written_bytes += written_bytes;
             deleted_trace_batches.extend(deleted_batches);
         }
+        Ok((
+            total_written_bytes,
+            deleted_unsealed_batches,
+            deleted_trace_batches,
+        ))
+    }
+}
 
-        self.try_set_meta()?;
+impl<L: Log, B: Blob> Indexed<L, B> {
+    /// Compact all traces and truncate all unsealeds, if possible.
+    ///
+    /// Precondition: pending has been emptied
+    ///
+    /// TODO: currently we do not attempt to compact unsealed batches and instead
+    /// logically delete them from unsealed after all updates contained within a
+    /// given unsealed batch have been moved over to trace. This policy works fine
+    /// assuming data mostly arrives in order, or not very far in advance of the
+    /// currently sealed time. We will need to revisit the unsealed compaction if
+    /// that assumption stops being true.
+    fn compact(&mut self) -> Result<(), Error> {
+        // NB: This validate_empty is intentionally a returned error instead of
+        // an assert because it's a precondition (and so a violation means a
+        // usage error by the caller of this).
+        self.pending.validate_empty()?;
 
+        let compaction_start = Instant::now();
+        let ret = self.apply_unbatched_cmd(|state, _, maintainer| state.compact_inner(maintainer));
+
+        // Track compaction_ms even if compaction failed.
+        self.metrics
+            .compaction_ms
+            .inc_by(metric_duration_ms(compaction_start.elapsed()));
+
+        let (total_written_bytes, deleted_unsealed_batches, deleted_trace_batches) = ret?;
         if !deleted_unsealed_batches.is_empty() || !deleted_trace_batches.is_empty() {
             self.metrics.compaction_count.inc();
         }
@@ -646,32 +695,6 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
 
         Ok(())
-    }
-
-    /// Compact all traces and truncate all unsealeds, if possible.
-    ///
-    /// TODO: currently we do not attempt to compact unsealed batches and instead
-    /// logically delete them from unsealed after all updates contained within a
-    /// given unsealed batch have been moved over to trace. This policy works fine
-    /// assuming data mostly arrives in order, or not very far in advance of the
-    /// currently sealed time. We will need to revisit the unsealed compaction if
-    /// that assumption stops being true.
-    fn compact(&mut self) -> Result<(), Error> {
-        let compaction_start = Instant::now();
-
-        let ret = match self.compact_inner() {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                self.state.restore();
-                Err(e)
-            }
-        };
-
-        self.metrics
-            .compaction_ms
-            .inc_by(metric_duration_ms(compaction_start.elapsed()));
-
-        ret
     }
 
     /// Drains writes from the log into the unsealed and does any necessary
@@ -773,35 +796,6 @@ impl AppliedState {
 }
 
 impl<L: Log, B: Blob> Indexed<L, B> {
-    /// Drain pending writes to unsealed, commit in-memory state and notify any
-    /// listeners.
-    ///
-    /// The caller is responsible for draining any pending responses after this.
-    fn drain_pending_inner(&mut self) -> Result<(), Error> {
-        let updates_by_id = self.pending.take_writes();
-        let seals_for_listeners = self.pending.take_seals();
-
-        let updates_for_listeners = updates_by_id.clone();
-        if let Err(e) = self
-            .state
-            .drain_pending_writes(updates_by_id, &mut self.blob)
-        {
-            self.state.restore();
-            return Err(format!("failed to append to unsealed: {}", e).into());
-        }
-
-        // TODO: only update meta if something has changed, instead of unconditionally.
-        self.try_set_meta().map_err(|e| {
-            format!(
-                "failed to commit metadata after appending to unsealed: {}",
-                e
-            )
-        })?;
-
-        self.update_listeners(updates_for_listeners, seals_for_listeners);
-        Ok(())
-    }
-
     fn update_listeners(
         &self,
         updates: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>>,
@@ -927,10 +921,7 @@ impl AppliedState {
 
             // ...and atomically swapping that snapshot's data into trace.
             let batch = BlobTraceBatch { desc, updates };
-            if let Err(e) = trace.append(batch, blob) {
-                self.restore();
-                return Err(format!("failed to append to trace: {}", e).into());
-            }
+            trace.append(batch, blob)?;
         }
         Ok(())
     }
