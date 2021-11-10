@@ -62,7 +62,7 @@ impl Encoder {
     pub fn encode_updates(&self, updates: &[(Row, i64, i64)]) -> Value {
         let mut enc_updates = Vec::new();
         for (data, time, diff) in updates {
-            let enc_data = super::encode_datums_as_avro(data, &self.columns);
+            let enc_data = super::encode_datums_as_avro(&**data, &self.columns);
             let enc_time = Value::Long(time.clone());
             let enc_diff = Value::Long(diff.clone());
             enc_updates.push(Value::Record(vec![

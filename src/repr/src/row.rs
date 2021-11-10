@@ -138,9 +138,9 @@ impl Ord for Row {
 /// need not contain a `Row`, for example large contiguous `[u8]` allocations.
 /// It is not expected that most users will use this type, especially as its
 /// only constructor is unsafe.
-#[derive(Debug)]
-pub struct RowRef<'a> {
-    data: &'a [u8],
+#[repr(transparent)]
+pub struct RowRef {
+    data: [u8],
 }
 
 #[derive(Debug)]
@@ -786,30 +786,6 @@ impl Row {
         row
     }
 
-    /// Unpack `self` into a `Vec<Datum>` for efficient random access.
-    pub fn unpack(&self) -> Vec<Datum> {
-        // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
-        let len = self.iter().count();
-        let mut vec = Vec::with_capacity(len);
-        vec.extend(self.iter());
-        vec
-    }
-
-    /// Return the first `Datum` in `self`
-    ///
-    /// Panics if the `Row` is empty.
-    pub fn unpack_first(&self) -> Datum {
-        self.iter().next().unwrap()
-    }
-
-    /// Iterate the `Datum` elements of the `Row`.
-    pub fn iter(&self) -> DatumListIter {
-        DatumListIter {
-            data: &self.data,
-            offset: 0,
-        }
-    }
-
     /// Pushes a [`DatumList`] that is built from a closure.
     ///
     /// The supplied closure will be invoked once with a `Row` that can
@@ -1040,14 +1016,9 @@ impl Row {
         // SAFETY: iterator offsets always lie on a datum boundary.
         unsafe { self.truncate(offset) }
     }
-
-    /// For debugging only
-    pub fn data(&self) -> &[u8] {
-        &self.data
-    }
 }
 
-impl<'a> RowRef<'a> {
+impl RowRef {
     /// Construct a `RowRef` from a byte slice.
     ///
     /// # Safety
@@ -1055,8 +1026,10 @@ impl<'a> RowRef<'a> {
     /// This method is unsafe because if the byte slice is not a valid
     /// row encoding, then unpacking its contents can cause undefined
     /// behavior.
-    pub unsafe fn from_bytes_unchecked(data: &'a [u8]) -> Self {
-        Self { data }
+    pub unsafe fn from_bytes_unchecked(data: &[u8]) -> &Self {
+        // SAFETY: RowRef just wraps [u8], and data is &[u8],
+        // therefore transmuting &[u8] to &RowRef is safe.
+        std::mem::transmute(data)
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
@@ -1082,9 +1055,23 @@ impl<'a> RowRef<'a> {
             offset: 0,
         }
     }
+
+    /// For debugging only
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
 }
 
-impl<'a> IntoIterator for &'a Row {
+impl std::ops::Deref for Row {
+    type Target = RowRef;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: self.data is a valid Row encoding since self is a Row
+        unsafe { RowRef::from_bytes_unchecked(&*self.data) }
+    }
+}
+
+impl<'a> IntoIterator for &'a RowRef {
     type Item = Datum<'a>;
     type IntoIter = DatumListIter<'a>;
     fn into_iter(self) -> DatumListIter<'a> {
@@ -1092,7 +1079,7 @@ impl<'a> IntoIterator for &'a Row {
     }
 }
 
-impl fmt::Debug for Row {
+impl fmt::Debug for RowRef {
     /// Debug representation using the internal datums
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("Row{")?;
@@ -1101,7 +1088,14 @@ impl fmt::Debug for Row {
     }
 }
 
-impl fmt::Display for Row {
+impl fmt::Debug for Row {
+    /// Debug representation using the internal datums
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl fmt::Display for RowRef {
     /// Display representation using the internal datums
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("(")?;
@@ -1112,6 +1106,13 @@ impl fmt::Display for Row {
             write!(f, "{}", datum)?;
         }
         f.write_str(")")
+    }
+}
+
+impl fmt::Display for Row {
+    /// Debug representation using the internal datums
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&**self, f)
     }
 }
 

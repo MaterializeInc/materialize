@@ -61,7 +61,7 @@ fn bench_sort_unpacked(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
         |rows| {
             let mut unpacked = vec![];
             for row in &rows {
-                unpacked.extend(row);
+                unpacked.extend(&**row);
             }
             let mut slices = unpacked.chunks(arity).collect::<Vec<_>>();
             slices.sort();
