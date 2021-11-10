@@ -12,23 +12,22 @@ message SimpleId {
   string id = 1;
 }
 
-> SELECT * FROM kafka_source;
-
-id
---
-1
-2
+> SELECT * FROM kafka_proto_source;
+id mz_offset
+------------
+c  1
+h  2
 
 $ kafka-ingest topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION} format=protobuf schema=${schema} message=simpleid publish=true
-{"id": "q"}
-{"id": "r"}
+{"id": "a"}
+{"id": "e"}
 
-> SELECT * FROM kafka_source;
-id
---
-a
-b
-q
-r
+> SELECT * FROM kafka_proto_source;
+id mz_offset
+------------
+c  1
+h  2
+a  3
+e  4
 
-> DROP SOURCE kafka_source;
+> DROP SOURCE kafka_proto_source;
