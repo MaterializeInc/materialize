@@ -731,7 +731,6 @@ mod tests {
     use crate::error::Error;
     use crate::indexed::{ListenEvent, ListenFn, SnapshotExt};
     use crate::mem::MemRegistry;
-    use crate::unreliable::UnreliableHandle;
 
     use super::*;
 
@@ -774,11 +773,9 @@ mod tests {
 
     #[test]
     fn persist_error_stream() -> Result<(), Error> {
-        let mut unreliable = UnreliableHandle::default();
-        let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
-
+        let mut p = MemRegistry::new().runtime_no_reentrance()?;
         let (write, _read) = p.create_or_load::<(), ()>("error_stream").unwrap();
-        unreliable.make_unavailable();
+        p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {
             let (mut input, probe, err_stream) = worker.dataflow(|scope| {
@@ -805,7 +802,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let expected = vec![(
-            "In persist(test), error writing data for time 0: failed to append to unsealed: unavailable: blob set".to_string(),
+            "In persist(test), error writing data for time 0: runtime shutdown".to_string(),
             0,
             1,
         )];
@@ -844,11 +841,9 @@ mod tests {
 
     #[test]
     fn seal_error_stream() -> Result<(), Error> {
-        let mut unreliable = UnreliableHandle::default();
-        let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
-
+        let mut p = MemRegistry::new().runtime_no_reentrance()?;
         let (write, _read) = p.create_or_load::<(), ()>("error_stream").unwrap();
-        unreliable.make_unavailable();
+        p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {
             let (mut input, probe, err_stream) = worker.dataflow(|scope| {
@@ -874,12 +869,7 @@ mod tests {
             .flat_map(|(_, xs)| xs.into_iter())
             .collect::<Vec<_>>();
 
-        let expected = vec![(
-            "failed to commit metadata after appending to unsealed: unavailable: blob set"
-                .to_string(),
-            0,
-            1,
-        )];
+        let expected = vec![("runtime shutdown".to_string(), 0, 1)];
         assert_eq!(actual, expected);
 
         Ok(())
@@ -1050,12 +1040,10 @@ mod tests {
 
     #[test]
     fn conditional_seal_error_stream() -> Result<(), Error> {
-        let mut unreliable = UnreliableHandle::default();
-        let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
-
+        let mut p = MemRegistry::new().runtime_no_reentrance()?;
         let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
         let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
-        unreliable.make_unavailable();
+        p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {
             let (mut primary_input, mut condition_input, probe, err_stream) =
@@ -1096,7 +1084,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         let expected = vec![(
-            "Error sealing conditional_seal(test) (condition) up to 1: failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
+            "Error sealing conditional_seal(test) (condition) up to 1: runtime shutdown"
+                .to_string(),
             1,
             1,
         )];
