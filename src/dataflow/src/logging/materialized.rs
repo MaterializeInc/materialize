@@ -25,12 +25,11 @@ use super::{LogVariant, MaterializedLog};
 use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
-use crate::render::datum_vec::DatumVec;
 use crate::render::Permutation;
 use crate::replay::MzReplay;
 use expr::{GlobalId, SourceInstanceId};
 use repr::adt::jsonb::Jsonb;
-use repr::{Datum, Row, Timestamp};
+use repr::{Datum, DatumVec, Row, Timestamp};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;

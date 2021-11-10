@@ -244,11 +244,11 @@ where
     // If we have temporal predicates do the thing they have to do.
     if let Some(plan) = temporal_plan {
         let (oks2, errs2) = oks.flat_map_fallible("UpsertTemporalOperators", {
-            let mut datums = crate::render::datum_vec::DatumVec::new();
+            let mut datum_vec = repr::DatumVec::new();
             let mut row_builder = Row::default();
             move |(row, time, diff)| {
                 let arena = repr::RowArena::new();
-                let mut datums_local = datums.borrow_with(&row);
+                let mut datums_local = datum_vec.borrow_with(&row);
                 plan.evaluate(&mut datums_local, &arena, time, diff, &mut row_builder)
             }
         });

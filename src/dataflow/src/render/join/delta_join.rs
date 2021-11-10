@@ -30,9 +30,9 @@ use timely::progress::Antichain;
 use super::super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
 use crate::render::context::CollectionBundle;
-use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
 use crate::render::Permutation;
+use repr::DatumVec;
 
 /// A delta query is implemented by a set of paths, one for each input.
 ///

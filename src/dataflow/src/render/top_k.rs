@@ -221,14 +221,18 @@ where
             G: Scope,
             G::Timestamp: Lattice,
         {
+            let mut datum_vec = repr::DatumVec::new();
             let mut collection = collection.map({
                 move |row| {
                     let row_hash = row.hashed();
-                    let datums = row.unpack();
-                    let iterator = group_key.iter().map(|i| datums[*i]);
-                    let total_size = repr::datums_size(iterator.clone());
-                    let mut group_row = Row::with_capacity(total_size);
-                    group_row.extend(iterator);
+                    let group_row = {
+                        let datums = datum_vec.borrow_with(&row);
+                        let iterator = group_key.iter().map(|i| datums[*i]);
+                        let total_size = repr::datums_size(iterator.clone());
+                        let mut group_row = Row::with_capacity(total_size);
+                        group_row.extend(iterator);
+                        group_row
+                    };
                     ((group_row, row_hash), row)
                 }
             });
@@ -371,12 +375,16 @@ where
             use timely::dataflow::operators::Map;
 
             let collection = collection.map({
+                let mut datum_vec = repr::DatumVec::new();
                 move |row| {
-                    let datums = row.unpack();
-                    let iterator = group_key.iter().map(|i| datums[*i]);
-                    let total_size = repr::datums_size(iterator.clone());
-                    let mut group_key = Row::with_capacity(total_size);
-                    group_key.extend(iterator);
+                    let group_key = {
+                        let datums = datum_vec.borrow_with(&row);
+                        let iterator = group_key.iter().map(|i| datums[*i]);
+                        let total_size = repr::datums_size(iterator.clone());
+                        let mut group_key = Row::with_capacity(total_size);
+                        group_key.extend(iterator);
+                        group_key
+                    };
                     (group_key, row)
                 }
             });

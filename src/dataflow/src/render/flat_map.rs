@@ -15,7 +15,7 @@ use repr::{Row, RowArena};
 use crate::operator::StreamExt;
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
-use crate::render::datum_vec::DatumVec;
+use repr::DatumVec;
 
 impl<G> Context<G, Row, repr::Timestamp>
 where

@@ -703,9 +703,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                                 "[{}]",
                                                 separated(
                                                     " ",
-                                                    row.unpack()
-                                                        .into_iter()
-                                                        .map(|d| datum_to_test_spec(d))
+                                                    row.iter().map(|d| datum_to_test_spec(d))
                                                 )
                                             ))
                                         }

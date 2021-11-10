@@ -473,8 +473,9 @@ impl SessionClient {
                     .collect(),
                 None => vec![],
             };
+            let mut datum_vec = repr::DatumVec::new();
             for row in rows {
-                let datums = row.unpack();
+                let datums = datum_vec.borrow_with(&row);
                 sql_rows.push(datums.iter().map(|datum| datum_to_json(datum)).collect());
             }
             results.push(SimpleResult {

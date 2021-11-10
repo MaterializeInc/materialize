@@ -113,20 +113,26 @@ where
 
         let keyed = if user_key_indices.is_some() {
             let key_indices = user_key_indices.expect("known to exist");
+            let mut datum_vec = repr::DatumVec::new();
             collection.map(move |row| {
                 // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
                 // Does it matter?
-                let datums = row.unpack();
-                let key = Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()));
+                let key = {
+                    let datums = datum_vec.borrow_with(&row);
+                    Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
+                };
                 (Some(key), row)
             })
         } else if relation_key_indices.is_some() {
             let relation_key_indices = relation_key_indices.expect("known to exist");
+            let mut datum_vec = repr::DatumVec::new();
             collection.map(move |row| {
                 // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
                 // Does it matter?
-                let datums = row.unpack();
-                let key = Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()));
+                let key = {
+                    let datums = datum_vec.borrow_with(&row);
+                    Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()))
+                };
                 (Some(key), row)
             })
         } else {

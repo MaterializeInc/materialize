@@ -24,11 +24,10 @@ use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
-use crate::render::datum_vec::DatumVec;
 use crate::render::Permutation;
 use crate::replay::MzReplay;
 use dataflow_types::logging::LoggingConfig;
-use repr::{datum_list_size, datum_size, Datum, Row, Timestamp};
+use repr::{datum_list_size, datum_size, Datum, DatumVec, Row, Timestamp};
 
 /// Constructs the logging dataflow for timely logs.
 ///
