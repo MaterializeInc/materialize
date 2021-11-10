@@ -166,8 +166,6 @@ List new features before bug fixes.
 
 - Support PgJDBC's `getColumns()` API.
 
-- Add reserved keyword `COMPILED`.
-
 - Support protobuf sources that contain imported messages and enums.
 
 {{% version-header v0.9.11 %}}

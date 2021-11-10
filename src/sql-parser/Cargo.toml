@@ -8,11 +8,13 @@ publish = false
 
 [dependencies]
 enum-kinds = "0.5.1"
+hex = "0.4.3"
 itertools = "0.10.1"
 lazy_static = "1.4.0"
 log = "0.4.13"
 ore = { path = "../ore", default-features = false }
 phf = { version = "0.10.0", features = ["uncased"] }
+repr = { path = "../repr" }
 stacker = "0.1.14"
 uncased = "0.9.6"
 
