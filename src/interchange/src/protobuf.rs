@@ -13,7 +13,7 @@ pub mod decode;
 
 use std::collections::HashSet;
 
-use anyhow::{bail, Result};
+use anyhow::bail;
 use serde_protobuf::descriptor::{Descriptors, FieldDescriptor, FieldLabel, FieldType};
 
 use repr::{ColumnName, ColumnType, ScalarType};
@@ -33,7 +33,7 @@ fn derive_scalar_type_from_proto_field<'a>(
     seen_messages: &mut HashSet<&'a str>,
     field: &'a FieldDescriptor,
     descriptors: &'a Descriptors,
-) -> Result<ScalarType> {
+) -> Result<ScalarType, anyhow::Error> {
     let field_type = field.field_type(descriptors);
     match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
@@ -59,7 +59,7 @@ fn derive_scalar_type<'a>(
     seen_messages: &mut HashSet<&'a str>,
     field: &'a FieldDescriptor,
     descriptors: &'a Descriptors,
-) -> Result<ScalarType> {
+) -> Result<ScalarType, anyhow::Error> {
     Ok(match field.field_type(descriptors) {
         FieldType::Bool => ScalarType::Bool,
         FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,

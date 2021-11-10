@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Context};
 
 use ordered_float::OrderedFloat;
 use protobuf::descriptor::FileDescriptorSet;
@@ -43,7 +43,7 @@ impl DecodedDescriptors {
         Self::from_descriptors(Descriptors::from_proto(fds), message_name)
     }
 
-    pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self> {
+    pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self, anyhow::Error> {
         Ok(Self::from_fds(
             &protobuf::Message::parse_from_bytes(bytes)
                 .context("parsing encoded protobuf descriptors failed")?,
@@ -59,7 +59,7 @@ impl DecodedDescriptors {
         self.descriptors
     }
 
-    pub fn validate(&self) -> Result<RelationDesc> {
+    pub fn validate(&self) -> Result<RelationDesc, anyhow::Error> {
         let proto_name = proto_message_name(&self.message_name);
         let message = self
             .descriptors()
@@ -93,7 +93,7 @@ impl DecodedDescriptors {
                     )?,
                 })
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
         let column_names = message.fields().iter().map(|f| Some(f.name().to_string()));
         Ok(RelationDesc::new(
@@ -120,7 +120,7 @@ impl Decoder {
         }
     }
 
-    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, anyhow::Error> {
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
         let mut deserializer = Deserializer::for_named_message(
             &self.descriptors.descriptors,
@@ -159,7 +159,7 @@ fn extract_row_into(
     message_descriptors: &MessageDescriptor,
     column_types: &[ColumnType],
     packer: &mut Row,
-) -> Result<()> {
+) -> Result<(), anyhow::Error> {
     let deserialized_message = match deserialized_message {
         SerdeValue::Map(deserialized_message) => deserialized_message,
         _ => bail!("Deserialization failed with an unsupported top level object type"),
@@ -189,7 +189,7 @@ fn json_from_serde_value(
     f: &FieldDescriptor,
     descriptors: &Descriptors,
     column_type: &ColumnType,
-) -> Result<()> {
+) -> Result<(), anyhow::Error> {
     packer.push(match val {
         SerdeValue::Bool(true) => Datum::True,
         SerdeValue::Bool(false) => Datum::False,
@@ -226,7 +226,7 @@ fn json_from_serde_value(
 fn default_datum_from_field<'a>(
     f: &'a FieldDescriptor,
     descriptors: &'a Descriptors,
-) -> Result<Datum<'a>> {
+) -> Result<Datum<'a>, anyhow::Error> {
     if let Some(default) = f.default_value() {
         return datum_from_serde_proto(default);
     }
@@ -264,7 +264,7 @@ fn nested_datum_from_serde_value(
     f: &FieldDescriptor,
     descriptors: &Descriptors,
     column_type: &ColumnType,
-) -> Result<()> {
+) -> Result<(), anyhow::Error> {
     packer.push(match val {
         SerdeValue::Bool(true) => Datum::True,
         SerdeValue::Bool(false) => Datum::False,
@@ -386,7 +386,7 @@ fn nested_datum_from_serde_value(
 fn default_datum_from_field_nested<'a>(
     f: &'a FieldDescriptor,
     descriptors: &'a Descriptors,
-) -> Result<Datum<'a>> {
+) -> Result<Datum<'a>, anyhow::Error> {
     if let Some(default) = f.default_value() {
         return datum_from_serde_proto_nested(default);
     }
@@ -423,7 +423,7 @@ fn default_datum_from_field_nested<'a>(
     }
 }
 
-fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
+fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>, anyhow::Error> {
     match val {
         ProtoValue::Bool(true) => Ok(Datum::True),
         ProtoValue::Bool(false) => Ok(Datum::False),
@@ -439,7 +439,7 @@ fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
     }
 }
 
-fn datum_from_serde_proto_nested<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
+fn datum_from_serde_proto_nested<'a>(val: &'a ProtoValue) -> Result<Datum<'a>, anyhow::Error> {
     if let ProtoValue::Bytes(_) = val {
         bail!("Nested bytes are not supported");
     }
