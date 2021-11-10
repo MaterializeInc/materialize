@@ -4290,6 +4290,7 @@ dependencies = [
  "ccsr",
  "chrono",
  "csv",
+ "datadriven",
  "dataflow-types",
  "dec",
  "enum-kinds",
