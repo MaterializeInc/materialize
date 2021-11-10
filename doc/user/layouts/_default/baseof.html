@@ -34,6 +34,7 @@ by the Apache License, Version 2.0.  */}}
 
             <main class="content">
                 {{ partial "breadcrumbs.html" . }}
+                {{ partial "heading.html" . }}
                 {{ block "main" . }}{{ end }}
                 {{ partial "helpful.html" }}
                 <!-- Footer goes in main so the border-right of
