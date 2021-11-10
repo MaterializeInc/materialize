@@ -43,10 +43,9 @@ impl DecodedDescriptors {
     }
 
     pub fn validate(&self) -> Result<RelationDesc, anyhow::Error> {
-        let proto_name = proto_message_name(&self.message_name);
         let message = self
             .descriptors
-            .message_by_name(&proto_name)
+            .message_by_name(&self.message_name)
             .ok_or_else(|| {
                 // TODO(benesch): the error message here used to include the names of
                 // all messages in the descriptor set, but that one feature required
@@ -56,7 +55,7 @@ impl DecodedDescriptors {
                 // [0]: https://github.com/dflemstr/serde-protobuf/pull/9
                 anyhow!(
                     "Message {} not found in file descriptor set",
-                    proto_name.quoted()
+                    self.message_name.quoted()
                 )
             })?;
         let mut seen_messages = HashSet::new();
@@ -416,17 +415,6 @@ fn datum_from_serde_proto_nested<'a>(val: &'a ProtoValue) -> Result<Datum<'a>, a
         bail!("Nested bytes are not supported");
     }
     datum_from_serde_proto(val)
-}
-
-fn proto_message_name(message_name: &str) -> String {
-    // Prepend a . (following the serde-protobuf naming scheme to list root paths
-    // for packaged messages) if the message is part of a package and the user hasn't
-    // already specified a root path
-    if message_name.is_empty() || !message_name.contains('.') || message_name.starts_with('.') {
-        message_name.to_string()
-    } else {
-        format!(".{}", message_name)
-    }
 }
 
 fn derive_column_type<'a>(
