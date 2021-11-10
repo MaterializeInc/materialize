@@ -13,6 +13,7 @@ message SimpleId {
 }
 
 > SELECT * FROM kafka_source;
+
 id
 --
 1
