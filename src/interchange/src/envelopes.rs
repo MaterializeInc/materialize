@@ -36,7 +36,7 @@ where
     let x: Stream<G, ((Option<Row>, Vec<DiffPair<Row>>), G::Timestamp, Diff)> =
         batches.unary(Pipeline, "combine_at_timestamp", move |_, _| {
             move |input, output| {
-                while let Some((cap, batches)) = input.next() {
+                while let Some((cap, batches)) = input.next().with_cap() {
                     let mut session = output.session(&cap);
                     batches.swap(&mut rows_buf);
                     for batch in rows_buf.drain(..) {

@@ -686,10 +686,7 @@ where
                 let mut data_output = data_output.activate();
 
                 // Write out everything and forward, keeping the write futures.
-                while let Some((cap, data)) = input.next() {
-                    // TODO(petrosagg): remove this unconditional retain once this is released:
-                    //     https://github.com/TimelyDataflow/timely-dataflow/pull/429
-                    let cap = cap.retain();
+                while let Some((cap, data)) = input.next().with_cap() {
                     data.swap(&mut buffer);
 
                     let mut session = data_output.session(&cap);

@@ -1096,7 +1096,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c696ec0400d8dd4d0d855d43204737a1190a379d"
+source = "git+https://github.com/petrosagg/differential-dataflow?branch=safe-capref#6b879a417ce8aaf7751eccf821ca6afef2445913"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4800,7 +4800,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#596ca501ac1b52464eff6c0479650b680a5ab5cd"
+source = "git+https://github.com/petrosagg/timely-dataflow?branch=safe-capabilityref#2862f9dc3d39d83b1bc6a34b16d16cd70de846b2"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4817,12 +4817,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#596ca501ac1b52464eff6c0479650b680a5ab5cd"
+source = "git+https://github.com/petrosagg/timely-dataflow?branch=safe-capabilityref#2862f9dc3d39d83b1bc6a34b16d16cd70de846b2"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#596ca501ac1b52464eff6c0479650b680a5ab5cd"
+source = "git+https://github.com/petrosagg/timely-dataflow?branch=safe-capabilityref#2862f9dc3d39d83b1bc6a34b16d16cd70de846b2"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4838,7 +4838,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#596ca501ac1b52464eff6c0479650b680a5ab5cd"
+source = "git+https://github.com/petrosagg/timely-dataflow?branch=safe-capabilityref#2862f9dc3d39d83b1bc6a34b16d16cd70de846b2"
 
 [[package]]
 name = "tinytemplate"

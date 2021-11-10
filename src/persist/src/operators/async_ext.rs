@@ -213,9 +213,7 @@ mod test {
                         // Drop initial capabilities
                         capabilities.clear();
                         let mut output_handle = output.activate();
-                        while let Some((cap, data)) = input_handle.next() {
-                            let cap = cap.retain();
-
+                        while let Some((cap, data)) = input_handle.next().with_cap() {
                             let mut session = output_handle.session(&cap);
                             for item in data.iter().copied() {
                                 tokio::time::sleep(Duration::from_millis(10)).await;
