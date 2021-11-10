@@ -299,23 +299,23 @@ impl Action for IngestAction {
                     if self.publish {
                         let schema = schema.expect("schema");
                         let ccsr_subject = format!("{}-{}", topic_name, typ);
-                        let schema_refs: Vec<_> = PROTO_IMPORT_REGEX
-                            .captures_iter(&schema)
-                            .filter_map(|capture| {
-                                let imp = capture
-                                    .get(1)
-                                    .expect("REGEX HAS ONE GROUP")
-                                    .as_str()
-                                    .to_owned();
-                                futures::executor::block_on(ccsr_client.get_subject(&imp))
-                                    .map(|subject| ccsr::SchemaReference {
-                                        name: imp.clone(),
-                                        subject: imp.clone(),
-                                        version: subject.version,
-                                    })
-                                    .ok()
+                        let schema_refs: Vec<_> = futures::future::join_all(
+                            PROTO_IMPORT_REGEX.captures_iter(&schema).map(|capture| {
+                                let imp = capture.get(1).expect("REGEX HAS ONE GROUP").as_str();
+                                ccsr_client.get_subject(imp)
+                            }),
+                        )
+                        .await
+                        .into_iter()
+                        .filter_map(|r| {
+                            r.ok().map(|subject| ccsr::SchemaReference {
+                                name: subject.name.clone(),
+                                subject: subject.name,
+                                version: subject.version,
                             })
-                            .collect();
+                        })
+                        .collect();
+
                         ccsr_client
                             .publish_schema(
                                 &ccsr_subject,
