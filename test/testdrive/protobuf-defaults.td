@@ -39,9 +39,7 @@ $ kafka-ingest topic=defaults format=protobuf descriptor-file=defaults.pb messag
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-defaults-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Defaults' USING SCHEMA FILE '${testdrive.temp-dir}/defaults.pb'
 
-# TODO(benesch): The fact that ENUM0 is returned below is incorrect. It should
-# be ENUM1.
 > SELECT * FROM defaults
 bool  int32  int64  float  double  bytes  string enum  mz_offset
 ----
-true  42     42     42     42      aaa    bbb    ENUM0 1
+true  42     42     42     42      aaa    bbb    ENUM1 1

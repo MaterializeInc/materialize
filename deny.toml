@@ -55,7 +55,6 @@ wrappers = [
     "protobuf-parse",
     "pubnub-core",
     "pubnub-hyper",
-    "serde-protobuf",
     "sysctl",
     "tiberius",
     "zip",
@@ -100,7 +99,6 @@ allow-git = [
     "https://github.com/MaterializeInc/rust-prometheus.git",
     # Waiting on https://github.com/stepancheg/rust-protobuf/pull/581.
     "https://github.com/MaterializeInc/rust-protobuf.git",
-    "https://github.com/MaterializeInc/serde-protobuf.git",
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",

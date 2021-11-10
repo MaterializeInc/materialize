@@ -12,20 +12,36 @@
 $ file-append path=simple.proto
 syntax = "proto3";
 
-message Simple {
+message OneInt {
     int64 f = 1;
+}
+
+message OneString {
+    string f = 1;
 }
 
 $ protobuf-compile-descriptors inputs=simple.proto output=simple.pb
 
-$ kafka-create-topic topic=corrupted
+$ kafka-create-topic topic=total-garbage
 
-$ kafka-ingest format=bytes topic=corrupted
+$ kafka-ingest format=bytes topic=total-garbage
 garbage
 
-> CREATE MATERIALIZED SOURCE corrupted FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-corrupted-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Simple' USING SCHEMA FILE '${testdrive.temp-dir}/simple.pb'
+> CREATE MATERIALIZED SOURCE total_garbage FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-total-garbage-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.OneInt' USING SCHEMA FILE '${testdrive.temp-dir}/simple.pb'
 
-! SELECT * FROM corrupted
-Decode error: Text: protobuf deserialization error: Deserializing into rust object: protobuf error
+! SELECT * FROM total_garbage
+Decode error: Text: protobuf deserialization error: incorrect tag
+
+$ kafka-create-topic topic=wrong-message
+
+$ kafka-ingest topic=wrong-message format=protobuf descriptor-file=simple.pb message=.OneInt
+{"f": 1}
+
+> CREATE MATERIALIZED SOURCE wrong_message FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-wrong-message-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.OneString' USING SCHEMA FILE '${testdrive.temp-dir}/simple.pb'
+
+! SELECT * FROM wrong_message
+Decode error: Text: protobuf deserialization error: unexpected EOF

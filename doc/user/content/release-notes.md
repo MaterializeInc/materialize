@@ -114,6 +114,9 @@ List new features before bug fixes.
 
 - Added support for `OPERATOR(<schema>.<op>)`. Schema can either be omitted or must be `pg_catalog`.
 
+- Fix a crash when decoding certain messages from Protobuf-formatted Kafka
+  topics {{% gh 8930 %}}.
+
 {{% version-header v0.10.0 %}}
 
 - Allow ingesting avro schemas whose top node is not a record type.
