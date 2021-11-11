@@ -35,6 +35,7 @@ use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Sn
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 
+#[derive(Debug)]
 enum Cmd {
     Register(String, (&'static str, &'static str), PFutureHandle<Id>),
     Destroy(String, PFutureHandle<bool>),
