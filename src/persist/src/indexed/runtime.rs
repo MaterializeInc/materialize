@@ -25,7 +25,7 @@ use ore::metrics::MetricsRegistry;
 use persist_types::Codec;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
-use tokio::time::{self};
+use tokio::time;
 
 use crate::error::Error;
 use crate::indexed::background::Maintainer;
