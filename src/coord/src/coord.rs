@@ -136,6 +136,7 @@ pub enum Message {
     ScrapeMetrics,
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
+    AdvanceLocalInputs,
 }
 
 #[derive(Derivative)]
@@ -260,7 +261,6 @@ where
     /// Whether or not the most recent operation was a read.
     last_op_was_read: bool,
     /// Whether we need to advance local inputs (i.e., did someone observe a timestamp).
-    // TODO(justin): this is a hack, and does not work right with TAIL.
     need_advance: bool,
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
@@ -572,6 +572,26 @@ where
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
+        {
+            // An explicit SELECT or INSERT on a table will bump the table's timestamps,
+            // but there are cases where timestamps are not bumped but we expect the closed
+            // timestamps to advance (`AS OF now()`, TAILing views over RT sources and
+            // tables). To address these, spawn a task that forces table timestamps to
+            // close on a regular interval. This roughly tracks the behaivor of realtime
+            // sources that close off timestamps on an interval.
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
+                loop {
+                    interval.tick().await;
+                    // If sending fails, the main thread has shutdown.
+                    if internal_cmd_tx.send(Message::AdvanceLocalInputs).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
         let mut metric_scraper_stream = self.metric_scraper.tick_stream();
 
         loop {
@@ -612,6 +632,9 @@ where
                     self.message_advance_source_timestamp(advance).await
                 }
                 Message::ScrapeMetrics => self.message_scrape_metrics().await,
+                Message::AdvanceLocalInputs => {
+                    self.need_advance = true;
+                }
             }
 
             if self.need_advance {
