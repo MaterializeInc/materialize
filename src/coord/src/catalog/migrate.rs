@@ -135,8 +135,8 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
 
-/// Rewrites Kafka Protobuf sources to store the compiled bytes rather than the
-/// text of the schema.
+/// Rewrites Protobuf sources to store the compiled bytes rather than the text
+/// of the schema.
 fn ast_rewrite_kafka_protobuf_source_text_to_compiled_0_9_13(
     stmt: &mut sql::ast::Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
@@ -209,12 +209,7 @@ fn ast_rewrite_kafka_protobuf_source_text_to_compiled_0_9_13(
         Ok(())
     }
 
-    if let Statement::CreateSource(CreateSourceStatement {
-        connector: CreateSourceConnector::Kafka { .. },
-        format,
-        ..
-    }) = stmt
-    {
+    if let Statement::CreateSource(CreateSourceStatement { format, .. }) = stmt {
         match format {
             CreateSourceFormat::Bare(value) => {
                 if let Format::Protobuf(ProtobufSchema::Csr {
