@@ -35,6 +35,7 @@ use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Sn
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 
+#[derive(Debug)]
 enum Cmd {
     Register(String, (&'static str, &'static str), PFutureHandle<Id>),
     Destroy(String, PFutureHandle<bool>),
@@ -890,7 +891,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         // mz_metrics). Otherwise, it has no effect.
         //
         // TODO: Make step smarter and remove this hack.
-        let need_step = need_step && self.indexed.pending.has_responses();
+        let need_step = need_step && self.indexed.has_pending_responses();
 
         if need_step {
             self.prev_step = step_start;

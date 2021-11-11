@@ -20,14 +20,14 @@
 > INSERT INTO t1 VALUES (1);
 
 ! COMMIT
-failed to append to unsealed: FileBlob::set sync fail point reached
+FileBlob::set sync fail point reached
 
 > BEGIN
 
 > INSERT INTO t1 VALUES (1);
 
 ! COMMIT
-failed to append to unsealed: FileBlob::set sync fail point reached
+FileBlob::set sync fail point reached
 
 #
 # Remove the I/O error and recover

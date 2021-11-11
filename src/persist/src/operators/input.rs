@@ -148,7 +148,6 @@ mod tests {
 
     use crate::error::Error;
     use crate::mem::MemRegistry;
-    use crate::unreliable::UnreliableHandle;
 
     use super::*;
 
@@ -262,10 +261,9 @@ mod tests {
 
     #[test]
     fn error_stream() -> Result<(), Error> {
-        let mut unreliable = UnreliableHandle::default();
-        let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
+        let mut p = MemRegistry::new().runtime_no_reentrance()?;
         let token = p.create_or_load::<(), ()>("error_stream").unwrap();
-        unreliable.make_unavailable();
+        p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {
             worker.dataflow(|scope| {
@@ -281,7 +279,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let expected = vec![(
-            "replaying persisted data: failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
+            "replaying persisted data: runtime shutdown".to_string(),
             0,
             1,
         )];
