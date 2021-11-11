@@ -381,6 +381,22 @@ impl MemRegistry {
         Indexed::new(log, blob, compacter, metrics)
     }
 
+    /// Returns a [RuntimeClient] with unreliable storage backed by the given
+    /// [`UnreliableHandle`].
+    pub fn indexed_unreliable(
+        &mut self,
+        unreliable: UnreliableHandle,
+    ) -> Result<Indexed<UnreliableLog<MemLog>, UnreliableBlob<MemBlob>>, Error> {
+        let log = self.log_no_reentrance()?;
+        let log = UnreliableLog::from_handle(log, unreliable.clone());
+        let metrics = Metrics::register_with(&MetricsRegistry::new());
+        let blob = self.blob_no_reentrance()?;
+        let blob = UnreliableBlob::from_handle(blob, unreliable);
+        let blob = BlobCache::new(metrics.clone(), blob);
+        let compacter = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        Indexed::new(log, blob, compacter, metrics)
+    }
+
     /// Starts a [RuntimeClient] using the [MemLog] and [MemBlob] contained by
     /// this registry.
     pub fn runtime_no_reentrance(&mut self) -> Result<RuntimeClient, Error> {
