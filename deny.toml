@@ -98,6 +98,8 @@ allow-git = [
     "https://github.com/MaterializeInc/rust-postgres.git",
     "https://github.com/MaterializeInc/rust-postgres-array.git",
     "https://github.com/MaterializeInc/rust-prometheus.git",
+    # Waiting on https://github.com/stepancheg/rust-protobuf/pull/581.
+    "https://github.com/MaterializeInc/rust-protobuf.git",
     "https://github.com/MaterializeInc/serde-protobuf.git",
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",

@@ -31,18 +31,18 @@ maplit = "1.0.2"
 md-5 = "0.9.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["s3", "sqs", "sts"] }
+mz-protoc = { path = "../protoc" }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
-protobuf = { version = "3.0.0-alpha.2", features = ["with-serde"] }
+protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 repr = { path = "../repr" }
 reqwest = { version = "0.11.6", features = ["native-tls-vendored"] }
 serde = "1.0.130"
-serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git" }
-serde_json = "1.0.71"
+serde_json = { version = "1.0.71", features = ["raw_value"] }
 sql-parser = { path = "../sql-parser" }
 structopt = "0.3.25"
 tempfile = "3.2.0"
@@ -58,6 +58,3 @@ uuid = "0.8.2"
 [dev-dependencies]
 assert_cmd = "2.0.2"
 predicates = "2.0.3"
-
-[build-dependencies]
-mz-protoc = { path = "../protoc" }

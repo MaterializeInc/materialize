@@ -19,12 +19,12 @@
 //! on libprotobuf and does *not* require Google's `protoc` binary to be
 //! installed on the system.
 //!
-//! This crate delegates all of the hard work to the [`protobuf_codegen_pure`]
+//! This crate delegates all of the hard work to the [`protobuf_codegen`]
 //! crate. The primary motivation is to provide a more stable and ergonomic API
 //! that is geared towards usage in build scripts. This insulates downstream
-//! crates from changes in `protobuf_codegen_pure`'s API and avoids duplicative
+//! crates from changes in `protobuf_codegen`'s API and avoids duplicative
 //! boilerplate in their build scripts. This crate also works around several
-//! bugs in `protobuf_codegen_pure` by patching the generated code, but the hope
+//! bugs in `protobuf_codegen` by patching the generated code, but the hope
 //! is to upstream these bugfixes over time.
 
 use std::env;
@@ -36,7 +36,7 @@ use std::process;
 use anyhow::{bail, Context};
 use protobuf::descriptor::FileDescriptorSet;
 use protobuf::Message;
-use protobuf_codegen_pure::Customize;
+use protobuf_codegen::Customize;
 use protobuf_parse::ParsedAndTypechecked;
 
 /// A builder for a protobuf compilation.
@@ -71,12 +71,6 @@ impl Protoc {
         self
     }
 
-    /// Enables or disables `serde` support.
-    pub fn serde(&mut self, set: bool) -> &mut Self {
-        self.customize.serde_derive = Some(set);
-        self
-    }
-
     fn parse_internal(&self) -> Result<ParsedAndTypechecked, anyhow::Error> {
         for input in &self.inputs {
             if !input.exists() {
@@ -107,11 +101,11 @@ impl Protoc {
     /// Executes the compilation.
     ///
     /// The generated files are placed into `out_dir` according to the
-    /// conventions of the [`protobuf_codegen_pure`] crate. Roughly speaking, for
+    /// conventions of the [`protobuf_codegen`] crate. Roughly speaking, for
     /// each input file `path/to/file.proto`, this method generates the Rust
     /// file `OUT_DIR/path/to/file.rs`. The details involve some special rules
     /// for escaping Rust keywords and special characters, but you will have to
-    /// consult the `protobuf_codegen_pure` source code for details.
+    /// consult the `protobuf_codegen` source code for details.
     pub fn compile_into(&mut self, out_dir: &Path) -> Result<(), anyhow::Error> {
         if !out_dir.exists() {
             bail!(
@@ -122,7 +116,7 @@ impl Protoc {
 
         let parsed = self.parse_internal()?;
 
-        protobuf_codegen::gen_and_write(
+        protobuf_codegen::gen_and_write::gen_and_write(
             &parsed.file_descriptors,
             "mz-protoc",
             &parsed.relative_paths,
@@ -185,10 +179,6 @@ impl Protoc {
     ///
     ///   * If an error occurs, instead of returning the error, the error is
     ///     printed to stderr and the process is aborted.
-    ///
-    ///   * If the compilation is Serde-enabled, Cargo will be instructed to
-    ///     enable the `with-serde` feature to work around a bug in
-    ///     [`protobuf_codegen_pure`].
     ///
     ///   * Various diagnostic information is printed to stdout for users
     ///     following along with e.g. `cargo build -vv`.

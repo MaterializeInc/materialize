@@ -417,12 +417,6 @@ The random seed currently in effect. If no ```--seed``` option was specified, it
 
 The temporary directory to use. If no ```--temp-dir``` option is specified, it will be a random directory inside the OS temp directory.
 
-#### `testdrive.protobuf-descriptors`
-
-#### `testdrive.protobuf-descriptors-file`
-
-The protobuf definitions from `src/testdrive/src/format/protobuf/` are compiled in and made available for tests to use.
-
 #### `testdrive.aws-region`
 
 #### `testdrive.aws-account`

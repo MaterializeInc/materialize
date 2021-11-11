@@ -2953,7 +2953,6 @@ dependencies = [
  "ore",
  "protobuf",
  "protobuf-codegen",
- "protobuf-codegen-pure",
  "protobuf-parse",
  "structopt",
  "tempfile",
@@ -3873,43 +3872,25 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "3.0.0-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d5ef59c35c7472ce5e1b6c5924b87585143d1fc2cf39eae0009bba6c4df62f1"
-dependencies = [
- "serde",
- "serde_derive",
-]
+source = "git+https://github.com/MaterializeInc/rust-protobuf.git#063964a8ab6fee98a9622a0c0a72a9765411025a"
 
 [[package]]
 name = "protobuf-codegen"
 version = "3.0.0-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89100ee819f69b77a4cab389fec9dd155a305af4c615e6413ec1ef9341f333ef"
+source = "git+https://github.com/MaterializeInc/rust-protobuf.git#063964a8ab6fee98a9622a0c0a72a9765411025a"
 dependencies = [
  "anyhow",
  "protobuf",
  "protobuf-parse",
- "thiserror",
-]
-
-[[package]]
-name = "protobuf-codegen-pure"
-version = "3.0.0-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79453e74d08190551e821533ee42c447f9e21ca26f83520e120e6e8af27f6879"
-dependencies = [
- "anyhow",
- "protobuf",
- "protobuf-codegen",
- "protobuf-parse",
+ "protoc",
+ "tempfile",
  "thiserror",
 ]
 
 [[package]]
 name = "protobuf-parse"
 version = "3.0.0-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c265ffc69976efc3056955b881641add3186ad0be893ef10622482d80d1d2b68"
+source = "git+https://github.com/MaterializeInc/rust-protobuf.git#063964a8ab6fee98a9622a0c0a72a9765411025a"
 dependencies = [
  "anyhow",
  "protobuf",
@@ -3921,8 +3902,7 @@ dependencies = [
 [[package]]
 name = "protoc"
 version = "3.0.0-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f1f8b318a54d18fbe542513331e058f4f8ce6502e542e057c50c7e5e803fdab"
+source = "git+https://github.com/MaterializeInc/rust-protobuf.git#063964a8ab6fee98a9622a0c0a72a9765411025a"
 dependencies = [
  "anyhow",
  "log",
@@ -4534,7 +4514,7 @@ dependencies = [
 [[package]]
 name = "serde-protobuf"
 version = "0.8.3-alpha.0"
-source = "git+https://github.com/MaterializeInc/serde-protobuf.git#8154bb9129aaa722abe7ce33a0aa263d22ed1e4f"
+source = "git+https://github.com/MaterializeInc/serde-protobuf.git#6c460d7aa5b8cc5a67744e4e5b9978aa429480f7"
 dependencies = [
  "linked-hash-map",
  "log",
@@ -5120,7 +5100,6 @@ dependencies = [
  "repr",
  "reqwest",
  "serde",
- "serde-protobuf",
  "serde_json",
  "sql-parser",
  "structopt",

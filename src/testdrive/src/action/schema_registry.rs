@@ -11,10 +11,67 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use ccsr::{SchemaReference, SchemaType};
 use ore::retry::Retry;
 
 use crate::action::{Action, Context, State};
 use crate::parser::BuiltinCommand;
+
+pub struct PublishAction {
+    subject: String,
+    schema: String,
+    schema_type: SchemaType,
+    references: Vec<String>,
+}
+
+pub fn build_publish(mut cmd: BuiltinCommand) -> Result<PublishAction, String> {
+    let subject = cmd.args.string("subject")?;
+    let schema_type = match cmd.args.string("schema-type")?.as_str() {
+        "avro" => SchemaType::Avro,
+        "json" => SchemaType::Json,
+        "protobuf" => SchemaType::Protobuf,
+        s => return Err(format!("unknown schema type: {}", s)),
+    };
+    let references = match cmd.args.opt_string("references") {
+        None => vec![],
+        Some(s) => s.split(',').map(|s| s.into()).collect(),
+    };
+    Ok(PublishAction {
+        subject,
+        schema: cmd.input.join("\n"),
+        schema_type,
+        references,
+    })
+}
+
+#[async_trait]
+impl Action for PublishAction {
+    async fn undo(&self, _: &mut State) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
+        let mut references = vec![];
+        for reference in &self.references {
+            let subject = state
+                .ccsr_client
+                .get_subject(reference)
+                .await
+                .map_err(|e| format!("fetching reference {}: {}", reference, e))?;
+            references.push(SchemaReference {
+                name: subject.name,
+                subject: reference.clone(),
+                version: subject.version,
+            })
+        }
+        state
+            .ccsr_client
+            .publish_schema(&self.subject, &self.schema, self.schema_type, &references)
+            .await
+            .map_err(|e| format!("publishing schema: {}", e))?;
+        Ok(())
+    }
+}
 
 pub struct WaitSchemaAction {
     schema: String,

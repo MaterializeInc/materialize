@@ -6,18 +6,25 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 $ set schema
 syntax = "proto3";
 
-import 'google/protobuf/timestamp.proto';
-
-message SimpleId {
+message Message {
   string id = 1;
 }
 
+$ file-append path=message.proto
+\${schema}
+
+$ protobuf-compile-descriptors inputs=message.proto output=message.pb
+
 $ kafka-create-topic topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION}
 
-$ kafka-ingest topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION} format=protobuf schema=${schema} message=simpleid publish=true
+$ schema-registry-publish subject=testdrive-upgrade-proto-source-${env.UPGRADE_FROM_VERSION}-${testdrive.seed}-value schema-type=protobuf
+\${schema}
+
+$ kafka-ingest topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION} format=protobuf descriptor-file=message.pb message=.Message
 {"id": "c"}
 {"id": "h"}
 

@@ -12,9 +12,8 @@ path = "bin/protoc.rs"
 [dependencies]
 anyhow = "1.0.47"
 ore = { path = "../ore" }
-protobuf = "3.0.0-alpha.2"
-protobuf-codegen = "3.0.0-alpha.2"
-protobuf-codegen-pure = "3.0.0-alpha.2"
-protobuf-parse = "3.0.0-alpha.2"
+protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
+protobuf-codegen = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
+protobuf-parse = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 structopt = "0.3.25"
 tempfile = "3.2.0"
