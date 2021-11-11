@@ -209,11 +209,11 @@ async fn main() {
     if errors.is_empty() {
         println!("testdrive completed successfully.");
     } else {
-        println!("!!! Error Report");
-        println!("{} errors were encountered during execution", errors.len());
+        eprintln!("!!! Error Report");
+        eprintln!("{} errors were encountered during execution", errors.len());
 
         if !error_files.is_empty() {
-            println!("files involved: {}", error_files.join(" "));
+            eprintln!("files involved: {}", error_files.join(" "));
         }
 
         process::exit(1);
