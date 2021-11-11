@@ -161,8 +161,10 @@ fn ast_rewrite_kafka_protobuf_source_text_to_compiled_0_9_13(
                     .flatten()
                     .map(|message| format!(".{}", message.get_name()))
                     .ok_or_else(|| anyhow!("unable to compile temporary schema"))?;
+                let mut schema = String::new();
+                strconv::format_bytes(&mut schema, &fds.write_to_bytes()?);
                 Ok(CsrSeedCompiledEncoding {
-                    schema: fds.write_to_bytes()?,
+                    schema,
                     message_name,
                 })
             }
