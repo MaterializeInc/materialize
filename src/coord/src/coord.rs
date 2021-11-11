@@ -7,33 +7,78 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Coordination of installed views, available timestamps, compacted timestamps, and transactions.
+//! Coordination of installed views, available timestamps, compacted
+//! timestamps, and transactions.
 //!
-//! The command coordinator maintains a view of the installed
-//! views, and for each tracks the frontier of available times
-//! ([`upper`](arrangement_state::Frontiers::upper)) and the frontier
-//! of compacted times ([`since`](arrangement_state::Frontiers::since)).
-//! The upper frontier describes times that may not return immediately, as any
-//! timestamps in advance of the frontier are still open. The since frontier
-//! constrains those times for which the maintained view will be correct,
-//! as any timestamps in advance of the frontier must accumulate to the same
-//! value as would an un-compacted trace. The since frontier cannot be directly
-//! mutated, but instead can have multiple handles to it which forward changes
-//! from an internal MutableAntichain to the since.
+//! The command coordinator maintains a view of the installed views, and for
+//! each tracks the frontier of available times
+//! ([`upper`](arrangement_state::Frontiers::upper)) and the frontier of
+//! compacted times ([`since`](arrangement_state::Frontiers::since)). The upper
+//! frontier describes times that may not return immediately, as any timestamps
+//! in advance of the frontier are still open. The since frontier constrains
+//! those times for which the maintained view will be correct, as any
+//! timestamps in advance of the frontier must accumulate to the same value as
+//! would an un-compacted trace. The since frontier cannot be directly mutated,
+//! but instead can have multiple handles to it which forward changes from an
+//! internal MutableAntichain to the since.
 //!
-//! The [`Coordinator`] tracks various compaction frontiers
-//! so that indexes, compaction, and transactions can work
-//! together. [`determine_timestamp()`](Coordinator::determine_timestamp)
-//! returns the least valid since of its sources. Any new transactions
-//! should thus always be >= the current compaction frontier
-//! and so should never change the frontier when being added to
-//! [`txn_reads`](Coordinator::txn_reads). The compaction frontier may
-//! change when a transaction ends (if it was the oldest transaction and
-//! the index's since was advanced after the transaction started) or when
-//! [`update_upper()`](Coordinator::update_upper) is run (if there are no in
-//! progress transactions before the new since). When it does, it is added to
-//! [`since_updates`](Coordinator::since_updates) and will be processed during
-//! the next [`maintenance()`](Coordinator::maintenance) call.
+//! The [`Coordinator`] tracks various compaction frontiers so that indexes,
+//! compaction, and transactions can work together.
+//! [`determine_timestamp()`](Coordinator::determine_timestamp) returns the
+//! least valid since of its sources. Any new transactions should thus always
+//! be >= the current compaction frontier and so should never change the
+//! frontier when being added to [`txn_reads`](Coordinator::txn_reads). The
+//! compaction frontier may change when a transaction ends (if it was the
+//! oldest transaction and the index's since was advanced after the transaction
+//! started) or when [`update_upper()`](Coordinator::update_upper) is run (if
+//! there are no in progress transactions before the new since). When it does,
+//! it is added to [`since_updates`](Coordinator::since_updates) and will be
+//! processed during the next [`maintenance()`](Coordinator::maintenance) call.
+//!
+//! ## Frontiers another way
+//!
+//! If the above description of frontiers left you with questions, this
+//! repackaged explanation might help.
+//!
+//! - `since` is the least recent time (i.e. oldest time) that you can read
+//!   from sources and be guaranteed that the returned data is accurate as of
+//!   that time.
+//!
+//!   Reads at times less than `since` may return values that were not actually
+//!   seen at the specified time, but arrived later (i.e. the results are
+//!   compacted).
+//!
+//!   For correctness' sake, the coordinator never chooses to read at a time
+//!   less than an arrangement's `since`.
+//!
+//! - `upper` is one millisecond greater than the most recent time that you can
+//!   read from sources and receive an immediate response.
+//!
+//!   Reads at times >= `upper` do not immediately return because the answer
+//!   isn't known yet. However, once the `upper` is >= the specified read time,
+//!   the read can return.
+//!
+//!   For the sake of returned values' freshness, the coordinator prefers
+//!   performing reads at an arrangement's `upper`. However, because we more
+//!   strongly prefer correctness, the coordinator will choose timestamps
+//!   greater than an object's `upper` if it is also being accessed alongside
+//!   objects whose `since` times are >= its `upper`.
+//!
+//! This illustration attempts to show, with time moving left to right, the
+//! relationship between `since` and `upper`.
+//!
+//! - `#`: possibly inaccurate results
+//! - `-`: immediate, correct response
+//! - `?`: not yet known
+//! - `s`: since
+//! - `u`: upper
+//! - `|`: eligible for coordinator to select
+//!
+//! ```nofmt
+//! ####s----u?????
+//!      ||||||||||
+//! ```
+//!
 
 use std::cell::RefCell;
 use std::cmp;
