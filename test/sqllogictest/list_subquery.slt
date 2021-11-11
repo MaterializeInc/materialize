@@ -1,0 +1,164 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE xs (x int not null)
+
+statement ok
+CREATE TABLE ys (y int not null)
+
+statement ok
+INSERT INTO xs VALUES (1), (1), (2);
+
+statement ok
+INSERT INTO ys VALUES (2), (4), (5);
+
+statement ok
+SELECT (LIST[1])::text
+
+### List subqueries ###
+statement ok
+SELECT LIST(SELECT x FROM xs)::text
+
+query T
+SELECT LIST(SELECT x FROM xs)::text
+----
+{1,1,2}
+
+query T
+SELECT LIST(SELECT x FROM xs WHERE x > 1)::text
+----
+{2}
+
+query T
+SELECT LIST[LIST(SELECT x FROM xs)]::text
+----
+{{1,1,2}}
+
+statement ok
+SELECT LIST(SELECT x FROM xs LIMIT 2)::text
+
+query T
+SELECT LIST(SELECT x FROM xs ORDER BY x DESC)::text
+----
+{2,1,1}
+
+query T
+SELECT LIST(SELECT x FROM xs ORDER BY x DESC LIMIT 2)::text
+----
+{2,1}
+
+query T
+SELECT LIST(SELECT x FROM xs ORDER BY x DESC LIMIT 1)::text
+----
+{2}
+
+query T
+SELECT LIST[LIST(SELECT x FROM xs), LIST(SELECT y FROM ys)]::text
+----
+{{1,1,2},{2,4,5}}
+
+query T
+SELECT list_cat(LIST(SELECT x FROM xs), LIST(SELECT y FROM ys))::text
+----
+{1,1,2,2,4,5}
+
+query T
+SELECT list_cat(LIST(SELECT x FROM xs), LIST(SELECT y FROM ys ORDER BY y DESC))::text
+----
+{1,1,2,5,4,2}
+
+query T
+SELECT LIST(SELECT y FROM xs JOIN ys ON xs.x = ys.y)::text
+----
+{2}
+
+query T
+SELECT LIST(SELECT y FROM xs JOIN ys ON 2*xs.x >= ys.y)::text
+----
+{2,2,2,4}
+
+query T
+SELECT LIST(SELECT DISTINCT y FROM xs JOIN ys ON 2*xs.x >= ys.y)::text
+----
+{2,4}
+
+query T
+SELECT LIST(SELECT 1 WHERE FALSE)::text
+----
+{}
+
+statement ok
+CREATE TABLE zs (z int not null)
+
+query T
+SELECT LIST(SELECT z FROM zs)::text;
+----
+{}
+
+query T
+SELECT LIST(SELECT AVG(0) FROM zs)::text;
+----
+{NULL}
+
+statement ok
+CREATE TABLE users (id int not null, other_field int not null)
+
+statement ok
+CREATE TABLE customer (id int not null, first_name string not null, last_name string not null, zip string not null)
+
+statement ok
+INSERT INTO users VALUES (1, 10), (2, 5), (3, 8);
+
+statement ok
+INSERT INTO customer VALUES (1, 'alice', 'lasta', '10003'::text), (2, 'bob', 'lastb', '10013'::text), (3, 'charlie', 'lastc', '11217'::text);
+
+query T
+SELECT LIST(SELECT id FROM customer)::text
+----
+{1,2,3}
+
+query T
+SELECT LIST(SELECT other_field FROM users ORDER BY id ASC)::text
+----
+{10,5,8}
+
+query error Expected subselect to return 1 column, got 2 columns
+SELECT LIST(SELECT first_name, last_name FROM customer)::text
+
+# Verify nested lists
+query error LIST expression cannot be cast to uniform type: text list vs integer list
+SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
+
+query T
+SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id::text]]::text FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2
+----
+{{alice,lasta},{10003},{1}}
+{{charlie,lastc},{11217},{3}}
+
+# Check CTE syntax can be included in a query
+query T
+SELECT LIST(WITH usps AS (SELECT 42) SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], LIST[customer.id::text]] FROM customer JOIN users ON customer.id = users.id ORDER BY users.other_field DESC LIMIT 2)::text
+----
+{{{alice,lasta},{10003},{1}},{{charlie,lastc},{11217},{3}}}
+
+statement ok
+CREATE TABLE qs (q int not null)
+
+query T
+SELECT LIST(SELECT TRUE FROM(SELECT AVG(0) FROM qs))::text;
+----
+{t}
+
+query T
+SELECT LIST(SELECT TRUE FROM(SELECT AVG(0) FROM (SELECT FROM qs)))::text;
+----
+{t}
