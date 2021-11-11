@@ -105,12 +105,11 @@ where
     let indexed = Indexed::new(log, blob, maintainer, metrics.clone())?;
     let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
     let id = RuntimeId::new();
-    let runtime_pool = pool.clone();
-    let impl_handle = runtime_pool.spawn(async move { while runtime.work() {} });
+    let impl_handle = tokio::spawn(async move { while runtime.work() {} });
 
     // Start up the ticker thread.
     let ticker_tx = tx.clone();
-    let ticker_handle = runtime_pool.spawn(async move {
+    let ticker_handle = tokio::spawn(async move {
         // Try to keep worst case command response times to roughly `110% of
         // min_step_interval` by ensuring there's a tick relatively shortly
         // after a step becomes eligible. We could just as easily make this
