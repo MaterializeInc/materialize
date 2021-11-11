@@ -7,6 +7,7 @@ pygmentsUseClasses = true
 # Keep the releases in reverse order of their release date. The first release
 # in the list is assumed to be the most recent.
 versions = [
+  { name = "v0.9.12", date = "11 November 2021" },
   { name = "v0.9.11", date = "02 November 2021" },
   { name = "v0.9.10", date = "27 October 2021" },
   { name = "v0.9.9", date = "21 October 2021" },
