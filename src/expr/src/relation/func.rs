@@ -640,8 +640,8 @@ pub enum AggregateFunc {
     ArrayConcat {
         order_by: Vec<ColumnOrder>,
     },
-    /// Accumulates `Datum::List`s whose first element is a `Datum::List` into a
-    /// single `Datum::List`. The other elements are columns used by `order_by`.
+    /// Accumulates `Datum::List`s of `ScalarType::Record` whose first field is a `Datum::List`
+    /// into a single `Datum::List` (the remaining fields are used by `order_by`).
     ListConcat {
         order_by: Vec<ColumnOrder>,
     },
