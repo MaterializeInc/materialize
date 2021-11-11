@@ -831,8 +831,10 @@ async fn compile_proto(
                 .flatten()
                 .map(|message| format!(".{}", message.get_name()))
                 .ok_or_else(|| anyhow!("unable to compile temporary schema"))?;
+            let mut schema = String::new();
+            strconv::format_bytes(&mut schema, &fds.write_to_bytes()?);
             Ok(CsrSeedCompiledEncoding {
-                schema: fds.write_to_bytes()?,
+                schema,
                 message_name,
             })
         }

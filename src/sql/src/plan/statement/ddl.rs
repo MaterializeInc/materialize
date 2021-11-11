@@ -1076,13 +1076,13 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                     seed
                 {
                     let value = DataEncoding::Protobuf(ProtobufEncoding {
-                        descriptors: value.schema.clone(),
+                        descriptors: strconv::parse_bytes(&value.schema)?,
                         message_name: value.message_name.clone(),
                     });
                     if let Some(key) = key {
                         return Ok(SourceDataEncoding::KeyValue {
                             key: DataEncoding::Protobuf(ProtobufEncoding {
-                                descriptors: key.schema.clone(),
+                                descriptors: strconv::parse_bytes(&key.schema)?,
                                 message_name: key.message_name.clone(),
                             }),
                             value,

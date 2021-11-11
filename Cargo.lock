@@ -4341,7 +4341,6 @@ dependencies = [
  "ore",
  "phf",
  "phf_codegen",
- "repr",
  "stacker",
  "uncased",
  "unicode-width",

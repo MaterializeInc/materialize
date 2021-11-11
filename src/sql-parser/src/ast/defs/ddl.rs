@@ -228,15 +228,14 @@ impl_display!(CsrSeedCompiled);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeedCompiledEncoding {
-    pub schema: Vec<u8>,
+    // Hex encoded string.
+    pub schema: String,
     pub message_name: String,
 }
 impl AstDisplay for CsrSeedCompiledEncoding {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(" SCHEMA '");
-        f.write_str(&display::escape_single_quote_string(&hex::encode(
-            &self.schema,
-        )));
+        f.write_str(&display::escape_single_quote_string(&self.schema));
         f.write_str("' MESSAGE '");
         f.write_str(&self.message_name);
         f.write_str("'");
