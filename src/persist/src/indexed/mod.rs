@@ -262,6 +262,15 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
         let new_meta = self.state.serialize_meta();
+        if prev_meta == new_meta {
+            // Since prev_meta is what's in storage, don't bother overwriting it
+            // with exactly the same bytes. An alternative approach would be to
+            // detect these cases earlier and avoid calling try_set_meta, but
+            // those checks would be difficult to maintain (and bugs in them
+            // would surface as either unnecessary storage usage or correctness
+            // issues).
+            return Ok(());
+        }
         if let Err(e) = self.blob.set_meta(&new_meta) {
             // We were unable to durably commit the in-memory state. Revert back to the
             // previous version of meta.
@@ -1270,6 +1279,7 @@ mod tests {
     use crate::error::Error;
     use crate::mem::MemRegistry;
     use crate::pfuture::PFuture;
+    use crate::unreliable::UnreliableHandle;
 
     use super::*;
 
@@ -1555,6 +1565,32 @@ mod tests {
             ))
         );
 
+        Ok(())
+    }
+
+    /// Test that verifies a performance and write amplification optimization
+    /// that avoids writing out to META if what we're writing matches what's
+    /// already in storage.
+    #[test]
+    fn try_set_meta_matches_storage() -> Result<(), Error> {
+        let updates = vec![
+            (("1".into(), "".into()), 2, 1),
+            (("2".into(), "".into()), 1, 1),
+        ];
+
+        let mut unreliable = UnreliableHandle::default();
+        let mut i = MemRegistry::new().indexed_unreliable(unreliable.clone())?;
+        let id = block_on(|res| i.register("0", "", "", res))?;
+
+        // Write the data out but don't close it.
+        block_on_drain(&mut i, |i, handle| {
+            i.write(vec![(id, updates.clone())], handle)
+        })?;
+
+        // We haven't closed the data, so nothing for step to do. If the
+        // optimization works, this doesn't need storage.
+        unreliable.make_unavailable();
+        i.step()?;
         Ok(())
     }
 
