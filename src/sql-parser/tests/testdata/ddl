@@ -490,6 +490,13 @@ CREATE SOURCE foo FROM FILE 'bar' COMPRESSION NONE FORMAT AVRO USING CONFLUENT S
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connector: CsrConnectorAvro { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: Some("a"), value_schema: "b" }), with_options: [] } })), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
+CREATE SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED COMPILED KEY SCHEMA 'a2d34f92' MESSAGE '.foo' VALUE SCHEMA 'bb32de68' MESSAGE '.bar'
+----
+CREATE SOURCE foo FROM FILE 'bar' COMPRESSION NONE FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED COMPILED KEY  SCHEMA 'a2d34f92' MESSAGE '.foo' VALUE  SCHEMA 'bb32de68' MESSAGE '.bar'
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connector: CsrConnectorProto { url: "http://localhost:8081", seed: Some(Compiled(CsrSeedCompiled { key: Some(CsrSeedCompiledEncoding { schema: [162, 211, 79, 146], message_name: ".foo" }), value: CsrSeedCompiledEncoding { schema: [187, 50, 222, 104], message_name: ".bar" } })), with_options: [] } })), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') ENVELOPE DEBEZIUM
 ----
 CREATE SOURCE foo FROM FILE 'bar' COMPRESSION NONE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') ENVELOPE DEBEZIUM
