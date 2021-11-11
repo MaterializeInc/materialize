@@ -304,14 +304,27 @@ impl SqlAction {
 
 pub struct FailSqlAction {
     cmd: FailSqlCommand,
+    stmt: Option<Statement<Raw>>,
     context: Context,
 }
 
 pub fn build_fail_sql(cmd: FailSqlCommand, context: Context) -> Result<FailSqlAction, String> {
-    Ok(FailSqlAction {
-        cmd,
-        context: context,
-    })
+    let stmts = sql_parser::parser::parse_statements(&cmd.query)
+        .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
+
+    // Allow for statements that could not be parsed.
+    // This way such statements can be used for negative testing in .td files
+    let stmt = match stmts {
+        Ok(s) => {
+            if s.len() != 1 {
+                return Err(format!("expected one statement, but got {}", s.len()));
+            }
+            Some(s.into_element())
+        }
+        Err(_) => None,
+    };
+
+    Ok(FailSqlAction { cmd, stmt, context })
 }
 
 #[async_trait]
@@ -321,15 +334,30 @@ impl Action for FailSqlAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
+        use Statement::{Commit, Rollback};
+
         let query = &self.cmd.query;
         print_query(&query);
 
+        let should_retry = match &self.stmt {
+            // Do not retry statements that could not be parsed
+            None => false,
+            // Do not retry COMMIT and ROLLBACK. Once the transaction has errored out and has
+            // been aborted, retrying COMMIT or ROLLBACK will actually start succeeding, which
+            // causes testdrive to emit a confusing "query succeded but expected error" message.
+            Some(Commit(_)) | Some(Rollback(_)) => false,
+            Some(_) => true,
+        };
+
         let pgclient = &state.pgclient;
-        Retry::default()
-            .initial_backoff(Duration::from_millis(50))
-            .factor(1.5)
-            .max_duration(self.context.timeout)
-            .retry(|retry_state| async move {
+
+        match should_retry {
+            true => Retry::default()
+                .initial_backoff(Duration::from_millis(50))
+                .factor(1.5)
+                .max_duration(self.context.timeout),
+            false => Retry::default().max_tries(1),
+        }.retry(|retry_state| async move {
             match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
@@ -339,7 +367,7 @@ impl Action for FailSqlAction {
                     Ok(())
                 }
                 Err(e) => {
-                    if retry_state.i == 0 {
+                    if retry_state.i == 0 && should_retry {
                         print!("query error didn't match; sleeping to see if dataflow produces error shortly");
                     }
                     if let Some(backoff) = retry_state.next_backoff {
