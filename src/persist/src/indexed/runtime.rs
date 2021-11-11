@@ -17,7 +17,7 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
-use std::thread::{self};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use log;
@@ -25,6 +25,7 @@ use ore::metrics::MetricsRegistry;
 use persist_types::Codec;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
+use tokio::time::{self};
 
 use crate::error::Error;
 use crate::indexed::background::Maintainer;
@@ -35,7 +36,6 @@ use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Sn
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 use futures_executor::block_on;
-use tokio::task::JoinHandle;
 
 #[derive(Debug)]
 enum Cmd {
@@ -105,7 +105,15 @@ where
     let indexed = Indexed::new(log, blob, maintainer, metrics.clone())?;
     let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
     let id = RuntimeId::new();
-    let impl_handle = tokio::spawn(async move { while runtime.work() {} });
+    let runtime_pool = pool.clone();
+    let impl_handle = thread::Builder::new()
+        .name(format!("persist-runtime-{}", id.0))
+        .spawn(move || {
+            let pool_guard = runtime_pool.enter();
+            while runtime.work() {}
+            // Explictly drop the pool guard so the lifetime is obvious.
+            drop(pool_guard);
+        })?;
 
     // Start up the ticker thread.
     let ticker_tx = tx.clone();
@@ -114,9 +122,9 @@ where
         // min_step_interval` by ensuring there's a tick relatively shortly
         // after a step becomes eligible. We could just as easily make this
         // 2 if we decide 150% is okay.
-        let tick_interval = config.min_step_interval / 10;
+        let mut interval = time::interval(config.min_step_interval / 10);
         loop {
-            thread::sleep(tick_interval);
+            interval.tick().await;
             match ticker_tx.send(Cmd::Tick) {
                 Ok(_) => {}
                 Err(_) => {
@@ -162,7 +170,7 @@ impl RuntimeId {
 #[derive(Debug)]
 struct RuntimeHandles {
     impl_handle: JoinHandle<()>,
-    ticker_handle: JoinHandle<()>,
+    ticker_handle: tokio::task::JoinHandle<()>,
 }
 
 #[derive(Debug)]
@@ -206,7 +214,7 @@ impl RuntimeCore {
             // returns (flushing out final writes, cleaning up LOCK files, etc).
             //
             // TODO: Regression test for this.
-            if let Err(_) = block_on(handles.impl_handle) {
+            if let Err(_) = handles.impl_handle.join() {
                 // If the thread panic'd, then by definition it has been
                 // stopped, so we can return an Ok. This is surprising, though,
                 // so log a message. Unfortunately, there isn't really a way to
