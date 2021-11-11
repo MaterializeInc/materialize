@@ -105,6 +105,9 @@ List new features before bug fixes.
 
 - Add support for `LIST(<subquery>)` constructor.
 
+- Fix a crash or incorrect results when a join consumes data from a distinct
+  operation. {{% gh 9027 %}}
+
 {{% version-header v0.9.12 %}}
 
 - **Breaking change**: Disallow ambiguous table references in queries. For
