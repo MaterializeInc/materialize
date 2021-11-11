@@ -1,3 +1,4 @@
+aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 alter_rename ::=
   'ALTER' ('INDEX' | 'SINK' | 'SOURCE' | 'VIEW' | 'TABLE') name 'RENAME TO' new_name
 alter_index ::=
@@ -9,7 +10,7 @@ alter_index ::=
     | 'RESET' '(' field ( ',' field )* ')'
   )
 array_agg ::=
-  'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')'
+  'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 begin ::=
   'BEGIN' ( transaction_mode ( ',' transaction_mode )* )?
 close ::=
@@ -336,15 +337,15 @@ join_expr ::=
 join_type ::=
     ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' | )
 jsonb_agg ::=
-    'jsonb_agg' '(' expression ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')'
+    'jsonb_agg' '(' expression ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 jsonb_object_agg ::=
-  'jsonb_object_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')'
+  'jsonb_object_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('KEY' '(' key_column ( ',' key_column )* ')')?
     ('CONSISTENCY' '(' 'TOPIC' consistency_topic ('FORMAT' consistency_format_spec)? ')' )?
 list_agg ::=
-  'list_agg' '(' value  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')'
+  'list_agg' '(' value  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 lit_cast ::=
   type val
 op_cast ::=
@@ -399,7 +400,7 @@ show_views ::=
 show_objects ::=
   'SHOW' 'EXTENDED'? 'FULL'?  'OBJECTS' ('FROM' schema_name)?
 string_agg ::=
-  'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')'
+  'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 table_ref ::=
   (
     table_name

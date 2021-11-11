@@ -7,6 +7,7 @@ menu:
 ---
 
 The `array_agg(value)` function aggregates values (including nulls) as an array.
+The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 

@@ -10,6 +10,7 @@ The `string_agg(value, delimiter)` aggregate function concatenates the non-null
 input values (i.e. `value`) into [`text`](/sql/types/text). Each value after the
 first is preceded by its corresponding `delimiter`, where _null_ values are
 equivalent to an empty string.
+The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
