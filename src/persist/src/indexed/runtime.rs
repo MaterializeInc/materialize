@@ -17,7 +17,7 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread::{self};
 use std::time::{Duration, Instant};
 
 use log;
@@ -34,6 +34,8 @@ use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
+use futures_executor::block_on;
+use tokio::task::JoinHandle;
 
 #[derive(Debug)]
 enum Cmd {
@@ -104,39 +106,27 @@ where
     let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
     let id = RuntimeId::new();
     let runtime_pool = pool.clone();
-    let impl_handle = thread::Builder::new()
-        .name(format!("persist-runtime-{}", id.0))
-        .spawn(move || {
-            let pool_guard = runtime_pool.enter();
-            while runtime.work() {}
-            // Explictly drop the pool guard so the lifetime is obvious.
-            drop(pool_guard);
-        })?;
+    let impl_handle = runtime_pool.spawn(async move { while runtime.work() {} });
 
     // Start up the ticker thread.
-    //
-    // TODO: Now that we have a runtime threaded here, we could use async stuff
-    // to do this.
     let ticker_tx = tx.clone();
-    let ticker_handle = thread::Builder::new()
-        .name(format!("persist-ticker"))
-        .spawn(move || {
-            // Try to keep worst case command response times to roughly `110% of
-            // min_step_interval` by ensuring there's a tick relatively shortly
-            // after a step becomes eligible. We could just as easily make this
-            // 2 if we decide 150% is okay.
-            let tick_interval = config.min_step_interval / 10;
-            loop {
-                thread::sleep(tick_interval);
-                match ticker_tx.send(Cmd::Tick) {
-                    Ok(_) => {}
-                    Err(_) => {
-                        // Runtime has shut down, we can stop ticking.
-                        return;
-                    }
+    let ticker_handle = runtime_pool.spawn(async move {
+        // Try to keep worst case command response times to roughly `110% of
+        // min_step_interval` by ensuring there's a tick relatively shortly
+        // after a step becomes eligible. We could just as easily make this
+        // 2 if we decide 150% is okay.
+        let tick_interval = config.min_step_interval / 10;
+        loop {
+            thread::sleep(tick_interval);
+            match ticker_tx.send(Cmd::Tick) {
+                Ok(_) => {}
+                Err(_) => {
+                    // Runtime has shut down, we can stop ticking.
+                    return;
                 }
             }
-        })?;
+        }
+    });
 
     // Construct the client.
     let handles = Mutex::new(Some(RuntimeHandles {
@@ -217,14 +207,14 @@ impl RuntimeCore {
             // returns (flushing out final writes, cleaning up LOCK files, etc).
             //
             // TODO: Regression test for this.
-            if let Err(_) = handles.impl_handle.join() {
+            if let Err(_) = block_on(handles.impl_handle) {
                 // If the thread panic'd, then by definition it has been
                 // stopped, so we can return an Ok. This is surprising, though,
                 // so log a message. Unfortunately, there isn't really a way to
                 // put the panic message in this log.
                 log::error!("persist runtime thread panic'd");
             }
-            if let Err(_) = handles.ticker_handle.join() {
+            if let Err(_) = block_on(handles.ticker_handle) {
                 // If the thread panic'd, then by definition it has been
                 // stopped, so we can return an Ok. This is surprising, though,
                 // so log a message. Unfortunately, there isn't really a way to
