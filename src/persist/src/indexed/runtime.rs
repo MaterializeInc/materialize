@@ -25,6 +25,7 @@ use ore::metrics::MetricsRegistry;
 use persist_types::Codec;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
+use tokio::time;
 
 use crate::error::Error;
 use crate::indexed::background::Maintainer;
@@ -34,6 +35,7 @@ use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
+use futures_executor::block_on;
 
 #[derive(Debug)]
 enum Cmd {
@@ -114,29 +116,24 @@ where
         })?;
 
     // Start up the ticker thread.
-    //
-    // TODO: Now that we have a runtime threaded here, we could use async stuff
-    // to do this.
     let ticker_tx = tx.clone();
-    let ticker_handle = thread::Builder::new()
-        .name(format!("persist-ticker"))
-        .spawn(move || {
-            // Try to keep worst case command response times to roughly `110% of
-            // min_step_interval` by ensuring there's a tick relatively shortly
-            // after a step becomes eligible. We could just as easily make this
-            // 2 if we decide 150% is okay.
-            let tick_interval = config.min_step_interval / 10;
-            loop {
-                thread::sleep(tick_interval);
-                match ticker_tx.send(Cmd::Tick) {
-                    Ok(_) => {}
-                    Err(_) => {
-                        // Runtime has shut down, we can stop ticking.
-                        return;
-                    }
+    let ticker_handle = tokio::spawn(async move {
+        // Try to keep worst case command response times to roughly `110% of
+        // min_step_interval` by ensuring there's a tick relatively shortly
+        // after a step becomes eligible. We could just as easily make this
+        // 2 if we decide 150% is okay.
+        let mut interval = time::interval(config.min_step_interval / 10);
+        loop {
+            interval.tick().await;
+            match ticker_tx.send(Cmd::Tick) {
+                Ok(_) => {}
+                Err(_) => {
+                    // Runtime has shut down, we can stop ticking.
+                    return;
                 }
             }
-        })?;
+        }
+    });
 
     // Construct the client.
     let handles = Mutex::new(Some(RuntimeHandles {
@@ -173,7 +170,7 @@ impl RuntimeId {
 #[derive(Debug)]
 struct RuntimeHandles {
     impl_handle: JoinHandle<()>,
-    ticker_handle: JoinHandle<()>,
+    ticker_handle: tokio::task::JoinHandle<()>,
 }
 
 #[derive(Debug)]
@@ -224,7 +221,7 @@ impl RuntimeCore {
                 // put the panic message in this log.
                 log::error!("persist runtime thread panic'd");
             }
-            if let Err(_) = handles.ticker_handle.join() {
+            if let Err(_) = block_on(handles.ticker_handle) {
                 // If the thread panic'd, then by definition it has been
                 // stopped, so we can return an Ok. This is surprising, though,
                 // so log a message. Unfortunately, there isn't really a way to
