@@ -24,8 +24,6 @@ services:
     networks:
       antithesis-net:
         ipv4_address: 10.0.0.12
-    environment:
-      MZ_LOG_FILTER: debug,librdkafka=debug
     command:
       --data-directory=/share/mzdata
       --workers 1
