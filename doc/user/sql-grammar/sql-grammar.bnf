@@ -430,6 +430,7 @@ type_map ::=
     "'" map_string "'" '::' 'MAP' '[' 'TEXT' '=>' value_type ']'
 type_list ::=
     'LIST' '[' (element (',' element)*)? ']'
+    | 'LIST' '(' query ')'
 type_numeric_dec ::=
   'numeric' ( '(' precision ',' scale ')' )?
 type_numeric_val ::=

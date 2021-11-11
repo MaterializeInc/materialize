@@ -94,6 +94,17 @@ SELECT LIST[['a', 'b'], ['c']];
  {{a,b},{c}}
 ```
 
+Alternatively, you can construct a list from the results subquery.  These subqueries must return a single column.  Note that, in this form of the `LIST` expression, parentheses are used rather than square brackets.
+
+```sql
+SELECT LIST(SELECT x FROM test0 WHERE x > 0 ORDER BY x DESC LIMIT 3);
+```
+```nofmt
+    x
+---------
+ {4,3,2}
+```
+
 Layered lists can be “ragged”, i.e. the length of lists in each layer can differ
 from one another. This differs from `array`, which requires that each dimension
 of a multidimensional array only contain arrays of the same length.
