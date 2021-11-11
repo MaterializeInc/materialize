@@ -26,8 +26,6 @@ use std::path::PathBuf;
 
 use enum_kinds::EnumKind;
 
-use repr::strconv;
-
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, DataType, Expr, Ident, SqlOption, UnresolvedObjectName, WithOption};
 
@@ -235,15 +233,13 @@ pub struct CsrSeedCompiledEncoding {
 }
 impl AstDisplay for CsrSeedCompiledEncoding {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        let mut schema_buf = String::new();
-        strconv::format_bytes(&mut schema_buf, &self.schema);
         f.write_str(" SCHEMA '");
-        f.write_str(&self.message_name);
-        f.write_str("' '");
         f.write_str(&display::escape_single_quote_string(&hex::encode(
             &self.schema,
         )));
-        f.write_str("' ");
+        f.write_str("' MESSAGE '");
+        f.write_str(&self.message_name);
+        f.write_str("'");
     }
 }
 impl_display!(CsrSeedCompiledEncoding);

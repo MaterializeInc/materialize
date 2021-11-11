@@ -1399,6 +1399,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Bail out if the current token is not an expected keyword, or consume it if it is
+    #[must_use]
     fn expect_keyword(&mut self, expected: Keyword) -> Result<(), ParserError> {
         if self.parse_keyword(expected) {
             Ok(())
@@ -1669,8 +1670,9 @@ impl<'a> Parser<'a> {
             if self.parse_keyword(COMPILED) {
                 let key = if self.parse_keyword(KEY) {
                     self.expect_keyword(SCHEMA)?;
-                    let message_name = self.parse_literal_string()?;
                     let schema = self.parse_byte_string()?;
+                    self.expect_keyword(MESSAGE)?;
+                    let message_name = self.parse_literal_string()?;
                     Some(CsrSeedCompiledEncoding {
                         schema,
                         message_name,
@@ -1679,8 +1681,9 @@ impl<'a> Parser<'a> {
                     None
                 };
                 self.expect_keywords(&[VALUE, SCHEMA])?;
-                let value_message_name = self.parse_literal_string()?;
                 let value_schema = self.parse_byte_string()?;
+                self.expect_keyword(MESSAGE)?;
+                let value_message_name = self.parse_literal_string()?;
                 Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled {
                     value: CsrSeedCompiledEncoding {
                         schema: value_schema,
