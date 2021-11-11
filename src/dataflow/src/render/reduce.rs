@@ -837,8 +837,11 @@ where
     G::Timestamp: Lattice,
 {
     collection.reduce_abelian::<_, RowSpine<_, _, _, _>>("DistinctBy", {
-        |key, _input, output| {
-            output.push((key.clone(), 1));
+        |_key, _input, output| {
+            // We're pushing an empty row here because the key is implicitly added by the
+            // arrangement, and the permutation logic takes care of using the key part of the
+            // output.
+            output.push((Row::default(), 1));
         }
     })
 }
