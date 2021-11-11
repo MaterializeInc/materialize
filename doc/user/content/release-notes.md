@@ -103,6 +103,7 @@ List new features before bug fixes.
 
 {{% version-header v0.9.13 %}}
 
+- Add support for `LIST(<subquery>)` constructor.
 
 {{% version-header v0.9.12 %}}
 
@@ -161,8 +162,6 @@ List new features before bug fixes.
 - Support the `row_number` window function.
 
 - Support PgJDBC's `getColumns()` API.
-
-- Add support for `LIST(<subquery>)` constructor.
 
 {{% version-header v0.9.11 %}}
 
