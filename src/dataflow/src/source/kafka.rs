@@ -18,7 +18,6 @@ use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
-use repr::MessagePayload;
 use timely::scheduling::activate::SyncActivator;
 
 use dataflow_types::{
@@ -31,7 +30,7 @@ use repr::adt::jsonb::Jsonb;
 use uuid::Uuid;
 
 use crate::logging::materialized::{Logger, MaterializedEvent};
-use crate::source::{NextMessage, SourceMessage, SourceReader};
+use crate::source::{MessagePayload, NextMessage, SourceMessage, SourceReader};
 
 use super::metrics::SourceBaseMetrics;
 
@@ -506,7 +505,10 @@ impl<'a> From<&BorrowedMessage<'a>> for SourceMessage {
             offset: msg.offset(),
         };
         Self {
-            payload: msg.payload().map(|p| MessagePayload::Data(p.to_vec())),
+            payload: match msg.payload() {
+                None => MessagePayload::Absent,
+                Some(p) => MessagePayload::Data(p.to_vec()),
+            },
             partition: PartitionId::Kafka(msg.partition()),
             offset: kafka_offset.into(),
             upstream_time_millis: msg.timestamp().to_millis(),

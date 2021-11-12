@@ -41,27 +41,6 @@ pub use scalar::{Datum, FromTy, ScalarBaseType, ScalarType, WithArena};
 // Concrete types used throughout Materialize for the generic parameters in Timely/Differential Dataflow.
 /// System-wide timestamp type.
 pub type Timestamp = u64;
+
 /// System-wide record count difference type.
 pub type Diff = isize;
-
-use serde::{Deserialize, Serialize};
-// This probably logically belongs in `dataflow`, but source caching looks at it,
-// so put it in `repr` instead.
-/// The payload delivered by a source connector; either bytes or an EOF marker.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, Hash, PartialEq, Ord, PartialOrd)]
-pub enum MessagePayload {
-    /// Data from the source connector
-    Data(Vec<u8>),
-    /// Forces the decoder to consider this a delimiter.
-    ///
-    /// For example, CSV records are normally terminated by a newline,
-    /// but files might not be newline-terminated; thus we need
-    /// the decoder to emit a CSV record when the end of a file is seen.
-    EOF,
-}
-
-impl Default for MessagePayload {
-    fn default() -> Self {
-        Self::Data(vec![])
-    }
-}

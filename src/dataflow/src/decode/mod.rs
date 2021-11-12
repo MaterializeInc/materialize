@@ -20,7 +20,6 @@ use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use prometheus::UIntGauge;
-use repr::MessagePayload;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
@@ -38,8 +37,7 @@ use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::protobuf::ProtobufDecoderState;
 use crate::metrics::Metrics;
-use crate::source::DecodeResult;
-use crate::source::SourceOutput;
+use crate::source::{DecodeResult, MessagePayload, SourceOutput};
 
 mod avro;
 mod csv;
@@ -130,10 +128,11 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
                     data.swap(&mut vector);
                     for data in vector.drain(..) {
                         let value = match &data.value {
-                            MessagePayload::Data(value) => value,
-                            MessagePayload::EOF => continue,
+                            MessagePayload::Absent => &[][..],
+                            MessagePayload::Data(value) => &value,
+                            MessagePayload::Eof => continue,
                         };
-                        let (mut data, schema) = match block_on(resolver.resolve(&*value)) {
+                        let (mut data, schema) = match block_on(resolver.resolve(&value)) {
                             Ok(ok) => ok,
                             Err(e) => {
                                 error!("Failed to get schema info for CDCv2 record: {}", e);
@@ -509,47 +508,40 @@ where
                             None
                         };
 
-                        if value == &MessagePayload::Data(vec![]) {
-                            session.give(DecodeResult {
-                                key,
-                                value: None,
-                                position: *position,
-                            });
-                        } else {
-                            let value = match &value {
-                                MessagePayload::Data(value) => {
-                                    let value_bytes_remaining = &mut value.as_slice();
-                                    let mut value = value_decoder
-                                        .next(value_bytes_remaining, *upstream_time_millis)
-                                        .transpose();
-                                    if let (Some(Ok(_)), false) =
-                                        (&value, value_bytes_remaining.is_empty())
-                                    {
-                                        value = Some(Err(DecodeError::Text(format!(
-                                            "Unexpected bytes remaining for decoded value: {:?}",
-                                            value_bytes_remaining
-                                        ))
-                                        .into()));
-                                    }
-                                    value.or_else(|| value_decoder.eof(&mut &[][..]).transpose())
+                        let value = match &value {
+                            MessagePayload::Absent => None,
+                            MessagePayload::Data(value) => {
+                                let value_bytes_remaining = &mut value.as_slice();
+                                let mut value = value_decoder
+                                    .next(value_bytes_remaining, *upstream_time_millis)
+                                    .transpose();
+                                if let (Some(Ok(_)), false) =
+                                    (&value, value_bytes_remaining.is_empty())
+                                {
+                                    value = Some(Err(DecodeError::Text(format!(
+                                        "Unexpected bytes remaining for decoded value: {:?}",
+                                        value_bytes_remaining
+                                    ))
+                                    .into()));
                                 }
-                                MessagePayload::EOF => Some(Err(DecodeError::Text(format!(
-                                    "Unexpected EOF in delimited stream"
-                                ))
-                                .into())),
-                            };
-
-                            if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
-                                n_errors += 1;
-                            } else if matches!(&value, Some(Ok(_))) {
-                                n_successes += 1;
+                                value.or_else(|| value_decoder.eof(&mut &[][..]).transpose())
                             }
-                            session.give(DecodeResult {
-                                key,
-                                value,
-                                position: *position,
-                            });
+                            MessagePayload::Eof => Some(Err(DecodeError::Text(format!(
+                                "Unexpected EOF in delimited stream"
+                            ))
+                            .into())),
+                        };
+
+                        if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                            n_errors += 1;
+                        } else if matches!(&value, Some(Ok(_))) {
+                            n_successes += 1;
                         }
+                        session.give(DecodeResult {
+                            key,
+                            value,
+                            position: *position,
+                        });
                     }
                 });
                 // Matching historical practice, we only log metrics on the value decoder.
@@ -666,8 +658,20 @@ where
                     };
 
                     let value = match value {
+                        MessagePayload::Absent => {
+                            n_errors += 1;
+                            session.give(DecodeResult {
+                                key,
+                                value: Some(Err(DecodeError::Text(
+                                    "Unexpected absent message in undelimited stream".into(),
+                                )
+                                .into())),
+                                position: n_seen.next(),
+                            });
+                            continue;
+                        }
                         MessagePayload::Data(data) => data,
-                        MessagePayload::EOF => {
+                        MessagePayload::Eof => {
                             let data = &mut &value_buf[..];
                             let mut result = value_decoder.eof(data).transpose();
                             if !data.is_empty() && !matches!(&result, Some(Err(_))) {

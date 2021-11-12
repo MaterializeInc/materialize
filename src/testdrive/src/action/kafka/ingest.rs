@@ -166,7 +166,11 @@ impl Transcoder {
                         row.read_to_end(&mut out).map_err_to_string()?;
                     }
                 }
-                Ok(Some(bytes::unescape(&out)?))
+                if out.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(bytes::unescape(&out)?))
+                }
             }
         }
     }

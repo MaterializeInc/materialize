@@ -16,7 +16,6 @@ use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
 use futures::executor::block_on;
 use log::error;
 use ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
-use repr::MessagePayload;
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
 use timely::scheduling::SyncActivator;
@@ -27,7 +26,7 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
-use crate::source::{NextMessage, SourceMessage, SourceReader};
+use crate::source::{MessagePayload, NextMessage, SourceMessage, SourceReader};
 
 use super::metrics::{KinesisMetrics, SourceBaseMetrics};
 use prometheus::core::AtomicI64;
@@ -223,7 +222,7 @@ impl SourceReader for KinesisSourceReader {
                             },
                             upstream_time_millis: None,
                             key: None,
-                            payload: Some(MessagePayload::Data(data)),
+                            payload: MessagePayload::Data(data),
                         };
                         self.buffered_messages.push_back(source_message);
                     }

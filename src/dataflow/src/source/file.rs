@@ -18,7 +18,6 @@ use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{EventMask, Inotify, WatchMask};
 use log::error;
-use repr::MessagePayload;
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
@@ -31,7 +30,7 @@ use mz_avro::BlockIter;
 use mz_avro::{AvroRead, Schema, Skip};
 
 use crate::logging::materialized::Logger;
-use crate::source::{NextMessage, SourceMessage, SourceReader};
+use crate::source::{MessagePayload, NextMessage, SourceMessage, SourceReader};
 
 use super::metrics::SourceBaseMetrics;
 
@@ -89,7 +88,7 @@ impl SourceReader for FileSourceReader {
                             None
                         }
                     })
-                    .chain(std::iter::once(Ok(MessagePayload::EOF))))
+                    .chain(std::iter::once(Ok(MessagePayload::Eof))))
                 };
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000);
                 let tail = if fc.tail {
@@ -128,7 +127,7 @@ impl SourceReader for FileSourceReader {
                         bi.map(|result| {
                             result.map(|Block { bytes, len: _ }| MessagePayload::Data(bytes))
                         })
-                        .chain(std::iter::once(Ok(MessagePayload::EOF)))
+                        .chain(std::iter::once(Ok(MessagePayload::Eof)))
                     })
                 };
 
@@ -172,7 +171,7 @@ impl SourceReader for FileSourceReader {
                     offset: self.current_file_offset.into(),
                     upstream_time_millis: None,
                     key: None,
-                    payload: Some(record),
+                    payload: record,
                 };
                 Ok(NextMessage::Ready(message))
             }

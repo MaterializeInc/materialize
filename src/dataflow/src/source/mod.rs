@@ -15,12 +15,12 @@ use persist::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
 use persist::indexed::Snapshot;
 use persist::operators::stream::Persist;
 use persist_types::Codec;
-use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
+use std::hash::Hash;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -129,9 +129,9 @@ where
     K: Data,
     V: Data,
 {
-    /// The record's key (or some empty/default value for sources without the concept of key)
+    /// The record's key.
     pub key: K,
-    /// The record's value
+    /// The record's value.
     pub value: V,
     /// The position in the source, if such a concept exists (e.g., Kafka offset, file line number)
     pub position: Option<i64>,
@@ -153,6 +153,21 @@ pub(crate) struct SourceData {
     ///
     /// Currently only applies to Kafka
     pub(crate) upstream_time_millis: Option<i64>,
+}
+
+/// The payload delivered by a source connector.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, Hash, PartialEq, Ord, PartialOrd)]
+pub enum MessagePayload {
+    /// A message with an absent payload.
+    Absent,
+    /// Data from the source connector
+    Data(Vec<u8>),
+    /// Forces the decoder to consider this a delimiter.
+    ///
+    /// For example, CSV records are normally terminated by a newline,
+    /// but files might not be newline-terminated; thus we need
+    /// the decoder to emit a CSV record when the end of a file is seen.
+    Eof,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
@@ -351,7 +366,7 @@ pub struct SourceMessage {
     /// Optional key
     pub key: Option<Vec<u8>>,
     /// Optional payload
-    pub payload: Option<MessagePayload>,
+    pub payload: MessagePayload,
 }
 
 impl fmt::Debug for SourceMessage {
@@ -361,7 +376,10 @@ impl fmt::Debug for SourceMessage {
             .field("offset", &self.offset)
             .field("upstream_time_millis", &self.upstream_time_millis)
             .field("key[present]", &self.key.is_some())
-            .field("payload[present]", &self.payload.is_some())
+            .field(
+                "payload[present]",
+                &matches!(&self.payload, MessagePayload::Data(_)),
+            )
             .finish()
     }
 }
@@ -1809,14 +1827,14 @@ where
             // Note: empty and null payload/keys are currently
             // treated as the same thing.
             let key = message.key.unwrap_or_default();
-            let out = message.payload.unwrap_or_default();
+            let out = message.payload;
             // Entry for partition_metadata is guaranteed to exist as messages
             // are only processed after we have updated the partition_metadata for a
             // partition and created a partition queue for it.
             *bytes_read += key.len();
             *bytes_read += match &out {
                 MessagePayload::Data(bytes) => bytes.len(),
-                MessagePayload::EOF => 0,
+                MessagePayload::Absent | MessagePayload::Eof => 0,
             };
             let ts_cap = cap.delayed(&ts);
 

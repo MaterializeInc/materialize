@@ -56,10 +56,9 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 use metrics::BucketMetrics;
 use notifications::Event;
-use repr::MessagePayload;
 
 use crate::logging::materialized::Logger;
-use crate::source::{NextMessage, SourceMessage, SourceReader};
+use crate::source::{MessagePayload, NextMessage, SourceMessage, SourceReader};
 
 use self::metrics::ScanBucketMetrics;
 use self::notifications::{EventType, TestEvent};
@@ -787,7 +786,7 @@ async fn download_object(
 
     if matches!(download_status, DownloadStatus::Ok) {
         let sent = tx.send(Ok(InternalMessage {
-            record: MessagePayload::EOF,
+            record: MessagePayload::Eof,
         }));
         if sent.await.is_err() {
             download_status = DownloadStatus::SendFailed;
@@ -951,7 +950,7 @@ impl SourceReader for S3SourceReader {
                     offset: self.offset.into(),
                     upstream_time_millis: None,
                     key: None,
-                    payload: Some(record),
+                    payload: record,
                 }))
             }
             Some(Some(Err(e))) => {
