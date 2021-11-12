@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 $ set schema
 syntax = "proto3";
+
+import 'google/protobuf/timestamp.proto';
+
 message SimpleId {
   string id = 1;
 }
