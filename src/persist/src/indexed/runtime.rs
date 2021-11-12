@@ -284,17 +284,17 @@ impl RuntimeClient {
     /// loaded and replayed into the stream once constructed.
     pub fn create_or_load<K: Codec, V: Codec>(
         &self,
-        id: &str,
+        name: &str,
     ) -> Result<(StreamWriteHandle<K, V>, StreamReadHandle<K, V>), Error> {
         let (tx, rx) = PFuture::new();
         self.core.send(Cmd::Register(
-            id.to_owned(),
+            name.to_owned(),
             (K::codec_name(), V::codec_name()),
             tx,
         ));
         let id = rx.recv()?;
-        let write = StreamWriteHandle::new(id, self.clone());
-        let meta = StreamReadHandle::new(id, self.clone());
+        let write = StreamWriteHandle::new(name.to_owned(), id, self.clone());
+        let meta = StreamReadHandle::new(name.to_owned(), id, self.clone());
         Ok((write, meta))
     }
 
@@ -392,6 +392,7 @@ where
 /// [crate::indexed::Indexed] via a [RuntimeClient].
 #[derive(PartialEq, Eq)]
 pub struct StreamWriteHandle<K, V> {
+    name: String,
     id: Id,
     runtime: RuntimeClient,
     _phantom: PhantomData<(K, V)>,
@@ -400,6 +401,7 @@ pub struct StreamWriteHandle<K, V> {
 impl<K, V> Clone for StreamWriteHandle<K, V> {
     fn clone(&self) -> Self {
         StreamWriteHandle {
+            name: self.name.clone(),
             id: self.id,
             runtime: self.runtime.clone(),
             _phantom: self._phantom,
@@ -410,6 +412,7 @@ impl<K, V> Clone for StreamWriteHandle<K, V> {
 impl<K, V> fmt::Debug for StreamWriteHandle<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StreamWriteHandle")
+            .field("name", &self.name)
             .field("id", &self.id)
             .field("runtime", &self.runtime)
             .finish()
@@ -418,15 +421,21 @@ impl<K, V> fmt::Debug for StreamWriteHandle<K, V> {
 
 impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     /// Returns a new [StreamWriteHandle] for the given stream.
-    pub fn new(id: Id, runtime: RuntimeClient) -> Self {
+    pub fn new(name: String, id: Id, runtime: RuntimeClient) -> Self {
         StreamWriteHandle {
+            name,
             id,
             runtime,
             _phantom: PhantomData,
         }
     }
 
-    /// Returns the stream [Id] for this handle.
+    /// Returns the external stream name for this handle.
+    pub fn stream_name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the internal stream [Id] for this handle.
     pub fn stream_id(&self) -> Id {
         self.id
     }
@@ -657,6 +666,7 @@ impl<K: Codec, V: Codec> Iterator for DecodedSnapshotIter<K, V> {
 /// by an [crate::indexed::Indexed] via a [RuntimeClient].
 #[derive(Debug, PartialEq, Eq)]
 pub struct StreamReadHandle<K, V> {
+    name: String,
     id: Id,
     runtime: RuntimeClient,
     _phantom: PhantomData<(K, V)>,
@@ -665,6 +675,7 @@ pub struct StreamReadHandle<K, V> {
 impl<K, V> Clone for StreamReadHandle<K, V> {
     fn clone(&self) -> Self {
         StreamReadHandle {
+            name: self.name.clone(),
             id: self.id,
             runtime: self.runtime.clone(),
             _phantom: self._phantom,
@@ -674,12 +685,18 @@ impl<K, V> Clone for StreamReadHandle<K, V> {
 
 impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     /// Returns a new [StreamReadHandle] for the given stream.
-    pub fn new(id: Id, runtime: RuntimeClient) -> Self {
+    pub fn new(name: String, id: Id, runtime: RuntimeClient) -> Self {
         StreamReadHandle {
+            name,
             id,
             runtime,
             _phantom: PhantomData,
         }
+    }
+
+    /// Returns the external stream name for this handle.
+    pub fn stream_name(&self) -> &str {
+        &self.name
     }
 
     /// Returns a consistent snapshot of all previously persisted stream data.
