@@ -33,7 +33,9 @@ use mzcloud::apis::deployments_api::{
 use mzcloud::apis::mz_versions_api::mz_versions_list;
 use mzcloud::models::deployment_request::DeploymentRequest;
 use mzcloud::models::deployment_size_enum::DeploymentSizeEnum;
-use mzcloud::models::patched_deployment_request::PatchedDeploymentRequest;
+use mzcloud::models::patched_deployment_update_request::PatchedDeploymentUpdateRequest;
+use mzcloud::models::provider_enum::ProviderEnum;
+use mzcloud::models::supported_cloud_region_request::SupportedCloudRegionRequest;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -121,6 +123,10 @@ enum Category {
 enum DeploymentsCommand {
     /// Create a new Materialize deployment.
     Create {
+        /// Cloud provider:region pair in which to deploy Materialize. Example: `aws:us-east-1`
+        #[structopt(long, parse(try_from_str = parse_cloud_region))]
+        cloud_provider_region: SupportedCloudRegionRequest,
+
         /// Name of the deployed materialized instance. Defaults to randomly assigned.
         #[structopt(long)]
         name: Option<String>,
@@ -244,6 +250,25 @@ enum MzVersionsCommand {
     List,
 }
 
+fn parse_cloud_region(s: &str) -> Result<SupportedCloudRegionRequest, String> {
+    let (provider, region) = s.split_once(":").ok_or_else(|| {
+        "Cloud provider region should colon separated `provider:region` pair.".to_owned()
+    })?;
+    let provider = provider.to_lowercase();
+    let region = region.to_lowercase();
+    match (provider.as_ref(), region.as_ref()) {
+        ("aws", "us-east-1") => Ok(SupportedCloudRegionRequest {
+            provider: ProviderEnum::AWS,
+            region: "us-east-1".to_owned(),
+        }),
+        ("aws", "eu-west-1") => Ok(SupportedCloudRegionRequest {
+            provider: ProviderEnum::AWS,
+            region: "eu-west-1".to_owned(),
+        }),
+        _ => Err("Unsupported cloud provider/region pair.".to_owned()),
+    }
+}
+
 fn parse_size(s: &str) -> Result<DeploymentSizeEnum, String> {
     match s {
         "XS" => Ok(DeploymentSizeEnum::XS),
@@ -273,6 +298,7 @@ async fn handle_deployment_operations(
 ) -> anyhow::Result<()> {
     Ok(match operation {
         DeploymentsCommand::Create {
+            cloud_provider_region,
             name,
             size,
             storage_mb,
@@ -283,7 +309,8 @@ async fn handle_deployment_operations(
         } => {
             let deployment = deployments_create(
                 &config,
-                Some(DeploymentRequest {
+                DeploymentRequest {
+                    cloud_provider_region: Box::new(cloud_provider_region),
                     name,
                     size: size.map(Box::new),
                     storage_mb,
@@ -292,7 +319,7 @@ async fn handle_deployment_operations(
                     mz_version,
                     enable_tailscale: Some(tailscale_auth_key.is_some()),
                     tailscale_auth_key,
-                }),
+                },
             )
             .await?;
             println!("{}", serde_json::to_string_pretty(&deployment)?);
@@ -319,7 +346,7 @@ async fn handle_deployment_operations(
             let deployment = deployments_partial_update(
                 &config,
                 &id,
-                Some(PatchedDeploymentRequest {
+                Some(PatchedDeploymentUpdateRequest {
                     name,
                     size: size.map(Box::new),
                     storage_mb: None,
