@@ -9,6 +9,6 @@ publish = false
 [dependencies]
 anyhow = "1.0.44"
 serde = "1.0.130"
-serde_json = "1.0.68"
+serde_json = "1.0.69"
 structopt = "0.3.25"
 ore = { path = "../../src/ore" }
