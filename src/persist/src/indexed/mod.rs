@@ -38,7 +38,7 @@ use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration, TraceBatchMeta, TraceMeta,
     UnsealedBatchMeta, UnsealedMeta,
 };
-use crate::indexed::metrics::{metric_duration_ms, Metrics};
+use crate::indexed::metrics::Metrics;
 use crate::indexed::trace::{Trace, TraceSnapshot, TraceSnapshotIter};
 use crate::indexed::unsealed::{Unsealed, UnsealedSnapshot, UnsealedSnapshotIter};
 use crate::pfuture::PFutureHandle;
@@ -669,10 +669,10 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         let compaction_start = Instant::now();
         let ret = self.apply_unbatched_cmd(|state, _, maintainer| state.compact_inner(maintainer));
 
-        // Track compaction_ms even if compaction failed.
+        // Track compaction_seconds even if compaction failed.
         self.metrics
-            .compaction_ms
-            .inc_by(metric_duration_ms(compaction_start.elapsed()));
+            .compaction_seconds
+            .inc_by(compaction_start.elapsed().as_secs_f64());
 
         let (total_written_bytes, deleted_unsealed_batches, deleted_trace_batches) = ret?;
         if !deleted_unsealed_batches.is_empty() || !deleted_trace_batches.is_empty() {
