@@ -105,11 +105,10 @@ impl Unsealed {
     }
 
     /// An open upper bound on the seqnos of contained updates.
-    pub fn seqno_upper(&self) -> Antichain<SeqNo> {
-        self.batches.last().map_or_else(
-            || Antichain::from_elem(SeqNo(0)),
-            |meta| meta.desc.upper().clone(),
-        )
+    pub fn seqno_upper(&self) -> SeqNo {
+        self.batches
+            .last()
+            .map_or_else(|| SeqNo(0), |meta| meta.desc.end)
     }
 
     /// Write a [BlobUnsealedBatch] to [Blob] storage and return the corresponding
@@ -172,7 +171,7 @@ impl Unsealed {
         batch: BlobUnsealedBatch,
         blob: &mut BlobCache<L>,
     ) -> Result<(), Error> {
-        if batch.desc.lower() != &self.seqno_upper() {
+        if batch.desc.start != self.seqno_upper() {
             return Err(Error::from(format!(
                 "batch lower doesn't match seqno_upper {:?}: {:?}",
                 self.seqno_upper(),
@@ -421,21 +420,11 @@ impl Iterator for UnsealedSnapshotIter {
 
 #[cfg(test)]
 mod tests {
-    use differential_dataflow::trace::Description;
-
     use crate::indexed::metrics::Metrics;
     use crate::indexed::SnapshotExt;
     use crate::mem::MemBlob;
 
     use super::*;
-
-    fn desc_from(lower: u64, upper: u64, since: u64) -> Description<SeqNo> {
-        Description::new(
-            Antichain::from_elem(SeqNo(lower)),
-            Antichain::from_elem(SeqNo(upper)),
-            Antichain::from_elem(SeqNo(since)),
-        )
-    }
 
     // Generate a list of ((k, v), t, 1) updates at all of the specified times.
     fn unsealed_updates(update_times: Vec<u64>) -> Vec<((Vec<u8>, Vec<u8>), u64, isize)> {
@@ -449,11 +438,7 @@ mod tests {
     // updates at the specified times.
     fn unsealed_batch(lower: u64, upper: u64, update_times: Vec<u64>) -> BlobUnsealedBatch {
         BlobUnsealedBatch {
-            desc: Description::new(
-                Antichain::from_elem(SeqNo(lower)),
-                Antichain::from_elem(SeqNo(upper)),
-                Antichain::from_elem(SeqNo(0)),
-            ),
+            desc: SeqNo(lower)..SeqNo(upper),
             updates: unsealed_updates(update_times),
         }
     }
@@ -462,18 +447,13 @@ mod tests {
         key: &str,
         lower: u64,
         upper: u64,
-        since: u64,
         ts_lower: u64,
         ts_upper: u64,
         size_bytes: u64,
     ) -> UnsealedBatchMeta {
         UnsealedBatchMeta {
             key: key.to_string(),
-            desc: Description::new(
-                Antichain::from_elem(SeqNo(lower)),
-                Antichain::from_elem(SeqNo(upper)),
-                Antichain::from_elem(SeqNo(since)),
-            ),
+            desc: SeqNo(lower)..SeqNo(upper),
             ts_upper,
             ts_lower,
             size_bytes,
@@ -520,11 +500,7 @@ mod tests {
 
         // ts < ts_lower.data()[0] is disallowed
         let batch = BlobUnsealedBatch {
-            desc: Description::new(
-                Antichain::from_elem(SeqNo(0)),
-                Antichain::from_elem(SeqNo(1)),
-                Antichain::from_elem(SeqNo(0)),
-            ),
+            desc: SeqNo(0)..SeqNo(1),
             updates: vec![(("k".into(), "v".into()), 1, 1)],
         };
         assert_eq!(
@@ -536,11 +512,7 @@ mod tests {
 
         // ts == ts_lower.data()[0] is allowed
         let batch = BlobUnsealedBatch {
-            desc: Description::new(
-                Antichain::from_elem(SeqNo(0)),
-                Antichain::from_elem(SeqNo(1)),
-                Antichain::from_elem(SeqNo(0)),
-            ),
+            desc: SeqNo(0)..SeqNo(1),
             updates: vec![(("k".into(), "v".into()), 2, 1)],
         };
         assert_eq!(f.append(batch, &mut blob), Ok(()));
@@ -563,11 +535,7 @@ mod tests {
 
         // Construct a unsealed batch where the updates are not sorted by time.
         let batch = BlobUnsealedBatch {
-            desc: Description::new(
-                Antichain::from_elem(SeqNo(0)),
-                Antichain::from_elem(SeqNo(1)),
-                Antichain::from_elem(SeqNo(0)),
-            ),
+            desc: SeqNo(0)..SeqNo(1),
             updates: vec![
                 (("k".into(), "v".into()), 3, 1),
                 (("k".into(), "v".into()), 2, 1),
@@ -621,9 +589,9 @@ mod tests {
         assert_eq!(
             cleared_keys(&f.batches),
             vec![
-                unsealed_batch_meta("KEY", 0, 1, 0, 0, 0, 90),
-                unsealed_batch_meta("KEY", 1, 2, 0, 1, 1, 90),
-                unsealed_batch_meta("KEY", 2, 3, 0, 0, 1, 124),
+                unsealed_batch_meta("KEY", 0, 1, 0, 0, 58),
+                unsealed_batch_meta("KEY", 1, 2, 1, 1, 58),
+                unsealed_batch_meta("KEY", 2, 3, 0, 1, 92),
             ],
         );
 
@@ -637,7 +605,7 @@ mod tests {
                 .into_iter()
                 .map(|b| b.desc)
                 .collect::<Vec<_>>(),
-            vec![desc_from(0, 1, 0)]
+            vec![SeqNo(0)..SeqNo(1)]
         );
 
         // Check that repeatedly truncating the same time bound does not modify the unsealed.
@@ -648,8 +616,8 @@ mod tests {
         assert_eq!(
             cleared_keys(&f.batches),
             vec![
-                unsealed_batch_meta("KEY", 1, 2, 0, 1, 1, 90),
-                unsealed_batch_meta("KEY", 2, 3, 0, 0, 1, 124),
+                unsealed_batch_meta("KEY", 1, 2, 1, 1, 58),
+                unsealed_batch_meta("KEY", 2, 3, 0, 1, 92),
             ],
         );
 
@@ -659,7 +627,7 @@ mod tests {
                 .into_iter()
                 .map(|b| b.desc)
                 .collect::<Vec<_>>(),
-            vec![desc_from(1, 2, 0), desc_from(2, 3, 0)]
+            vec![SeqNo(1)..SeqNo(2), SeqNo(2)..SeqNo(3)]
         );
 
         // Check that truncate correctly handles the case where there are no more batches.
@@ -687,11 +655,7 @@ mod tests {
             (("k".into(), "v".into()), 5, 1),
         ];
         let batch = BlobUnsealedBatch {
-            desc: Description::new(
-                Antichain::from_elem(SeqNo(0)),
-                Antichain::from_elem(SeqNo(2)),
-                Antichain::from_elem(SeqNo(0)),
-            ),
+            desc: SeqNo(0)..SeqNo(2),
             updates: updates.clone(),
         };
 
@@ -745,11 +709,7 @@ mod tests {
             (("k".into(), "v".into()), 2, 1),
         ];
         let batch = BlobUnsealedBatch {
-            desc: Description::new(
-                Antichain::from_elem(SeqNo(0)),
-                Antichain::from_elem(SeqNo(2)),
-                Antichain::from_elem(SeqNo(0)),
-            ),
+            desc: SeqNo(0)..SeqNo(2),
             updates: updates.clone(),
         };
 
@@ -769,7 +729,7 @@ mod tests {
 
         assert_eq!(
             cleared_keys(&f.batches),
-            vec![unsealed_batch_meta("KEY", 0, 2, 0, 1, 2, 124)],
+            vec![unsealed_batch_meta("KEY", 0, 2, 1, 2, 92)],
         );
 
         Ok(())

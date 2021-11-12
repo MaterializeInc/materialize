@@ -785,7 +785,7 @@ impl AppliedState {
             // We maintain the invariant that the sequence number chosen for the
             // write is >= every unsealed's seqno_upper and that there is nothing
             // for that unsealed in [unsealed.seqno_upper, write_seqno).
-            let seqno_upper = unsealed.seqno_upper()[0];
+            let seqno_upper = unsealed.seqno_upper();
             debug_assert!(seqno_upper <= desc.start);
 
             // We can artificially start the Unsealed batch at the unsealed's current
@@ -864,12 +864,7 @@ impl AppliedState {
         }
 
         let batch = BlobUnsealedBatch {
-            desc: Description::new(
-                Antichain::from_elem(desc.start),
-                Antichain::from_elem(desc.end),
-                // We never compact Unsealed, so since is always the minimum.
-                Antichain::from_elem(SeqNo(0)),
-            ),
+            desc: desc.clone(),
             updates,
         };
         self.append_unsealed(id, batch, blob)?;
