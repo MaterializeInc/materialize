@@ -724,6 +724,96 @@ class Materialized(PythonService):
         super().__init__(name=name, config=config)
 
 
+class Coordd(PythonService):
+    def __init__(
+        self,
+        name: str = "coordd",
+        hostname: Optional[str] = None,
+        image: Optional[str] = None,
+        port: int = 6875,
+        memory: Optional[str] = None,
+        data_directory: str = "/share/mzdata",
+        options: str = "",
+        environment: List[str] = [],
+        volumes: List[str] = ["mzdata:/share/mzdata", "tmp:/share/tmp"],
+        mzbuild: str = "coordd",
+        depends_on: List[str] = [],
+    ) -> None:
+        # Make sure MZ_DEV=1 is always present
+        if "MZ_DEV=1" not in environment:
+            environment.append("MZ_DEV=1")
+
+        command = (
+            f"--data-directory={data_directory} {options} --listen-addr 0.0.0.0:{port}"
+        )
+
+        config: PythonServiceConfig = (
+            {"image": image} if image else {"mzbuild": mzbuild}
+        )
+
+        if hostname:
+            config["hostname"] = hostname
+
+        # Depending on the docker-compose version, this may either work or be ignored with a warning
+        # Unfortunately no portable way of setting the memory limit is known
+        if memory:
+            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+
+        config.update(
+            {
+                "command": command,
+                "ports": [port],
+                "environment": environment,
+                "volumes": volumes,
+                "depends_on": depends_on,
+            }
+        )
+
+        super().__init__(name=name, config=config)
+
+
+class Dataflowd(PythonService):
+    def __init__(
+        self,
+        name: str = "dataflowd",
+        hostname: Optional[str] = None,
+        image: Optional[str] = None,
+        ports: List[int] = [6876],
+        memory: Optional[str] = None,
+        options: str = "",
+        environment: List[str] = [
+            "MZ_LOG_FILTER",
+            "MZ_SOFT_ASSERTIONS=1",
+        ],
+        volumes: List[str] = [],
+        depends_on: List[str] = [],
+    ) -> None:
+        command = f"{options}"
+
+        config: PythonServiceConfig = (
+            {"image": image} if image else {"mzbuild": "dataflowd"}
+        )
+
+        if hostname:
+            config["hostname"] = hostname
+
+        # Depending on the docker-compose version, this may either work or be ignored with a warning
+        # Unfortunately no portable way of setting the memory limit is known
+        if memory:
+            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+
+        config.update(
+            {
+                "command": command,
+                "ports": ports,
+                "environment": environment,
+                "volumes": volumes,
+            }
+        )
+
+        super().__init__(name=name, config=config)
+
+
 class Zookeeper(PythonService):
     def __init__(
         self,
@@ -1138,7 +1228,7 @@ class StartAndWaitForTcp(WorkflowStep):
       services: A list of PythonService objects to start and wait until their TCP ports are open
     """
 
-    def __init__(self, *, services: List[PythonService]) -> None:
+    def __init__(self, *, services: List[PythonService], **kwargs: Any) -> None:
         if not isinstance(services, list):
             raise errors.BadSpec(
                 f"services for start-and-wait-for-tcp should be a list, got: {services}"
@@ -1151,12 +1241,13 @@ class StartAndWaitForTcp(WorkflowStep):
                 )
 
         self._services = services
+        self._kwargs = kwargs
 
     def run(self, workflow: Workflow) -> None:
         for service in self._services:
             # Those two methods are loaded dynamically, so silence any mypi warnings about them
             workflow.start_services(services=[service.name])  # type: ignore
-            workflow.wait_for_tcp(host=service.name, port=service.port())  # type: ignore
+            workflow.wait_for_tcp(host=service.name, port=service.port(), **self._kwargs)  # type: ignore
 
 
 @Steps.register("kill-services")

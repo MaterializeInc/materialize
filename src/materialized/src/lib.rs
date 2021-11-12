@@ -35,10 +35,10 @@ use pid_file::PidFile;
 use crate::mux::Mux;
 use crate::server_metrics::Metrics;
 
-mod http;
-mod mux;
-mod server_metrics;
-mod telemetry;
+pub mod http;
+pub mod mux;
+pub mod server_metrics;
+pub mod telemetry;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -227,7 +227,10 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize dataflow server.
     let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
         workers,
-        timely_worker: config.timely_worker,
+        timely_config: timely::Config {
+            communication: timely::CommunicationConfig::Process(workers),
+            worker: timely::WorkerConfig::default(),
+        },
         experimental_mode: config.experimental_mode,
         now: SYSTEM_TIME.clone(),
         metrics_registry: config.metrics_registry.clone(),

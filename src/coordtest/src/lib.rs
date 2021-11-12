@@ -117,7 +117,10 @@ impl CoordTest {
         let metrics_registry = MetricsRegistry::new();
         let (dataflow_server, dataflow_client) = dataflow::serve(dataflow::Config {
             workers: 1,
-            timely_worker: timely::WorkerConfig::default(),
+            timely_config: timely::Config {
+                communication: timely::CommunicationConfig::Process(1),
+                worker: timely::WorkerConfig::default(),
+            },
             experimental_mode,
             now: now.clone(),
             metrics_registry: metrics_registry.clone(),
