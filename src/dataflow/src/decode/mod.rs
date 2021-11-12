@@ -109,7 +109,7 @@ pub fn rewrite_for_upsert(
 }
 
 pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
+    stream: &Stream<G, SourceOutput<Vec<u8>, Option<Vec<u8>>>>,
     schema: &str,
     registry: Option<ccsr::ClientConfig>,
     confluent_wire_format: bool,
@@ -120,7 +120,7 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
     stream.sink(
-        SourceOutput::<Vec<u8>, MessagePayload>::position_value_contract(),
+        SourceOutput::<Vec<u8>, Option<Vec<u8>>>::position_value_contract(),
         "CDCv2-Decode",
         {
             let channel = channel.clone();
@@ -130,8 +130,8 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
                     data.swap(&mut vector);
                     for data in vector.drain(..) {
                         let value = match &data.value {
-                            MessagePayload::Data(value) => value,
-                            MessagePayload::EOF => continue,
+                            Some(value) => value,
+                            None => continue,
                         };
                         let (mut data, schema) = match block_on(resolver.resolve(&*value)) {
                             Ok(ok) => ok,
@@ -417,7 +417,7 @@ fn get_decoder(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
+    stream: &Stream<G, SourceOutput<Vec<u8>, Option<Vec<u8>>>>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
@@ -467,7 +467,7 @@ where
     // fall back to arbitrarily hashing by value if the upstream didn't give us a position.
     let use_key_contract = matches!(envelope, SourceEnvelope::Debezium(..));
     let results = stream.unary_frontier(
-        Exchange::new(move |x: &SourceOutput<Vec<u8>, MessagePayload>| {
+        Exchange::new(move |x: &SourceOutput<Vec<u8>, Option<Vec<u8>>>| {
             if use_key_contract {
                 x.key.hashed()
             } else if let Some(position) = x.position {
@@ -509,47 +509,36 @@ where
                             None
                         };
 
-                        if value == &MessagePayload::Data(vec![]) {
-                            session.give(DecodeResult {
-                                key,
-                                value: None,
-                                position: *position,
-                            });
-                        } else {
-                            let value = match &value {
-                                MessagePayload::Data(value) => {
-                                    let value_bytes_remaining = &mut value.as_slice();
-                                    let mut value = value_decoder
-                                        .next(value_bytes_remaining, *upstream_time_millis)
-                                        .transpose();
-                                    if let (Some(Ok(_)), false) =
-                                        (&value, value_bytes_remaining.is_empty())
-                                    {
-                                        value = Some(Err(DecodeError::Text(format!(
-                                            "Unexpected bytes remaining for decoded value: {:?}",
-                                            value_bytes_remaining
-                                        ))
-                                        .into()));
-                                    }
-                                    value.or_else(|| value_decoder.eof(&mut &[][..]).transpose())
+                        let value = match &value {
+                            Some(value) => {
+                                let value_bytes_remaining = &mut value.as_slice();
+                                let mut value = value_decoder
+                                    .next(value_bytes_remaining, *upstream_time_millis)
+                                    .transpose();
+                                if let (Some(Ok(_)), false) =
+                                    (&value, value_bytes_remaining.is_empty())
+                                {
+                                    value = Some(Err(DecodeError::Text(format!(
+                                        "Unexpected bytes remaining for decoded value: {:?}",
+                                        value_bytes_remaining
+                                    ))
+                                    .into()));
                                 }
-                                MessagePayload::EOF => Some(Err(DecodeError::Text(format!(
-                                    "Unexpected EOF in delimited stream"
-                                ))
-                                .into())),
-                            };
-
-                            if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
-                                n_errors += 1;
-                            } else if matches!(&value, Some(Ok(_))) {
-                                n_successes += 1;
+                                value.or_else(|| value_decoder.eof(&mut &[][..]).transpose())
                             }
-                            session.give(DecodeResult {
-                                key,
-                                value,
-                                position: *position,
-                            });
+                            None => None,
+                        };
+
+                        if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                            n_errors += 1;
+                        } else if matches!(&value, Some(Ok(_))) {
+                            n_successes += 1;
                         }
+                        session.give(DecodeResult {
+                            key,
+                            value,
+                            position: *position,
+                        });
                     }
                 });
                 // Matching historical practice, we only log metrics on the value decoder.

@@ -47,6 +47,17 @@ use crate::source::{
 };
 use crate::source::{DecodeResult, PersistentTimestampBindingsConfig};
 
+/// A type-level enum that holds one of two types of sources depending on their message type
+///
+/// This enum puts no restrictions to the generic parameters of the variants since it only serves
+/// as a type-level enum.
+enum SourceType<Delimited, ByteStream> {
+    /// A delimited source
+    Delimited(Delimited),
+    /// A bytestream source
+    ByteStream(ByteStream),
+}
+
 impl<G> Context<G, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -277,44 +288,47 @@ where
 
                     (ok_stream.as_collection(), capability)
                 } else {
-                    let is_connector_delimited = connector.is_delimited();
-
                     let ((ok_source, ts_bindings, err_source), capability) = match connector {
                         ExternalSourceConnector::Kafka(_) => {
-                            source::create_source::<_, KafkaSourceReader>(
+                            let ((ok, ts, err), cap) = source::create_source::<_, KafkaSourceReader>(
                                 source_config,
                                 &connector,
                                 source_persist_config
                                     .as_ref()
                                     .map(|config| config.bindings_config.clone()),
-                            )
+                            );
+                            ((SourceType::Delimited(ok), ts, err), cap)
                         }
                         ExternalSourceConnector::Kinesis(_) => {
-                            source::create_source::<_, KinesisSourceReader>(
-                                source_config,
-                                &connector,
-                                source_persist_config
-                                    .as_ref()
-                                    .map(|config| config.bindings_config.clone()),
-                            )
+                            let ((ok, ts, err), cap) =
+                                source::create_source::<_, KinesisSourceReader>(
+                                    source_config,
+                                    &connector,
+                                    source_persist_config
+                                        .as_ref()
+                                        .map(|config| config.bindings_config.clone()),
+                                );
+                            ((SourceType::Delimited(ok), ts, err), cap)
                         }
                         ExternalSourceConnector::S3(_) => {
-                            source::create_source::<_, S3SourceReader>(
+                            let ((ok, ts, err), cap) = source::create_source::<_, S3SourceReader>(
                                 source_config,
                                 &connector,
                                 source_persist_config
                                     .as_ref()
                                     .map(|config| config.bindings_config.clone()),
-                            )
+                            );
+                            ((SourceType::ByteStream(ok), ts, err), cap)
                         }
                         ExternalSourceConnector::File(_) | ExternalSourceConnector::AvroOcf(_) => {
-                            source::create_source::<_, FileSourceReader>(
+                            let ((ok, ts, err), cap) = source::create_source::<_, FileSourceReader>(
                                 source_config,
                                 &connector,
                                 source_persist_config
                                     .as_ref()
                                     .map(|config| config.bindings_config.clone()),
-                            )
+                            );
+                            ((SourceType::ByteStream(ok), ts, err), cap)
                         }
                         ExternalSourceConnector::Postgres(_) => unreachable!(),
                         ExternalSourceConnector::PubNub(_) => unreachable!(),
@@ -349,6 +363,10 @@ where
                                 DataEncoding::Avro(enc) => enc,
                                 _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
                             };
+                            let ok_source = match ok_source {
+                                SourceType::Delimited(s) => s,
+                                _ => unreachable!("Attempted to create non-delimited CDCv2 source"),
+                            };
                             let (oks, token) = decode_cdcv2(
                                 &ok_source,
                                 &schema,
@@ -362,9 +380,9 @@ where
                                 .push(Rc::new(token));
                             (oks, None)
                         } else {
-                            let (results, extra_token) = if is_connector_delimited {
-                                render_decode_delimited(
-                                    &ok_source,
+                            let (results, extra_token) = match ok_source {
+                                SourceType::Delimited(source) => render_decode_delimited(
+                                    &source,
                                     key_encoding,
                                     value_encoding,
                                     &self.debug_name,
@@ -372,10 +390,9 @@ where
                                     &mut linear_operators,
                                     fast_forwarded,
                                     render_state.metrics.clone(),
-                                )
-                            } else {
-                                render_decode(
-                                    &ok_source,
+                                ),
+                                SourceType::ByteStream(source) => render_decode(
+                                    &source,
                                     key_encoding,
                                     value_encoding,
                                     &self.debug_name,
@@ -383,7 +400,7 @@ where
                                     &mut linear_operators,
                                     fast_forwarded,
                                     render_state.metrics.clone(),
-                                )
+                                ),
                             };
                             if let Some(tok) = extra_token {
                                 tokens
