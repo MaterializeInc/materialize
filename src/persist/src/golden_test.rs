@@ -21,7 +21,7 @@ use crate::mem::{MemBlob, MemRegistry};
 use crate::nemesis::direct::{Direct, StartRuntime};
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::{Input, Runtime, RuntimeWorker};
-use crate::storage::Blob;
+use crate::storage::{Atomicity, Blob};
 use crate::unreliable::UnreliableBlob;
 
 /// A test to catch changes in any part of the end-to-end persist encoding.
@@ -202,7 +202,8 @@ impl Blobs {
         let blobs: Blobs =
             serde_json::from_str(blob_json).map_err(|err| Error::from(err.to_string()))?;
         for (key, val) in blobs.blobs.iter() {
-            blob.set(&key, val.to_owned(), false).await?;
+            blob.set(&key, val.to_owned(), Atomicity::AllowNonAtomic)
+                .await?;
         }
         Ok(())
     }

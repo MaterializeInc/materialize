@@ -24,7 +24,7 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use crate::indexed::Indexed;
-use crate::storage::{Blob, LockInfo, Log, SeqNo};
+use crate::storage::{Atomicity, Blob, LockInfo, Log, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
 #[derive(Debug)]
@@ -223,15 +223,9 @@ impl MemBlobCore {
         Ok(self.dataz.get(key).cloned())
     }
 
-    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+    fn set(&mut self, key: &str, value: Vec<u8>) -> Result<(), Error> {
         self.ensure_open()?;
-        if allow_overwrite {
-            self.dataz.insert(key.to_owned(), value);
-        } else if self.dataz.contains_key(key) {
-            return Err(format!("not allowed to overwrite: {}", key).into());
-        } else {
-            self.dataz.insert(key.to_owned(), value);
-        };
+        self.dataz.insert(key.to_owned(), value);
         Ok(())
     }
 
@@ -312,8 +306,9 @@ impl Blob for MemBlob {
         self.core_lock()?.get(key)
     }
 
-    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
-        self.core_lock()?.set(key, value, allow_overwrite)
+    async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
+        // NB: This is always atomic, so we're free to ignore the atomic param.
+        self.core_lock()?.set(key, value)
     }
 
     async fn delete(&mut self, key: &str) -> Result<(), Error> {
@@ -476,6 +471,7 @@ impl MemMultiRegistry {
 #[cfg(test)]
 mod tests {
     use crate::storage::tests::{blob_impl_test, log_impl_test};
+    use crate::storage::Atomicity::RequireAtomic;
 
     use super::*;
 
@@ -517,7 +513,10 @@ mod tests {
         let blob_gen2 = Arc::new(Mutex::new(registry.blob_no_reentrance()?));
 
         // Write some data with the new handle.
-        blob_gen2.lock()?.set("a", "1".into(), true).await?;
+        blob_gen2
+            .lock()?
+            .set("a", "1".into(), RequireAtomic)
+            .await?;
 
         // The old handle should not be usable anymore. Writes and reads using
         // it should fail and the value set by blob_gen2 should not be affected.
@@ -528,7 +527,7 @@ mod tests {
         assert_eq!(
             blob_gen1_2
                 .lock()?
-                .set("a", "2".as_bytes().to_vec(), true)
+                .set("a", "2".as_bytes().to_vec(), RequireAtomic)
                 .await,
             Err(Error::from("MemBlob has been closed"))
         );
@@ -546,7 +545,7 @@ mod tests {
         // MemBlob, make sure it's still usable.
         blob_gen2
             .lock()?
-            .set("b", "3".into(), true)
+            .set("b", "3".into(), RequireAtomic)
             .await
             .expect("blob_take2 should still be open");
 

@@ -24,7 +24,7 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::pfuture::PFuture;
-use crate::storage::Blob;
+use crate::storage::{Atomicity, Blob};
 
 /// A disk-backed cache for objects in [Blob] storage.
 ///
@@ -160,7 +160,7 @@ impl<B: Blob> BlobCache<B> {
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
-        block_on(self.blob.lock()?.set(&key, val, false))
+        block_on(self.blob.lock()?.set(&key, val, Atomicity::AllowNonAtomic))
             .map_err(|err| self.metric_set_error(err))?;
         self.metrics
             .unsealed
@@ -258,7 +258,7 @@ impl<B: Blob> BlobCache<B> {
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
-        block_on(self.blob.lock()?.set(&key, val, false))
+        block_on(self.blob.lock()?.set(&key, val, Atomicity::AllowNonAtomic))
             .map_err(|err| self.metric_set_error(err))?;
         self.metrics
             .trace
@@ -313,8 +313,12 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.meta_size_bytes.set(val_len);
 
         let write_start = Instant::now();
-        block_on(self.blob.lock()?.set(Self::META_KEY, val, true))
-            .map_err(|err| self.metric_set_error(err))?;
+        block_on(
+            self.blob
+                .lock()?
+                .set(Self::META_KEY, val, Atomicity::RequireAtomic),
+        )
+        .map_err(|err| self.metric_set_error(err))?;
         self.metrics
             .meta
             .blob_write_ms
