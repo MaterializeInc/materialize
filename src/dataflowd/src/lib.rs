@@ -35,13 +35,24 @@ pub type FramedServer<C> = Framed<C, Command, Response>;
 /// A framed connection from the client's perspective.
 pub type FramedClient<C> = Framed<C, Response, Command>;
 
+fn length_delimited_codec() -> LengthDelimitedCodec {
+    // NOTE(benesch): using an unlimited maximum frame length is problematic
+    // because Tokio never shrinks its buffer. Sending or receiving one large
+    // message of size N means the client will hold on to a buffer of size
+    // N forever. We should investigate alternative transport protocols that
+    // do not have this limitation.
+    let mut codec = LengthDelimitedCodec::new();
+    codec.set_max_frame_length(usize::MAX);
+    codec
+}
+
 /// Constructs a framed connection for the server.
 pub fn framed_server<C>(conn: C) -> FramedServer<C>
 where
     C: AsyncRead + AsyncWrite,
 {
     tokio_serde::Framed::new(
-        tokio_util::codec::Framed::new(conn, LengthDelimitedCodec::new()),
+        tokio_util::codec::Framed::new(conn, length_delimited_codec()),
         Bincode::default(),
     )
 }
@@ -52,7 +63,7 @@ where
     C: AsyncRead + AsyncWrite,
 {
     tokio_serde::Framed::new(
-        tokio_util::codec::Framed::new(conn, LengthDelimitedCodec::new()),
+        tokio_util::codec::Framed::new(conn, length_delimited_codec()),
         Bincode::default(),
     )
 }
