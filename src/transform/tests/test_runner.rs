@@ -245,6 +245,7 @@ mod tests {
                 Ok(Box::new(transform::projection_pushdown::ProjectionPushdown))
             }
             "ReductionPushdown" => Ok(Box::new(transform::reduction_pushdown::ReductionPushdown)),
+            "TopKFusion" => Ok(Box::new(transform::fusion::top_k::TopK)),
             "UnionBranchCancellation" => {
                 Ok(Box::new(transform::union_cancel::UnionBranchCancellation))
             }

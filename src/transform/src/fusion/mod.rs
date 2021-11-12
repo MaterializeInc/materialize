@@ -15,4 +15,5 @@ pub mod map;
 pub mod negate;
 pub mod project;
 pub mod reduce;
+pub mod top_k;
 pub mod union;
