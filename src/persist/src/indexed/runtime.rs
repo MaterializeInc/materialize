@@ -31,7 +31,7 @@ use crate::error::Error;
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::Id;
-use crate::indexed::metrics::{metric_duration_ms, Metrics};
+use crate::indexed::metrics::Metrics;
 use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
@@ -843,8 +843,8 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         }
         let step_start = Instant::now();
         self.metrics
-            .cmd_run_ms
-            .inc_by(metric_duration_ms(step_start.duration_since(run_start)));
+            .cmd_run_seconds
+            .inc_by(step_start.duration_since(run_start).as_secs_f64());
 
         // HACK: This rate limits how much we call step in response to workloads
         // consisting entirely of write, seal, and allow_compaction (which is
@@ -901,8 +901,8 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
             }
 
             self.metrics
-                .cmd_step_ms
-                .inc_by(metric_duration_ms(step_start.elapsed()));
+                .cmd_step_seconds
+                .inc_by(step_start.elapsed().as_secs_f64());
         }
 
         return more_work;

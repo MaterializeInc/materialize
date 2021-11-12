@@ -22,7 +22,7 @@ use crate::error::Error;
 use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, TraceBatchMeta, UnsealedBatchMeta,
 };
-use crate::indexed::metrics::{metric_duration_ms, Metrics};
+use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFuture;
 use crate::storage::Blob;
 
@@ -164,8 +164,8 @@ impl<B: Blob> BlobCache<B> {
             .map_err(|err| self.metric_set_error(err))?;
         self.metrics
             .unsealed
-            .blob_write_ms
-            .inc_by(metric_duration_ms(write_start.elapsed()));
+            .blob_write_seconds
+            .inc_by(write_start.elapsed().as_secs_f64());
         self.metrics.unsealed.blob_write_count.inc();
         self.metrics.unsealed.blob_write_bytes.inc_by(val_len);
 
@@ -180,8 +180,8 @@ impl<B: Blob> BlobCache<B> {
         block_on(self.blob.lock()?.delete(&batch.key))?;
         self.metrics
             .unsealed
-            .blob_delete_ms
-            .inc_by(metric_duration_ms(delete_start.elapsed()));
+            .blob_delete_seconds
+            .inc_by(delete_start.elapsed().as_secs_f64());
         self.metrics.unsealed.blob_delete_count.inc();
         self.metrics
             .unsealed
@@ -262,8 +262,8 @@ impl<B: Blob> BlobCache<B> {
             .map_err(|err| self.metric_set_error(err))?;
         self.metrics
             .trace
-            .blob_write_ms
-            .inc_by(metric_duration_ms(write_start.elapsed()));
+            .blob_write_seconds
+            .inc_by(write_start.elapsed().as_secs_f64());
         self.metrics.trace.blob_write_count.inc();
         self.metrics.trace.blob_write_bytes.inc_by(val_len);
 
@@ -278,8 +278,8 @@ impl<B: Blob> BlobCache<B> {
         block_on(self.blob.lock()?.delete(&batch.key))?;
         self.metrics
             .trace
-            .blob_delete_ms
-            .inc_by(metric_duration_ms(delete_start.elapsed()));
+            .blob_delete_seconds
+            .inc_by(delete_start.elapsed().as_secs_f64());
         self.metrics.trace.blob_delete_count.inc();
         self.metrics
             .trace
@@ -317,8 +317,8 @@ impl<B: Blob> BlobCache<B> {
             .map_err(|err| self.metric_set_error(err))?;
         self.metrics
             .meta
-            .blob_write_ms
-            .inc_by(metric_duration_ms(write_start.elapsed()));
+            .blob_write_seconds
+            .inc_by(write_start.elapsed().as_secs_f64());
         self.metrics.meta.blob_write_count.inc();
         self.metrics.meta.blob_write_bytes.inc_by(val_len);
 
