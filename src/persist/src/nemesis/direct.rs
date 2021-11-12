@@ -499,7 +499,7 @@ impl DirectWorker {
         let progress = stream.progress_rx;
         let (tx, rx) = PFuture::new();
         let _ = thread::Builder::new()
-            .name("nemesis-seal".into())
+            .name("nemesis:seal".into())
             .spawn(move || {
                 tx.fill(|| -> Result<SeqNo, Error> {
                     // Wait for the seal to succeed or fail. Then, only if it
