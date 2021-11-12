@@ -646,7 +646,11 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         } else {
             false
         };
-        let system_table_enabled = !args.disable_persistent_system_tables_test;
+        let mut system_table_enabled = !args.disable_persistent_system_tables_test;
+        if system_table_enabled && args.logical_compaction_window.is_none() {
+            log::warn!("--logical-compaction-window is off; disabling background persistence test to prevent unbounded disk usage");
+            system_table_enabled = false;
+        }
 
         let storage = if args.persist_storage.is_empty() {
             PersistStorage::File(PersistFileStorage {
