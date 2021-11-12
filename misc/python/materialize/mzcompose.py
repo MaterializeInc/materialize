@@ -909,14 +909,8 @@ class Testdrive(PythonService):
         mzbuild: str = "testdrive",
         no_reset: bool = False,
         default_timeout: Optional[int] = None,
-        entrypoint: List[str] = [
-            "testdrive",
-            "--kafka-addr=kafka:9092",
-            "--schema-registry-url=http://schema-registry:8081",
-            "--materialized-url=postgres://materialize@materialized:6875",
-            "--validate-catalog=/share/mzdata/catalog",
-            "${TD_TEST:-$$*}",
-        ],
+        validate_catalog: bool = True,
+        entrypoint: Optional[List[str]] = None,
         environment: List[str] = [
             "TD_TEST",
             "TMPDIR=/share/tmp",
@@ -930,6 +924,18 @@ class Testdrive(PythonService):
         ],
         volumes: List[str] = [".:/workdir", "mzdata:/share/mzdata", "tmp:/share/tmp"],
     ) -> None:
+        if entrypoint is None:
+            entrypoint = [
+                "testdrive",
+                "--kafka-addr=kafka:9092",
+                "--schema-registry-url=http://schema-registry:8081",
+                "--materialized-url=postgres://materialize@materialized:6875",
+                "${TD_TEST:-$$*}",
+            ]
+
+        if validate_catalog:
+            entrypoint.append("--validate-catalog=/share/mzdata/catalog")
+
         if no_reset:
             entrypoint.append("--no-reset")
 
