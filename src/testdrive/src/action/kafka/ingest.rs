@@ -119,6 +119,9 @@ impl Transcoder {
                     protobuf::MessageType::Batch => {
                         Self::decode_json::<_, protobuf::gen::billing::Batch>(row)?.map(convert)
                     }
+                    protobuf::MessageType::Empty => {
+                        Self::decode_json::<_, protobuf::well_known_types::Empty>(row)?.map(convert)
+                    }
                     protobuf::MessageType::Measurement => {
                         Self::decode_json::<_, protobuf::gen::billing::Measurement>(row)?
                             .map(convert)
