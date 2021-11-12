@@ -71,7 +71,28 @@ mz_versioned["current_source"] = Materialized(
 
 prerequisites = [Zookeeper(), Kafka(), SchemaRegistry(), Postgres()]
 
-services = [*prerequisites, *(mz_versioned.values()), Testdrive()]
+TESTDRIVE_VALIDATE_CATALOG_SVC_NAME = "testdrive-svc"
+TESTDRIVE_NOVALIDATE_CATALOG_SVC_NAME = "testdrive-svc-novalidate"
+
+services = [
+    *prerequisites,
+    *(mz_versioned.values()),
+    Testdrive(name=TESTDRIVE_VALIDATE_CATALOG_SVC_NAME),
+    # N.B.: we need to use `validate_catalog=False` because testdrive uses HEAD version to read
+    # from disk to compare to the in-memory representation.  Doing this invokes SQL planning.
+    # However, the SQL planner cannot be guaranteed to handle all old syntaxes directly. For
+    # example, HEAD will panic when attempting to plan the <= v0.9.12 representation of protobufs
+    # because it expects them to be either be:
+    #   1) purified (input from the console)
+    #   2) upgraded (reading from old catalog)
+    #
+    # Therefore, we use this version when running against instances of materailized that have not
+    # been upgraded.
+    #
+    # Disabling catalog validation is preferable to using a versioned testdrive because that would
+    # involve maintaining backwards compatibility for all testdrive commands.
+    Testdrive(name=TESTDRIVE_NOVALIDATE_CATALOG_SVC_NAME, validate_catalog=False)
+]
 
 
 def workflow_upgrade(w: Workflow):
@@ -98,12 +119,12 @@ def test_upgrade_from_version(w: Workflow, from_version: str, priors: List[str])
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
         w.run_service(
-            service="testdrive-svc",
+            service=TESTDRIVE_NOVALIDATE_CATALOG_SVC_NAME,
             command=f"--seed=1 --no-reset {temp_dir} create-in-@({version_glob})-{td_glob}.td",
         )
 
     w.kill_services(services=[mz_from])
-    w.remove_services(services=[mz_from, "testdrive-svc"])
+    w.remove_services(services=[mz_from, TESTDRIVE_NOVALIDATE_CATALOG_SVC_NAME])
 
     mz_to = "materialized_current_source"
     w.start_services(services=[mz_to])
@@ -111,10 +132,10 @@ def test_upgrade_from_version(w: Workflow, from_version: str, priors: List[str])
 
     with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
         w.run_service(
-            service="testdrive-svc",
+            service=TESTDRIVE_VALIDATE_CATALOG_SVC_NAME,
             command=f"--seed=1 --no-reset {temp_dir} check-from-@({version_glob})-{td_glob}.td",
         )
 
     w.kill_services(services=[mz_to])
-    w.remove_services(services=[mz_to, "testdrive-svc"])
+    w.remove_services(services=[mz_to, TESTDRIVE_VALIDATE_CATALOG_SVC_NAME])
     w.remove_volumes(volumes=["mzdata", "tmp"])
