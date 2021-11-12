@@ -13,12 +13,13 @@ use std::str::FromStr;
 
 pub mod gen;
 
-pub use protobuf::Message;
+pub use protobuf::{well_known_types, Message};
 
 #[derive(Debug, Copy, Clone)]
 pub enum MessageType {
     Batch,
     Struct,
+    Empty,
     Measurement,
     SimpleId,
     NestedOuter,
@@ -34,6 +35,7 @@ impl FromStr for MessageType {
         match s {
             "batch" => Ok(MessageType::Batch),
             "struct" => Ok(MessageType::Struct),
+            "empty" => Ok(MessageType::Empty),
             "measurement" => Ok(MessageType::Measurement),
             "simpleid" => Ok(MessageType::SimpleId),
             "nested" => Ok(MessageType::NestedOuter),

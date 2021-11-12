@@ -110,6 +110,8 @@ List new features before bug fixes.
 
 - Support protobuf sources that contain imported messages and enums.
 
+- Correctly handle protobuf messages where the value is omitted instead of dropping them.
+
 {{% version-header v0.9.12 %}}
 
 - **Breaking change**: Disallow ambiguous table references in queries. For

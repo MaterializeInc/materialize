@@ -51,14 +51,22 @@ Protobuf type "fixed64" is not supported
 
 $ kafka-create-topic topic=messages
 
-$ kafka-ingest format=protobuf topic=messages message=struct timestamp=1
+$ kafka-ingest format=protobuf topic=messages message=struct
 {"int": 1, "bad_int": 1, "bin": "ONE", "st": "my-string"}
 {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
 
+# An empty message has the same wire format as a struct message with all
+# default fields.
+#
+# TODO(benesch): teach kafka-ingest to tolerate missing fields.
+$ kafka-ingest format=protobuf topic=messages message=empty
+{}
+
 # TODO: these should be fully json
 > SELECT * FROM pm
-1 1 ONE  my-string 1
+1 1 ONE  my-string       1
 2 2 ONE  something-valid 2
+0 0 ZERO ""              3
 
 # Test failure to deserialize protobuf messages when the value is corrupted
 > CREATE SOURCE corrupted_protomessages FROM
@@ -82,6 +90,7 @@ Decode error: Text: protobuf deserialization error: Deserializing into rust obje
 
 > SELECT * FROM protomessages3
 2 2 ONE  something-valid 2
+0 0 ZERO ""              3
 
 $ kafka-create-topic topic=messages-partitioned partitions=2
 
