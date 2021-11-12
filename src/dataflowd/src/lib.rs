@@ -16,7 +16,7 @@
 
 use async_trait::async_trait;
 use futures::sink::SinkExt;
-use futures::StreamExt;
+use futures::stream::{self, SelectAll, SplitSink, SplitStream, StreamExt};
 use log::trace;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpStream, ToSocketAddrs};
@@ -61,7 +61,8 @@ where
 pub struct RemoteClient {
     // TODO: the client could discover the number of workers from the server.
     num_workers: usize,
-    conns: Vec<FramedClient<TcpStream>>,
+    stream: SelectAll<SplitStream<FramedClient<TcpStream>>>,
+    sinks: Vec<SplitSink<FramedClient<TcpStream>, Command>>,
 }
 
 impl RemoteClient {
@@ -70,11 +71,19 @@ impl RemoteClient {
         num_workers: usize,
         addrs: &[impl ToSocketAddrs],
     ) -> Result<RemoteClient, anyhow::Error> {
-        let mut conns = Vec::new();
+        let mut streams = vec![];
+        let mut sinks = vec![];
         for addr in addrs {
-            conns.push(framed_client(TcpStream::connect(addr).await?));
+            let client = framed_client(TcpStream::connect(addr).await?);
+            let (sink, stream) = client.split();
+            streams.push(stream);
+            sinks.push(sink);
         }
-        Ok(RemoteClient { num_workers, conns })
+        Ok(RemoteClient {
+            num_workers,
+            stream: stream::select_all(streams),
+            sinks,
+        })
     }
 }
 
@@ -87,15 +96,15 @@ impl dataflow::Client for RemoteClient {
     async fn send(&mut self, cmd: dataflow::Command) {
         // TODO: something better than panicking.
         trace!("Broadcasting dataflow command: {:?}", cmd);
-        let num_conns = self.conns.len();
+        let num_conns = self.sinks.len();
         if num_conns == 1 {
             // This special case avoids a clone of the whole plan.
-            self.conns[0]
+            self.sinks[0]
                 .send(cmd)
                 .await
                 .expect("worker command receiver should not drop first");
         } else {
-            for (index, sendpoint) in self.conns.iter_mut().enumerate() {
+            for (index, sendpoint) in self.sinks.iter_mut().enumerate() {
                 sendpoint
                     .send(cmd.clone_for_worker(index, num_conns))
                     .await
@@ -107,7 +116,7 @@ impl dataflow::Client for RemoteClient {
     async fn recv(&mut self) -> Option<dataflow::Response> {
         // TODO: something better than panicking.
         // Attempt to read from each of `self.conns`.
-        futures::stream::select_all(self.conns.iter_mut().map(|stream| stream.by_ref()))
+        self.stream
             .next()
             .await
             .map(|x| x.expect("connection to dataflow server broken"))
