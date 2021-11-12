@@ -232,6 +232,17 @@ impl JoinInputMapper {
             .dedup()
     }
 
+    /// Returns the index of the only input referenced in the given expression.
+    pub fn single_input(&self, expr: &MirScalarExpr) -> Option<usize> {
+        let mut inputs = self.lookup_inputs(expr);
+        if let Some(first_input) = inputs.next() {
+            if inputs.next().is_none() {
+                return Some(first_input);
+            }
+        }
+        None
+    }
+
     /// Takes an expression in the global context and looks in `equivalences`
     /// for an equivalent expression (also expressed in the global context) that
     /// belongs to one or more of the inputs in `bound_inputs`

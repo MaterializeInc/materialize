@@ -1,0 +1,36 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE t1(f1 INT, f2 INT);
+
+statement ok
+CREATE MATERIALIZED VIEW v1 AS SELECT t1 from t1;
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1, (SELECT DISTINCT f1 % 2 AS F FROM t1) T WHERE t1.f1 % 2 = t.f;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+| Map (#0 % 2)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM v1, (SELECT DISTINCT (v1.t1).f1 as f1 FROM v1) Y WHERE (v1.t1).f1 = y.f1;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter !(isnull(record_get[0](#0)))
+| Map record_get[0](#0)
+
+EOF
