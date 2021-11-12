@@ -778,7 +778,7 @@ class Dataflowd(PythonService):
         name: str = "dataflowd",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
-        port: int = 6876,
+        ports: List[int] = [6876],
         memory: Optional[str] = None,
         options: str = "",
         environment: List[str] = [
@@ -786,6 +786,7 @@ class Dataflowd(PythonService):
             "MZ_SOFT_ASSERTIONS=1",
         ],
         volumes: List[str] = [],
+        depends_on: List[str] = [],
     ) -> None:
         command = f"{options}"
 
@@ -804,7 +805,7 @@ class Dataflowd(PythonService):
         config.update(
             {
                 "command": command,
-                "ports": [port],
+                "ports": ports,
                 "environment": environment,
                 "volumes": volumes,
             }
