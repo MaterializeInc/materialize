@@ -18,9 +18,7 @@ use criterion::measurement::WallTime;
 use criterion::{
     criterion_group, criterion_main, Bencher, BenchmarkGroup, BenchmarkId, Criterion, Throughput,
 };
-use differential_dataflow::trace::Description;
 use rand::Rng;
-use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 
 use ore::cast::CastFrom;
@@ -315,11 +313,7 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
     let size = get_encoded_len(updates.clone());
     group.throughput(Throughput::Bytes(size));
     let batch = BlobUnsealedBatch {
-        desc: Description::new(
-            Antichain::from_elem(SeqNo(0)),
-            Antichain::from_elem(SeqNo(1)),
-            Antichain::from_elem(SeqNo(0)),
-        ),
+        desc: SeqNo(0)..SeqNo(1),
         updates,
     };
 

@@ -15,6 +15,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::{fmt, io};
 
 use differential_dataflow::trace::Description;
@@ -140,7 +141,7 @@ pub struct UnsealedBatchMeta {
     pub key: String,
     /// Half-open interval [lower, upper) of sequence numbers that this batch
     /// contains updates for.
-    pub desc: Description<SeqNo>,
+    pub desc: Range<SeqNo>,
     /// The maximum timestamp of any update contained in this batch.
     pub ts_upper: u64,
     /// The minimum timestamp from any update contained in this batch.
@@ -206,7 +207,7 @@ pub struct TraceBatchMeta {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BlobUnsealedBatch {
     /// Which updates are included in this batch.
-    pub desc: Description<SeqNo>,
+    pub desc: Range<SeqNo>,
     /// The updates themselves.
     pub updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
 }
@@ -530,7 +531,7 @@ impl UnsealedMeta {
         for meta in self.batches.iter() {
             meta.validate()?;
             if let Some(prev) = prev {
-                if !PartialOrder::less_equal(prev.desc.upper(), meta.desc.lower()) {
+                if prev.desc.end > meta.desc.start {
                     return Err(format!(
                         "invalid batch sequence: {:?} followed by {:?}",
                         prev.desc, meta.desc
@@ -544,11 +545,10 @@ impl UnsealedMeta {
     }
 
     /// Returns an open upper bound on the seqnos contained in this unsealed.
-    pub fn seqno_upper(&self) -> Antichain<SeqNo> {
-        self.batches.last().map_or_else(
-            || Antichain::from_elem(SeqNo(0)),
-            |meta| meta.desc.upper().clone(),
-        )
+    pub fn seqno_upper(&self) -> SeqNo {
+        self.batches
+            .last()
+            .map_or_else(|| SeqNo(0), |meta| meta.desc.end)
     }
 }
 
@@ -559,7 +559,7 @@ impl UnsealedBatchMeta {
         // TODO: It's unclear if the equal case (an empty desc) is
         // useful/harmful. Feel free to make this a less_than if empty descs end
         // up making sense.
-        if PartialOrder::less_equal(self.desc.upper(), &self.desc.lower()) {
+        if self.desc.end <= self.desc.start {
             return Err(format!("invalid desc: {:?}", &self.desc).into());
         }
 
@@ -666,7 +666,7 @@ impl BlobUnsealedBatch {
         // TODO: It's unclear if the equal case (an empty desc) is
         // useful/harmful. Feel free to make this a less_than if empty descs end
         // up making sense.
-        if PartialOrder::less_equal(self.desc.upper(), &self.desc.lower()) {
+        if self.desc.end <= self.desc.start {
             return Err(format!("invalid desc: {:?}", &self.desc).into());
         }
         // TODO: It's unclear if this invariant is useful/harmful. Feel free to
@@ -809,18 +809,10 @@ mod tests {
         )
     }
 
-    fn seqno_desc(lower: u64, upper: u64) -> Description<SeqNo> {
-        Description::new(
-            Antichain::from_elem(SeqNo(lower)),
-            Antichain::from_elem(SeqNo(upper)),
-            Antichain::from_elem(SeqNo(0)),
-        )
-    }
-
     fn unsealed_batch_meta(lower: u64, upper: u64) -> UnsealedBatchMeta {
         UnsealedBatchMeta {
             key: "".to_string(),
-            desc: seqno_desc(lower, upper),
+            desc: SeqNo(lower)..SeqNo(upper),
             ts_upper: 0,
             ts_lower: 0,
             size_bytes: 0,
@@ -856,40 +848,36 @@ mod tests {
     fn unsealed_batch_validate() {
         // Normal case
         let b = BlobUnsealedBatch {
-            desc: seqno_desc(0, 2),
+            desc: SeqNo(0)..SeqNo(2),
             updates: vec![update_with_ts(0), update_with_ts(1)],
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
         let b: BlobUnsealedBatch = BlobUnsealedBatch {
-            desc: seqno_desc(0, 2),
+            desc: SeqNo(0)..SeqNo(2),
             updates: vec![],
         };
         assert_eq!(b.validate(), Err("updates is empty".into()));
 
         // Invalid desc
         let b: BlobUnsealedBatch = BlobUnsealedBatch {
-            desc: seqno_desc(2, 0),
+            desc: SeqNo(2)..SeqNo(0),
             updates: vec![],
         };
         assert_eq!(
             b.validate(),
-            Err(Error::from(
-                "invalid desc: Description { lower: Antichain { elements: [SeqNo(2)] }, upper: Antichain { elements: [SeqNo(0)] }, since: Antichain { elements: [SeqNo(0)] } }"
-            ))
+            Err(Error::from("invalid desc: SeqNo(2)..SeqNo(0)"))
         );
 
         // Empty desc
         let b: BlobUnsealedBatch = BlobUnsealedBatch {
-            desc: seqno_desc(0, 0),
+            desc: SeqNo(0)..SeqNo(0),
             updates: vec![],
         };
         assert_eq!(
             b.validate(),
-            Err(Error::from(
-                "invalid desc: Description { lower: Antichain { elements: [SeqNo(0)] }, upper: Antichain { elements: [SeqNo(0)] }, since: Antichain { elements: [SeqNo(0)] } }"
-            ))
+            Err(Error::from("invalid desc: SeqNo(0)..SeqNo(0)"))
         );
     }
 
@@ -1154,11 +1142,17 @@ mod tests {
 
         // Empty interval
         let b = unsealed_batch_meta(0, 0);
-        assert_eq!(b.validate(), Err(Error::from("invalid desc: Description { lower: Antichain { elements: [SeqNo(0)] }, upper: Antichain { elements: [SeqNo(0)] }, since: Antichain { elements: [SeqNo(0)] } }")));
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("invalid desc: SeqNo(0)..SeqNo(0)"))
+        );
 
         // Invalid desc
         let b = unsealed_batch_meta(1, 0);
-        assert_eq!(b.validate(), Err(Error::from("invalid desc: Description { lower: Antichain { elements: [SeqNo(1)] }, upper: Antichain { elements: [SeqNo(0)] }, since: Antichain { elements: [SeqNo(0)] } }")));
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("invalid desc: SeqNo(1)..SeqNo(0)"))
+        );
     }
 
     #[test]
@@ -1200,7 +1194,7 @@ mod tests {
         assert_eq!(
             b.validate(),
             Err(Error::from(
-                "invalid batch sequence: Description { lower: Antichain { elements: [SeqNo(0)] }, upper: Antichain { elements: [SeqNo(2)] }, since: Antichain { elements: [SeqNo(0)] } } followed by Description { lower: Antichain { elements: [SeqNo(1)] }, upper: Antichain { elements: [SeqNo(3)] }, since: Antichain { elements: [SeqNo(0)] } }"
+                "invalid batch sequence: SeqNo(0)..SeqNo(2) followed by SeqNo(1)..SeqNo(3)"
             ))
         );
     }
@@ -1391,7 +1385,7 @@ mod tests {
         assert_eq!(
             b.validate(),
             Err(Error::from(
-                "id Id(0) unsealed seqno_upper Antichain { elements: [SeqNo(3)] } is not less or equal to the blob's seqno SeqNo(2)"
+                "id Id(0) unsealed seqno_upper SeqNo(3) is not less or equal to the blob's seqno SeqNo(2)"
             ))
         );
 
