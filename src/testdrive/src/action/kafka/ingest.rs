@@ -119,6 +119,9 @@ impl Transcoder {
                     protobuf::MessageType::Batch => {
                         Self::decode_json::<_, protobuf::gen::billing::Batch>(row)?.map(convert)
                     }
+                    protobuf::MessageType::Empty => {
+                        Self::decode_json::<_, protobuf::well_known_types::Empty>(row)?.map(convert)
+                    }
                     protobuf::MessageType::Measurement => {
                         Self::decode_json::<_, protobuf::gen::billing::Measurement>(row)?
                             .map(convert)
@@ -163,7 +166,11 @@ impl Transcoder {
                         row.read_to_end(&mut out).map_err_to_string()?;
                     }
                 }
-                Ok(Some(bytes::unescape(&out)?))
+                if out.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(bytes::unescape(&out)?))
+                }
             }
         }
     }
