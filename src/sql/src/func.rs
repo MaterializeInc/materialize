@@ -25,10 +25,11 @@ use ore::collections::CollectionExt;
 use pgrepr::oid;
 use repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
 
+use crate::ast::{SelectStatement, Statement};
 use crate::names::PartialName;
 use crate::plan::expr::{
-    AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirScalarExpr, NullaryFunc,
-    ScalarWindowFunc, TableFunc, UnaryFunc, VariadicFunc,
+    AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
+    NullaryFunc, ScalarWindowFunc, TableFunc, UnaryFunc, VariadicFunc,
 };
 use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
@@ -328,6 +329,57 @@ fn sql_impl_func(expr: &'static str) -> Operation<HirScalarExpr> {
         let mut out = invoke(&ecx.qcx, types)?;
         out.splice_parameters(&args, 0);
         Ok(out)
+    })
+}
+
+// Defines a built-in table function from a static SQL SELECT statement.
+//
+// The SQL statement should use the standard parameter syntax (`$1`, `$2`, ...)
+// to refer to the inputs to the function; see sql_impl_func for an example.
+//
+// The number of parameters in the SQL expression must exactly match the number
+// of parameters in the built-in's declaration. There is no support for variadic
+// functions.
+//
+// As this is a full SQL statement, it returns a set of rows, similar to a
+// table function. The SELECT's projection's names are used and should be
+// aliased if needed.
+fn sql_impl_table_func(sql: &'static str) -> Operation<(HirRelationExpr, Scope)> {
+    let query = match sql_parser::parser::parse_statements(sql)
+        .expect("static function definition failed to parse")
+        .expect_element("static function definition must have exactly one statement")
+    {
+        Statement::Select(SelectStatement { query, as_of: None }) => query,
+        _ => panic!("static function definition expected SELECT statement"),
+    };
+    let invoke = move |qcx: &QueryContext,
+                       types: Vec<ScalarType>|
+          -> Result<(HirRelationExpr, Scope), anyhow::Error> {
+        // Reconstruct an expression context where the parameter types are
+        // bound to the types of the expressions in `args`.
+        let mut scx = qcx.scx.clone();
+        scx.param_types = Rc::new(RefCell::new(
+            types
+                .into_iter()
+                .enumerate()
+                .map(|(i, ty)| (i + 1, ty))
+                .collect(),
+        ));
+        let mut qcx = QueryContext::root(&scx, qcx.lifetime);
+
+        let mut query = query.clone();
+        transform_ast::transform_query(&scx, &mut query)?;
+
+        let query = query::resolve_names(&mut qcx, query)?;
+
+        query::plan_subquery(&mut qcx, &query)
+    };
+
+    Operation::variadic(move |ecx, args| {
+        let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
+        let (mut out, scope) = invoke(&ecx.qcx, types)?;
+        out.splice_parameters(&args, 0);
+        Ok((out, scope))
     })
 }
 
@@ -1227,6 +1279,8 @@ pub enum Func {
     Aggregate(Vec<FuncImpl<(HirScalarExpr, AggregateFunc)>>),
     Table(Vec<FuncImpl<TableFuncPlan>>),
     ScalarWindow(Vec<FuncImpl<ScalarWindowFunc>>),
+    // Similar to Table, but directly exposes a relation.
+    Set(Vec<FuncImpl<(HirRelationExpr, Scope)>>),
 }
 
 impl Func {
@@ -1236,6 +1290,7 @@ impl Func {
             Func::Aggregate(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
             Func::Table(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
             Func::ScalarWindow(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+            Func::Set(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
         }
     }
 }
@@ -1984,6 +2039,24 @@ lazy_static! {
             },
             "decode" => Scalar {
                 params!(String, String) => BinaryFunc::Decode, 1947;
+            }
+        }
+    };
+
+    pub static ref INFORMATION_SCHEMA_BUILTINS: HashMap<&'static str, Func> = {
+        use ParamType::*;
+        builtins! {
+            "_pg_expandarray" => Set {
+                // See: https://github.com/postgres/postgres/blob/16e3ad5d143795b05a21dc887c2ab384cce4bcb8/src/backend/catalog/information_schema.sql#L43
+                params!(ArrayAny) => sql_impl_table_func("
+                    SELECT
+                        $1[s] AS x,
+                        s - pg_catalog.array_lower($1, 1) + 1 AS n
+                    FROM pg_catalog.generate_series(
+                        pg_catalog.array_lower($1, 1),
+                        pg_catalog.array_upper($1, 1),
+                        1) as g(s)
+                "), 13112;
             }
         }
     };

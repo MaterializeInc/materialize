@@ -51,8 +51,8 @@ use transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
-    PG_CATALOG_SCHEMA,
+    Builtin, BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::{PersistConfig, PersistDetails, PersistMultiDetails, PersisterWithConfig};
 use crate::session::{PreparedStatement, Session};
@@ -2621,6 +2621,7 @@ impl SessionCatalog for ConnCatalog<'_> {
                 .iter()
                 .filter(|s| {
                     (**s != PG_CATALOG_SCHEMA)
+                        && (**s != INFORMATION_SCHEMA)
                         && (**s != MZ_CATALOG_SCHEMA)
                         && (**s != MZ_TEMP_SCHEMA)
                         && (**s != MZ_INTERNAL_SCHEMA)
