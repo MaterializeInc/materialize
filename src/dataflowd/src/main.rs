@@ -62,7 +62,7 @@ struct Args {
     processes: usize,
     /// Dataflowd hosts
     #[structopt(short, long, env = "DATAFLOWD_HOSTS", value_name = "H")]
-    hosts: Option<String>,
+    hosts: Vec<String>,
 }
 
 #[tokio::main]
@@ -81,24 +81,27 @@ fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfi
 
     if processes > 1 {
         let mut addresses = Vec::new();
-        if let Some(hosts) = &args.hosts {
-            let file = ::std::fs::File::open(hosts.clone())?;
-            let reader = ::std::io::BufReader::new(file);
-            use ::std::io::BufRead;
-            for line in reader.lines().take(processes) {
-                addresses.push(line?);
+        if args.hosts.is_empty() {
+            for index in 0..processes {
+                addresses.push(format!("localhost:{}", 2101 + index));
+            }
+        } else {
+            if let Ok(file) = ::std::fs::File::open(args.hosts[0].clone()) {
+                let reader = ::std::io::BufReader::new(file);
+                use ::std::io::BufRead;
+                for line in reader.lines().take(processes) {
+                    addresses.push(line?);
+                }
+            } else {
+                addresses.extend(args.hosts.iter().cloned());
             }
             if addresses.len() < processes {
                 bail!(
-                    "could only read {} addresses from {}, but -n: {}",
+                    "could only read {} addresses from {:?}, but -n: {}",
                     addresses.len(),
-                    hosts,
+                    args.hosts,
                     processes
                 );
-            }
-        } else {
-            for index in 0..processes {
-                addresses.push(format!("localhost:{}", 2101 + index));
             }
         }
 

@@ -10,11 +10,24 @@
 from materialize.mzcompose import Coordd, Dataflowd, Testdrive, Workflow
 
 daemons = [
-    Dataflowd(name="dataflowd", options="--workers 1", hostname="dataflowd"),
+    Dataflowd(
+        name="dataflowd_1",
+        options="--workers 2 --processes 2 --process 0 --hosts dataflowd_1:2101 dataflowd_2:2101",
+        hostname="dataflowd_1",
+        depends_on=["dataflowd_2"],
+        ports=[6876, 2101],
+    ),
+    Dataflowd(
+        name="dataflowd_2",
+        options="--workers 2 --processes 2 --process 1 --hosts dataflowd_1:2101 dataflowd_2:2101",
+        hostname="dataflowd_2",
+        depends_on=["dataflowd_1"],
+        ports=[6876, 2101],
+    ),
     Coordd(
         name="materialized",
-        options="--workers 1 --dataflowd-addr dataflowd:6876",
-        depends_on=["dataflowd"],
+        options="--workers 4 --dataflowd-addr dataflowd_1:6876 dataflowd_2:6876",
+        depends_on=["dataflowd_1", "dataflowd_2"],
     ),
 ]
 
