@@ -91,7 +91,7 @@ services = [
     #
     # Disabling catalog validation is preferable to using a versioned testdrive because that would
     # involve maintaining backwards compatibility for all testdrive commands.
-    Testdrive(name=TESTDRIVE_NOVALIDATE_CATALOG_SVC_NAME, validate_catalog=False)
+    Testdrive(name=TESTDRIVE_NOVALIDATE_CATALOG_SVC_NAME, validate_catalog=False),
 ]
 
 
