@@ -304,7 +304,7 @@ impl<R: Runtime> Runner<R> {
             let rx = rx.clone();
             threads.push(
                 thread::Builder::new()
-                    .name(format!("nemesis:worker-{}", idx))
+                    .name(format!("nemesis:work-{}", idx))
                     .spawn(move || {
                         let mut outstanding =
                             VecDeque::<FutureStep>::with_capacity(Self::MAX_OUTSTANDING);

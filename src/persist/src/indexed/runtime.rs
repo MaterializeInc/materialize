@@ -107,7 +107,7 @@ where
     let id = RuntimeId::new();
     let runtime_pool = pool.clone();
     let impl_handle = thread::Builder::new()
-        .name(format!("persist-runtime-{}", id.0))
+        .name("persist:runtime".into())
         .spawn(move || {
             let pool_guard = runtime_pool.enter();
             while runtime.work() {}
