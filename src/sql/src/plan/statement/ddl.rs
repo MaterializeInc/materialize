@@ -13,7 +13,6 @@
 //! `ALTER`, `CREATE`, and `DROP`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
 use std::iter;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -22,9 +21,7 @@ use anyhow::{anyhow, bail};
 use aws_arn::ARN;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use log::{debug, error};
-use protobuf::Message;
 use regex::Regex;
 use reqwest::Url;
 
@@ -42,20 +39,21 @@ use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy
 use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
-use protoc::Protoc;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
-use sql_parser::ast::{CreateSourceFormat, CsvColumns, KeyConstraint, SourceIncludeMetadataType};
+use sql_parser::ast::CsrSeedCompiledOrLegacy;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AvroSchema, ColumnOption,
     Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
     CreateRoleStatement, CreateSchemaStatement, CreateSinkConnector, CreateSinkStatement,
-    CreateSourceConnector, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions, CreateViewsStatement,
-    CsrConnector, CsrSeed, DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement,
-    Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency, ObjectType, ProtobufSchema,
-    Raw, SqlOption, Statement, UnresolvedObjectName, Value, ViewDefinition, WithOption,
+    CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CreateTableStatement,
+    CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
+    CreateViewsStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled, CsvColumns,
+    DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, ProtobufSchema, Raw,
+    SourceIncludeMetadataType, SqlOption, Statement, UnresolvedObjectName, Value, ViewDefinition,
+    WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -1025,21 +1023,17 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 }
                 AvroSchema::Csr {
                     csr_connector:
-                        CsrConnector {
+                        CsrConnectorAvro {
                             url,
                             seed,
                             with_options: ccsr_options,
                         },
                 } => {
-                    let url: Url = url.parse()?;
-                    let kafka_options =
-                        kafka_util::extract_config(&mut normalize::options(with_options))?;
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
-                        url,
-                        &kafka_options,
+                        url.parse()?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options))?,
                         normalize::options(&ccsr_options),
                     )?;
-
                     if let Some(seed) = seed {
                         Schema {
                             key_schema: seed.key_schema.clone(),
@@ -1048,7 +1042,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                             confluent_wire_format: true,
                         }
                     } else {
-                        unreachable!("CSR seed resolution should already have been called")
+                        unreachable!("CSR seed resolution should already have been called: Avro")
                     }
                 }
             };
@@ -1076,23 +1070,27 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
         }
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr {
-                csr_connector: CsrConnector { seed, .. },
+                csr_connector: CsrConnectorProto { seed, .. },
             } => {
-                if let Some(CsrSeed {
-                    key_schema,
-                    value_schema,
-                }) = seed
+                if let Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled { key, value })) =
+                    seed
                 {
-                    let value = DataEncoding::Protobuf(compile_proto(value_schema)?);
-                    if let Some(key_schema) = key_schema {
+                    let value = DataEncoding::Protobuf(ProtobufEncoding {
+                        descriptors: strconv::parse_bytes(&value.schema)?,
+                        message_name: value.message_name.clone(),
+                    });
+                    if let Some(key) = key {
                         return Ok(SourceDataEncoding::KeyValue {
-                            key: DataEncoding::Protobuf(compile_proto(key_schema)?),
+                            key: DataEncoding::Protobuf(ProtobufEncoding {
+                                descriptors: strconv::parse_bytes(&key.schema)?,
+                                message_name: key.message_name.clone(),
+                            }),
                             value,
                         });
                     }
                     value
                 } else {
-                    unreachable!("CSR seed resolution should already have been called")
+                    unreachable!("CSR seed resolution should already have been called: Proto")
                 }
             }
             ProtobufSchema::InlineSchema {
@@ -1139,54 +1137,6 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
         Format::Json => bail_unsupported!("JSON sources"),
         Format::Text => DataEncoding::Text,
     }))
-}
-
-fn compile_proto(schema: &str) -> Result<ProtobufEncoding, anyhow::Error> {
-    // Compiling a protobuf schema requires writing the schema to disk.
-    const DEFAULT_TEMP_SCHEMA_NAME: &str = "schema.proto";
-    let include_dir = tempfile::tempdir()?;
-    let schema_path = include_dir.path().join(DEFAULT_TEMP_SCHEMA_NAME);
-    let schema_bytes = strconv::parse_bytes(schema)?;
-    fs::write(&schema_path, &schema_bytes)?;
-
-    match Protoc::new()
-        .include(include_dir.path())
-        .input(schema_path)
-        .parse()
-    {
-        Ok(fds) => {
-            let message_name = fds
-                .get_file()
-                .iter()
-                .find(|f| f.get_name() == DEFAULT_TEMP_SCHEMA_NAME)
-                .map(|file| file.get_message_type().iter().next())
-                .flatten()
-                .map(|message| format!(".{}", message.get_name()))
-                .ok_or_else(|| anyhow!("protobuf compilation error"))?;
-            Ok(ProtobufEncoding {
-                descriptors: fds.write_to_bytes()?,
-                message_name,
-            })
-        }
-        Err(e) => {
-            lazy_static! {
-                static ref MISSING_IMPORT_ERROR: Regex = Regex::new(
-                    r#"protobuf path \\"(?P<reference>.*)\\" is not found in import path"#
-                )
-                .expect("known valid");
-            }
-
-            // Make protobuf import errors more user-friendly.
-            if let Some(captures) = MISSING_IMPORT_ERROR.captures(&e.to_string()) {
-                bail!(
-                    "unsupported protobuf schema reference {}",
-                    &captures["reference"]
-                )
-            } else {
-                Err(e)
-            }
-        }
-    }
 }
 
 fn get_key_envelope(
@@ -1394,7 +1344,7 @@ fn kafka_sink_builder(
     let format = match format {
         Some(Format::Avro(AvroSchema::Csr {
             csr_connector:
-                CsrConnector {
+                CsrConnectorAvro {
                     url,
                     seed,
                     with_options,
@@ -1565,7 +1515,7 @@ fn get_kafka_sink_consistency_config(
         }) => match topic_format {
             Some(Format::Avro(AvroSchema::Csr {
                 csr_connector:
-                    CsrConnector {
+                    CsrConnectorAvro {
                         url,
                         seed,
                         with_options,

@@ -1398,6 +1398,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Bail out if the current token is not an expected keyword, or consume it if it is
+    #[must_use]
     fn expect_keyword(&mut self, expected: Keyword) -> Result<(), ParserError> {
         if self.parse_keyword(expected) {
             Ok(())
@@ -1578,7 +1579,7 @@ impl<'a> Parser<'a> {
 
     fn parse_avro_schema(&mut self) -> Result<AvroSchema<Raw>, ParserError> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
-            let csr_connector = self.parse_csr_connector()?;
+            let csr_connector = self.parse_csr_connector_avro()?;
             AvroSchema::Csr { csr_connector }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
@@ -1607,7 +1608,7 @@ impl<'a> Parser<'a> {
 
     fn parse_protobuf_schema(&mut self) -> Result<ProtobufSchema<Raw>, ParserError> {
         if self.parse_keywords(&[USING, CONFLUENT, SCHEMA, REGISTRY]) {
-            let csr_connector = self.parse_csr_connector()?;
+            let csr_connector = self.parse_csr_connector_proto()?;
             Ok(ProtobufSchema::Csr { csr_connector })
         } else if self.parse_keyword(MESSAGE) {
             let message_name = self.parse_literal_string()?;
@@ -1626,7 +1627,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_csr_connector(&mut self) -> Result<CsrConnector<Raw>, ParserError> {
+    fn parse_csr_connector_avro(&mut self) -> Result<CsrConnectorAvro<Raw>, ParserError> {
         let url = self.parse_literal_string()?;
 
         let seed = if self.parse_keyword(SEED) {
@@ -1654,7 +1655,68 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        Ok(CsrConnector {
+        Ok(CsrConnectorAvro {
+            url,
+            seed,
+            with_options,
+        })
+    }
+
+    fn parse_csr_connector_proto(&mut self) -> Result<CsrConnectorProto<Raw>, ParserError> {
+        let url = self.parse_literal_string()?;
+
+        let seed = if self.parse_keyword(SEED) {
+            if self.parse_keyword(COMPILED) {
+                let key = if self.parse_keyword(KEY) {
+                    self.expect_keyword(SCHEMA)?;
+                    let schema = self.parse_literal_string()?;
+                    self.expect_keyword(MESSAGE)?;
+                    let message_name = self.parse_literal_string()?;
+                    Some(CsrSeedCompiledEncoding {
+                        schema,
+                        message_name,
+                    })
+                } else {
+                    None
+                };
+                self.expect_keywords(&[VALUE, SCHEMA])?;
+                let value_schema = self.parse_literal_string()?;
+                self.expect_keyword(MESSAGE)?;
+                let value_message_name = self.parse_literal_string()?;
+                Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled {
+                    value: CsrSeedCompiledEncoding {
+                        schema: value_schema,
+                        message_name: value_message_name,
+                    },
+                    key,
+                }))
+            } else {
+                let key_schema = if self.parse_keyword(KEY) {
+                    self.expect_keyword(SCHEMA)?;
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
+                self.expect_keywords(&[VALUE, SCHEMA])?;
+                let value_schema = self.parse_literal_string()?;
+                Some(CsrSeedCompiledOrLegacy::Legacy(CsrSeed {
+                    value_schema,
+                    key_schema,
+                }))
+            }
+        } else {
+            None
+        };
+
+        // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
+        // accept `WITH (...)` here.
+        let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
+            self.parse_opt_with_sql_options()?
+        } else {
+            vec![]
+        };
+
+        Ok(CsrConnectorProto {
             url,
             seed,
             with_options,

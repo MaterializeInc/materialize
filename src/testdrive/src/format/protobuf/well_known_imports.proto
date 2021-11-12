@@ -9,8 +9,9 @@
 
 syntax = "proto3";
 
-enum Choices {
-  ZERO = 0;
-  ONE = 1;
-  TWO = 2;
+import 'google/protobuf/timestamp.proto';
+
+message TimestampId {
+    string id = 1;
+    google.protobuf.Timestamp ts = 2;
 }

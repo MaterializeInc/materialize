@@ -7,10 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::bail;
+use std::fs;
+
+use anyhow::{anyhow, bail};
 use futures::executor::block_on;
 use lazy_static::lazy_static;
+use protobuf::Message;
+use protoc::Protoc;
+use regex::Regex;
+use repr::strconv;
 use semver::Version;
+use tempfile;
 use tokio::fs::File;
 
 use ore::collections::CollectionExt;
@@ -19,11 +26,13 @@ use sql::ast::visit_mut::{self, VisitMut};
 use sql::ast::{
     AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceConnector,
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
-    CreateViewStatement, CsrConnector, CsvColumns, DataType, Format, Function, Ident, Raw, RawName,
-    SqlOption, Statement, TableFactor, UnresolvedObjectName, Value, ViewDefinition, WithOption,
-    WithOptionValue,
+    CreateViewStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeed, CsrSeedCompiled,
+    CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy, CsvColumns, DataType, Format, Function,
+    Ident, ProtobufSchema, Raw, RawName, SqlOption, Statement, TableFactor, UnresolvedObjectName,
+    Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use sql::plan::resolve_names_stmt;
+use uuid::Uuid;
 
 use crate::catalog::storage::Transaction;
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
@@ -60,6 +69,7 @@ where
 lazy_static! {
     static ref VER_0_9_1: Version = Version::new(0, 9, 1);
     static ref VER_0_9_2: Version = Version::new(0, 9, 2);
+    static ref VER_0_9_13: Version = Version::new(0, 9, 13);
 }
 
 pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
@@ -83,6 +93,9 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         }
         if catalog_version < *VER_0_9_2 {
             ast_rewrite_csv_column_aliases_0_9_2(stmt)?;
+        }
+        if catalog_version < *VER_0_9_13 {
+            ast_rewrite_kafka_protobuf_source_text_to_compiled_0_9_13(stmt)?;
         }
         Ok(())
     })?;
@@ -121,6 +134,110 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+/// Rewrites Protobuf sources to store the compiled bytes rather than the text
+/// of the schema.
+fn ast_rewrite_kafka_protobuf_source_text_to_compiled_0_9_13(
+    stmt: &mut sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    fn compile_proto(schema: &str) -> Result<CsrSeedCompiledEncoding, anyhow::Error> {
+        let temp_schema_name: String = Uuid::new_v4().to_simple().to_string();
+        let include_dir = tempfile::tempdir()?;
+        let schema_path = include_dir.path().join(&temp_schema_name);
+        let schema_bytes = strconv::parse_bytes(schema)?;
+        fs::write(&schema_path, &schema_bytes)?;
+
+        match Protoc::new()
+            .include(include_dir.path())
+            .input(schema_path)
+            .parse()
+        {
+            Ok(fds) => {
+                let message_name = fds
+                    .get_file()
+                    .iter()
+                    .find(|f| f.get_name() == temp_schema_name)
+                    .map(|file| file.get_message_type().iter().next())
+                    .flatten()
+                    .map(|message| format!(".{}", message.get_name()))
+                    .ok_or_else(|| anyhow!("unable to compile temporary schema"))?;
+                let mut schema = String::new();
+                strconv::format_bytes(&mut schema, &fds.write_to_bytes()?);
+                Ok(CsrSeedCompiledEncoding {
+                    schema,
+                    message_name,
+                })
+            }
+            Err(e) => {
+                lazy_static! {
+                    static ref MISSING_IMPORT_ERROR: Regex = Regex::new(
+                        r#"protobuf path \\"(?P<reference>.*)\\" is not found in import path"#
+                    )
+                    .unwrap();
+                }
+
+                // Make protobuf import errors more user-friendly.
+                if let Some(captures) = MISSING_IMPORT_ERROR.captures(&e.to_string()) {
+                    bail!(
+                        "unsupported protobuf schema reference {}",
+                        &captures["reference"]
+                    )
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    fn do_upgrade(seed: &mut CsrSeedCompiledOrLegacy) -> Result<(), anyhow::Error> {
+        match seed {
+            CsrSeedCompiledOrLegacy::Legacy(CsrSeed {
+                key_schema,
+                value_schema,
+            }) => {
+                let key = match key_schema {
+                    Some(k) => Some(compile_proto(k)?),
+                    None => None,
+                };
+                *seed = CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled {
+                    value: compile_proto(value_schema)?,
+                    key,
+                });
+            }
+            CsrSeedCompiledOrLegacy::Compiled(_) => (),
+        }
+        Ok(())
+    }
+
+    if let Statement::CreateSource(CreateSourceStatement { format, .. }) = stmt {
+        match format {
+            CreateSourceFormat::Bare(value) => {
+                if let Format::Protobuf(ProtobufSchema::Csr {
+                    csr_connector: CsrConnectorProto { seed: Some(s), .. },
+                }) = value
+                {
+                    do_upgrade(s)?;
+                }
+            }
+            CreateSourceFormat::KeyValue { key, value } => {
+                if let Format::Protobuf(ProtobufSchema::Csr {
+                    csr_connector: CsrConnectorProto { seed: Some(s), .. },
+                }) = key
+                {
+                    do_upgrade(s)?;
+                }
+                if let Format::Protobuf(ProtobufSchema::Csr {
+                    csr_connector: CsrConnectorProto { seed: Some(s), .. },
+                }) = value
+                {
+                    do_upgrade(s)?;
+                }
+            }
+            CreateSourceFormat::None => {}
+        }
+    }
+    Ok(())
+}
 
 /// Rewrites all references of `pg_catalog.char` to `pg_catalog.text`, which
 /// matches the previous char implementation's semantics.
@@ -255,7 +372,7 @@ fn ast_insert_default_confluent_wire_format_0_7_1(
             format:
                 CreateSourceFormat::Bare(Format::Avro(AvroSchema::Csr {
                     csr_connector:
-                        CsrConnector {
+                        CsrConnectorAvro {
                             ref mut with_options,
                             ..
                         },
