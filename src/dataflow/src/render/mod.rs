@@ -1116,7 +1116,10 @@ pub mod plan {
             })
         }
 
-        /// Shards the plan across workers, partitioning responsibility for the `Constant` elements.
+        /// Partitions the plan into `parts` many disjoint pieces.
+        ///
+        /// This is used to partition `Plan::Constant` stages so that the work
+        /// can be distributed across many workers.
         pub fn partition_among(self, parts: usize) -> Vec<Self> {
             if parts == 0 {
                 Vec::new()

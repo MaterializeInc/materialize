@@ -185,7 +185,7 @@ pub enum Command {
 }
 
 impl Command {
-    /// Partitions the command among `peers` many workers.
+    /// Partitions the command into `parts` many disjoint pieces.
     ///
     /// This is used to subdivide commands that can be sharded across workers,
     /// for example the `plan::Constant` stages of dataflow plans, and the
