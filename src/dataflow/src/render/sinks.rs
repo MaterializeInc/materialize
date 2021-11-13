@@ -21,7 +21,7 @@ use timely::dataflow::Scope;
 use dataflow_types::*;
 use expr::GlobalId;
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
-use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
+use repr::{Datum, Diff, Row, Timestamp};
 
 use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
@@ -202,13 +202,9 @@ where
 {
     fn uses_keys(&self) -> bool;
 
-    fn get_key_desc(&self) -> Option<&RelationDesc>;
-
     fn get_key_indices(&self) -> Option<&[usize]>;
 
     fn get_relation_key_indices(&self) -> Option<&[usize]>;
-
-    fn get_value_desc(&self) -> &RelationDesc;
 
     fn render_continuous_sink(
         &self,

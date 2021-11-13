@@ -168,12 +168,3 @@ impl FromStr for PartitionId {
         }
     }
 }
-
-impl PartitionId {
-    pub fn kafka_id(&self) -> Option<i32> {
-        match self {
-            PartitionId::Kafka(id) => Some(*id),
-            _ => None,
-        }
-    }
-}
