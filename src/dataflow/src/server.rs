@@ -191,57 +191,63 @@ impl Command {
     /// for example the `plan::Constant` stages of dataflow plans, and the
     /// `Command::Insert` commands that may contain multiple updates.
     pub fn partition_among(self, parts: usize) -> Vec<Self> {
-        match self {
-            Command::CreateDataflows(dataflows) => {
-                let mut dataflows_parts = vec![Vec::new(); parts];
+        if parts == 0 {
+            Vec::new()
+        } else if parts == 1 {
+            vec![self]
+        } else {
+            match self {
+                Command::CreateDataflows(dataflows) => {
+                    let mut dataflows_parts = vec![Vec::new(); parts];
 
-                for dataflow in dataflows {
-                    // A list of descriptions of objects for each part to build.
-                    let mut builds_parts = vec![Vec::new(); parts];
-                    // Partition each build description among `parts`.
-                    for build_desc in dataflow.objects_to_build {
-                        let build_part = build_desc.view.partition_among(parts);
-                        for (view, objects_to_build) in
-                            build_part.into_iter().zip(builds_parts.iter_mut())
+                    for dataflow in dataflows {
+                        // A list of descriptions of objects for each part to build.
+                        let mut builds_parts = vec![Vec::new(); parts];
+                        // Partition each build description among `parts`.
+                        for build_desc in dataflow.objects_to_build {
+                            let build_part = build_desc.view.partition_among(parts);
+                            for (view, objects_to_build) in
+                                build_part.into_iter().zip(builds_parts.iter_mut())
+                            {
+                                objects_to_build.push(dataflow_types::BuildDesc {
+                                    id: build_desc.id,
+                                    view,
+                                });
+                            }
+                        }
+                        // Each list of build descriptions results in a dataflow description.
+                        for (dataflows_part, objects_to_build) in
+                            dataflows_parts.iter_mut().zip(builds_parts)
                         {
-                            objects_to_build.push(dataflow_types::BuildDesc {
-                                id: build_desc.id,
-                                view,
+                            dataflows_part.push(DataflowDescription {
+                                source_imports: dataflow.source_imports.clone(),
+                                index_imports: dataflow.index_imports.clone(),
+                                objects_to_build,
+                                index_exports: dataflow.index_exports.clone(),
+                                sink_exports: dataflow.sink_exports.clone(),
+                                dependent_objects: dataflow.dependent_objects.clone(),
+                                as_of: dataflow.as_of.clone(),
+                                debug_name: dataflow.debug_name.clone(),
                             });
                         }
                     }
-                    // Each list of build descriptions results in a dataflow description.
-                    for (dataflows_part, objects_to_build) in
-                        dataflows_parts.iter_mut().zip(builds_parts)
-                    {
-                        dataflows_part.push(DataflowDescription {
-                            source_imports: dataflow.source_imports.clone(),
-                            index_imports: dataflow.index_imports.clone(),
-                            objects_to_build,
-                            index_exports: dataflow.index_exports.clone(),
-                            sink_exports: dataflow.sink_exports.clone(),
-                            dependent_objects: dataflow.dependent_objects.clone(),
-                            as_of: dataflow.as_of.clone(),
-                            debug_name: dataflow.debug_name.clone(),
-                        });
+                    dataflows_parts
+                        .into_iter()
+                        .map(|dataflows| Command::CreateDataflows(dataflows))
+                        .collect()
+                }
+                Command::Insert { id, updates } => {
+                    let mut updates_parts = vec![Vec::new(); parts];
+                    for (index, update) in updates.into_iter().enumerate() {
+                        updates_parts[index % parts].push(update);
                     }
+                    updates_parts
+                        .into_iter()
+                        .map(|updates| Command::Insert { id, updates })
+                        .collect()
                 }
-                dataflows_parts
-                    .into_iter()
-                    .map(|dataflows| Command::CreateDataflows(dataflows))
-                    .collect()
+                command => vec![command; parts],
             }
-            Command::Insert { id, updates } => {
-                let mut updates_parts = vec![Vec::new(); parts];
-                for (index, update) in updates.into_iter().enumerate() {
-                    updates_parts[index % parts].push(update);
-                }
-                updates_parts
-                    .into_iter()
-                    .map(|updates| Command::Insert { id, updates })
-                    .collect()
-            }
-            command => vec![command; parts],
         }
     }
 }

@@ -1118,172 +1118,177 @@ pub mod plan {
 
         /// Shards the plan across workers, partitioning responsibility for the `Constant` elements.
         pub fn partition_among(self, parts: usize) -> Vec<Self> {
-            match self {
-                // For constants, balance the rows across the workers.
-                Plan::Constant { rows } => match rows {
-                    Ok(rows) => {
-                        let mut rows_parts = vec![Vec::new(); parts];
-                        for (index, row) in rows.into_iter().enumerate() {
-                            rows_parts[index % parts].push(row);
+            if parts == 0 {
+                Vec::new()
+            } else if parts == 1 {
+                vec![self]
+            } else {
+                match self {
+                    // For constants, balance the rows across the workers.
+                    Plan::Constant { rows } => match rows {
+                        Ok(rows) => {
+                            let mut rows_parts = vec![Vec::new(); parts];
+                            for (index, row) in rows.into_iter().enumerate() {
+                                rows_parts[index % parts].push(row);
+                            }
+                            rows_parts
+                                .into_iter()
+                                .map(|rows| Plan::Constant { rows: Ok(rows) })
+                                .collect()
                         }
-                        rows_parts
-                            .into_iter()
-                            .map(|rows| Plan::Constant { rows: Ok(rows) })
-                            .collect()
-                    }
-                    Err(err) => {
-                        let mut result = vec![
-                            Plan::Constant {
-                                rows: Ok(Vec::new())
-                            };
-                            parts
-                        ];
-                        assert!(parts > 0);
-                        result[0] = Plan::Constant { rows: Err(err) };
-                        result
-                    }
-                },
+                        Err(err) => {
+                            let mut result = vec![
+                                Plan::Constant {
+                                    rows: Ok(Vec::new())
+                                };
+                                parts
+                            ];
+                            result[0] = Plan::Constant { rows: Err(err) };
+                            result
+                        }
+                    },
 
-                // For all other variants, just replace inputs with appropriately sharded versions.
-                // This is surprisingly verbose, but that is all it is doing.
-                Plan::Get {
-                    id,
-                    keys,
-                    mfp,
-                    key_val,
-                } => vec![
+                    // For all other variants, just replace inputs with appropriately sharded versions.
+                    // This is surprisingly verbose, but that is all it is doing.
                     Plan::Get {
                         id,
                         keys,
                         mfp,
                         key_val,
-                    };
-                    parts
-                ],
-                Plan::Let { value, body, id } => {
-                    let value_parts = value.partition_among(parts);
-                    let body_parts = body.partition_among(parts);
-                    value_parts
-                        .into_iter()
-                        .zip(body_parts)
-                        .map(|(value, body)| Plan::Let {
-                            value: Box::new(value),
-                            body: Box::new(body),
+                    } => vec![
+                        Plan::Get {
                             id,
-                        })
-                        .collect()
-                }
-                Plan::Mfp {
-                    input,
-                    mfp,
-                    key_val,
-                } => input
-                    .partition_among(parts)
-                    .into_iter()
-                    .map(|input| Plan::Mfp {
-                        input: Box::new(input),
-                        mfp: mfp.clone(),
-                        key_val: key_val.clone(),
-                    })
-                    .collect(),
-                Plan::FlatMap {
-                    input,
-                    func,
-                    exprs,
-                    mfp,
-                } => input
-                    .partition_among(parts)
-                    .into_iter()
-                    .map(|input| Plan::FlatMap {
-                        input: Box::new(input),
-                        func: func.clone(),
-                        exprs: exprs.clone(),
-                        mfp: mfp.clone(),
-                    })
-                    .collect(),
-                Plan::Join { inputs, plan } => {
-                    let mut inputs_parts = vec![Vec::new(); parts];
-                    for input in inputs.into_iter() {
-                        for (index, input_part) in
-                            input.partition_among(parts).into_iter().enumerate()
-                        {
-                            inputs_parts[index].push(input_part);
-                        }
+                            keys,
+                            mfp,
+                            key_val,
+                        };
+                        parts
+                    ],
+                    Plan::Let { value, body, id } => {
+                        let value_parts = value.partition_among(parts);
+                        let body_parts = body.partition_among(parts);
+                        value_parts
+                            .into_iter()
+                            .zip(body_parts)
+                            .map(|(value, body)| Plan::Let {
+                                value: Box::new(value),
+                                body: Box::new(body),
+                                id,
+                            })
+                            .collect()
                     }
-                    inputs_parts
+                    Plan::Mfp {
+                        input,
+                        mfp,
+                        key_val,
+                    } => input
+                        .partition_among(parts)
                         .into_iter()
-                        .map(|inputs| Plan::Join {
-                            inputs,
+                        .map(|input| Plan::Mfp {
+                            input: Box::new(input),
+                            mfp: mfp.clone(),
+                            key_val: key_val.clone(),
+                        })
+                        .collect(),
+                    Plan::FlatMap {
+                        input,
+                        func,
+                        exprs,
+                        mfp,
+                    } => input
+                        .partition_among(parts)
+                        .into_iter()
+                        .map(|input| Plan::FlatMap {
+                            input: Box::new(input),
+                            func: func.clone(),
+                            exprs: exprs.clone(),
+                            mfp: mfp.clone(),
+                        })
+                        .collect(),
+                    Plan::Join { inputs, plan } => {
+                        let mut inputs_parts = vec![Vec::new(); parts];
+                        for input in inputs.into_iter() {
+                            for (index, input_part) in
+                                input.partition_among(parts).into_iter().enumerate()
+                            {
+                                inputs_parts[index].push(input_part);
+                            }
+                        }
+                        inputs_parts
+                            .into_iter()
+                            .map(|inputs| Plan::Join {
+                                inputs,
+                                plan: plan.clone(),
+                            })
+                            .collect()
+                    }
+                    Plan::Reduce {
+                        input,
+                        key_val_plan,
+                        plan,
+                        permutation,
+                    } => input
+                        .partition_among(parts)
+                        .into_iter()
+                        .map(|input| Plan::Reduce {
+                            input: Box::new(input),
+                            key_val_plan: key_val_plan.clone(),
                             plan: plan.clone(),
+                            permutation: permutation.clone(),
                         })
-                        .collect()
-                }
-                Plan::Reduce {
-                    input,
-                    key_val_plan,
-                    plan,
-                    permutation,
-                } => input
-                    .partition_among(parts)
-                    .into_iter()
-                    .map(|input| Plan::Reduce {
-                        input: Box::new(input),
-                        key_val_plan: key_val_plan.clone(),
-                        plan: plan.clone(),
-                        permutation: permutation.clone(),
-                    })
-                    .collect(),
-                Plan::TopK { input, top_k_plan } => input
-                    .partition_among(parts)
-                    .into_iter()
-                    .map(|input| Plan::TopK {
-                        input: Box::new(input),
-                        top_k_plan: top_k_plan.clone(),
-                    })
-                    .collect(),
-                Plan::Negate { input } => input
-                    .partition_among(parts)
-                    .into_iter()
-                    .map(|input| Plan::Negate {
-                        input: Box::new(input),
-                    })
-                    .collect(),
-                Plan::Threshold {
-                    input,
-                    threshold_plan,
-                } => input
-                    .partition_among(parts)
-                    .into_iter()
-                    .map(|input| Plan::Threshold {
-                        input: Box::new(input),
-                        threshold_plan: threshold_plan.clone(),
-                    })
-                    .collect(),
-                Plan::Union { inputs } => {
-                    let mut inputs_parts = vec![Vec::new(); parts];
-                    for input in inputs.into_iter() {
-                        for (index, input_part) in
-                            input.partition_among(parts).into_iter().enumerate()
-                        {
-                            inputs_parts[index].push(input_part);
-                        }
-                    }
-                    inputs_parts
+                        .collect(),
+                    Plan::TopK { input, top_k_plan } => input
+                        .partition_among(parts)
                         .into_iter()
-                        .map(|inputs| Plan::Union { inputs })
-                        .collect()
+                        .map(|input| Plan::TopK {
+                            input: Box::new(input),
+                            top_k_plan: top_k_plan.clone(),
+                        })
+                        .collect(),
+                    Plan::Negate { input } => input
+                        .partition_among(parts)
+                        .into_iter()
+                        .map(|input| Plan::Negate {
+                            input: Box::new(input),
+                        })
+                        .collect(),
+                    Plan::Threshold {
+                        input,
+                        threshold_plan,
+                    } => input
+                        .partition_among(parts)
+                        .into_iter()
+                        .map(|input| Plan::Threshold {
+                            input: Box::new(input),
+                            threshold_plan: threshold_plan.clone(),
+                        })
+                        .collect(),
+                    Plan::Union { inputs } => {
+                        let mut inputs_parts = vec![Vec::new(); parts];
+                        for input in inputs.into_iter() {
+                            for (index, input_part) in
+                                input.partition_among(parts).into_iter().enumerate()
+                            {
+                                inputs_parts[index].push(input_part);
+                            }
+                        }
+                        inputs_parts
+                            .into_iter()
+                            .map(|inputs| Plan::Union { inputs })
+                            .collect()
+                    }
+                    Plan::ArrangeBy {
+                        input,
+                        ensure_arrangements,
+                    } => input
+                        .partition_among(parts)
+                        .into_iter()
+                        .map(|input| Plan::ArrangeBy {
+                            input: Box::new(input),
+                            ensure_arrangements: ensure_arrangements.clone(),
+                        })
+                        .collect(),
                 }
-                Plan::ArrangeBy {
-                    input,
-                    ensure_arrangements,
-                } => input
-                    .partition_among(parts)
-                    .into_iter()
-                    .map(|input| Plan::ArrangeBy {
-                        input: Box::new(input),
-                        ensure_arrangements: ensure_arrangements.clone(),
-                    })
-                    .collect(),
             }
         }
     }
