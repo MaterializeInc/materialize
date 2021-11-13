@@ -9,7 +9,7 @@
 
 //! Types related to the creation of dataflow sources.
 
-use dataflow_types::{DataflowError, SourceErrorDetails};
+use dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
 use mz_avro::types::Value;
 use persist::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
 use persist::indexed::Snapshot;
@@ -159,9 +159,9 @@ pub(crate) struct SourceData {
 /// The output of the decoding operator
 pub struct DecodeResult {
     /// The decoded key
-    pub key: Option<Result<Row, DataflowError>>,
+    pub key: Option<Result<Row, DecodeError>>,
     /// The decoded value
-    pub value: Option<Result<Row, DataflowError>>,
+    pub value: Option<Result<Row, DecodeError>>,
     /// The index of the decoded value in the stream
     pub position: Option<i64>,
 }

@@ -9,7 +9,7 @@
 
 use futures::executor::block_on;
 
-use dataflow_types::{DataflowError, DecodeError};
+use dataflow_types::DecodeError;
 use interchange::avro::{Decoder, EnvelopeType};
 use repr::Row;
 
@@ -46,16 +46,16 @@ impl AvroDecoderState {
         &mut self,
         bytes: &mut &[u8],
         upstream_time_millis: Option<i64>,
-    ) -> Result<Option<Row>, DataflowError> {
+    ) -> Result<Option<Row>, DecodeError> {
         match block_on(self.decoder.decode(bytes, upstream_time_millis)) {
             Ok(row) => {
                 self.events_success += 1;
                 Ok(Some(row))
             }
-            Err(err) => Err(DataflowError::DecodeError(DecodeError::Text(format!(
+            Err(err) => Err(DecodeError::Text(format!(
                 "avro deserialization error: {:#}",
                 err
-            )))),
+            ))),
         }
     }
 }
