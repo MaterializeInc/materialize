@@ -105,22 +105,13 @@ impl dataflow::Client for RemoteClient {
     }
 
     async fn send(&mut self, cmd: dataflow::Command) {
-        // TODO: something better than panicking.
         trace!("Broadcasting dataflow command: {:?}", cmd);
         let num_conns = self.sinks.len();
-        if num_conns == 1 {
-            // This special case avoids a clone of the whole plan.
-            self.sinks[0]
-                .send(cmd)
+        for (sink, cmd_part) in self.sinks.iter_mut().zip(cmd.partition_among(num_conns)) {
+            // TODO: something better than panicking.
+            sink.send(cmd_part)
                 .await
                 .expect("worker command receiver should not drop first");
-        } else {
-            for (index, sendpoint) in self.sinks.iter_mut().enumerate() {
-                sendpoint
-                    .send(cmd.clone_for_worker(index, num_conns))
-                    .await
-                    .expect("worker command receiver should not drop first")
-            }
         }
     }
 
