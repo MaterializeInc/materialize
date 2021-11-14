@@ -185,31 +185,41 @@ pub enum Command {
 }
 
 impl Command {
-    /// Produces a copy of the command suitable for the indicated worker.
+    /// Partitions the command into `parts` many disjoint pieces.
     ///
     /// This is used to subdivide commands that can be sharded across workers,
     /// for example the `plan::Constant` stages of dataflow plans, and the
     /// `Command::Insert` commands that may contain multiple updates.
-    pub fn clone_for_worker(&self, index: usize, peers: usize) -> Self {
-        match self {
-            Command::CreateDataflows(dataflows) => {
-                Command::CreateDataflows(
-                    dataflows
-                        .iter()
-                        .map(|dataflow| {
-                            // We do this here, because it is hard to have `dataflow_types::Dataflow` know about
-                            // `dataflow::Plan`.
-                            // Each dataflow we construct should shard its `Constant` collections.
-                            let objects_to_build = dataflow
-                                .objects_to_build
-                                .iter()
-                                .map(|description| dataflow_types::BuildDesc {
-                                    id: description.id,
-                                    view: description.view.clone_for_worker(index, peers),
-                                })
-                                .collect::<Vec<_>>();
-                            // Clone all fields, other than `objects_to_build` defined above.
-                            DataflowDescription {
+    pub fn partition_among(self, parts: usize) -> Vec<Self> {
+        if parts == 0 {
+            Vec::new()
+        } else if parts == 1 {
+            vec![self]
+        } else {
+            match self {
+                Command::CreateDataflows(dataflows) => {
+                    let mut dataflows_parts = vec![Vec::new(); parts];
+
+                    for dataflow in dataflows {
+                        // A list of descriptions of objects for each part to build.
+                        let mut builds_parts = vec![Vec::new(); parts];
+                        // Partition each build description among `parts`.
+                        for build_desc in dataflow.objects_to_build {
+                            let build_part = build_desc.view.partition_among(parts);
+                            for (view, objects_to_build) in
+                                build_part.into_iter().zip(builds_parts.iter_mut())
+                            {
+                                objects_to_build.push(dataflow_types::BuildDesc {
+                                    id: build_desc.id,
+                                    view,
+                                });
+                            }
+                        }
+                        // Each list of build descriptions results in a dataflow description.
+                        for (dataflows_part, objects_to_build) in
+                            dataflows_parts.iter_mut().zip(builds_parts)
+                        {
+                            dataflows_part.push(DataflowDescription {
                                 source_imports: dataflow.source_imports.clone(),
                                 index_imports: dataflow.index_imports.clone(),
                                 objects_to_build,
@@ -218,21 +228,26 @@ impl Command {
                                 dependent_objects: dataflow.dependent_objects.clone(),
                                 as_of: dataflow.as_of.clone(),
                                 debug_name: dataflow.debug_name.clone(),
-                            }
-                        })
-                        .collect(),
-                )
+                            });
+                        }
+                    }
+                    dataflows_parts
+                        .into_iter()
+                        .map(|dataflows| Command::CreateDataflows(dataflows))
+                        .collect()
+                }
+                Command::Insert { id, updates } => {
+                    let mut updates_parts = vec![Vec::new(); parts];
+                    for (index, update) in updates.into_iter().enumerate() {
+                        updates_parts[index % parts].push(update);
+                    }
+                    updates_parts
+                        .into_iter()
+                        .map(|updates| Command::Insert { id, updates })
+                        .collect()
+                }
+                command => vec![command; parts],
             }
-            Command::Insert { id, updates } => Command::Insert {
-                id: *id,
-                updates: updates
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| i % peers == index)
-                    .map(|(_, update)| update.clone())
-                    .collect(),
-            },
-            command => command.clone(),
         }
     }
 }
@@ -344,18 +359,10 @@ impl Client for LocalClient {
 
     async fn send(&mut self, cmd: Command) {
         trace!("Broadcasting dataflow command: {:?}", cmd);
-        let num_workers = self.num_workers();
-        if num_workers == 1 {
-            // This special case avoids a clone of the whole plan.
-            self.worker_txs[0]
-                .send(cmd)
-                .expect("worker command receiver should not drop first");
-        } else {
-            for (index, sendpoint) in self.worker_txs.iter().enumerate() {
-                sendpoint
-                    .send(cmd.clone_for_worker(index, self.num_workers()))
-                    .expect("worker command receiver should not drop first")
-            }
+        let cmd_parts = cmd.partition_among(self.num_workers());
+        for (tx, cmd_part) in self.worker_txs.iter().zip(cmd_parts) {
+            tx.send(cmd_part)
+                .expect("worker command receiver should not drop first")
         }
         for thread in &self.worker_threads {
             thread.unpark()
