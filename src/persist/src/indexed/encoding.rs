@@ -64,6 +64,8 @@ pub struct LogEntry {
 ///   because truncating the unnecessary elements out of unsealed is fallible, and
 ///   is allowed to lag behind the migration of new data into trace)
 /// - id_mapping.len() + graveyard.len() is == next_stream_id.
+/// - All of the keys for trace and unsealed batches are unique across all persisted
+///   streams.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BlobMeta {
     /// The next internal stream id to assign.
@@ -470,6 +472,28 @@ impl BlobMeta {
                 )));
             }
         }
+
+        let mut batch_keys = HashSet::new();
+        for u in self.unsealeds.iter() {
+            for batch in u.batches.iter() {
+                if batch_keys.contains(&batch.key) {
+                    return Err(
+                        format!("duplicate batch key found in unsealed: {}", batch.key).into(),
+                    );
+                }
+                batch_keys.insert(batch.key.clone());
+            }
+        }
+
+        for t in self.traces.iter() {
+            for batch in t.batches.iter() {
+                if batch_keys.contains(&batch.key) {
+                    return Err(format!("duplicate batch key found in trace: {}", batch.key).into());
+                }
+                batch_keys.insert(batch.key.clone());
+            }
+        }
+
         Ok(())
     }
 
@@ -1468,6 +1492,61 @@ mod tests {
             Err(Error::from(
                 "next stream Id(2), but only registered 1 ids and deleted 0 ids"
             ))
+        );
+
+        let b = BlobMeta {
+            next_stream_id: Id(2),
+            id_mapping: vec![("0", Id(0)).into(), ("1", Id(1)).into()],
+            unsealeds_seqno_upper: SeqNo(2),
+            unsealeds: vec![
+                UnsealedMeta {
+                    id: Id(0),
+                    ts_lower: vec![0].into(),
+                    batches: vec![unsealed_batch_meta(0, 1)],
+                    next_blob_id: 0,
+                },
+                UnsealedMeta {
+                    id: Id(1),
+                    ts_lower: vec![0].into(),
+                    batches: vec![unsealed_batch_meta(0, 1)],
+                    next_blob_id: 0,
+                },
+            ],
+            traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(1))],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("duplicate batch key found in unsealed: "))
+        );
+
+        let b = BlobMeta {
+            next_stream_id: Id(2),
+            id_mapping: vec![("0", Id(0)).into(), ("1", Id(1)).into()],
+            unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(1))],
+            traces: vec![
+                TraceMeta {
+                    id: Id(0),
+                    batches: vec![batch_meta(0, 1)],
+                    since: Antichain::from_elem(0),
+                    seal: Antichain::from_elem(1),
+                    next_blob_id: 0,
+                },
+                TraceMeta {
+                    id: Id(1),
+                    batches: vec![batch_meta(0, 1)],
+                    since: Antichain::from_elem(0),
+                    seal: Antichain::from_elem(1),
+                    next_blob_id: 0,
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("duplicate batch key found in trace: "))
         );
     }
 
