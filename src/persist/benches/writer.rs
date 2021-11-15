@@ -35,7 +35,7 @@ use persist::indexed::metrics::Metrics;
 use persist::indexed::Indexed;
 use persist::mem::MemRegistry;
 use persist::pfuture::{PFuture, PFutureHandle};
-use persist::storage::{Blob, LockInfo, Log, SeqNo};
+use persist::storage::{Atomicity, Blob, LockInfo, Log, SeqNo};
 
 fn new_file_log(name: &str, parent: &Path) -> FileLog {
     let file_log_dir = parent.join(name);
@@ -91,7 +91,7 @@ fn bench_set<B: Blob>(writer: &mut B, data: Vec<u8>, b: &mut Bencher) {
         futures_executor::block_on(writer.set(
             &format!("{}", rng.gen::<usize>()),
             data.clone(),
-            false,
+            Atomicity::AllowNonAtomic,
         ))
         .expect("failed to write data");
     })

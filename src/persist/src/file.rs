@@ -21,7 +21,7 @@ use fail::fail_point;
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::storage::{Blob, LockInfo, Log, SeqNo};
+use crate::storage::{Atomicity, Blob, LockInfo, Log, SeqNo};
 
 /// Inner struct handles to separate files that store the data and metadata about the
 /// most recently truncated sequence number for [FileLog].
@@ -327,47 +327,50 @@ impl Blob for FileBlob {
         Ok(Some(buf))
     }
 
-    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+    async fn set(&mut self, key: &str, value: Vec<u8>, atomic: Atomicity) -> Result<(), Error> {
         let file_path = self.blob_path(key)?;
-        if allow_overwrite {
-            // allow_overwrite=true requires atomic writes, so write to a temp
-            // file and rename it into place.
-            let mut tmp_name = file_path.clone();
-            debug_assert_eq!(tmp_name.extension(), None);
-            tmp_name.set_extension("tmp");
-            // NB: Don't use create_new(true) for this so that if we have a
-            // partial one from a previous crash, it will just get overwritten
-            // (which is safe).
-            let mut file = File::create(&tmp_name)?;
-            file.write_all(&value[..])?;
+        match atomic {
+            Atomicity::RequireAtomic => {
+                // To implement require_atomic, write to a temp file and rename
+                // it into place.
+                let mut tmp_name = file_path.clone();
+                debug_assert_eq!(tmp_name.extension(), None);
+                tmp_name.set_extension("tmp");
+                // NB: Don't use create_new(true) for this so that if we have a
+                // partial one from a previous crash, it will just get
+                // overwritten (which is safe).
+                let mut file = File::create(&tmp_name)?;
+                file.write_all(&value[..])?;
 
-            fail_point!("fileblob_set_sync", |_| {
-                Err(Error::from(format!(
-                    "FileBlob::set sync allow_overwrite fail point reached for file {:?}",
-                    file_path
-                )))
-            });
+                fail_point!("fileblob_set_sync", |_| {
+                    Err(Error::from(format!(
+                        "FileBlob::set sync fail point reached for file {:?}",
+                        file_path
+                    )))
+                });
 
-            file.sync_all()?;
-            fs::rename(tmp_name, &file_path)?;
-            // TODO: We also need to fsync the directory to be truly confidant
-            // that this is permanently there. It doesn't seem like this is
-            // available in the stdlib, find a crate for it?
-        } else {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&file_path)?;
-            file.write_all(&value[..])?;
+                file.sync_all()?;
+                fs::rename(tmp_name, &file_path)?;
+                // TODO: We also need to fsync the directory to be truly
+                // confidant that this is permanently there. It doesn't seem
+                // like this is available in the stdlib, find a crate for it?
+            }
+            Atomicity::AllowNonAtomic => {
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .open(&file_path)?;
+                file.write_all(&value[..])?;
 
-            fail_point!("fileblob_set_sync", |_| {
-                Err(Error::from(format!(
-                    "FileBlob::set sync fail point reached for file {:?}",
-                    file_path
-                )))
-            });
+                fail_point!("fileblob_set_sync", |_| {
+                    Err(Error::from(format!(
+                        "FileBlob::set sync fail point reached for file {:?}",
+                        file_path
+                    )))
+                });
 
-            file.sync_all()?;
+                file.sync_all()?;
+            }
         }
         Ok(())
     }
