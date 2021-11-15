@@ -6,13 +6,11 @@ main:
 parent: 'sql-functions'
 ---
 
-If `FILTER` is specified, then only the input rows for which the `filter_clause` evaluates to true are fed to the [aggregate function](../#aggregate-func); other rows are discarded
+If `FILTER` is specified, then only the input rows for which the `filter_clause` evaluates to true are fed to the [aggregate function](../#aggregate-func); other rows are discarded.
 
 ## Syntax
 
 {{< diagram "aggregate-with-filter.svg" >}}
-
-## Details
 
 ## Examples
 
