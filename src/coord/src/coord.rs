@@ -51,11 +51,13 @@
 //!   For correctness' sake, the coordinator never chooses to read at a time
 //!   less than an arrangement's `since`.
 //!
-//! - `upper` is one millisecond greater than the most recent time that you can
-//!   read from sources and receive an immediate response.
+//! - `upper` is the first time after the most recent time that you can read
+//!   from sources and receive an immediate response. Alternately, it is the
+//!   least time at which the data may still change (that is the reason we may
+//!   not be able to respond immediately).
 //!
-//!   Reads at times >= `upper` do not immediately return because the answer
-//!   isn't known yet. However, once the `upper` is >= the specified read time,
+//!   Reads at times >= `upper` may not immediately return because the answer
+//!   isn't known yet. However, once the `upper` is > the specified read time,
 //!   the read can return.
 //!
 //!   For the sake of returned values' freshness, the coordinator prefers
@@ -76,7 +78,7 @@
 //!
 //! ```nofmt
 //! ####s----u?????
-//!      ||||||||||
+//!     |||||||||||
 //! ```
 //!
 
