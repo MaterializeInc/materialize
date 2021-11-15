@@ -1542,7 +1542,41 @@ GROUP BY operator, worker",
     needs_logs: true,
 };
 
-// Next id BuiltinView: 5034
+pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
+    name: "pg_constraint",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_constraint AS SELECT
+    NULL::pg_catalog.oid as oid,
+    NULL::pg_catalog.text as conname,
+    NULL::pg_catalog.oid as connamespace,
+    NULL::pg_catalog.char as contype,
+    NULL::pg_catalog.bool as condeferrable,
+    NULL::pg_catalog.bool as condeferred,
+    NULL::pg_catalog.bool as convalidated,
+    NULL::pg_catalog.oid as conrelid,
+    NULL::pg_catalog.oid as contypid,
+    NULL::pg_catalog.oid as conindid,
+    NULL::pg_catalog.oid as conparentid,
+    NULL::pg_catalog.oid as confrelid,
+    NULL::pg_catalog.char as confupdtype,
+    NULL::pg_catalog.char as confdeltype,
+    NULL::pg_catalog.char as confmatchtype,
+    NULL::pg_catalog.bool as conislocal,
+    NULL::pg_catalog.int4 as coninhcount,
+    NULL::pg_catalog.bool as connoinherit,
+    NULL::pg_catalog.int2[] as conkey,
+    NULL::pg_catalog.int2[] as confkey,
+    NULL::pg_catalog.oid[] as conpfeqop,
+    NULL::pg_catalog.oid[] as conppeqop,
+    NULL::pg_catalog.oid[] as conffeqop,
+    NULL::pg_catalog.oid[] as conexclop,
+    NULL::pg_catalog.text as conbin
+    WHERE false",
+    id: GlobalId::System(5034),
+    needs_logs: false,
+};
+
+// Next id BuiltinView: 5035
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
@@ -1678,6 +1712,7 @@ lazy_static! {
             Builtin::View(&PG_ENUM),
             Builtin::View(&PG_ATTRDEF),
             Builtin::View(&PG_SETTINGS),
+            Builtin::View(&PG_CONSTRAINT),
         ];
 
         // TODO(sploiselle): assign static global IDs to functions
