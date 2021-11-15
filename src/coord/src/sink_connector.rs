@@ -107,49 +107,41 @@ fn get_latest_ts(
         )
     })?;
 
-    let mut latest_message = None;
-    while let Some(message) = get_next_message(consumer, timeout)? {
-        latest_message = Some(message);
+    let (hi, lo) = consumer
+        .fetch_watermarks(consistency_topic, 0, timeout)
+        .map_err(|e| {
+            anyhow!(
+                "Failed to fetch metadata while reading from consistency topic: {}",
+                e
+            )
+        })?;
+    let hi: u64 = hi.try_into()?;
+
+    // Empty topic
+    if hi == 0 {
+        return Ok(None);
     }
 
-    if latest_message.is_none() {
-        // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
-        match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
-            Ok((lo, hi)) => {
-                if hi == 0 {
-                    return Ok(None);
-                } else {
-                    bail!(
-                        "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
-                        consistency_topic,
-                        partition,
-                        lo,
-                        hi
-                    );
-                }
-            }
-            Err(e) => {
-                bail!(
-                    "Failed to fetch metadata while reading from consistency topic: {}",
-                    e
-                );
-            }
+    while let Some(message) = get_next_message(consumer, timeout)? {
+        if Some(hi) == maybe_decode_consistency_end_record(&message, consistency_topic)? {
+            return Ok(Some(hi));
         }
     }
 
-    let latest_message = latest_message.expect("known to exist");
-
-    // the latest valid message should be an END message. If not, things have
-    // gone wrong!
-    let timestamp = decode_consistency_end_record(&latest_message, consistency_topic)?;
-
-    Ok(Some(timestamp))
+    bail!(
+        "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
+        consistency_topic,
+        partition,
+        lo,
+        hi
+    );
 }
 
-fn decode_consistency_end_record(
+// Errors if cannot decode message; returns `None` if not `END` message.
+fn maybe_decode_consistency_end_record(
     bytes: &[u8],
     consistency_topic: &str,
-) -> Result<Timestamp, anyhow::Error> {
+) -> Result<Option<Timestamp>, anyhow::Error> {
     // The first 5 bytes are reserved for the schema id/schema registry information
     let mut bytes = &bytes[5..];
     let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
@@ -162,7 +154,7 @@ fn decode_consistency_end_record(
         match (status, id) {
             (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
                 if let Ok(ts) = id.parse::<u64>() {
-                    Ok(Timestamp::from(ts))
+                    Ok(Some(Timestamp::from(ts)))
                 } else {
                     bail!(
                         "Malformed consistency record, failed to parse timestamp {} in topic {}",
@@ -171,11 +163,7 @@ fn decode_consistency_end_record(
                     );
                 }
             }
-            _ => {
-                bail!(
-                    "Malformed consistency record in topic {}, expected END with a timestamp but record was {:?}, tried matching {:?} {:?}",
-                    consistency_topic, m, status, id);
-            }
+            _ => Ok(None),
         }
     } else {
         bail!("Failed to decode consistency topic message, was not a parseable record");
