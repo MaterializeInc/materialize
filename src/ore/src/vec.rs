@@ -29,7 +29,7 @@ pub fn repurpose_allocation<T1, T2>(mut v: Vec<T1>) -> Vec<T2> {
     let cap = v.capacity();
     let p = v.as_mut_ptr().cast();
     std::mem::forget(v);
-    // This is safe because `T1` and `T2` have the same size and alignment,
+    // This is sound because `T1` and `T2` have the same size and alignment,
     // `p`'s allocation is no longer owned by `v` (since that has been forgotten),
     // and `p` was previously allocated with capacity `cap`.
     unsafe { Vec::from_raw_parts(p, 0, cap) }
