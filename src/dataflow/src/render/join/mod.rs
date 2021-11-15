@@ -40,6 +40,8 @@ use repr::{Datum, Row, RowArena};
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
+use super::Permutation;
+
 /// A complete enumeration of possible join plans to render.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum JoinPlan {
@@ -60,6 +62,14 @@ struct JoinClosure {
 }
 
 impl JoinClosure {
+    pub fn permute(&mut self, p: &Permutation) {
+        p.permute_safe_mfp_plan(&mut self.before);
+        for key in &mut self.ready_equivalences {
+            for expr in key {
+                expr.permute(&p.permutation);
+            }
+        }
+    }
     /// Applies per-row filtering and logic.
     #[inline(always)]
     fn apply<'a>(

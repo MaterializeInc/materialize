@@ -116,7 +116,7 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, MirScalarExpr};
+use expr::{GlobalId, Id, MapFilterProject, MfpPlan, MirScalarExpr, SafeMfpPlan};
 use itertools::Itertools;
 use ore::collections::CollectionExt as _;
 use ore::now::NowFn;
@@ -1515,5 +1515,26 @@ impl Permutation {
     /// The arity of the permutation
     pub fn arity(&self) -> usize {
         self.permutation.len()
+    }
+
+    pub fn as_map_and_new_arity(&self) -> (HashMap<usize, usize>, usize) {
+        (
+            self.permutation.iter().cloned().enumerate().collect(),
+            self.permutation.iter().cloned().max().unwrap_or(0) + 1,
+        )
+    }
+
+    pub fn permute_mfp(&self, mfp: &mut MapFilterProject) {
+        let (map, new_arity) = self.as_map_and_new_arity();
+        mfp.permute(map, new_arity);
+    }
+
+    pub fn permute_mfp_plan(&self, mfp: &mut MfpPlan) {
+        mfp.permute(&self.permutation);
+    }
+
+    pub fn permute_safe_mfp_plan(&self, mfp: &mut SafeMfpPlan) {
+        let (map, new_arity) = self.as_map_and_new_arity();
+	SafeMfpPlan::permute(mfp, map, new_arity);
     }
 }

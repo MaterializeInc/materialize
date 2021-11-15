@@ -1133,6 +1133,8 @@ pub fn memoize_expr(
 
 pub mod plan {
 
+    use std::collections::HashMap;
+
     use serde::{Deserialize, Serialize};
 
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc};
@@ -1146,6 +1148,9 @@ pub mod plan {
     }
 
     impl SafeMfpPlan {
+        pub fn permute(&mut self, map: HashMap<usize, usize>, new_arity: usize) {
+            self.mfp.permute(map, new_arity);
+        }
         /// Evaluates the linear operator on a supplied list of datums.
         ///
         /// The arguments are the initial datums associated with the row,
@@ -1181,7 +1186,7 @@ pub mod plan {
         /// A version of `evaluate` which produces an iterator over `Datum`
         /// as output.
         ///
-        /// This version can be usefulwhen one wants to capture the resulting
+        /// This version can be useful when one wants to capture the resulting
         /// datums without packing and then unpacking a row.
         #[inline(always)]
         pub fn evaluate_iter<'b, 'a: 'b>(
@@ -1239,7 +1244,7 @@ pub mod plan {
     /// They must directly constrain `MzLogicalTimestamp` from below or above,
     /// by expressions that do not themselves contain `MzLogicalTimestamp`.
     /// Conjunctions of such constraints are also ok.
-    #[derive(Debug)]
+    #[derive(Clone, Debug)]
     pub struct MfpPlan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
         mfp: SafeMfpPlan,
@@ -1250,6 +1255,18 @@ pub mod plan {
     }
 
     impl MfpPlan {
+        pub fn permute(&mut self, permutation: &[usize]) {
+            self.mfp.mfp.permute(
+                permutation.iter().cloned().enumerate().collect(),
+                permutation.iter().cloned().max().unwrap_or(0) + 1,
+            );
+            for lb in &mut self.lower_bounds {
+                lb.permute(permutation);
+            }
+            for ub in &mut self.upper_bounds {
+                ub.permute(permutation);
+            }
+        }
         /// Partitions `predicates` into non-temporal, and lower and upper temporal bounds.
         ///
         /// The first returned list is of predicates that do not contain `mz_logical_timestamp`.

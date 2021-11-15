@@ -1017,10 +1017,11 @@ where
                 timestamp,
                 conn_id,
                 finishing,
-                map_filter_project,
+                mut map_filter_project,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace_bundle = self.render_state.traces.get(&id).unwrap().clone();
+		trace_bundle.permutation().permute_safe_mfp_plan(&mut map_filter_project);
                 let timestamp_frontier = Antichain::from_elem(timestamp);
                 let empty_frontier = Antichain::new();
                 trace_bundle
@@ -1443,9 +1444,6 @@ impl PendingPeek {
                 // for the arena above (the allocation would not be allowed
                 // to outlive the arena above, from which it might borrow).
                 let mut borrow = datum_vec.borrow_with_many(&[key, row]);
-                self.trace_bundle
-                    .permutation()
-                    .permute_in_place(&mut borrow);
                 if let Some(result) = self
                     .map_filter_project
                     .evaluate_into(&mut borrow, &arena, &mut row_builder)

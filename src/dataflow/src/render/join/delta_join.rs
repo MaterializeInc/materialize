@@ -55,9 +55,7 @@ pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     source_relation: usize,
     /// An initial closure to apply before any stages.
-    ///
-    /// Values of `None` indicate the identity closure.
-    initial_closure: Option<JoinClosure>,
+    initial_closure: JoinClosure,
     /// A *sequence* of stages to apply one after the other.
     stage_plans: Vec<DeltaStagePlan>,
     /// A concluding closure to apply after the last stage.
@@ -119,11 +117,6 @@ impl DeltaJoinPlan {
 
             // Initial action we can take on the source relation before joining.
             let initial_closure = join_build_state.extract_closure();
-            let initial_closure = if initial_closure.is_identity() {
-                None
-            } else {
-                Some(initial_closure)
-            };
 
             // Sequence of steps to apply.
             let mut stage_plans = Vec::with_capacity(number_of_inputs - 1);
@@ -134,11 +127,7 @@ impl DeltaJoinPlan {
             // We use the order specified by the implementation.
             let order = &join_orders[source_relation];
 
-            let mut stream_arity = if let Some(initial_closure) = &initial_closure {
-                initial_closure.before.projection.len()
-            } else {
-                input_mapper.input_arity(source_relation)
-            };
+            let mut stream_arity = initial_closure.before.projection.len();
 
             for (lookup_relation, lookup_key) in order.iter() {
                 // rebase the intended key to use global column identifiers.
@@ -358,7 +347,7 @@ where
                             .enter_region(region);
 
                         // Apply what `closure` we are able to, and record any errors.
-                        if let Some(initial_closure) = initial_closure {
+                        if !initial_closure.is_identity() {
                             let (stream, errs) =
                                 update_stream.flat_map_fallible("DeltaJoinInitialization", {
                                     let mut row_builder = Row::default();
@@ -546,7 +535,7 @@ fn build_halfjoin<G, Tr, CF>(
     prev_thinning: Vec<usize>,
     permutation: Permutation,
     comparison: CF,
-    closure: JoinClosure,
+    mut closure: JoinClosure,
 ) -> (
     Collection<G, (Row, G::Timestamp)>,
     Collection<G, DataflowError>,
@@ -558,6 +547,7 @@ where
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
+    closure.permute(&permutation);
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -598,7 +588,6 @@ where
         move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
             let temp_storage = RowArena::new();
             let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
-            permutation.permute_in_place(&mut datums_local);
             let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
             let diff = diff1.clone() * diff2.clone();
             let dout = (row, time.clone());
@@ -629,7 +618,7 @@ fn build_update_stream<G, Tr>(
     trace: Arranged<G, Tr>,
     as_of: Antichain<G::Timestamp>,
     source_relation: usize,
-    initial_closure: Option<JoinClosure>,
+    mut initial_closure: JoinClosure,
     permutation: Permutation,
 ) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
@@ -643,7 +632,7 @@ where
     use timely::dataflow::channels::pact::Pipeline;
 
     let mut row_builder = Row::default();
-
+    initial_closure.permute(&permutation);
     let (ok_stream, err_stream) =
         trace
             .stream
@@ -666,8 +655,7 @@ where
                                             let temp_storage = RowArena::new();
                                             let mut datums_local =
                                                 datums.borrow_with_many(&[key, val]);
-                                            permutation.permute_in_place(&mut datums_local);
-                                            if let Some(initial_closure) = &initial_closure {
+                                            if !initial_closure.is_identity() {
                                                 match initial_closure
                                                     .apply(
                                                         &mut datums_local,

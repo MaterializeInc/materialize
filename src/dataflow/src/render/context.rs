@@ -537,16 +537,21 @@ where
             self.as_collection()
         } else {
             mfp.optimize();
-            let mfp_plan = mfp.into_plan().unwrap();
+            let mut mfp_plan = mfp.into_plan().unwrap();
             let (stream, errors) = self.flat_map(key_val, |permutation| {
                 let mut row_builder = Row::default();
                 let mut datum_vec = DatumVec::new();
+
+                if let Some(Permutation {
+                    key_arity: _,
+                    permutation,
+                }) = permutation
+                {
+                    mfp_plan.permute(&permutation);
+                }
                 move |row_parts, time, diff| {
                     let temp_storage = RowArena::new();
                     let mut datums_local = datum_vec.borrow_with_many(row_parts);
-                    if let Some(permutation) = &permutation {
-                        permutation.permute_in_place(&mut datums_local);
-                    }
                     mfp_plan.evaluate(
                         &mut datums_local,
                         &temp_storage,
