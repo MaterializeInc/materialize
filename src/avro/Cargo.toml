@@ -12,7 +12,7 @@ edition = "2021"
 autobenches = false
 
 [dependencies]
-anyhow = "1.0.44"
+anyhow = "1.0.45"
 byteorder = { version = "1.4.3", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 crc32fast = { version = "1.2.1", optional = true }

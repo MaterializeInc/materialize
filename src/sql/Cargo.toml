@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.44"
+anyhow = "1.0.45"
 aws-arn = "0.2.0"
 aws-util = { path = "../aws-util" }
 build-info = { path = "../build-info" }

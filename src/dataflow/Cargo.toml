@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.44"
+anyhow = "1.0.45"
 async-trait = "0.1.51"
 async-compression = { version = "0.3.8", features = ["tokio", "gzip"] }
 aws-util = { path = "../aws-util" }

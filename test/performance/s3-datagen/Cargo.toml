@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.44"
+anyhow = "1.0.45"
 aws-util = { path = "../../../src/aws-util" }
 bytefmt = "0.1.7"
 futures = "0.3.17"
