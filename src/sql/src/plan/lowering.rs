@@ -722,7 +722,16 @@ impl HirScalarExpr {
                                 // Record input arity here so that any group_keys that need to mutate get_inner
                                 // don't add those columns to the aggregate input.
                                 let input_arity = get_inner.typ().arity();
-                                let mut group_key = Vec::new();
+                                // The reduction that computes the window function must be keyed on the columns
+                                // from the outer context, plus the expressions in the partition key. The current
+                                // subquery will be 'executed' for every distinct row from the outer context so
+                                // by putting the outer columns in the grouping key we isolate each re-execution.
+                                let mut group_key = col_map
+                                    .inner
+                                    .iter()
+                                    .map(|(_, outer_col)| *outer_col)
+                                    .sorted()
+                                    .collect_vec();
                                 for p in partition {
                                     let key =
                                         p.applied_to(id_gen, col_map, &mut get_inner, subquery_map);
