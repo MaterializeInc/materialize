@@ -1,12 +1,12 @@
 ---
 title: "Aggregate Function Filters"
-description: "If FILTER is specified, then only the input rows for which the filter_clause evaluates to true are fed to the aggregate function; other rows are discarded"
+description: "Use FILTER to specify which rows are sent to an aggregate function"
 menu:
-main:
-parent: 'sql-functions'
+  main:
+    parent: 'sql-functions'
 ---
 
-If `FILTER` is specified, then only the input rows for which the `filter_clause` evaluates to true are fed to the [aggregate function](../#aggregate-func); other rows are discarded.
+You can use a `FILTER` clause on an aggregate function to specify which rows are sent to an [aggregate function](../#aggregate-func). Rows for which the `filter_clause` evaluates to false are discarded.
 
 ## Syntax
 
