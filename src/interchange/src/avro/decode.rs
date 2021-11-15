@@ -179,7 +179,11 @@ impl Decoder {
             if let Err(()) = push_coords(coords, &mut self.packer) {
                 if !self.warned_on_unknown {
                     self.warned_on_unknown = true;
-                    log::warn!("Record with unrecognized source coordinates in {}. You might be using an unsupported upstream database.", self.debug_name);
+                    log::warn!(
+                        "Record with unrecognized source coordinates in {}. \
+                         You might be using an unsupported upstream database.",
+                        self.debug_name
+                    );
                 }
             }
             let upstream_time_millis = match upstream_time_millis {
@@ -190,9 +194,10 @@ impl Decoder {
             let row = self.packer.finish_and_reuse();
             if self.reject_non_inserts {
                 if !matches!(row.iter().next(), None | Some(Datum::Null)) {
-                    panic!(
+                    anyhow::bail!(
                         "[customer-data] Updates and deletes are not allowed for this source! \
-                         This probably means it was started with `start_offset`. Got row: {:?}",
+                         This probably means it was started with `start_offset` \
+                         and without `UPSERT` semantics. Got row: {:?}",
                         row
                     )
                 }
