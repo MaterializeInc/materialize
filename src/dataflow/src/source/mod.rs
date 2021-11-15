@@ -1279,7 +1279,7 @@ where
                 })?;
 
                 for (pid, offset) in offsets {
-                    timestamp_histories.add_partition(pid, Some(offset));
+                    timestamp_histories.add_partition(pid, offset);
                 }
 
                 // We need to sort by offset and then timestamp because `add_binding()` will not allow
@@ -1603,13 +1603,13 @@ impl SourceReaderPersistence {
         }
     }
 
-    /// Restores the known source partitions (along with their latest read offset) and the known
-    /// timestamp bindings.
+    /// Restores the known source partitions (along with their latest read offset, if the binding
+    /// is not beyond the `upper_data_seal_ts`) and the known timestamp bindings.
     fn restore(
         &self,
     ) -> Result<
         (
-            HashMap<PartitionId, MzOffset>,
+            HashMap<PartitionId, Option<MzOffset>>,
             Vec<(SourceTimestamp, AssignedTimestamp)>,
         ),
         persist::error::Error,
@@ -1654,7 +1654,7 @@ impl SourceReaderPersistence {
         upper_data_seal_ts: u64,
     ) -> Result<
         (
-            HashMap<PartitionId, MzOffset>,
+            HashMap<PartitionId, Option<MzOffset>>,
             Vec<(SourceTimestamp, AssignedTimestamp)>,
         ),
         persist::error::Error,
@@ -1676,11 +1676,23 @@ impl SourceReaderPersistence {
                 starting_offsets
                     .entry(source_timestamp.partition.clone())
                     .and_modify(|current_offset| {
-                        if source_timestamp.offset > *current_offset {
-                            *current_offset = source_timestamp.offset;
+                        match current_offset {
+                            Some(current_offset) if source_timestamp.offset > *current_offset => {
+                                *current_offset = source_timestamp.offset;
+                            }
+                            _ => (), // ignore "older" starting offsets
                         }
                     })
-                    .or_insert_with(|| source_timestamp.offset);
+                    .or_insert_with(|| Some(source_timestamp.offset));
+            } else {
+                // If the binding is beyond the upper seal timestamp, we don't want to use its
+                // offset as a starting offset. We still want to record that we know about the
+                // partition so that we can add bindings to `timestamp_histories`. We do this,
+                // because we restore all bindings, ignoring whether they are before or after the
+                // seal timestamp.
+                starting_offsets
+                    .entry(source_timestamp.partition.clone())
+                    .or_insert_with(|| None);
             }
 
             // Collect all the bindings. The bindings are potentially beyond the starting offsets, but
