@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dataflow_types::{CsvEncoding, DataflowError, DecodeError, LinearOperator};
+use dataflow_types::{CsvEncoding, DecodeError, LinearOperator};
 use repr::{Datum, Row};
 
 #[derive(Debug)]
@@ -68,7 +68,7 @@ impl CsvDecoderState {
         }
     }
 
-    pub fn decode(&mut self, chunk: &mut &[u8]) -> Result<Option<Row>, DataflowError> {
+    pub fn decode(&mut self, chunk: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
         loop {
             let (result, n_input, n_output, n_ends) = self.csv_reader.read_record(
                 *chunk,
@@ -98,12 +98,12 @@ impl CsvDecoderState {
                         }
                         if ends_valid != self.n_cols {
                             self.events_error += 1;
-                            Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                            Err(DecodeError::Text(format!(
                                 "CSV error at record number {}: expected {} columns, got {}.",
                                 self.total_events(),
                                 self.n_cols,
                                 ends_valid
-                            ))))
+                            )))
                         } else {
                             match std::str::from_utf8(&self.output[0..self.output_cursor]) {
                                 Ok(output) => {
@@ -125,11 +125,11 @@ impl CsvDecoderState {
                                 }
                                 Err(e) => {
                                     self.events_error += 1;
-                                    Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                                    Err(DecodeError::Text(format!(
                                         "CSV error at record number {}: invalid UTF-8 ({})",
                                         self.total_events(),
                                         e
-                                    ))))
+                                    )))
                                 }
                             }
                         }
@@ -146,14 +146,14 @@ impl CsvDecoderState {
                                 .enumerate()
                                 .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
                             if let Some((i, (actual, expected))) = mismatched {
-                                break Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                                break Err(DecodeError::Text(format!(
                                     "source file contains incorrect columns '{:?}', \
                                      first mismatched column at index {} expected={} actual={}",
                                     row,
                                     i + 1,
                                     expected,
                                     actual
-                                ))));
+                                )));
                             }
                         }
                         if chunk.is_empty() {

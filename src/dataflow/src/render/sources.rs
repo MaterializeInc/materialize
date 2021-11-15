@@ -28,6 +28,7 @@ use dataflow_types::*;
 use expr::{GlobalId, Id, SourceInstanceId};
 use ore::cast::CastFrom;
 use ore::now::NowFn;
+use ore::result::ResultExt;
 use repr::{Datum, RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::decode::decode_cdcv2;
@@ -422,34 +423,25 @@ where
                                                     self.dataflow_id,
                                                 ),
                                             );
-                                            results.flat_map(
-                                                move |DecodeResult { key, value, .. }| {
-                                                    let (keys, metrics) = &mut trackstate;
-                                                    #[rustfmt::skip]
-                                                    let value = value.map(|value| {
-                                                        match key {
-                                                            None => Err::<_, DataflowError>(
-                                                                DecodeError::Text(
-                                                                    "All upsert keys should decode to a value."
-                                                                        .to_string(),
-                                                                )
-                                                                .into(),
-                                                            ),
-                                                            Some(Err(e)) => Err(e),
-                                                            Some(Ok(key)) => {
-                                                                rewrite_for_upsert(value, keys, key, metrics)
-                                                            }
-                                                        }
-                                                    });
-                                                    value
-                                                },
-                                            )
+                                            results.flat_map(move |result| {
+                                                let (keys, metrics) = &mut trackstate;
+                                                result.value.map(|value| match result.key {
+                                                    None => Err(DecodeError::Text(
+                                                        "All upsert keys should decode to a value."
+                                                            .into(),
+                                                    )),
+                                                    Some(Err(e)) => Err(e),
+                                                    Some(Ok(key)) => rewrite_for_upsert(
+                                                        value, keys, key, metrics,
+                                                    ),
+                                                })
+                                            })
                                         }
                                         DebeziumMode::Plain => {
                                             results.flat_map(|DecodeResult { value, .. }| value)
                                         }
                                     };
-                                    let (stream, errors) = results.ok_err(std::convert::identity);
+                                    let (stream, errors) = results.ok_err(ResultExt::err_into);
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
                                         errors.pass_through("decode-errors").as_collection();
@@ -563,7 +555,8 @@ where
                                         connector.key_envelope().cloned(),
                                         push_metadata,
                                         results,
-                                    );
+                                    )
+                                    .ok_err(ResultExt::err_into);
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
                                         errors.pass_through("decode-errors").as_collection();
@@ -753,30 +746,24 @@ fn flatten_results<G>(
     key_envelope: Option<KeyEnvelope>,
     push_metadata: bool,
     results: timely::dataflow::Stream<G, DecodeResult>,
-) -> (
-    timely::dataflow::Stream<G, Row>,
-    timely::dataflow::Stream<G, DataflowError>,
-)
+) -> timely::dataflow::Stream<G, Result<Row, DecodeError>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     match key_envelope {
-        None => results
-            .flat_map(move |res| {
-                if push_metadata {
-                    res.value.map(|result| {
-                        let mut row = result?;
-                        row.push(Datum::from(res.position));
-                        Ok(row)
-                    })
-                } else {
-                    res.value
-                }
-            })
-            .ok_err(std::convert::identity),
-        Some(KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert) => results
-            .flat_map(flatten_key_value)
-            .map(move |maybe_kv| {
+        None => results.flat_map(move |res| {
+            if push_metadata {
+                res.value.map(|result| {
+                    let mut row = result?;
+                    row.push(Datum::from(res.position));
+                    Ok(row)
+                })
+            } else {
+                res.value
+            }
+        }),
+        Some(KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert) => {
+            results.flat_map(flatten_key_value).map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value, position)| {
                     key.extend_by_row(&value);
                     if push_metadata {
@@ -785,10 +772,9 @@ where
                     key
                 })
             })
-            .ok_err(std::convert::identity),
-        Some(KeyEnvelope::Named(_)) => results
-            .flat_map(flatten_key_value)
-            .map(move |maybe_kv| {
+        }
+        Some(KeyEnvelope::Named(_)) => {
+            results.flat_map(flatten_key_value).map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value, position)| {
                     // Named semantics rename a key that is a single column, and encode a
                     // multi-column field as a struct with that name
@@ -807,14 +793,12 @@ where
                     row
                 })
             })
-            .ok_err(std::convert::identity),
+        }
     }
 }
 
 /// Handle possibly missing key or value portions of messages
-fn flatten_key_value(
-    result: DecodeResult,
-) -> Option<Result<(Row, Row, Option<i64>), DataflowError>> {
+fn flatten_key_value(result: DecodeResult) -> Option<Result<(Row, Row, Option<i64>), DecodeError>> {
     let DecodeResult {
         key,
         value,
@@ -828,8 +812,8 @@ fn flatten_key_value(
             (Err(e), _) => Some(Err(e)),
         },
         (None, None) => None,
-        _ => Some(Err(DataflowError::DecodeError(DecodeError::Text(
+        _ => Some(Err(DecodeError::Text(
             "Key and/or Value are not present for message".to_string(),
-        )))),
+        ))),
     }
 }

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dataflow_types::{DataflowError, DecodeError, ProtobufEncoding};
+use dataflow_types::{DecodeError, ProtobufEncoding};
 use interchange::protobuf::decode::{DecodedDescriptors, Decoder};
 use repr::Row;
 
@@ -33,7 +33,7 @@ impl ProtobufDecoderState {
             events_error: 0,
         }
     }
-    pub fn get_value(&mut self, bytes: &[u8]) -> Option<Result<Row, DataflowError>> {
+    pub fn get_value(&mut self, bytes: &[u8]) -> Option<Result<Row, DecodeError>> {
         match self.decoder.decode(bytes) {
             Ok(row) => {
                 if let Some(row) = row {
@@ -41,17 +41,17 @@ impl ProtobufDecoderState {
                     Some(Ok(row))
                 } else {
                     self.events_error += 1;
-                    Some(Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                    Some(Err(DecodeError::Text(format!(
                         "protobuf deserialization returned None"
-                    )))))
+                    ))))
                 }
             }
             Err(err) => {
                 self.events_error += 1;
-                Some(Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                Some(Err(DecodeError::Text(format!(
                     "protobuf deserialization error: {:#}",
                     err
-                )))))
+                ))))
             }
         }
     }
