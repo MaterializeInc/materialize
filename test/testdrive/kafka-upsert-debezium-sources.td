@@ -48,7 +48,7 @@ $ set schema={
 
 $ kafka-create-topic topic=dbzupsert
 
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=1
 {"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}}
 {"id": 1} {"before": {"row": {"id": 1, "creature": "mudskipper"}}, "after": {"row": {"id": 1, "creature": "salamander"}}}
 {"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}}
@@ -70,7 +70,7 @@ id creature
 -----------
 1  lizard
 
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=2
 {"id": 1} {"before": {"row": {"id": 1, "creature": "lizard"}}, "after": {"row": {"id": 1, "creature": "dino"}}}
 
 > SELECT * FROM doin_upsert
@@ -78,7 +78,7 @@ id creature
 -----------
 1  dino
 
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=3
 {"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "archeopteryx"}}}
 {"id": 2} {"before": {"row": {"id": 2, "creature": "archeopteryx"}}, "after": {"row": {"id": 2, "creature": "velociraptor"}}}
 
@@ -89,7 +89,7 @@ id creature
 2  velociraptor
 
 # test duplicates
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=4
 {"id": 3} {"before": {"row": {"id": 3, "creature": "protoceratops"}}, "after": {"row": {"id": 3, "creature": "triceratops"}}}
 {"id": 3} {"before": {"row": {"id": 3, "creature": "protoceratops"}}, "after": {"row": {"id": 3, "creature": "triceratops"}}}
 
@@ -99,7 +99,7 @@ id creature
 3  triceratops
 
 # test removal and reinsertion
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=5
 {"id": 4} {"before": null, "after": {"row": {"id": 4, "creature": "moros"}}}
 
 > SELECT creature FROM doin_upsert WHERE id = 4
@@ -107,14 +107,14 @@ creature
 --------
 moros
 
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=6
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": null}
 
 > SELECT creature FROM doin_upsert WHERE id = 4
 creature
 --------
 
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=7
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": {"row": {"id": 4, "creature": "chicken"}}}
 
 > SELECT creature FROM doin_upsert WHERE id = 4
@@ -138,6 +138,18 @@ id creature
 id creature
 -----------
 3  triceratops
+
+# Test that `WITH (kafka_time_offset=<whatever>)` works
+> CREATE MATERIALIZED SOURCE upsert_time_skip
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  WITH (kafka_time_offset = 6)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM UPSERT
+
+> SELECT * FROM upsert_time_skip
+id creature
+-----------
+4  chicken
 
 # Test that it doesn't work with full deduplication
 ! CREATE MATERIALIZED SOURCE upsert_full_dedupe
