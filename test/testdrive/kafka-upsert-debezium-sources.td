@@ -54,6 +54,16 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}}
 
 
+# Test that `WITH (start_offset=<whatever>)` gives an error on SELECT if misconfigured
+> CREATE MATERIALIZED SOURCE start_offset_misconfigured
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  WITH (start_offset = 1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+
+! SELECT * FROM start_offset_misconfigured
+Updates and deletes are not allowed for this source! This probably means it was started with `start_offset` and without `UPSERT` semantics.
+
 ! CREATE MATERIALIZED SOURCE doin_upsert
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
