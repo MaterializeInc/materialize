@@ -21,6 +21,7 @@ use timely::progress::Antichain;
 use dataflow_types::{DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails};
 use expr::{EvalError, MirScalarExpr};
 use log::error;
+use ore::result::ResultExt;
 use persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
 use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
@@ -160,34 +161,8 @@ where
                     error!("Encountered empty key in: {:?}", decode_result);
                     return None;
                 }
-
-                // SourceError and EvalError cannot occur in the dataflow leading from a Kafka
-                // source to upsert. Though other sources will behave differently and we have to
-                // find a solution eventually.
-                let key = decode_result.key.map(|key_result| {
-                    key_result.map_err(|err| match err {
-                        DataflowError::DecodeError(decode_error) => decode_error,
-                        DataflowError::SourceError(_) => panic!(
-                            "Cannot have SourceErrors when using persistent upsert operator!"
-                        ),
-                        DataflowError::EvalError(_) => {
-                            panic!("Cannot have EvalErrors when using persistent upsert operator!")
-                        }
-                    })
-                });
-                let value = decode_result.value.map(|value_result| {
-                    value_result.map_err(|err| match err {
-                        DataflowError::DecodeError(decode_error) => decode_error,
-                        DataflowError::SourceError(_) => panic!(
-                            "Cannot have SourceErrors when using persistent upsert operator!"
-                        ),
-                        DataflowError::EvalError(_) => {
-                            panic!("Cannot have EvalErrors when using persistent upsert operator!")
-                        }
-                    })
-                });
                 let position = decode_result.position.expect("missing Kafka offset");
-                Some((key.unwrap(), value, position))
+                Some((decode_result.key.unwrap(), decode_result.value, position))
             });
 
             let mut row_packer = repr::Row::default();
@@ -345,7 +320,7 @@ where
                                 .or_insert_with(Default::default);
 
                             let new_entry = SourceData {
-                                value: new_value,
+                                value: new_value.map(ResultExt::err_into),
                                 position: new_position,
                                 upstream_time_millis: None, // upsert sources don't have a column for this, so setting it to `None` is fine.
                             };
@@ -424,7 +399,7 @@ where
                                 Some(Err(err)) => {
                                     // This can never be retracted! But at least it's better to put the source in a
                                     // permanently errored state than to keep on trucking with wrong results.
-                                    session.give((Err(err), cap.time().clone(), 1));
+                                    session.give((Err(err.into()), cap.time().clone(), 1));
                                 }
                             }
                         }

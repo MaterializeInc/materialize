@@ -22,7 +22,7 @@ use rusoto_s3::{
 use tokio::io::AsyncReadExt;
 
 use crate::error::Error;
-use crate::storage::{Blob, LockInfo};
+use crate::storage::{Atomicity, Blob, LockInfo};
 
 /// Configuration for [S3Blob].
 #[derive(Clone)]
@@ -159,9 +159,6 @@ impl Config {
 /// Implementation of [Blob] backed by S3.
 //
 // TODO: Productionize this:
-// - Resolve what to do with allow_overwrite, there is no obvious way to support
-//   this in s3. (The best I can imagine is the "Legal Hold" feature and
-//   enforcing that the bucket has versioning turned off.)
 // - Resolve what to do with LOCK, this impl is race-y.
 pub struct S3Blob {
     client: Option<S3Client>,
@@ -223,7 +220,8 @@ impl S3Blob {
             let _ = new_lock.check_reentrant_for(&lockfile_path, &mut existing.as_slice())?;
         }
         let contents = new_lock.to_string().into_bytes();
-        self.set(Self::LOCKFILE_KEY, contents, true).await?;
+        self.set(Self::LOCKFILE_KEY, contents, Atomicity::RequireAtomic)
+            .await?;
         Ok(())
     }
 
@@ -262,25 +260,10 @@ impl Blob for S3Blob {
         Ok(Some(val))
     }
 
-    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+    async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
+        // NB: S3 is always atomic, so we're free to ignore the atomic param.
         let client = self.ensure_open()?;
         let path = self.get_path(key);
-
-        if !allow_overwrite {
-            // TODO: This is inefficient, but it's unclear if there's a good way
-            // to implement this with s3. See the productionize comment on
-            // [S3Blob].
-            //
-            // NB: We don't have to worry about races because the locking
-            // prevents multiple instantiations of S3Blob pointed at the same
-            // place and (for now) usage of the Blob implementers is serialized.
-            if let Some(_) = self.get(key).await? {
-                return Err(Error::from(format!(
-                    "cannot set existing key with allow_overwrite=false: {}",
-                    key
-                )));
-            }
-        }
 
         let body = ByteStream::from(value);
         client

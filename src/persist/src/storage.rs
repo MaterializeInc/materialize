@@ -127,6 +127,20 @@ pub trait Log {
     fn close(&mut self) -> Result<bool, Error>;
 }
 
+/// Configuration of whether a [Blob::set] must occur atomically.
+#[derive(Debug)]
+pub enum Atomicity {
+    /// Require the write be atomic and either succeed or leave the previous
+    /// value intact.
+    RequireAtomic,
+    /// Allow the write to leave partially written data in the event of an
+    /// interruption. This is a performance optimization allowable for
+    /// write-once modify-never blobs (everything but META). It's only exploited
+    /// in some Blob implementations (File), others are naturally always atomic
+    /// (S3, Mem).
+    AllowNonAtomic,
+}
+
 /// An abstraction over a `bytes key`->`bytes value` store.
 ///
 /// - Invariant: Implementations are responsible for ensuring that they are
@@ -138,9 +152,9 @@ pub trait Blob: Send + 'static {
 
     /// Inserts a key-value pair into the map.
     ///
-    /// When allow_overwrite is true, writes must be atomic and either succeed
-    /// or leave the previous value intact.
-    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error>;
+    /// When atomicity is required, writes must be atomic and either succeed or
+    /// leave the previous value intact.
+    async fn set(&mut self, key: &str, value: Vec<u8>, atomic: Atomicity) -> Result<(), Error>;
 
     /// Remove a key from the map.
     ///
@@ -285,6 +299,7 @@ pub mod tests {
 
     use crate::error::Error;
     use crate::mem::MemRegistry;
+    use crate::storage::Atomicity::{AllowNonAtomic, RequireAtomic};
 
     use super::*;
 
@@ -398,9 +413,9 @@ pub mod tests {
         Ok(())
     }
 
-    fn keys(baseline: &[String], new: &str) -> Vec<String> {
+    fn keys(baseline: &[String], new: &[&str]) -> Vec<String> {
         let mut ret = baseline.to_vec();
-        ret.push(new.into());
+        ret.extend(new.iter().map(|x| x.to_string()));
         ret.sort();
         ret
     }
@@ -449,20 +464,25 @@ pub mod tests {
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
 
-        // Set a key and get it back.
-        blob0.set("k0", values[0].clone(), false).await?;
+        // Set a key with AllowNonAtomic and get it back.
+        blob0.set("k0", values[0].clone(), AllowNonAtomic).await?;
         assert_eq!(blob0.get("k0").await?, Some(values[0].clone()));
+
+        // Set a key with RequireAtomic and get it back.
+        blob0.set("k0a", values[0].clone(), RequireAtomic).await?;
+        assert_eq!(blob0.get("k0a").await?, Some(values[0].clone()));
 
         // Blob contains the key we just inserted.
         let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
-        assert_eq!(blob_keys, keys(&empty_keys, "k0"));
+        assert_eq!(blob_keys, keys(&empty_keys, &["k0", "k0a"]));
 
-        // Can only overwrite a key without allow_overwrite.
-        assert!(blob0.set("k0", values[1].clone(), false).await.is_err());
-        assert_eq!(blob0.get("k0").await?, Some(values[0].clone()));
-        blob0.set("k0", values[1].clone(), true).await?;
+        // Can overwrite a key with AllowNonAtomic.
+        blob0.set("k0", values[1].clone(), AllowNonAtomic).await?;
         assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
+        // Can overwrite a key with RequireAtomic.
+        blob0.set("k0a", values[1].clone(), RequireAtomic).await?;
+        assert_eq!(blob0.get("k0a").await?, Some(values[1].clone()));
 
         // Can delete a key.
         blob0.delete("k0").await?;
@@ -474,11 +494,12 @@ pub mod tests {
         assert_eq!(blob0.delete("nope").await, Ok(()));
 
         // Empty blob contains no keys.
+        blob0.delete("k0a").await?;
         let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
-        blob0.set("k0", values[1].clone(), false).await?;
+        blob0.set("k0", values[1].clone(), AllowNonAtomic).await?;
         assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
 
         // Insert multiple keys back to back and validate that we can list
@@ -486,19 +507,22 @@ pub mod tests {
         let mut expected_keys = empty_keys;
         for i in 1..=5 {
             let key = format!("k{}", i);
-            blob0.set(&key, values[0].clone(), false).await?;
+            blob0.set(&key, values[0].clone(), AllowNonAtomic).await?;
             expected_keys.push(key);
         }
 
         // Blob contains the key we just inserted.
         let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
-        assert_eq!(blob_keys, keys(&expected_keys, "k0"));
+        assert_eq!(blob_keys, keys(&expected_keys, &["k0"]));
 
         // Cannot reuse a blob once it is closed.
         assert_eq!(blob0.close().await, Ok(true));
         assert!(blob0.get("k0").await.is_err());
-        assert!(blob0.set("k1", values[0].clone(), true).await.is_err());
+        assert!(blob0
+            .set("k1", values[0].clone(), RequireAtomic)
+            .await
+            .is_err());
 
         // Close must be idempotent and must return false if it did no work.
         assert_eq!(blob0.close().await, Ok(false));
@@ -561,21 +585,21 @@ pub mod tests {
         assert_eq!(block_on(blob.list_keys())?, Vec::<String>::new());
 
         // encoded_version == current version. No-op.
-        block_on(blob.set("META", val.clone(), true))?;
+        block_on(blob.set("META", val.clone(), RequireAtomic))?;
         check_meta_version_maybe_delete_data(&mut blob)?;
         assert_eq!(block_on(blob.list_keys())?, vec!["META".to_string()]);
 
         // encoded_version > current_version. Should return an error indicating
         // encoded_version is from the future, and not modify the blob.
         val[0] = future_version;
-        block_on(blob.set("META", val.clone(), true))?;
+        block_on(blob.set("META", val.clone(), RequireAtomic))?;
         assert!(check_meta_version_maybe_delete_data(&mut blob).is_err());
         assert_eq!(block_on(blob.list_keys())?, vec!["META".to_string()]);
 
         // encoded_version < current_version. Should delete all existing keys,
         // and not return any errors.
         val[0] = prev_version;
-        block_on(blob.set("META", val.clone(), true))?;
+        block_on(blob.set("META", val.clone(), RequireAtomic))?;
         check_meta_version_maybe_delete_data(&mut blob)?;
         assert_eq!(block_on(blob.list_keys())?, Vec::<String>::new());
 

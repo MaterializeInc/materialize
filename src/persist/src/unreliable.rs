@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use crate::error::Error;
-use crate::storage::{Blob, Log, SeqNo};
+use crate::storage::{Atomicity, Blob, Log, SeqNo};
 
 #[derive(Debug)]
 struct UnreliableCore {
@@ -150,9 +150,9 @@ impl<B: Blob + Sync> Blob for UnreliableBlob<B> {
         self.blob.get(key).await
     }
 
-    async fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+    async fn set(&mut self, key: &str, value: Vec<u8>, atomic: Atomicity) -> Result<(), Error> {
         self.handle.check_unavailable("blob set")?;
-        self.blob.set(key, value, allow_overwrite).await
+        self.blob.set(key, value, atomic).await
     }
 
     async fn list_keys(&self) -> Result<Vec<String>, Error> {
@@ -180,6 +180,7 @@ impl<B: Blob + Sync> Blob for UnreliableBlob<B> {
 #[cfg(test)]
 mod tests {
     use crate::mem::{MemBlob, MemLog};
+    use crate::storage::Atomicity::RequireAtomic;
 
     use super::*;
 
@@ -210,17 +211,17 @@ mod tests {
         let (mut blob, mut handle) = UnreliableBlob::new(MemBlob::new_no_reentrance("unreliable"));
 
         // Initially starts reliable.
-        assert!(blob.set("a", b"1".to_vec(), true).await.is_ok());
+        assert!(blob.set("a", b"1".to_vec(), RequireAtomic).await.is_ok());
         assert!(blob.get("a").await.is_ok());
 
         // Setting it to unavailable causes all operations to fail.
         handle.make_unavailable();
-        assert!(blob.set("a", b"2".to_vec(), true).await.is_err());
+        assert!(blob.set("a", b"2".to_vec(), RequireAtomic).await.is_err());
         assert!(blob.get("a").await.is_err());
 
         // Can be set back to working.
         handle.make_available();
-        assert!(blob.set("a", b"3".to_vec(), true).await.is_ok());
+        assert!(blob.set("a", b"3".to_vec(), RequireAtomic).await.is_ok());
         assert!(blob.get("a").await.is_ok());
     }
 }

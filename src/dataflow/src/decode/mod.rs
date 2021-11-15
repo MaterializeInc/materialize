@@ -27,8 +27,8 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
+use dataflow_types::LinearOperator;
 use dataflow_types::{DataEncoding, DebeziumMode, DecodeError, RegexEncoding, SourceEnvelope};
-use dataflow_types::{DataflowError, LinearOperator};
 use interchange::avro::ConfluentAvroResolver;
 use log::error;
 use repr::Datum;
@@ -47,11 +47,11 @@ mod protobuf;
 
 /// Update row to blank out retractions of rows that we have never seen
 pub fn rewrite_for_upsert(
-    val: Result<Row, DataflowError>,
+    val: Result<Row, DecodeError>,
     keys: &mut HashMap<Row, Row>,
     key: Row,
     metrics: &UIntGauge,
-) -> Result<Row, DataflowError> {
+) -> Result<Row, DecodeError> {
     if let Ok(row) = val {
         // often off by one, but is only tracked every N seconds so it will always be off
         metrics.set(keys.len() as u64);
@@ -187,7 +187,7 @@ pub(crate) enum PreDelimitedFormat {
 }
 
 impl PreDelimitedFormat {
-    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DataflowError> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DecodeError> {
         match self {
             PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
             PreDelimitedFormat::Text => {
@@ -238,7 +238,7 @@ impl DataDecoder {
         &mut self,
         bytes: &mut &[u8],
         upstream_time_millis: Option<i64>,
-    ) -> Result<Option<Row>, DataflowError> {
+    ) -> Result<Option<Row>, DecodeError> {
         match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
                 let delimiter = *delimiter;
@@ -264,7 +264,7 @@ impl DataDecoder {
     ///
     /// This is distinct from `next` because, for example, a CSV record should be returned even if it
     /// does not end in a newline.
-    pub fn eof(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DataflowError> {
+    pub fn eof(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
         match &mut self.inner {
             DataDecoderInner::Csv(csv) => {
                 let result = csv.decode(bytes);
