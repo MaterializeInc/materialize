@@ -43,4 +43,4 @@ criterion = "0.3.5"
 ore = { path = "../ore", default-features = false, features = ["test"] }
 rand = { version = "0.8.4", features = [ "small_rng" ] }
 tempfile = "3.2.0"
-serde_json = "1.0.68"
+serde_json = "1.0.70"
