@@ -540,3 +540,113 @@ SELECT * FROM information_schema._pg_expandarray(ARRAY['c', 'b', 'a']) ORDER BY 
 a 3
 b 2
 c 1
+
+# Test table and column naming for table functions that return 1 column.
+
+query T colnames
+SELECT generate_series.* FROM generate_series(1, 1)
+----
+generate_series
+1
+
+query T
+SELECT generate_series.generate_series FROM generate_series(1, 1)
+----
+1
+
+query T colnames
+SELECT g FROM generate_series(1, 1) AS g
+----
+g
+1
+
+query T
+SELECT g.g FROM generate_series(1, 1) AS g
+----
+1
+
+query T colnames
+SELECT g.* FROM generate_series(1, 1) AS g
+----
+g
+1
+
+query T colnames
+SELECT g FROM generate_series(1, 1) AS g(a)
+----
+g
+1
+
+query T colnames
+SELECT g.a FROM generate_series(1, 1) AS g(a)
+----
+a
+1
+
+query T colnames
+SELECT g.* FROM generate_series(1, 1) AS g(a)
+----
+a
+1
+
+statement error column "g.g" does not exist
+SELECT g.g FROM generate_series(1, 1) AS g(a)
+
+statement error column "generate_series" does not exist
+SELECT generate_series FROM generate_series(1, 1) AS g
+
+statement error column "g.generate_series" does not exist
+SELECT g.generate_series FROM generate_series(1, 1) AS g
+
+statement error column "generate_series.g" does not exist
+SELECT generate_series.g FROM generate_series(1, 1) AS g
+
+# Test table and column naming for set functions that return more than 1 column.
+
+query T colnames
+SELECT g FROM information_schema._pg_expandarray(ARRAY[100]) AS g
+----
+g
+(100,1)
+
+query TT colnames
+SELECT _pg_expandarray.* FROM information_schema._pg_expandarray(ARRAY[100])
+----
+x n
+100 1
+
+query T
+SELECT _pg_expandarray.x FROM information_schema._pg_expandarray(ARRAY[100])
+----
+100
+
+query T
+SELECT g FROM information_schema._pg_expandarray(ARRAY[100]) AS g
+----
+(100,1)
+
+query T
+SELECT g.x FROM information_schema._pg_expandarray(ARRAY[100]) AS g
+----
+100
+
+query TT
+SELECT g.* FROM information_schema._pg_expandarray(ARRAY[100]) AS g
+----
+100 1
+
+# Test aliasing table functions and using named columns of the results.
+
+query T rowsort
+SELECT jsonb_array_elements.value->>'a' FROM jsonb_array_elements('[{"a":1},{"a":2},{"a":3}]')
+----
+1
+2
+3
+
+query T rowsort
+SELECT js.value->>'a' FROM jsonb_array_elements('[{"a":1},{"a":2},{"a":3}]') js
+----
+1
+2
+3
