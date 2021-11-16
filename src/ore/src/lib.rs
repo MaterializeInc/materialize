@@ -49,6 +49,7 @@ pub mod panic;
 pub mod result;
 #[cfg(feature = "network")]
 pub mod retry;
+pub mod stack;
 pub mod stats;
 pub mod str;
 #[cfg(feature = "test")]

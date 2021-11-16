@@ -22,6 +22,7 @@ use expr::DummyHumanizer;
 use itertools::Itertools;
 
 use ore::collections::CollectionExt;
+use ore::stack;
 use repr::*;
 
 use crate::plan::query::ExprContext;
@@ -691,7 +692,7 @@ impl HirRelationExpr {
         outers: &[RelationType],
         params: &BTreeMap<usize, ScalarType>,
     ) -> RelationType {
-        match self {
+        stack::maybe_grow(|| match self {
             HirRelationExpr::Constant { typ, .. } => typ.clone(),
             HirRelationExpr::Get { typ, .. } => typ.clone(),
             HirRelationExpr::Project { input, outputs } => {
@@ -777,7 +778,7 @@ impl HirRelationExpr {
             HirRelationExpr::DeclareKeys { input, keys } => {
                 input.typ(outers, params).with_keys(keys.clone())
             }
-        }
+        })
     }
 
     pub fn arity(&self) -> usize {
@@ -1577,7 +1578,7 @@ impl AbstractExpr for HirScalarExpr {
         inner: &RelationType,
         params: &BTreeMap<usize, ScalarType>,
     ) -> Self::Type {
-        match self {
+        stack::maybe_grow(|| match self {
             HirScalarExpr::Column(ColumnRef { level, column }) => {
                 if *level == 0 {
                     inner.column_types[*column].clone()
@@ -1613,7 +1614,7 @@ impl AbstractExpr for HirScalarExpr {
                     .nullable(true)
             }
             HirScalarExpr::Windowing(expr) => expr.func.typ(outers, inner, params),
-        }
+        })
     }
 }
 

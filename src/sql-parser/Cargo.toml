@@ -14,7 +14,6 @@ lazy_static = "1.4.0"
 log = "0.4.13"
 ore = { path = "../ore", default-features = false }
 phf = { version = "0.10.0", features = ["uncased"] }
-stacker = "0.1.14"
 uncased = "0.9.6"
 
 [dev-dependencies]
