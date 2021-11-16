@@ -1258,7 +1258,12 @@ pub mod plan {
         pub fn permute(&mut self, permutation: &[usize]) {
             self.mfp.mfp.permute(
                 permutation.iter().cloned().enumerate().collect(),
-                permutation.iter().cloned().max().unwrap_or(0) + 1,
+                permutation
+                    .iter()
+                    .cloned()
+                    .max()
+                    .map(|x| x + 1)
+                    .unwrap_or(0),
             );
             for lb in &mut self.lower_bounds {
                 lb.permute(permutation);
