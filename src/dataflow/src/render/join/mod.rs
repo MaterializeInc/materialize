@@ -62,6 +62,8 @@ struct JoinClosure {
 }
 
 impl JoinClosure {
+    /// Prepares this join closure to act on a permuted input,
+    /// according to the permutation `p`.
     pub fn permute(&mut self, p: &Permutation) {
         p.permute_safe_mfp_plan(&mut self.before);
         for key in &mut self.ready_equivalences {

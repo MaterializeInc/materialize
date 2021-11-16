@@ -1520,15 +1520,21 @@ impl Permutation {
         self.permutation.len()
     }
 
+    /// Prepares the MFP `mfp` to act on permuted input, according
+    /// to this permutation
     pub fn permute_mfp(&self, mfp: &mut MapFilterProject) {
         let (map, new_arity) = permutation_to_map_and_new_arity(&self.permutation);
         mfp.permute(map, new_arity);
     }
 
+    /// Prepares the MfpPlan `mfp` to act on permuted input, according
+    /// to this permutation
     pub fn permute_mfp_plan(&self, mfp: &mut MfpPlan) {
         mfp.permute(&self.permutation);
     }
 
+    /// Prepares the SafeMfpPlan `mfp` to act on permuted input, according
+    /// to this permutation
     pub fn permute_safe_mfp_plan(&self, mfp: &mut SafeMfpPlan) {
         let (map, new_arity) = permutation_to_map_and_new_arity(&self.permutation);
         SafeMfpPlan::permute(mfp, map, new_arity);
