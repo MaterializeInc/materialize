@@ -48,6 +48,7 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 - Consistent Kinesis sources are not supported {{% gh 2191 %}}
 - Enhanced fan-out Kinesis consumers are not supported {{% gh 2192 %}}
 - Reading from a Kinesis stream as of a sequence number or timestamp is not supported {{% gh 2294 %}}
+- Kinesis resharding is not supported {{% gh 8776 %}}
 - Kinesis sinks are not supported {{% gh 2372 %}}
 
 ### File sources
