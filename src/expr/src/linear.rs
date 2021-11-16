@@ -1132,6 +1132,8 @@ pub fn memoize_expr(
 }
 
 pub mod util {
+    use std::collections::HashMap;
+
     /// Takes a permutation represented as an array
     /// (where the `i`th column being `j` implies that column `i` in the original row
     ///  corresponds to column `j` in the permuted row; see `dataflow::render::Permutation`
