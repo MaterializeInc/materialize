@@ -1136,7 +1136,7 @@ pub mod util {
 
     /// Takes a permutation represented as an array
     /// (where the `i`th column being `j` implies that column `i` in the original row
-    ///  corresponds to column `j` in the permuted row; see `dataflow::render::Permutation`
+    ///  corresponds to column `j` in the permuted row; see `dataflow::render::Permutation`)
     /// and converts it to a column map along with the arity of the permuted representation
     pub fn permutation_to_map_and_new_arity(
         permutation: &[usize],
