@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::ord::{ColValSpine, OrdKeySpine};
+use differential_dataflow::trace::implementations::ord::{ColValSpine, OrdKeySpine, OrdValSpine};
 use differential_dataflow::trace::TraceReader;
 use ore::metric;
 use ore::metrics::{
@@ -28,6 +28,7 @@ use expr::GlobalId;
 use repr::{Diff, Row, Timestamp};
 
 pub type RowSpine<K, V, T, R, O = usize> = ColValSpine<K, V, T, R, O>;
+pub type RowOrdSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
 pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;
 
 pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;

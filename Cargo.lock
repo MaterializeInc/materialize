@@ -1104,7 +1104,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=columnation#9d26dc2dd577b12e6c43bf59f59931008afe9866"
+source = "git+https://github.com/antiguru/differential-dataflow.git?branch=columnation#ac4448fa6a1cc7d63012b378bf102d4fabf15e63"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1160,7 +1160,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=columnation#9d26dc2dd577b12e6c43bf59f59931008afe9866"
+source = "git+https://github.com/antiguru/differential-dataflow.git?branch=columnation#ac4448fa6a1cc7d63012b378bf102d4fabf15e63"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4821,7 +4821,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#596ca501ac1b52464eff6c0479650b680a5ab5cd"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#22f22cd58419bda10355bc1a9943f5b910da7694"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4838,12 +4838,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#596ca501ac1b52464eff6c0479650b680a5ab5cd"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#22f22cd58419bda10355bc1a9943f5b910da7694"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#596ca501ac1b52464eff6c0479650b680a5ab5cd"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#22f22cd58419bda10355bc1a9943f5b910da7694"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4859,7 +4859,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#596ca501ac1b52464eff6c0479650b680a5ab5cd"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#22f22cd58419bda10355bc1a9943f5b910da7694"
 
 [[package]]
 name = "tinytemplate"

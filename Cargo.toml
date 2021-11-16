@@ -77,5 +77,5 @@ rustc-demangle = { opt-level = 3 }
 debug = 1
 
 [patch."https://github.com/TimelyDataflow/differential-dataflow.git"]
-differential-dataflow = { git = "https://github.com/frankmcsherry/differential-dataflow.git", branch = "columnation" }
-dogsdogsdogs = { git = "https://github.com/frankmcsherry/differential-dataflow.git", branch = "columnation" }
+differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow.git", branch = "columnation" }
+dogsdogsdogs = { git = "https://github.com/antiguru/differential-dataflow.git", branch = "columnation" }
