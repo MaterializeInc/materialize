@@ -61,7 +61,6 @@
 //! return the output arrangement directly and avoid the extra collation arrangement.
 
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::Multiply;
