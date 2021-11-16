@@ -1416,8 +1416,9 @@ dependencies = [
 
 [[package]]
 name = "fail"
-version = "0.4.0"
-source = "git+https://github.com/tikv/fail-rs#6cd91d5597be7c5518b9d1c7067320cbe4e30cfa"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec3245a0ca564e7f3c797d20d833a6870f57a728ac967d5225b3ffdef4465011"
 dependencies = [
  "lazy_static",
  "log",

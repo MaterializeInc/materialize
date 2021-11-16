@@ -86,6 +86,4 @@ allow-git = [
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",
-    # Waiting for a new release that includes the latest dependency bumps.
-    "https://github.com/tikv/fail-rs.git",
 ]
