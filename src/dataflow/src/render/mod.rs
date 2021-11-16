@@ -1520,7 +1520,12 @@ impl Permutation {
     pub fn as_map_and_new_arity(&self) -> (HashMap<usize, usize>, usize) {
         (
             self.permutation.iter().cloned().enumerate().collect(),
-            self.permutation.iter().cloned().max().unwrap_or(0) + 1,
+            self.permutation
+                .iter()
+                .cloned()
+                .max()
+                .map(|x| x + 1)
+                .unwrap_or(0),
         )
     }
 
