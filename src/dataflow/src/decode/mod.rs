@@ -602,17 +602,18 @@ where
             input.for_each(|cap, data| {
                 // Currently Kafka is the only kind of source that can have metadata, and it is
                 // always delimited, so we will never have metadata in `render_decode`
-                let metadata = None;
-
                 let mut session = output.session(&cap);
                 for SourceOutput {
                     key: _,
                     value,
-                    position: _,
+                    position,
                     upstream_time_millis,
-                    partition: _,
+                    partition,
                 } in data.iter()
                 {
+                    let metadata =
+                        to_kafka_metadata(partition.clone(), *position, *upstream_time_millis);
+
                     let value = match value {
                         MessagePayload::Data(data) => data,
                         MessagePayload::EOF => {
