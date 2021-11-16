@@ -120,7 +120,7 @@ fn get_latest_ts(
 
     let mut latest_ts = None;
     let mut latest_offset = None;
-    while let Some((message, offset)) = get_next_message(consumer, timeout)? {
+    while let Some((message, offset)) = get_next_message(consumer, Duration::ZERO)? {
         debug_assert!(offset >= latest_offset.unwrap_or(0));
         latest_offset = Some(offset);
 
