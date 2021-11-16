@@ -101,8 +101,6 @@ impl SourceReader for KafkaSourceReader {
             _ => unreachable!(),
         };
 
-        self.create_partition_queue(pid);
-
         // Passed-in initial offsets take precedence over potential user-configured start offsets.
         // The reason is that an initial offset most likely comes from source state that we
         // restored from persistence while start offsets are something that a user configured
@@ -139,6 +137,9 @@ impl SourceReader for KafkaSourceReader {
             // offset for this topic.
             *self.start_offsets.get(&pid).unwrap_or(&-1)
         };
+
+        // Seek to the *next* offset (aka start_offset + 1) that we have not yet processed
+        self.create_partition_queue(pid, Offset::Offset(start_offset + 1));
 
         let prev = self.last_offsets.insert(pid, start_offset);
 
@@ -329,7 +330,7 @@ impl KafkaSourceReader {
     }
 
     /// Creates a new partition queue for `partition_id`.
-    fn create_partition_queue(&mut self, partition_id: i32) {
+    fn create_partition_queue(&mut self, partition_id: i32, initial_offset: Offset) {
         info!(
             "Activating Kafka queue for {} [{}] (source {}) on worker {}",
             self.topic_name, partition_id, self.id, self.worker_id
@@ -346,7 +347,7 @@ impl KafkaSourceReader {
         }
         // Add new partition
         partition_list
-            .add_partition_offset(&self.topic_name, partition_id, Offset::Beginning)
+            .add_partition_offset(&self.topic_name, partition_id, initial_offset)
             .expect("offset known to be valid");
         self.consumer
             .assign(&partition_list)
