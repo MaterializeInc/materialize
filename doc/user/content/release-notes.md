@@ -101,6 +101,8 @@ List new features before bug fixes.
 
 {{< /comment >}}
 
+{{% version-header v0.9.14 %}}
+
 {{% version-header v0.9.13 %}}
 
 - Add support for `LIST(<subquery>)` constructor.
