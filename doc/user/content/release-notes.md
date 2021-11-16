@@ -103,6 +103,8 @@ List new features before bug fixes.
 
 {{% version-header v0.9.14 %}}
 
+- Allow ingesting avro schemas whose top node is not a record type.
+
 {{% version-header v0.9.13 %}}
 
 - **Breaking change**: Disallow creating views (materialized or not) with

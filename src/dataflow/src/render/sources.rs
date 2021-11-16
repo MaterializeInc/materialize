@@ -344,6 +344,7 @@ where
                     );
 
                     let (stream, errors) = {
+                        let (key_desc, _) = encoding.desc().expect("planning has verified this");
                         let (key_encoding, value_encoding) = match encoding {
                             SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
                             SourceDataEncoding::Single(value) => (None, value),
@@ -368,6 +369,8 @@ where
                                 SourceType::Delimited(s) => s,
                                 _ => unreachable!("Attempted to create non-delimited CDCv2 source"),
                             };
+                            // TODO(petrosagg): this should move to the envelope section below and
+                            // made to work with a stream of Rows instead of decoding Avro directly
                             let (oks, token) = decode_cdcv2(
                                 &ok_source,
                                 &schema,
@@ -446,38 +449,21 @@ where
                                     let errors =
                                         errors.pass_through("decode-errors").as_collection();
 
-                                    let dbz_key_indices = match &src.connector {
-                                        SourceConnector::External {
-                                            encoding:
-                                                SourceDataEncoding::KeyValue {
-                                                    key:
-                                                        DataEncoding::Avro(AvroEncoding {
-                                                            schema: key_schema,
-                                                            ..
-                                                        }),
-                                                    ..
-                                                },
-                                            ..
-                                        } => {
-                                            let fields = match &src.bare_desc.typ().column_types[0]
-                                                .scalar_type
-                                            {
-                                                ScalarType::Record { fields, .. } => fields.clone(),
-                                                _ => unreachable!(),
-                                            };
-                                            let row_desc = RelationDesc::from_names_and_types(
-                                                fields.into_iter().map(|(n, t)| (Some(n), t)),
-                                            );
-                                            // these must be available because the DDL parsing logic already
-                                            // checks this and bails in case the key is not correct
-                                            let key_indices =
-                                                interchange::avro::validate_key_schema(key_schema, &row_desc)
-                                                    .expect(
-                                                    "Invalid key schema, this indicates a bug in Materialize",
-                                                );
-                                            Some(key_indices)
-                                        }
-                                        _ => None,
+                                    let dbz_key_indices = if let Some(key_desc) = key_desc {
+                                        let fields = match &src.bare_desc.typ().column_types[0]
+                                            .scalar_type
+                                        {
+                                            ScalarType::Record { fields, .. } => fields.clone(),
+                                            _ => unreachable!(),
+                                        };
+                                        let row_desc = RelationDesc::from_names_and_types(
+                                            fields.into_iter().map(|(n, t)| (Some(n), t)),
+                                        );
+                                        // these must be available because the DDL parsing logic already
+                                        // checks this and bails in case the key is not correct
+                                        Some(dataflow_types::match_key_indices(&key_desc, &row_desc).expect("Invalid key schema, this indicates a bug in Materialize"))
+                                    } else {
+                                        None
                                     };
 
                                     let stream = dedupe_strategy.clone().render(
@@ -491,7 +477,9 @@ where
 
                                     (stream, Some(errors))
                                 }
-                                SourceEnvelope::Upsert => {
+                                SourceEnvelope::Upsert(_key_envelope) => {
+                                    // TODO: use the key envelope to figure out when to add keys.
+                                    // The opeator currently does it unconditionally
                                     let upsert_operator_name = format!("{}-upsert", source_name);
 
                                     // append position metadata to the output row
@@ -550,18 +538,16 @@ where
 
                                     (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                                 }
-                                _ => {
-                                    let (stream, errors) = flatten_results(
-                                        connector.key_envelope().cloned(),
-                                        push_metadata,
-                                        results,
-                                    )
-                                    .ok_err(ResultExt::err_into);
+                                SourceEnvelope::None(key_envelope) => {
+                                    let (stream, errors) =
+                                        flatten_results(key_envelope, push_metadata, results)
+                                            .ok_err(ResultExt::err_into);
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
                                         errors.pass_through("decode-errors").as_collection();
                                     (stream, Some(errors))
                                 }
+                                SourceEnvelope::CdcV2 => unreachable!(),
                             }
                         }
                     };
@@ -622,7 +608,7 @@ where
 
                 // Apply `as_of` to each timestamp.
                 match &envelope {
-                    SourceEnvelope::Upsert => {}
+                    SourceEnvelope::Upsert(_) => {}
                     _ => {
                         let as_of_frontier1 = self.as_of_frontier.clone();
                         collection = collection
@@ -743,7 +729,7 @@ fn get_persist_config(
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results<G>(
-    key_envelope: Option<KeyEnvelope>,
+    key_envelope: &KeyEnvelope,
     push_metadata: bool,
     results: timely::dataflow::Stream<G, DecodeResult>,
 ) -> timely::dataflow::Stream<G, Result<Row, DecodeError>>
@@ -751,7 +737,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     match key_envelope {
-        None => results.flat_map(move |res| {
+        KeyEnvelope::None => results.flat_map(move |res| {
             if push_metadata {
                 res.value.map(|result| {
                     let mut row = result?;
@@ -762,7 +748,7 @@ where
                 res.value
             }
         }),
-        Some(KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert) => {
+        KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => {
             results.flat_map(flatten_key_value).map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value, position)| {
                     key.extend_by_row(&value);
@@ -773,7 +759,7 @@ where
                 })
             })
         }
-        Some(KeyEnvelope::Named(_)) => {
+        KeyEnvelope::Named(_) => {
             results.flat_map(flatten_key_value).map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value, position)| {
                     // Named semantics rename a key that is a single column, and encode a

@@ -600,7 +600,7 @@ a b
 ! CREATE SOURCE recursive
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'ignored'
   FORMAT AVRO USING SCHEMA '{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}'
-validating avro value schema: Recursive types are not supported: .a
+validating avro schema: Recursive types are not supported: .a
 
 $ set key-schema={"type": "string"}
 $ set value-schema={"type": "record", "name": "r", "fields": [{"name": "a", "type": "string"}]}

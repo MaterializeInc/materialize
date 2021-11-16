@@ -23,9 +23,7 @@ pub use self::encode::{
     AvroEncoder, AvroSchemaGenerator,
 };
 pub use self::envelope_debezium::DebeziumDeduplicationStrategy;
-pub use self::schema::{
-    parse_schema, validate_key_schema, validate_value_schema, ConfluentAvroResolver,
-};
+pub use self::schema::{parse_schema, schema_to_relationdesc, ConfluentAvroResolver};
 
 use self::decode::{AvroStringDecoder, OptionalRecordDecoder, RowWrapper};
 use self::envelope_debezium::{AvroDebeziumDecoder, RowCoordinates};
@@ -45,42 +43,46 @@ fn is_null(schema: &SchemaPieceOrNamed) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Context;
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
     use ordered_float::OrderedFloat;
-    use serde::Deserialize;
-    use std::fs::File;
 
     use mz_avro::types::{DecimalValue, Value};
     use repr::adt::numeric;
-    use repr::{ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
+    use repr::{Datum, RelationDesc, ScalarType};
 
     use super::*;
 
-    #[derive(Deserialize)]
-    struct TestCase {
-        name: String,
-        input: serde_json::Value,
-        expected: Vec<(ColumnName, ColumnType)>,
+    #[test]
+    fn record_without_fields() -> anyhow::Result<()> {
+        let schema = r#"{
+            "type": "record",
+            "name": "test",
+            "fields": []
+        }"#;
+
+        let desc = schema_to_relationdesc(parse_schema(schema)?)?;
+        assert_eq!(desc.arity(), 0, "empty record produced rows");
+
+        Ok(())
     }
 
     #[test]
-    #[ignore] // TODO(benesch): update tests for diff envelope.
-    fn test_schema_parsing() -> anyhow::Result<()> {
-        let file = File::open("interchange/testdata/avro-schema.json")
-            .context("opening test data file")?;
-        let test_cases: Vec<TestCase> =
-            serde_json::from_reader(file).context("parsing JSON test data")?;
+    fn basic_record() -> anyhow::Result<()> {
+        let schema = r#"{
+            "type": "record",
+            "name": "test",
+            "fields": [
+                { "name": "f1", "type": "int" },
+                { "name": "f2", "type": "string" }
+            ]
+        }"#;
 
-        for tc in test_cases {
-            // Stringifying the JSON we just parsed is rather silly, but it
-            // avoids embedding JSON strings inside of JSON, which is hard on
-            // the eyes.
-            let schema = serde_json::to_string(&tc.input)?;
-            let output = super::validate_value_schema(&schema, EnvelopeType::Debezium)?;
-            assert_eq!(output, tc.expected, "failed test case name: {}", tc.name)
-        }
+        let desc = schema_to_relationdesc(parse_schema(schema)?)?;
+        let expected_desc = RelationDesc::empty()
+            .with_named_column("f1", ScalarType::Int32.nullable(false))
+            .with_named_column("f2", ScalarType::String.nullable(false));
 
+        assert_eq!(desc, expected_desc);
         Ok(())
     }
 

@@ -105,7 +105,7 @@ mz_obj_no  false     bigint
 ! CREATE MATERIALIZED SOURCE reader_schema
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
   WITH (reader_schema = '{"bad": "news", "bears"')
-validating avro value schema:
+validating avro schema:
 
 > CREATE MATERIALIZED SOURCE tailed
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf' WITH (tail = true)
