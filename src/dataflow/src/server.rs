@@ -1021,7 +1021,9 @@ where
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace_bundle = self.render_state.traces.get(&id).unwrap().clone();
-		trace_bundle.permutation().permute_safe_mfp_plan(&mut map_filter_project);
+                trace_bundle
+                    .permutation()
+                    .permute_safe_mfp_plan(&mut map_filter_project);
                 let timestamp_frontier = Antichain::from_elem(timestamp);
                 let empty_frontier = Antichain::new();
                 trace_bundle

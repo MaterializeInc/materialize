@@ -1535,6 +1535,6 @@ impl Permutation {
 
     pub fn permute_safe_mfp_plan(&self, mfp: &mut SafeMfpPlan) {
         let (map, new_arity) = self.as_map_and_new_arity();
-	SafeMfpPlan::permute(mfp, map, new_arity);
+        SafeMfpPlan::permute(mfp, map, new_arity);
     }
 }

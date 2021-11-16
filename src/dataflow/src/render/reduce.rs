@@ -631,10 +631,7 @@ impl KeyValPlan {
         val_mfp.optimize();
         let val_plan = val_mfp.into_plan().unwrap().into_nontemporal().unwrap();
 
-        Self {
-            key_plan,
-            val_plan,
-        }
+        Self { key_plan, val_plan }
     }
 
     /// The arity of the key plan
@@ -671,11 +668,11 @@ where
             timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
             _,
         ) = input.flat_map(None, |permutation| {
-	    if let Some(permutation) = permutation {
-		permutation.permute_safe_mfp_plan(&mut key_plan);
-		permutation.permute_safe_mfp_plan(&mut val_plan);
-	    }
-	    // Determine the columns we'll need from the row.
+            if let Some(permutation) = permutation {
+                permutation.permute_safe_mfp_plan(&mut key_plan);
+                permutation.permute_safe_mfp_plan(&mut val_plan);
+            }
+            // Determine the columns we'll need from the row.
             let mut demand = Vec::new();
             demand.extend(key_plan.demand());
             demand.extend(val_plan.demand());
@@ -684,12 +681,12 @@ where
             // remap column references to the subset we use.
             let mut demand_map = std::collections::HashMap::new();
             for column in demand.iter() {
-		demand_map.insert(*column, demand_map.len());
+                demand_map.insert(*column, demand_map.len());
             }
-	    let demand_map_len = demand_map.len();
+            let demand_map_len = demand_map.len();
             key_plan.permute(demand_map.clone(), demand_map_len);
-	    val_plan.permute(demand_map, demand_map_len);
-	    let skips = convert_indexes_to_skips(demand);
+            val_plan.permute(demand_map, demand_map_len);
+            let skips = convert_indexes_to_skips(demand);
             move |row_parts, time, diff| {
                 let temp_storage = RowArena::new();
 
