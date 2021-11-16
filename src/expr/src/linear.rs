@@ -1131,6 +1131,26 @@ pub fn memoize_expr(
     )
 }
 
+pub mod util {
+    /// Takes a permutation represented as an array
+    /// (where the `i`th column being `j` implies that column `i` in the original row
+    ///  corresponds to column `j` in the permuted row; see `dataflow::render::Permutation`
+    /// and converts it to a column map along with the arity of the permuted representation
+    pub fn permutation_to_map_and_new_arity(
+        permutation: &[usize],
+    ) -> (HashMap<usize, usize>, usize) {
+        (
+            permutation.iter().cloned().enumerate().collect(),
+            permutation
+                .iter()
+                .cloned()
+                .max()
+                .map(|x| x + 1)
+                .unwrap_or(0),
+        )
+    }
+}
+
 pub mod plan {
 
     use std::collections::HashMap;
@@ -1140,6 +1160,8 @@ pub mod plan {
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc};
     use repr::adt::numeric::Numeric;
     use repr::{Datum, Diff, Row, RowArena, ScalarType};
+
+    use super::util::permutation_to_map_and_new_arity;
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1256,15 +1278,8 @@ pub mod plan {
 
     impl MfpPlan {
         pub fn permute(&mut self, permutation: &[usize]) {
-            self.mfp.mfp.permute(
-                permutation.iter().cloned().enumerate().collect(),
-                permutation
-                    .iter()
-                    .cloned()
-                    .max()
-                    .map(|x| x + 1)
-                    .unwrap_or(0),
-            );
+            let (map, new_arity) = permutation_to_map_and_new_arity(permutation);
+            self.mfp.mfp.permute(map, new_arity);
             for lb in &mut self.lower_bounds {
                 lb.permute(permutation);
             }
