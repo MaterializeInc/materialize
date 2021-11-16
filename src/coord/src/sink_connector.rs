@@ -46,18 +46,14 @@ pub async fn build(
 fn get_next_message(
     consumer: &mut BaseConsumer,
     timeout: Duration,
-) -> Result<Option<Vec<u8>>, anyhow::Error> {
+) -> Result<Option<(Vec<u8>, i64)>, anyhow::Error> {
     if let Some(result) = consumer.poll(timeout) {
         match result {
             Ok(message) => match message.payload() {
-                Some(p) => Ok(Some(p.to_vec())),
-                None => {
-                    bail!("unexpected null payload")
-                }
+                Some(p) => Ok(Some((p.to_vec(), message.offset()))),
+                None => bail!("unexpected null payload"),
             },
-            Err(err) => {
-                bail!("Failed to process message {}", err)
-            }
+            Err(err) => bail!("Failed to process message {}", err),
         }
     } else {
         Ok(None)
@@ -122,22 +118,38 @@ fn get_latest_ts(
         return Ok(None);
     }
 
-    while let Some(message) = get_next_message(consumer, timeout)? {
-        if Some(hi) == maybe_decode_consistency_end_record(&message, consistency_topic)? {
-            return Ok(Some(hi));
+    let mut latest_ts = None;
+    let mut latest_offset = None;
+    while let Some((message, offset)) = get_next_message(consumer, timeout)? {
+        debug_assert!(offset >= latest_offset.unwrap_or(0));
+        latest_offset = Some(offset);
+
+        if let Some(ts) = maybe_decode_consistency_end_record(&message, consistency_topic)? {
+            debug_assert!(ts >= latest_ts.unwrap_or(0));
+            latest_ts = Some(ts);
+
+            // Short circuit to avoids a delay with length `timeout`
+            if ts >= hi {
+                break;
+            }
         }
     }
 
-    bail!(
-        "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
-        consistency_topic,
-        partition,
-        lo,
-        hi
-    );
+    // Topic not empty but we couldn't read any messages
+    if latest_offset.is_none() {
+        bail!(
+            "unable to read any messages from non-empty topic {}:{}, lo/hi: {}/{}",
+            consistency_topic,
+            partition,
+            lo,
+            hi
+        );
+    }
+    Ok(latest_ts)
 }
 
-// Errors if cannot decode message; returns `None` if not `END` message.
+// There may be arbitrary messages in this topic that we cannot decode.  We only
+// return an error when we know we've found an END message but cannot decode it.
 fn maybe_decode_consistency_end_record(
     bytes: &[u8],
     consistency_topic: &str,
@@ -166,7 +178,7 @@ fn maybe_decode_consistency_end_record(
             _ => Ok(None),
         }
     } else {
-        bail!("Failed to decode consistency topic message, was not a parseable record");
+        Ok(None)
     }
 }
 
