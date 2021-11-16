@@ -41,9 +41,8 @@ Because this feature is still in beta, we strongly suggest that you start with t
   CREATE SINK quotes_sink
   FROM quotes
   INTO KAFKA BROKER 'localhost:9092' TOPIC 'quotes-eo-sink'
-  WITH (reuse_topic=true, consistency_topic='quotes-eo-sink-consistency')
-  FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+  CONSISTENCY (TOPIC 'quotes-eo-sink-consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081')
+  WITH (reuse_topic=true);
 ```
 
 ## Related topics
