@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.44"
+anyhow = "1.0.45"
 log = "0.4.13"
 mz-http-proxy = { path = "../http-proxy", features = ["hyper"] }
 rusoto_core = "0.47.0"

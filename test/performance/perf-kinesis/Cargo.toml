@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.44"
+anyhow = "1.0.45"
 aws-util = { path = "../../../src/aws-util" }
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
