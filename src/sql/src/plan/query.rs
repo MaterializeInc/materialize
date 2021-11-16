@@ -2112,9 +2112,8 @@ fn plan_table_function(
     };
     let resolved_name = normalize::unresolved_object_name(name.clone())?;
 
-    let impls = match resolve_func(ecx, name, args)? {
-        Func::Table(impls) => impls,
-        Func::Set(impls) => {
+    let (call, mut scope) = match resolve_func(ecx, name, args)? {
+        Func::Table(impls) => {
             let tf = func::select_impl(
                 ecx,
                 FuncSpec::Func(&resolved_name),
@@ -2122,33 +2121,58 @@ fn plan_table_function(
                 scalar_args,
                 vec![],
             )?;
-            return Ok(tf);
+            let call = HirRelationExpr::CallTable {
+                func: tf.func,
+                exprs: tf.exprs,
+            };
+            let scope = Scope::from_source(
+                Some(PartialName {
+                    database: None,
+                    schema: None,
+                    item: resolved_name.item.clone(),
+                }),
+                tf.column_names,
+                Some(ecx.qcx.outer_scope.clone()),
+            );
+            (call, scope)
+        }
+        Func::Set(impls) => {
+            let (call, scope) = func::select_impl(
+                ecx,
+                FuncSpec::Func(&resolved_name),
+                impls,
+                scalar_args,
+                vec![],
+            )?;
+            let scope = Scope::from_source(
+                Some(PartialName {
+                    database: None,
+                    schema: None,
+                    item: resolved_name.item.clone(),
+                }),
+                scope.column_names(),
+                Some(ecx.qcx.outer_scope.clone()),
+            );
+            (call, scope)
         }
         _ => bail!("{} is not a table function", name),
     };
-    let name = resolved_name;
-    let args = scalar_args;
-    let tf = func::select_impl(ecx, FuncSpec::Func(&name), impls, args, vec![])?;
-    let call = HirRelationExpr::CallTable {
-        func: tf.func,
-        exprs: tf.exprs,
-    };
-    let scope = Scope::from_source(
-        Some(PartialName {
-            database: None,
-            schema: None,
-            item: name.item,
-        }),
-        tf.column_names,
-        Some(ecx.qcx.outer_scope.clone()),
-    );
-    let mut scope = plan_table_alias(scope, alias)?;
+
     if let Some(alias) = alias {
-        if let [item] = &mut *scope.items {
+        scope = if alias.columns.is_empty()
+            && scope.len() == 1
+            && scope
+                .resolve_table_column(
+                    &resolved_name,
+                    &normalize::column_name(Ident::from(resolved_name.item.clone())),
+                )
+                .is_ok()
+        {
             // Strange special case for table functions that ouput one column.
             // If a table alias is provided but not a column alias, the column
             // implicitly takes on the same alias in addition to its inherent
-            // name.
+            // name unless the column has a given name different from the function's name
+            // (like jsonb_array_elements, which has a single `value` column).
             //
             // Concretely, this means `SELECT x FROM generate_series(1, 5) AS x`
             // returns a single column of type int, even though
@@ -2157,6 +2181,25 @@ fn plan_table_function(
             //     SELECT x FROM t AS x
             //
             // would return a single column of type record(int).
+            plan_table_alias(
+                scope,
+                Some(&TableAlias {
+                    name: alias.name.clone(),
+                    columns: vec![alias.name.clone()],
+                    strict: true,
+                }),
+            )?
+        } else {
+            plan_table_alias(scope, Some(&alias))?
+        };
+        if let [item] = &mut *scope.items {
+            // The single column case also has the property that you can select the table
+            // name and get the column (not the full table row wrapped in a record), named
+            // by the table:
+            //
+            //     SELECT g FROM generate_series(1, 1) AS g(a);
+            //
+            // Returns `1` (not `(1)`) with a column named `g` (not `a`).
             item.names.push(ScopeItemName {
                 table_name: None,
                 column_name: Some(normalize::column_name(alias.name.clone())),
