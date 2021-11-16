@@ -542,12 +542,8 @@ where
                 let mut row_builder = Row::default();
                 let mut datum_vec = DatumVec::new();
 
-                if let Some(Permutation {
-                    key_arity: _,
-                    permutation,
-                }) = permutation
-                {
-                    mfp_plan.permute(&permutation);
+                if let Some(permutation) = &permutation {
+                    permutation.permute_mfp_plan(&mut mfp_plan);
                 }
                 move |row_parts, time, diff| {
                     let temp_storage = RowArena::new();
