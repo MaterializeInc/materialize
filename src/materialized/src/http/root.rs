@@ -54,7 +54,8 @@ pub fn handle_static(
 }
 
 #[cfg(not(feature = "dev-web"))]
-const STATIC_DIR: include_dir::Dir = include_dir::include_dir!("src/http/static");
+const STATIC_DIR: include_dir::Dir =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static");
 
 #[cfg(not(feature = "dev-web"))]
 fn get_static_file(path: &str) -> Option<Body> {
