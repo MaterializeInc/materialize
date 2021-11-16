@@ -8,6 +8,7 @@ menu:
 
 The `list_agg(value, delimiter)` aggregate function concatenates
 input values (including nulls) into a [`list`](/sql/types/list).
+The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
