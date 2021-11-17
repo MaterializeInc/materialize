@@ -14,6 +14,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
@@ -31,6 +32,7 @@ use crate::error::Error;
 use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
+use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::{Indexed, ListenFn, Snapshot};
@@ -465,6 +467,58 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
         let (tx, rx) = PFuture::new();
         self.runtime.allow_compaction(&[(self.id, since)], tx);
         rx
+    }
+}
+
+/// A handle to construct a [ColumnarRecords] from a vector of records for writes.
+#[derive(Debug)]
+pub struct WriteReqBuilder<K: Codec, V: Codec> {
+    records: ColumnarRecordsBuilder,
+    key_buf: Vec<u8>,
+    val_buf: Vec<u8>,
+    _phantom: PhantomData<(K, V)>,
+}
+
+impl<K: Codec, V: Codec> WriteReqBuilder<K, V> {
+    /// Finalize a write request into [ColumnarRecords].
+    pub fn finish(&mut self) -> ColumnarRecords {
+        std::mem::take(&mut self.records).finish()
+    }
+}
+
+impl<'a, K: Codec, V: Codec> FromIterator<&'a ((K, V), u64, isize)> for WriteReqBuilder<K, V> {
+    fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, isize)>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let size_hint = iter.size_hint();
+
+        let mut builder = WriteReqBuilder {
+            records: ColumnarRecordsBuilder::default(),
+            key_buf: Vec::new(),
+            val_buf: Vec::new(),
+            _phantom: PhantomData,
+        };
+        for record in iter {
+            let ((key, val), ts, diff) = record;
+            builder.key_buf.clear();
+            key.encode(&mut builder.key_buf);
+            builder.val_buf.clear();
+            val.encode(&mut builder.val_buf);
+
+            if builder.records.len() == 0 {
+                // Use the first record to attempt to pre-size the builder
+                // allocations. This uses the iter's size_hint's lower+1 to
+                // match the logic in Vec.
+                let (lower, _) = size_hint;
+                let additional = usize::saturating_add(lower, 1);
+                builder
+                    .records
+                    .reserve(additional, builder.key_buf.len(), builder.val_buf.len());
+            }
+            builder
+                .records
+                .push(((&builder.key_buf, &builder.val_buf), *ts, *diff));
+        }
+        builder
     }
 }
 

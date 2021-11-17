@@ -14,6 +14,7 @@
 pub mod arrangement;
 pub mod background;
 pub mod cache;
+pub mod columnar;
 pub mod encoding;
 pub mod metrics;
 pub mod runtime;
