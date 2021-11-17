@@ -1575,21 +1575,30 @@ impl AggregateExpr {
                         MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
                         BinaryFunc::ListIndex,
                     );
+                let field_names = vec![
+                    ColumnName::from("?row_number?"),
+                    ColumnName::from("?record?"),
+                ];
+                let fields = field_names
+                    .iter()
+                    .cloned()
+                    .zip([
+                        ScalarType::Int64.nullable(false),
+                        // ListIndex's output type is nullable. The optimizer will re-discover
+                        // that this field is not nullable when constant-folding ListIndex.
+                        record.typ(input_type),
+                    ])
+                    .collect_vec();
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
-                        elem_type: self
-                            .typ(input_type)
-                            .scalar_type
-                            .unwrap_list_element_type()
-                            .clone(),
+                        elem_type: ScalarType::Record {
+                            fields,
+                            custom_oid: None,
+                            custom_name: None,
+                        },
                     },
                     exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from("?row_number?"),
-                                ColumnName::from("?record?"),
-                            ],
-                        },
+                        func: VariadicFunc::RecordCreate { field_names },
                         exprs: vec![
                             MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
                             record,
