@@ -1279,9 +1279,9 @@ pub mod plan {
     }
 
     impl MfpPlan {
-	/// Prepares `self` to act on permuted input, according to the permutation array
-	/// `permutation` (see for example the documentation on `util::permutation_to_map_and_new_arity`
-	/// for a description of the input).
+        /// Prepares `self` to act on permuted input, according to the permutation array
+        /// `permutation` (see for example the documentation on `util::permutation_to_map_and_new_arity`
+        /// for a description of the input).
         pub fn permute(&mut self, permutation: &[usize]) {
             let (map, new_arity) = permutation_to_map_and_new_arity(permutation);
             self.mfp.mfp.permute(map, new_arity);
