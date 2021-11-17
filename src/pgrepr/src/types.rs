@@ -65,6 +65,8 @@ pub enum Type {
     Uuid,
     /// A function name.
     RegProc,
+    /// A type name.
+    RegType,
 }
 
 lazy_static! {
@@ -146,6 +148,7 @@ impl Type {
                 Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
                 Type::Uuid => &postgres_types::Type::UUID_ARRAY,
                 Type::RegProc => &postgres_types::Type::REGPROC_ARRAY,
+                Type::RegType => &postgres_types::Type::REGTYPE_ARRAY,
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -170,6 +173,7 @@ impl Type {
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
             Type::Uuid => &postgres_types::Type::UUID,
             Type::RegProc => &postgres_types::Type::REGPROC,
+            Type::RegType => &postgres_types::Type::REGTYPE,
         }
     }
 
@@ -207,6 +211,7 @@ impl Type {
             &postgres_types::Type::TIMESTAMPTZ => "timestamp with time zone",
             &postgres_types::Type::VARCHAR => "character varying",
             &postgres_types::Type::REGPROC_ARRAY => "regproc[]",
+            // TODO possibly add regtype
             other => other.name(),
         }
     }
@@ -246,6 +251,7 @@ impl Type {
             Type::TimestampTz => 8,
             Type::Uuid => 16,
             Type::RegProc => 4,
+            Type::RegType => 4,
         }
     }
 
@@ -290,6 +296,7 @@ impl Type {
             Type::TimestampTz => ScalarType::TimestampTz,
             Type::Uuid => ScalarType::Uuid,
             Type::RegProc => ScalarType::RegProc,
+            Type::RegType => ScalarType::RegType,
         }
     }
 }
@@ -330,6 +337,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Uuid => Type::Uuid,
             ScalarType::Numeric { .. } => Type::Numeric,
             ScalarType::RegProc => Type::RegProc,
+            ScalarType::RegType => Type::RegType,
         }
     }
 }

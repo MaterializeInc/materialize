@@ -965,6 +965,8 @@ pub enum ScalarType {
     },
     /// A PostgreSQL function name.
     RegProc,
+    /// A PostgreSQL type name.
+    RegType,
 }
 
 /// [FromTy] is a utility trait for [ScalarType] that defines a mapping between a Rust type T and
