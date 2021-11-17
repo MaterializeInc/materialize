@@ -159,10 +159,7 @@ pub fn plan_create_table(
         .collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
-        bail!(
-            "cannot CREATE TABLE: column {} specified more than once",
-            dup.as_str().quoted()
-        );
+        bail!("column {} specified more than once", dup.as_str().quoted());
     }
 
     // Build initial relation type that handles declared data types
