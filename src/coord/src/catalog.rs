@@ -2511,6 +2511,7 @@ impl From<SerializedPlanContext> for PlanContext {
     fn from(cx: SerializedPlanContext) -> PlanContext {
         PlanContext {
             wall_time: cx.wall_time.unwrap_or_else(|| Utc.timestamp(0, 0)),
+            qgm_optimizations: false,
         }
     }
 }

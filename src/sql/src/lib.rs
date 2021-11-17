@@ -92,5 +92,4 @@ pub mod normalize;
 pub mod parse;
 pub mod plan;
 pub mod pure;
-#[cfg(test)]
 pub mod query_model;

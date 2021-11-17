@@ -96,7 +96,7 @@ impl Session {
         match self.transaction {
             TransactionStatus::Default | TransactionStatus::Started(_) => {
                 self.transaction = TransactionStatus::InTransaction(Transaction {
-                    pcx: PlanContext::new(wall_time),
+                    pcx: PlanContext::new(wall_time, self.vars.qgm_optimizations()),
                     ops: TransactionOps::None,
                     write_lock_guard: None,
                     access,
@@ -116,7 +116,7 @@ impl Session {
     pub fn start_transaction_implicit(mut self, wall_time: DateTime<Utc>, stmts: usize) -> Self {
         if let TransactionStatus::Default = self.transaction {
             let txn = Transaction {
-                pcx: PlanContext::new(wall_time),
+                pcx: PlanContext::new(wall_time, self.vars.qgm_optimizations()),
                 ops: TransactionOps::None,
                 write_lock_guard: None,
                 access: None,

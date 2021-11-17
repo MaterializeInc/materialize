@@ -66,6 +66,12 @@ const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
 };
 
+const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
+    name: static_uncased_str!("qgm_optimizations_experimental"),
+    value: &false,
+    description: "Enables optimizations based on a Query Graph Model (QGM) query representation.",
+};
+
 const SEARCH_PATH: ServerVar<[&str]> = ServerVar {
     name: static_uncased_str!("search_path"),
     value: &["mz_catalog", "pg_catalog", "public", "mz_temp"],
@@ -148,6 +154,7 @@ pub struct Vars {
     extra_float_digits: SessionVar<i32>,
     failpoints: ServerVar<str>,
     integer_datetimes: ServerVar<bool>,
+    qgm_optimizations: SessionVar<bool>,
     search_path: ServerVar<[&'static str]>,
     server_version: ServerVar<str>,
     server_version_num: ServerVar<i32>,
@@ -167,6 +174,7 @@ impl Default for Vars {
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
             failpoints: FAILPOINTS,
             integer_datetimes: INTEGER_DATETIMES,
+            qgm_optimizations: SessionVar::new(&QGM_OPTIMIZATIONS),
             search_path: SEARCH_PATH,
             server_version: SERVER_VERSION,
             server_version_num: SERVER_VERSION_NUM,
@@ -190,6 +198,7 @@ impl Vars {
             &self.extra_float_digits,
             &self.failpoints,
             &self.integer_datetimes,
+            &self.qgm_optimizations,
             &self.search_path,
             &self.server_version,
             &self.server_version_num,
@@ -241,6 +250,8 @@ impl Vars {
             Ok(&self.failpoints)
         } else if name == INTEGER_DATETIMES.name {
             Ok(&self.integer_datetimes)
+        } else if name == QGM_OPTIMIZATIONS.name {
+            Ok(&self.qgm_optimizations)
         } else if name == SEARCH_PATH.name {
             Ok(&self.search_path)
         } else if name == SERVER_VERSION.name {
@@ -319,6 +330,8 @@ impl Vars {
             Ok(())
         } else if name == INTEGER_DATETIMES.name {
             Err(CoordError::ReadOnlyParameter(&INTEGER_DATETIMES))
+        } else if name == QGM_OPTIMIZATIONS.name {
+            self.qgm_optimizations.set(value, local)
         } else if name == SEARCH_PATH.name {
             Err(CoordError::ReadOnlyParameter(&SEARCH_PATH))
         } else if name == SERVER_VERSION.name {
@@ -355,6 +368,7 @@ impl Vars {
             extra_float_digits,
             failpoints: _,
             integer_datetimes: _,
+            qgm_optimizations,
             search_path: _,
             server_version: _,
             server_version_num: _,
@@ -365,6 +379,7 @@ impl Vars {
         } = self;
         application_name.end_transaction(action);
         database.end_transaction(action);
+        qgm_optimizations.end_transaction(action);
         extra_float_digits.end_transaction(action);
         sql_safe_updates.end_transaction(action);
     }
@@ -397,6 +412,11 @@ impl Vars {
     /// Returns the value of the `integer_datetimes` configuration parameter.
     pub fn integer_datetimes(&self) -> bool {
         *self.integer_datetimes.value
+    }
+
+    /// Returns the value of the `qgm_optimizations` configuration parameter.
+    pub fn qgm_optimizations(&self) -> bool {
+        *self.qgm_optimizations.value()
     }
 
     /// Returns the value of the `search_path` configuration parameter.
@@ -452,6 +472,14 @@ pub trait Var: fmt::Debug {
 
     /// Returns the name of the type of this variable.
     fn type_name(&self) -> &'static str;
+
+    /// Indicates wither the [`Var`] is experimental.
+    ///
+    /// The default implementation determines this from the [`Var`] name, as
+    /// experimental variable names should always end with "_experimental".
+    fn experimental(&self) -> bool {
+        self.name().ends_with("_experimental")
+    }
 }
 
 /// A `ServerVar` is the default value for a configuration parameter.

@@ -9,6 +9,8 @@
 
 //! Generates a graphviz graph from a Query Graph Model.
 
+#![cfg(test)]
+
 use crate::query_model::{BoxType, Model, Quantifier, QuantifierId, QueryBox};
 use itertools::Itertools;
 use std::cell::RefCell;

@@ -28,7 +28,7 @@ pub type BoxId = u64;
 pub type QuantifierSet = BTreeSet<QuantifierId>;
 
 /// A Query Graph Model instance represents a SQL query.
-/// See: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210707_qgm_sql_high_level_representation.md
+/// See [the design doc](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210707_qgm_sql_high_level_representation.md) for details.
 ///
 /// In this representation, SQL queries are represented as a graph of operators,
 /// represented as boxes, that are connected via quantifiers. A top-level box
@@ -416,7 +416,7 @@ impl QueryBox {
 }
 
 impl BoxType {
-    fn get_box_type_str(&self) -> &'static str {
+    pub fn get_box_type_str(&self) -> &'static str {
         match self {
             BoxType::BaseTable(..) => "BaseTable",
             BoxType::Except => "Except",
