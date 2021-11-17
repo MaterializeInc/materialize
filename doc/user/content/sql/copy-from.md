@@ -40,6 +40,12 @@ As described in the **Text Format** section of [PostgreSQL's documentation][pg-c
 As described in the **CSV Format** section of [PostgreSQL's documentation][pg-copy-from]
 except that:
 
+- More than one layer of escaped quote characters returns the wrong result.
+  {{% gh 9074 %}}
+
+- Quote characters must immediately follow a delimiter to be treated as
+  expected. {{% gh 9075 %}}
+
 - Single-column rows containing quoted end-of-data markers (e.g. `"\."`) will be
   treated as end-of-data markers despite being quoted. In PostgreSQL, this data
   would be escaped and would not terminate the data processing.
