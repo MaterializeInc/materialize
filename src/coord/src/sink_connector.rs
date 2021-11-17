@@ -103,7 +103,7 @@ fn get_latest_ts(
         )
     })?;
 
-    let (hi, lo) = consumer
+    let (lo, hi) = consumer
         .fetch_watermarks(consistency_topic, 0, timeout)
         .map_err(|e| {
             anyhow!(
@@ -111,7 +111,6 @@ fn get_latest_ts(
                 e
             )
         })?;
-    let hi: u64 = hi.try_into()?;
 
     // Empty topic
     if hi == 0 {
@@ -127,11 +126,11 @@ fn get_latest_ts(
         if let Some(ts) = maybe_decode_consistency_end_record(&message, consistency_topic)? {
             debug_assert!(ts >= latest_ts.unwrap_or(0));
             latest_ts = Some(ts);
+        }
 
-            // Short circuit to avoids a delay with length `timeout`
-            if ts >= hi {
-                break;
-            }
+        // Short circuit to avoids a delay with length `timeout`
+        if offset >= hi {
+            break;
         }
     }
 
