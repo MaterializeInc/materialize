@@ -278,7 +278,7 @@ lazy_static! {
                         )
                     )
                     END
-            )"), //TODO dunno if this works
+            )"),
 
             (String, Float32) => Explicit: CastStringToFloat32,
             (String, Float64) => Explicit: CastStringToFloat64,
