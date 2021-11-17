@@ -136,7 +136,7 @@ lazy_static! {
             (Int16, Float64) => Implicit: CastInt16ToFloat64,
             (Int16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(s)))
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(func::CastInt16ToNumeric(s))))
             }),
             (Int16, String) => Assignment: CastInt16ToString,
 

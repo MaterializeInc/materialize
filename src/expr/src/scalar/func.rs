@@ -163,18 +163,6 @@ fn cast_int16_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(i64::from(a.unwrap_int16()))
 }
 
-fn cast_int16_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_int16();
-    let mut a = Numeric::from(i32::from(a));
-    if let Some(scale) = scale {
-        if numeric::rescale(&mut a, scale).is_err() {
-            return Err(EvalError::NumericFieldOverflow);
-        }
-    }
-    // Besides `rescale`, cast is infallible.
-    Ok(Datum::from(a))
-}
-
 fn cast_int32_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() != 0)
 }
@@ -3660,7 +3648,7 @@ pub enum UnaryFunc {
     CastRegProcToOid,
     CastInt64ToInt16,
     CastInt64ToInt32,
-    CastInt16ToNumeric(Option<u8>),
+    CastInt16ToNumeric(CastInt16ToNumeric),
     CastInt32ToNumeric(Option<u8>),
     CastInt64ToBool,
     CastInt64ToNumeric(Option<u8>),
@@ -3871,6 +3859,7 @@ derive_unary!(
     CastFloat32ToFloat64,
     CastFloat64ToFloat32,
     CastFloat32ToString,
+    CastInt16ToNumeric,
     PgColumnSize,
     MzRowSize,
     IsNull,
@@ -3955,6 +3944,7 @@ impl UnaryFunc {
             | Exp(_)
             | SqrtFloat64(_)
             | CbrtFloat64(_)
+            | CastInt16ToNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegNumeric => Ok(neg_numeric(a)),
             NegInterval => Ok(neg_interval(a)),
@@ -3968,7 +3958,6 @@ impl UnaryFunc {
             CastInt16ToFloat64 => Ok(cast_int16_to_float64(a)),
             CastInt16ToInt32 => Ok(cast_int16_to_int32(a)),
             CastInt16ToInt64 => Ok(cast_int16_to_int64(a)),
-            CastInt16ToNumeric(scale) => cast_int16_to_numeric(a, *scale),
             CastInt16ToString => Ok(cast_int16_to_string(a, temp_storage)),
             CastInt32ToBool => Ok(cast_int32_to_bool(a)),
             CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
@@ -4157,6 +4146,7 @@ impl UnaryFunc {
             | Exp(_)
             | SqrtFloat64(_)
             | CbrtFloat64(_)
+            | CastInt16ToNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -4214,7 +4204,6 @@ impl UnaryFunc {
             }
 
             CastStringToNumeric(scale)
-            | CastInt16ToNumeric(scale)
             | CastInt32ToNumeric(scale)
             | CastInt64ToNumeric(scale)
             | CastFloat32ToNumeric(scale)
@@ -4374,6 +4363,7 @@ impl UnaryFunc {
             | Exp(_)
             | SqrtFloat64(_)
             | CbrtFloat64(_)
+            | CastInt16ToNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4429,7 +4419,6 @@ impl UnaryFunc {
             | CastNumericToInt32 => false,
             CastStringToInt64 | CastInt16ToInt64 | CastInt32ToInt64 | CastNumericToInt64 => false,
             CastStringToNumeric(_)
-            | CastInt16ToNumeric(_)
             | CastInt32ToNumeric(_)
             | CastInt64ToNumeric(_)
             | CastFloat32ToNumeric(_)
@@ -4590,6 +4579,7 @@ impl UnaryFunc {
             | Exp(_)
             | SqrtFloat64(_)
             | CbrtFloat64(_)
+            | CastInt16ToNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegNumeric => f.write_str("-"),
             NegInterval => f.write_str("-"),
@@ -4602,7 +4592,6 @@ impl UnaryFunc {
             CastInt16ToInt32 => f.write_str("i16toi32"),
             CastInt16ToInt64 => f.write_str("i16toi64"),
             CastInt16ToString => f.write_str("i16tostr"),
-            CastInt16ToNumeric(..) => f.write_str("i16tonumeric"),
             CastInt32ToBool => f.write_str("i32tobool"),
             CastInt32ToFloat32 => f.write_str("i32tof32"),
             CastInt32ToFloat64 => f.write_str("i32tof64"),

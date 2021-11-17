@@ -1048,6 +1048,23 @@ impl<E> DatumType<E> for Vec<u8> {
     }
 }
 
+impl<E> DatumType<E> for Numeric {
+    fn as_column_type() -> ColumnType {
+        ScalarType::Numeric { scale: None }.nullable(false)
+    }
+
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+        match res {
+            Ok(Datum::Numeric(n)) => Ok(n.into_inner()),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+        Ok(Datum::from(self))
+    }
+}
+
 impl<'a> ScalarType {
     /// Returns the contained numeric scale.
     ///
