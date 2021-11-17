@@ -31,6 +31,7 @@ _numeric
 _oid
 _record
 _regproc
+_regtype
 _text
 _time
 _timestamp
@@ -59,6 +60,7 @@ numeric
 oid
 record
 regproc
+regtype
 text
 time
 timestamp
@@ -85,6 +87,7 @@ _numeric         system
 _oid             system
 _record          system
 _regproc         system
+_regtype         system
 _text            system
 _time            system
 _timestamp       system
@@ -112,6 +115,7 @@ map              system
 numeric          system
 oid              system
 regproc          system
+regtype          system
 record           system
 text             system
 time             system
