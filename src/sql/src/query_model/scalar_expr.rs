@@ -26,8 +26,8 @@ use crate::query_model::{QuantifierId, QuantifierSet};
 /// * BaseColumn is used to represent leaf columns, only allowed in
 ///   the projection of BaseTables and TableFunctions.
 ///
-/// Scalar expressions only make sense within the context of a [QueryBox],
-/// and hence, their name.
+/// Scalar expressions only make sense within the context of a
+/// [`crate::query_model::QueryBox`], and hence, their name.
 #[derive(Debug, PartialEq, Clone)]
 pub enum BoxScalarExpr {
     /// A reference to a column from a quantifier that either lives in
