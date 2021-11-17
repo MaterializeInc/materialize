@@ -122,8 +122,14 @@ fn golden() -> Result<(), Error> {
     let g = Generator::new(seed, config);
     let reqs = g.into_iter().take(100).collect::<Vec<_>>();
 
-    let golden = golden_state(DATAZ)?;
     let (current, raw_blobs) = current_state(&reqs)?;
+    let golden = golden_state(DATAZ).map_err(|e| {
+        for req in reqs.iter() {
+            log::debug!("req {:?}", req);
+        }
+        log::info!("current impl blob state: {}", raw_blobs);
+        e
+    })?;
 
     if golden != current {
         for req in reqs {
