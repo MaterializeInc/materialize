@@ -26,11 +26,7 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 
 ### Functions
 
-- Materialize does not support [window
-  functions](https://www.postgresql.org/docs/current/tutorial-window.html). In
-  some cases, you may be able to achieve the desired results with [temporal
-  filters](https://materialize.com/temporal-filters/) or the [TOP K by
-  group](/guides/top-k/) idiom instead. {{% gh 213 %}}
+- Materialize does not support [window functions](https://www.postgresql.org/docs/current/tutorial-window.html). In some cases, you may be able to achieve the desired results with [temporal filters](/guides/temporal-filters/) or the [TOP K by group](/guides/top-k/) idiom instead. {{% gh 213 %}}
 - Table functions in scalar positions are only partially supported. We currently
   support no more than one table function in scalar position, which can only be
   situated in the query's outermost projection. {{% gh 1546 %}}
