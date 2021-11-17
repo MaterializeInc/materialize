@@ -116,7 +116,10 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, MirScalarExpr};
+use expr::{
+    permutation_to_map_and_new_arity, GlobalId, Id, MapFilterProject, MfpPlan, MirScalarExpr,
+    SafeMfpPlan,
+};
 use itertools::Itertools;
 use ore::collections::CollectionExt as _;
 use ore::now::NowFn;
@@ -1515,5 +1518,25 @@ impl Permutation {
     /// The arity of the permutation
     pub fn arity(&self) -> usize {
         self.permutation.len()
+    }
+
+    /// Prepares the MFP `mfp` to act on permuted input, according
+    /// to this permutation
+    pub fn permute_mfp(&self, mfp: &mut MapFilterProject) {
+        let (map, new_arity) = permutation_to_map_and_new_arity(&self.permutation);
+        mfp.permute(map, new_arity);
+    }
+
+    /// Prepares the MfpPlan `mfp` to act on permuted input, according
+    /// to this permutation
+    pub fn permute_mfp_plan(&self, mfp: &mut MfpPlan) {
+        mfp.permute(&self.permutation);
+    }
+
+    /// Prepares the SafeMfpPlan `mfp` to act on permuted input, according
+    /// to this permutation
+    pub fn permute_safe_mfp_plan(&self, mfp: &mut SafeMfpPlan) {
+        let (map, new_arity) = permutation_to_map_and_new_arity(&self.permutation);
+        SafeMfpPlan::permute(mfp, map, new_arity);
     }
 }

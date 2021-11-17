@@ -409,7 +409,7 @@ where
         &mut self,
         prev_keyed: J,
         next_input: Arranged<G, Tr2>,
-        closure: JoinClosure,
+        mut closure: JoinClosure,
         prev_permutation: Permutation,
         next_permutation: Permutation,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>)
@@ -429,11 +429,11 @@ where
         let mut row_builder = Row::default();
         let permutation = prev_permutation.join(&next_permutation);
 
+        closure.permute(&permutation);
         let (oks, err) = prev_keyed
             .join_core(&next_input, move |key, old, new| {
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow_with_many(&[key, old, new]);
-                permutation.permute_in_place(&mut datums_local);
                 closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
                     .map_err(DataflowError::from)
