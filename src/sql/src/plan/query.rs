@@ -1753,12 +1753,13 @@ fn plan_view_select(
 
     // Step 8. Handle intrusive ORDER BY and DISTINCT.
     let order_by = {
+        let relation_type = qcx.relation_type(&relation_expr);
         let (mut order_by, mut map_exprs) = plan_projected_order_by_exprs(
             &ExprContext {
                 qcx,
                 name: "ORDER BY clause",
                 scope: &map_scope,
-                relation_type: &qcx.relation_type(&relation_expr),
+                relation_type: &relation_type,
                 allow_aggregates: true,
                 allow_subqueries: true,
             },
@@ -1769,6 +1770,9 @@ fn plan_view_select(
         match distinct {
             None => relation_expr = relation_expr.map(map_exprs),
             Some(Distinct::EntireRow) => {
+                if relation_type.arity() == 0 {
+                    bail!("SELECT DISTINCT must have at least one column");
+                }
                 // `SELECT DISTINCT` only distincts on the columns in the SELECT
                 // list, so we can't proceed if `ORDER BY` has introduced any
                 // columns for arbitrary expressions. This matches PostgreSQL.

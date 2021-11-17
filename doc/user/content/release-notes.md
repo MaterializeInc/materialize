@@ -115,6 +115,9 @@ List new features before bug fixes.
 - Disallow calls to functions with using `DISTINCT *` as their arguments, e.g.
   `COUNT(DISTINCT *)`.
 
+- Disallow `DISTINCT` expressions on 0-column objects, such as tables with no
+  columns.
+
 {{% version-header v0.9.12 %}}
 
 - **Breaking change**: Disallow ambiguous table references in queries. For
