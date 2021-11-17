@@ -206,7 +206,7 @@ db error: FATAL: database "no_such_dbname" does not exist
 # Confirm that the new sources can be used to build upon
 #
 
-> CREATE MATERIALIZED VIEW join_view AS SELECT * FROM pk_table, nonpk_table WHERE pk_table.pk = nonpk_table.f1;
+> CREATE MATERIALIZED VIEW join_view (a, b, c, d) AS SELECT * FROM pk_table, nonpk_table WHERE pk_table.pk = nonpk_table.f1;
 
 > SELECT * FROM join_view;
 "1" "one" "1" "1"

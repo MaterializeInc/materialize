@@ -69,14 +69,8 @@ $ kafka-verify format=json sink=materialize.public.record_sink key=false
 {"after":{"row":{"unnamed_cols":{"record0":{"b":2,"f1":1,"f3":3}}}},"before":null}
 
 # Duplicate column names
-> CREATE VIEW duplicate_cols AS SELECT 'a1' AS a, 'a1' AS a;
-
-> CREATE SINK duplicate_cols_sink FROM duplicate_cols
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'duplicate-cols-sink'
-  FORMAT JSON
-
-$ kafka-verify format=json sink=materialize.public.duplicate_cols_sink key=false
-{"after":{"row":{"a":"a1","a1":"a1"}},"before":null}
+! CREATE VIEW duplicate_cols AS SELECT 'a1' AS a, 'a1' AS a;
+column "a" specified more than once
 
 # Complex types
 

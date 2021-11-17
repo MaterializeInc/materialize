@@ -42,7 +42,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
         )?;
         client.batch_execute(
-            "CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src",
+            "CREATE MATERIALIZED VIEW mat (a, a_data, c, c_data) AS SELECT 'a', data, 'c' AS c, data FROM src",
         )?;
         client.batch_execute("CREATE DATABASE d")?;
         client.batch_execute("CREATE SCHEMA d.s")?;
@@ -67,10 +67,10 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 .map(|row| (row.get("Column_name"), row.get("Seq_in_index")))
                 .collect::<Vec<(String, i64)>>(),
             &[
-                ("?column?".into(), 1),
-                ("data".into(), 2),
+                ("a".into(), 1),
+                ("a_data".into(), 2),
                 ("c".into(), 3),
-                ("data".into(), 4),
+                ("c_data".into(), 4),
             ],
         );
         assert_eq!(
@@ -309,7 +309,7 @@ fn test_metrics_registry_hygiene() -> Result<(), Box<dyn Error>> {
         source_file.path().display()
     ))?;
     client.batch_execute(
-        "CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src",
+        "CREATE MATERIALIZED VIEW mat (a, a_data, c, c_data) AS SELECT 'a', data, 'c' AS c, data FROM src",
     )?;
 
     // Check that metrics are where we expect them:
