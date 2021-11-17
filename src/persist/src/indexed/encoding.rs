@@ -92,6 +92,14 @@ pub struct BlobMeta {
     ///
     /// Invariant: Each stream id is in here at most once.
     pub traces: Vec<TraceMeta>,
+    /// Unsealed blobs to delete.
+    ///
+    /// Invariant: Each key is in here or pending_trace_deletes at most once.
+    pub pending_unsealed_deletes: Vec<UnsealedBatchMeta>,
+    /// Trace blobs to delete.
+    ///
+    /// Invariant: Each key is in here or pending_unsealed_deletes at most once.
+    pub pending_trace_deletes: Vec<TraceBatchMeta>,
 }
 
 /// Registration information for a single stream.
@@ -266,6 +274,8 @@ impl Default for BlobMeta {
             graveyard: Vec::new(),
             unsealeds: Vec::new(),
             traces: Vec::new(),
+            pending_unsealed_deletes: Vec::new(),
+            pending_trace_deletes: Vec::new(),
         }
     }
 }
@@ -348,7 +358,7 @@ impl Codec for BlobMeta {
 
 impl BlobMeta {
     const MAGIC: &'static [u8] = b"mz";
-    const CURRENT_VERSION: u8 = 3;
+    const CURRENT_VERSION: u8 = 4;
 
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
@@ -484,7 +494,6 @@ impl BlobMeta {
                 batch_keys.insert(batch.key.clone());
             }
         }
-
         for t in self.traces.iter() {
             for batch in t.batches.iter() {
                 if batch_keys.contains(&batch.key) {
@@ -492,6 +501,26 @@ impl BlobMeta {
                 }
                 batch_keys.insert(batch.key.clone());
             }
+        }
+
+        let mut pending_delete_keys = HashSet::new();
+        for meta in self.pending_unsealed_deletes.iter() {
+            if pending_delete_keys.contains(&meta.key) {
+                return Err(Error::from(format!(
+                    "pending deletes contain duplicate key: {}",
+                    &meta.key
+                )));
+            }
+            pending_delete_keys.insert(meta.key.clone());
+        }
+        for meta in self.pending_trace_deletes.iter() {
+            if pending_delete_keys.contains(&meta.key) {
+                return Err(Error::from(format!(
+                    "pending deletes contain duplicate key: {}",
+                    &meta.key
+                )));
+            }
+            pending_delete_keys.insert(meta.key.clone());
         }
 
         Ok(())
@@ -1548,6 +1577,29 @@ mod tests {
             b.validate(),
             Err(Error::from("duplicate batch key found in trace: "))
         );
+
+        // Duplicate key in pending deletes
+        let b = BlobMeta {
+            pending_unsealed_deletes: vec![UnsealedBatchMeta {
+                key: "foo".into(),
+                desc: seqno_desc(0, 1),
+                ts_upper: 1,
+                ts_lower: 0,
+                size_bytes: 0,
+            }],
+            pending_trace_deletes: vec![TraceBatchMeta {
+                key: "foo".into(),
+                desc: u64_desc(0, 1),
+                level: 0,
+                size_bytes: 0,
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("pending deletes contain duplicate key: foo"))
+        );
     }
 
     #[test]
@@ -1563,6 +1615,8 @@ mod tests {
             graveyard: vec![],
             unsealeds: vec![],
             traces: vec![],
+            pending_unsealed_deletes: vec![],
+            pending_trace_deletes: vec![],
         };
         let mut encoded = Vec::new();
         original.encode(&mut encoded);

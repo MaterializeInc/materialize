@@ -259,7 +259,6 @@ impl Unsealed {
     /// Returns a list of batches that can safely be deleted after the eviction is
     /// committed to durable storage.
     fn evict(&mut self) -> Vec<UnsealedBatchMeta> {
-        // TODO: actually physically free the old batches.
         let ts_lower = self.ts_lower.clone();
         let evicted = self
             .batches

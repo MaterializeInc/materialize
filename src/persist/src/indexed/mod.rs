@@ -169,6 +169,8 @@ struct AppliedState {
     graveyard: Vec<StreamRegistration>,
     unsealeds: BTreeMap<Id, Unsealed>,
     traces: BTreeMap<Id, Trace>,
+    pending_unsealed_deletes: Vec<UnsealedBatchMeta>,
+    pending_trace_deletes: Vec<TraceBatchMeta>,
 }
 
 impl<L: Log, B: Blob> Indexed<L, B> {
@@ -233,6 +235,8 @@ impl AppliedState {
             graveyard: meta.graveyard,
             unsealeds,
             traces,
+            pending_unsealed_deletes: meta.pending_unsealed_deletes,
+            pending_trace_deletes: meta.pending_trace_deletes,
         }
     }
 
@@ -309,6 +313,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
     /// Applies an unbatched cmd to the machine state and snapshots the result
     /// to durable storage.
+    ///
+    /// This assumes idempotence of the closure's usage of external systems.
+    /// There are currently exceptions to this assumption: notably writing new
+    /// blobs, which in that particular case means we're open to the risk of
+    /// orphaned blobs.
     ///
     /// Precondition: pending has been emptied
     fn apply_unbatched_cmd<
@@ -480,7 +489,6 @@ impl AppliedState {
 
         self.id_mapping.retain(|r| r.name != id_str);
 
-        // TODO: actually physically delete the unsealed and trace batches.
         let unsealed = self.unsealeds.remove(&mapping.id);
         let trace = self.traces.remove(&mapping.id);
 
@@ -488,6 +496,14 @@ impl AppliedState {
         // stream.
         debug_assert!(unsealed.is_some());
         debug_assert!(trace.is_some());
+
+        if let Some(unsealed) = unsealed.as_ref() {
+            self.pending_unsealed_deletes
+                .append(&mut unsealed.meta().batches);
+        }
+        if let Some(trace) = trace.as_ref() {
+            self.pending_trace_deletes.append(&mut trace.meta().batches);
+        }
 
         self.graveyard.push(mapping);
 
@@ -633,10 +649,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 }
 
 impl AppliedState {
-    fn compact_inner<B: Blob>(
-        &mut self,
-        maintainer: &Maintainer<B>,
-    ) -> Result<(u64, Vec<UnsealedBatchMeta>, Vec<TraceBatchMeta>), Error> {
+    fn compact_inner<B: Blob>(&mut self, maintainer: &Maintainer<B>) -> Result<u64, Error> {
         let mut total_written_bytes = 0;
         let mut deleted_unsealed_batches = vec![];
         let mut deleted_trace_batches = vec![];
@@ -650,11 +663,13 @@ impl AppliedState {
             total_written_bytes += written_bytes;
             deleted_trace_batches.extend(deleted_batches);
         }
-        Ok((
-            total_written_bytes,
-            deleted_unsealed_batches,
-            deleted_trace_batches,
-        ))
+
+        self.pending_unsealed_deletes
+            .append(&mut deleted_unsealed_batches);
+        self.pending_trace_deletes
+            .append(&mut deleted_trace_batches);
+
+        Ok(total_written_bytes)
     }
 }
 
@@ -683,30 +698,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             .compaction_seconds
             .inc_by(compaction_start.elapsed().as_secs_f64());
 
-        let (total_written_bytes, deleted_unsealed_batches, deleted_trace_batches) = ret?;
-        if !deleted_unsealed_batches.is_empty() || !deleted_trace_batches.is_empty() {
-            self.metrics.compaction_count.inc();
-        }
+        let total_written_bytes = ret?;
         self.metrics
             .compaction_write_bytes
             .inc_by(total_written_bytes);
-
-        // After we've committed our logical deletions to durable storage, we can
-        // physically delete the data.
-        //
-        // TODO: if there's an error in the middle of the deletions then any
-        // undeleted blobs will forever be orphaned. We could instead retain a
-        // pending_deletes list but we would lose that across restarts unless we
-        // wrote it to persistent storage. Alternatively, we should expose a list
-        // method on blob and have a periodic cleanup task that attempts to find
-        // and delete unused blobs. We could also use the list method to verify
-        // that all referenced blobs exist.
-        for batch in deleted_unsealed_batches {
-            self.blob.delete_unsealed_batch(&batch)?;
-        }
-
-        for batch in deleted_trace_batches {
-            self.blob.delete_trace_batch(&batch)?;
+        if total_written_bytes > 0 {
+            self.metrics.compaction_count.inc();
         }
 
         Ok(())
@@ -722,6 +719,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         self.drain_pending()?;
         self.apply_unbatched_cmd(|state, blob, _| state.drain_unsealed(blob))?;
         self.compact()?;
+        self.apply_unbatched_cmd(|state, blob, _| state.delete_blobs(blob))?;
         Ok(())
     }
 }
@@ -941,6 +939,22 @@ impl AppliedState {
         Ok(())
     }
 
+    /// Physically deletes any blobs queued for deletion.
+    ///
+    /// NB: This is called within `apply_unbatched_cmd`, which assumes
+    /// idempotent usage of external systems. The [Blob] trait returns success
+    /// if a key being deleted already doesn't exist, so this method is indeed
+    /// idempotent.
+    fn delete_blobs<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<(), Error> {
+        for meta in self.pending_unsealed_deletes.drain(..) {
+            blob.delete_unsealed_batch(&meta)?;
+        }
+        for meta in self.pending_trace_deletes.drain(..) {
+            blob.delete_trace_batch(&meta)?;
+        }
+        Ok(())
+    }
+
     /// Returns the current "sealed" frontier for an id.
     ///
     /// This frontier represents a contract of time such that all updates with a
@@ -1067,6 +1081,8 @@ impl AppliedState {
                 .map(|(_, unsealed)| unsealed.meta())
                 .collect(),
             traces: self.traces.iter().map(|(_, trace)| trace.meta()).collect(),
+            pending_unsealed_deletes: self.pending_unsealed_deletes.clone(),
+            pending_trace_deletes: self.pending_trace_deletes.clone(),
         }
     }
 }
@@ -1277,7 +1293,7 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::error::Error;
-    use crate::mem::MemRegistry;
+    use crate::mem::{MemBlob, MemLog, MemRegistry};
     use crate::pfuture::PFuture;
     use crate::unreliable::UnreliableHandle;
 
@@ -1591,6 +1607,86 @@ mod tests {
         // optimization works, this doesn't need storage.
         unreliable.make_unavailable();
         i.step()?;
+        Ok(())
+    }
+
+    #[test]
+    fn pending_deletes() -> Result<(), Error> {
+        let num_unsealed_batches = |i: &Indexed<MemLog, MemBlob>| -> usize {
+            i.state
+                .serialize_meta()
+                .unsealeds
+                .iter()
+                .map(|t| t.batches.len())
+                .sum()
+        };
+        let num_trace_batches = |i: &Indexed<MemLog, MemBlob>| -> usize {
+            i.state
+                .serialize_meta()
+                .traces
+                .iter()
+                .map(|t| t.batches.len())
+                .sum()
+        };
+
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
+        let id = block_on(|res| i.register("0", "", "", res))?;
+
+        // Write data out, seal it, and drain_unsealed to get it into trace.
+        // This puts the unsealed blob in pending deletes.
+        block_on_drain(&mut i, |i, handle| {
+            i.write(vec![(id, vec![(("1".into(), "".into()), 1, 1)])], handle)
+        })?;
+        block_on_drain(&mut i, |i, handle| i.seal(vec![id], 2, handle))?;
+        i.apply_unbatched_cmd(|state, blob, _| state.drain_unsealed(blob))?;
+        // NB: The unsealed batch isn't removed until we compact.
+        assert_eq!(num_unsealed_batches(&i), 1);
+        assert_eq!(num_trace_batches(&i), 1);
+
+        // Do it again to get a second batch in trace.
+        block_on_drain(&mut i, |i, handle| {
+            i.write(vec![(id, vec![(("2".into(), "".into()), 2, 1)])], handle)
+        })?;
+        block_on_drain(&mut i, |i, handle| i.seal(vec![id], 3, handle))?;
+        i.apply_unbatched_cmd(|state, blob, _| state.drain_unsealed(blob))?;
+        assert_eq!(num_trace_batches(&i), 2);
+
+        // We advance the since frontier to set up the following compact call,
+        // relying on knowledge of our compaction selection heuristic, which is
+        // unfortunate. There's probably some way we can break that part of the
+        // code up to make it more testable.
+        block_on_drain(&mut i, |i, handle| i.seal(vec![id], 4, handle))?;
+        block_on_drain(&mut i, |i, handle| {
+            i.allow_compaction(vec![(id, Antichain::from_elem(3))], handle)
+        })?;
+
+        // Compacting the two trace batches should result in pending deletes for
+        // them.
+        assert_eq!(num_unsealed_batches(&i), 2);
+        assert_eq!(num_trace_batches(&i), 2);
+        assert_eq!(i.state.serialize_meta().pending_unsealed_deletes.len(), 0);
+        assert_eq!(i.state.serialize_meta().pending_trace_deletes.len(), 0);
+        i.compact()?;
+        assert_eq!(num_unsealed_batches(&i), 0);
+        assert_eq!(num_trace_batches(&i), 1);
+        assert_eq!(i.state.serialize_meta().pending_unsealed_deletes.len(), 2);
+        assert_eq!(i.state.serialize_meta().pending_trace_deletes.len(), 2);
+
+        // These get cleared out by delete_blobs.
+        i.apply_unbatched_cmd(|state, blob, _| state.delete_blobs(blob))?;
+        assert_eq!(i.state.serialize_meta().pending_unsealed_deletes.len(), 0);
+        assert_eq!(i.state.serialize_meta().pending_trace_deletes.len(), 0);
+
+        // Now destroy the collection. The trace blob should be in pending
+        // deletes.
+        block_on(|res| i.destroy(&"0", res))?;
+        assert_eq!(num_trace_batches(&i), 0);
+        assert_eq!(i.state.serialize_meta().pending_trace_deletes.len(), 1);
+
+        // These again get cleared out by delete_blobs.
+        i.apply_unbatched_cmd(|state, blob, _| state.delete_blobs(blob))?;
+        assert_eq!(i.state.serialize_meta().pending_trace_deletes.len(), 0);
+
         Ok(())
     }
 
