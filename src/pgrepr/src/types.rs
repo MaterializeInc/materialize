@@ -117,6 +117,7 @@ impl Type {
             postgres_types::Type::TIMESTAMPTZ => Some(Type::TimestampTz),
             postgres_types::Type::UUID => Some(Type::Uuid),
             postgres_types::Type::REGPROC => Some(Type::RegProc),
+            postgres_types::Type::REGTYPE => Some(Type::RegType),
             _ => None,
         }
     }
@@ -211,7 +212,7 @@ impl Type {
             &postgres_types::Type::TIMESTAMPTZ => "timestamp with time zone",
             &postgres_types::Type::VARCHAR => "character varying",
             &postgres_types::Type::REGPROC_ARRAY => "regproc[]",
-            // TODO possibly add regtype
+            &postgres_types::Type::REGTYPE_ARRAY => "regtype[]",
             other => other.name(),
         }
     }
