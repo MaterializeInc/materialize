@@ -138,10 +138,10 @@ fn test_hir_generator() {
     datadriven::walk("tests/querymodel", |f| {
         let catalog = TestCatalog {};
 
-        let scx = &StatementContext::new(None, &catalog, Rc::new(RefCell::new(BTreeMap::new())));
-
         f.run(move |s| -> String {
-            let build_stmt = |stmt| -> String {
+            let build_stmt = |stmt, dot_graph, lower| -> String {
+                let scx =
+                    &StatementContext::new(None, &catalog, Rc::new(RefCell::new(BTreeMap::new())));
                 if let sql_parser::ast::Statement::Select(query) = stmt {
                     let planned_query = match crate::plan::query::plan_root_query(
                         scx,
@@ -154,25 +154,41 @@ fn test_hir_generator() {
 
                     let model = query_model::Model::from(&planned_query.expr);
 
-                    match query_model::dot::DotGenerator::new().generate(&model, &s.input) {
-                        Ok(graph) => graph,
-                        Err(e) => format!("graph generation error: {}", e),
+                    let mut output = String::new();
+
+                    if dot_graph {
+                        output += &match query_model::dot::DotGenerator::new()
+                            .generate(&model, &s.input)
+                        {
+                            Ok(graph) => graph,
+                            Err(e) => return format!("graph generation error: {}", e),
+                        };
                     }
+
+                    if lower {
+                        output += &model.lower().pretty_humanized(&catalog);
+                    }
+
+                    output
                 } else {
-                    panic!("invalid query: {}", s.input);
+                    format!("invalid query: {}", s.input)
                 }
             };
-            match s.directive.as_str() {
-                "build" => {
-                    let stmts = match sql_parser::parser::parse_statements(&s.input) {
-                        Ok(stmts) => stmts,
-                        Err(e) => return format!("unable to parse SQL: {}: {}", s.input, e),
-                    };
 
-                    stmts
-                        .into_iter()
-                        .fold("".to_string(), |c, stmt| c + &build_stmt(stmt))
-                }
+            let execute_command = |dot_graph, lower| -> String {
+                let stmts = match sql_parser::parser::parse_statements(&s.input) {
+                    Ok(stmts) => stmts,
+                    Err(e) => return format!("unable to parse SQL: {}: {}", s.input, e),
+                };
+
+                stmts.into_iter().fold("".to_string(), |c, stmt| {
+                    c + &build_stmt(stmt, dot_graph, lower)
+                })
+            };
+
+            match s.directive.as_str() {
+                "build" => execute_command(true, false),
+                "lower" => execute_command(false, true),
                 _ => panic!("unknown directive: {}", s.directive),
             }
         })

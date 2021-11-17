@@ -1,0 +1,121 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+lower
+select;
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Constant ()
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Project ()
+----
+----
+
+lower
+select 1;
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Constant ()
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map 1
+| Project (#0)
+----
+----
+
+lower
+select a, a from (select 1 as a);
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Constant ()
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map 1
+| Project (#0)
+| Map #0, #0
+| Project (#1, #2)
+----
+----
+
+
+lower
+select a, b, a from (select 1 as a, 2 as b);
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Constant ()
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map 1, 2
+| Project (#0, #1)
+| Map #0, #1, #0
+| Project (#2..#4)
+----
+----
+
+lower
+select x.a from (select true as a) x join (select false as b) y on x.a;
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Constant ()
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map true
+| Project (#0)
+
+%3 =
+| Constant ()
+
+%4 =
+| Join %0 %3
+| | implementation = Unimplemented
+| Map false
+| Project (#0)
+
+%5 =
+| Join %2 %4
+| | implementation = Unimplemented
+| Project (#0, #1)
+| Filter #0
+| Map #0, #1
+| Project (#2, #3)
+| Map #0
+| Project (#2)
+----
+----
