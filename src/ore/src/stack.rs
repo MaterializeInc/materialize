@@ -77,7 +77,7 @@ where
 /// }
 ///
 /// impl Evaluator {
-///     fn eval(&self, expr: &Expr) -> i64 {
+///     fn eval(&mut self, expr: &Expr) -> i64 {
 ///         match expr {
 ///             Expr::Var { name } => self.vars[name],
 ///             Expr::Add { left, right } => self.eval(left) + self.eval(right),
@@ -91,17 +91,24 @@ where
 /// so:
 ///
 /// ```
+/// # use std::collections::HashMap;
+/// # enum Expr {
+/// #     Var { name: String },
+/// #     Add { left: Box<Expr>, right: Box<Expr> },
+/// # }
+/// use ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+///
 /// struct Evaluator {
 ///     vars: HashMap<String, i64>,
 ///     recursion_guard: RecursionGuard,
 /// }
 ///
 /// impl Evaluator {
-///     fn eval(&self, expr: &Expr) -> Result<i64, RecursionLimitError> {
+///     fn eval(&mut self, expr: &Expr) -> Result<i64, RecursionLimitError> {
 ///         // ADDED: call to `self.checked_recur`.
-///         self.checked_recur(|| match expr {
-///             Expr::Var { name } => self.vars[name],
-///             Expr::Add { left, right } => self.eval(left) + self.eval(right),
+///         self.checked_recur_mut(|e| match expr {
+///             Expr::Var { name } => Ok(e.vars[name]),
+///             Expr::Add { left, right } => Ok(e.eval(left)? + e.eval(right)?),
 ///         })
 ///     }
 /// }
