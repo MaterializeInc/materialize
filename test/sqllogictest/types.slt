@@ -893,3 +893,15 @@ query B
 SELECT 1082 = 'date'::regtype
 ----
 true
+
+statement ok
+CREATE TABLE text_to_regtype (a text);
+
+statement ok
+INSERT INTO text_to_regtype VALUES (NULL), ('date');
+
+query I
+SELECT a::regtype FROM text_to_regtype ORDER BY a
+----
+1082
+NULL
