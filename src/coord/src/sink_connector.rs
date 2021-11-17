@@ -27,6 +27,7 @@ use dataflow_types::{
 use expr::GlobalId;
 use ore::collections::CollectionExt;
 use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::error::KafkaError;
 use repr::Timestamp;
 use sql::kafka_util;
 
@@ -53,6 +54,7 @@ fn get_next_message(
                 Some(p) => Ok(Some((p.to_vec(), message.offset()))),
                 None => bail!("unexpected null payload"),
             },
+            Err(KafkaError::PartitionEOF(_)) => Ok(None),
             Err(err) => bail!("Failed to process message {}", err),
         }
     } else {
@@ -63,9 +65,21 @@ fn get_next_message(
 // Retrieves the latest committed timestamp from the consistency topic
 fn get_latest_ts(
     consistency_topic: &str,
-    consumer: &mut BaseConsumer,
+    mut consumer_config: ClientConfig,
     timeout: Duration,
 ) -> Result<Option<Timestamp>, anyhow::Error> {
+    let mut consumer = consumer_config
+        .set(
+            "group.id",
+            format!("materialize-bootstrap-{}", consistency_topic),
+        )
+        .set("isolation.level", "read_committed")
+        .set("enable.auto.commit", "false")
+        .set("auto.offset.reset", "earliest")
+        .set("enable.partition.eof", "true")
+        .create::<BaseConsumer>()
+        .context("creating consumer client failed")?;
+
     // ensure the consistency topic has exactly one partition
     let partitions = kafka_util::get_partitions(&consumer, consistency_topic, timeout)
         .with_context(|| {
@@ -119,18 +133,14 @@ fn get_latest_ts(
 
     let mut latest_ts = None;
     let mut latest_offset = None;
-    while let Some((message, offset)) = get_next_message(consumer, Duration::ZERO)? {
+    while let Some((message, offset)) = get_next_message(&mut consumer, timeout)? {
         debug_assert!(offset >= latest_offset.unwrap_or(0));
         latest_offset = Some(offset);
 
         if let Some(ts) = maybe_decode_consistency_end_record(&message, consistency_topic)? {
-            debug_assert!(ts >= latest_ts.unwrap_or(0));
-            latest_ts = Some(ts);
-        }
-
-        // Short circuit to avoids a delay with length `timeout`
-        if offset >= hi {
-            break;
+            if ts >= latest_ts.unwrap_or(0) {
+                latest_ts = Some(ts);
+            }
         }
     }
 
@@ -158,8 +168,8 @@ fn maybe_decode_consistency_end_record(
     let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
         .context("Failed to decode consistency topic message")?;
 
-    if let Value::Record(r) = record {
-        let m: HashMap<String, Value> = r.into_iter().collect();
+    if let Value::Record(ref r) = record {
+        let m: HashMap<String, Value> = r.clone().into_iter().collect();
         let status = m.get("status");
         let id = m.get("id");
         match (status, id) {
@@ -456,21 +466,7 @@ async fn build_kafka(
 
             // get latest committed timestamp from consistency topic
             let gate_ts = if builder.reuse_topic {
-                let mut consumer_config = config.clone();
-                consumer_config
-                    .set(
-                        "group.id",
-                        format!("materialize-bootstrap-{}", consistency_topic),
-                    )
-                    .set("isolation.level", "read_committed")
-                    .set("enable.auto.commit", "false")
-                    .set("auto.offset.reset", "earliest");
-
-                let mut consumer = consumer_config
-                    .create::<BaseConsumer>()
-                    .context("creating consumer client failed")?;
-
-                get_latest_ts(&consistency_topic, &mut consumer, Duration::from_secs(5))
+                get_latest_ts(&consistency_topic, config.clone(), Duration::from_secs(5))
                     .context("error restarting from existing kafka consistency topic for sink")?
             } else {
                 None
