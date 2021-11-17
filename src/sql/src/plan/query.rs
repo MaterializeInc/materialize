@@ -30,6 +30,7 @@ use std::mem;
 use anyhow::{anyhow, bail, ensure, Context};
 use expr::{func as expr_func, LocalId};
 use itertools::Itertools;
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use ore::str::StrExt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::fold::Fold;
@@ -1171,6 +1172,13 @@ fn check_col_index(name: &str, e: &Expr<Aug>, max: usize) -> Result<Option<usize
 }
 
 fn plan_query(
+    qcx: &mut QueryContext,
+    q: &Query<Aug>,
+) -> Result<(HirRelationExpr, Scope, RowSetFinishing), anyhow::Error> {
+    qcx.checked_recur_mut(|qcx| plan_query_inner(qcx, q))
+}
+
+fn plan_query_inner(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope, RowSetFinishing), anyhow::Error> {
@@ -2672,6 +2680,13 @@ pub fn plan_expr<'a>(
     ecx: &'a ExprContext,
     e: &Expr<Aug>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    ecx.checked_recur(|ecx| plan_expr_inner(ecx, e))
+}
+
+fn plan_expr_inner<'a>(
+    ecx: &'a ExprContext,
+    e: &Expr<Aug>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
     if let Some(i) = ecx.scope.resolve_expr(e) {
         // We've already calculated this expression.
         return Ok(HirScalarExpr::Column(i).into());
@@ -3968,6 +3983,13 @@ pub struct QueryContext<'a> {
     pub ctes: HashMap<LocalId, CteDesc>,
     /// The GlobalIds of the items the `Query` is dependent upon.
     pub ids: HashSet<GlobalId>,
+    pub recursion_guard: RecursionGuard,
+}
+
+impl CheckedRecursion for QueryContext<'_> {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
 }
 
 impl<'a> QueryContext<'a> {
@@ -3979,6 +4001,7 @@ impl<'a> QueryContext<'a> {
             outer_relation_types: vec![],
             ctes: HashMap::new(),
             ids: HashSet::new(),
+            recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
 
@@ -4006,6 +4029,7 @@ impl<'a> QueryContext<'a> {
                 .collect(),
             ctes,
             ids: HashSet::new(),
+            recursion_guard: self.recursion_guard.clone(),
         }
     }
 
@@ -4081,6 +4105,12 @@ pub struct ExprContext<'a> {
     pub allow_aggregates: bool,
     /// Are subqueries allowed in this context
     pub allow_subqueries: bool,
+}
+
+impl CheckedRecursion for ExprContext<'_> {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.qcx.recursion_guard
+    }
 }
 
 impl<'a> ExprContext<'a> {
