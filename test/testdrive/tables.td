@@ -349,8 +349,6 @@ INSERT has more expressions than target columns
 > INSERT INTO nocols SELECT UNION ALL SELECT
 > SELECT count(*) FROM nocols
 2
-> SELECT count(DISTINCT *) FROM nocols
-1
 
 # Test that show columns preserves the column order
 > CREATE TABLE column_order (b int, a int);

@@ -552,6 +552,14 @@ impl<'a> Parser<'a> {
             Some(DISTINCT),
         );
         let args = self.parse_optional_args(true)?;
+
+        if distinct && matches!(args, FunctionArgs::Star) {
+            return Err(self.error(
+                self.peek_prev_pos() - 1,
+                "DISTINCT * not supported as function args".to_string(),
+            ));
+        }
+
         let filter = if self.parse_keyword(FILTER) {
             self.expect_token(&Token::LParen)?;
             self.expect_keyword(WHERE)?;

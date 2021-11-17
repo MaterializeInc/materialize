@@ -112,6 +112,9 @@ List new features before bug fixes.
 
 - Correctly handle protobuf messages where the value is omitted instead of dropping them.
 
+- Disallow calls to functions with using `DISTINCT *` as their arguments, e.g.
+  `COUNT(DISTINCT *)`.
+
 {{% version-header v0.9.12 %}}
 
 - **Breaking change**: Disallow ambiguous table references in queries. For

@@ -3218,7 +3218,13 @@ fn plan_function_order_by(
 
 fn plan_aggregate(
     ecx: &ExprContext,
-    sql_func: &Function<Aug>,
+    Function::<Aug> {
+        name,
+        args,
+        filter,
+        over,
+        distinct,
+    }: &Function<Aug>,
 ) -> Result<AggregateExpr, anyhow::Error> {
     // Normal aggregate functions, like `sum`, expect as input a single expression
     // which yields the datum to aggregate. Order sensitive aggregate functions,
@@ -3233,16 +3239,16 @@ fn plan_aggregate(
     // most, so explicitly drop it if the function doesn't care about order. This
     // prevents the projection into Record below from triggering on unspported
     // functions.
-    let impls = match resolve_func(ecx, &sql_func.name, &sql_func.args)? {
+    let impls = match resolve_func(ecx, &name, &args)? {
         Func::Aggregate(impls) => impls,
         _ => unreachable!("plan_aggregate called on non-aggregate function,"),
     };
 
-    if sql_func.over.is_some() {
+    if over.is_some() {
         bail_unsupported!("aggregate window functions");
     }
 
-    let name = normalize::unresolved_object_name(sql_func.name.clone())?;
+    let name = normalize::unresolved_object_name(name.clone())?;
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
     // generalized function selection framework. The rule is simple: the user
@@ -3252,7 +3258,7 @@ fn plan_aggregate(
     // rules to all aggregates, not just `count`, since we may one day support
     // user-defined aggregates, including user-defined aggregates that take no
     // parameters.
-    let (args, order_by) = match &sql_func.args {
+    let (args, order_by) = match &args {
         FunctionArgs::Star => (vec![], vec![]),
         FunctionArgs::Args { args, order_by } => {
             if args.is_empty() {
@@ -3269,7 +3275,7 @@ fn plan_aggregate(
     let (order_by_exprs, col_orders) = plan_function_order_by(ecx, &order_by)?;
 
     let (mut expr, func) = func::select_impl(ecx, FuncSpec::Func(&name), impls, args, col_orders)?;
-    if let Some(filter) = &sql_func.filter {
+    if let Some(filter) = &filter {
         // If a filter is present, as in
         //
         //     <agg>(<expr>) FILTER (WHERE <cond>)
@@ -3321,7 +3327,7 @@ fn plan_aggregate(
     Ok(AggregateExpr {
         func,
         expr: Box::new(expr),
-        distinct: sql_func.distinct,
+        distinct: *distinct,
     })
 }
 
