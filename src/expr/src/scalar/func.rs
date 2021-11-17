@@ -42,7 +42,7 @@ use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
 use repr::adt::numeric::{self, Numeric};
 use repr::adt::regex::Regex;
-use repr::{strconv, ColumnName, ColumnType, Datum, Row, RowArena, ScalarType};
+use repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, MirScalarExpr};
@@ -714,7 +714,7 @@ fn cast_jsonb_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn cast_jsonb_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
         Datum::Int64(_) => cast_int64_to_int32(a),
-        Datum::Float64(f) => cast_float64_to_int32(Some(*f)).map(|f| f.into()),
+        Datum::Float64(f) => cast_float64_to_int32(*f).map(|f| f.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "integer".into(),
@@ -725,7 +725,7 @@ fn cast_jsonb_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn cast_jsonb_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
         Datum::Int64(_) => Ok(a),
-        Datum::Float64(f) => cast_float64_to_int64(Some(*f)).map(|f| f.into()),
+        Datum::Float64(f) => cast_float64_to_int64(*f).map(|f| f.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "bigint".into(),
@@ -736,7 +736,7 @@ fn cast_jsonb_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn cast_jsonb_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
         Datum::Int64(_) => Ok(cast_int64_to_float32(a)),
-        Datum::Float64(f) => cast_float64_to_float32(Some(*f)).map(|f| f.into()),
+        Datum::Float64(f) => cast_float64_to_float32(*f).map(|f| f.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "real".into(),
@@ -3521,18 +3521,95 @@ impl fmt::Display for BinaryFunc {
     }
 }
 
+/// A description of an SQL unary function that has the ability to lazy evaluate its arguments
 // This trait will eventualy be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
-trait UnaryFuncTrait {
+trait LazyUnaryFunc {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError>;
+
+    /// The output ColumnType of this function
     fn output_type(&self, input_type: ColumnType) -> ColumnType;
+
+    /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool;
+
+    /// Whether this function will produce NULL on non-NULL input
     fn introduces_nulls(&self) -> bool;
+
+    /// Whether this function preserves uniqueness
     fn preserves_uniqueness(&self) -> bool;
+}
+
+/// A description of an SQL unary function that operates on eagerly evaluated expressions
+trait EagerUnaryFunc {
+    type Input: DatumType<EvalError>;
+    type Output: DatumType<EvalError>;
+
+    fn call(&self, input: Self::Input) -> Self::Output;
+
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        let output = Self::Output::as_column_type();
+        let nullable = output.nullable;
+        // The output is nullable if it is nullable by itself or the input is nullable and this
+        // function propagates nulls
+        output.nullable(nullable || (self.propagates_nulls() && input_type.nullable))
+    }
+
+    /// Whether this function will produce NULL on NULL input
+    fn propagates_nulls(&self) -> bool {
+        // If the input is not nullable then nulls are propagated
+        !Self::Input::as_column_type().nullable
+    }
+
+    /// Whether this function will produce NULL on non-NULL input
+    fn introduces_nulls(&self) -> bool {
+        // If the output is nullable then nulls can be introduced
+        Self::Output::as_column_type().nullable
+    }
+
+    /// Whether this function preserves uniqueness
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+}
+
+impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        match T::Input::try_from_result(a.eval(datums, temp_storage)) {
+            // If we can convert to the input type then we call the function
+            Ok(input) => self.call(input).into_result(temp_storage),
+            // If we can't and we got a non-null datum something went wrong in the planner
+            Err(Ok(datum)) if !datum.is_null() => panic!("invalid input type"),
+            // Otherwise we just propagate NULLs and errors
+            Err(res) => res,
+        }
+    }
+
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        self.output_type(input_type)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        self.propagates_nulls()
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        self.introduces_nulls()
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        self.preserves_uniqueness()
+    }
 }
 
 #[derive(
