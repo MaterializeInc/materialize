@@ -260,7 +260,7 @@ lazy_static! {
             // does a lookup of the function name and expects exactly one type to
             // match it. You can also specify (in postgres) a string that's a valid
             // int4 and it'll happily cast it (without verifying that the int4 matches
-            // a function oid). To support this, use a SQL expression that checks if
+            // a type oid). To support this, use a SQL expression that checks if
             // the input might be a valid int4 with a regex, otherwise try to lookup in
             // mz_types. CASE will return NULL if the subquery returns zero results,
             // so use mz_error_if_null to coerce that into an error. This is hacky and

@@ -884,11 +884,6 @@ SELECT 'date'::regtype::oid
 query error type "nonexistent" does not exist
 SELECT 'nonexistent'::regtype
 
-query T
-SELECT 'date'::regtype
-----
-1082
-
 query B
 SELECT 1082 = 'date'::regtype
 ----
