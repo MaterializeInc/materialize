@@ -46,7 +46,7 @@
 //!   session contained the string `<TEMP>`, it will be replaced with a
 //!   temporary directory.
 //! - `update-upper`: Sends a batch of
-//!   [`FrontierUppers`](dataflow::WorkerFeedback::FrontierUppers) to the
+//!   [`FrontierUppers`](dataflow_types::client::WorkerFeedback::FrontierUppers) to the
 //!   Coordinator. Input is one update per line of the format
 //!   `database.schema.item N` where N is some numeric timestamp. No output.
 //! - `inc-timestamp`: Increments the timestamp by number in the input. No
