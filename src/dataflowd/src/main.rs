@@ -18,7 +18,7 @@ use tokio::net::TcpListener;
 use tokio::select;
 use tracing_subscriber::EnvFilter;
 
-use dataflow::Client;
+use dataflow_types::client::Client;
 use ore::metrics::MetricsRegistry;
 use ore::now::SYSTEM_TIME;
 

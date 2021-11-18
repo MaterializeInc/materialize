@@ -18,7 +18,8 @@ use ore::{
     metrics::{IntCounterVec, IntGaugeVec},
 };
 
-use super::{Command, CommandKind, PendingPeek};
+use super::PendingPeek;
+use dataflow_types::client::{Command, CommandKind};
 use prometheus::core::AtomicI64;
 
 #[derive(Clone)]

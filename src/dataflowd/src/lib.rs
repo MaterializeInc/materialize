@@ -23,7 +23,7 @@ use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio_serde::formats::Bincode;
 use tokio_util::codec::LengthDelimitedCodec;
 
-use dataflow::{Command, Response};
+use dataflow_types::client::{Command, Response};
 
 /// A framed connection to a dataflowd server.
 pub type Framed<C, T, U> =
@@ -99,12 +99,12 @@ impl RemoteClient {
 }
 
 #[async_trait]
-impl dataflow::Client for RemoteClient {
+impl dataflow_types::client::Client for RemoteClient {
     fn num_workers(&self) -> usize {
         self.num_workers
     }
 
-    async fn send(&mut self, cmd: dataflow::Command) {
+    async fn send(&mut self, cmd: dataflow_types::client::Command) {
         trace!("Broadcasting dataflow command: {:?}", cmd);
         let num_conns = self.sinks.len();
         for (sink, cmd_part) in self.sinks.iter_mut().zip(cmd.partition_among(num_conns)) {
@@ -115,7 +115,7 @@ impl dataflow::Client for RemoteClient {
         }
     }
 
-    async fn recv(&mut self) -> Option<dataflow::Response> {
+    async fn recv(&mut self) -> Option<dataflow_types::client::Response> {
         // TODO: something better than panicking.
         // Attempt to read from each of `self.conns`.
         self.stream
