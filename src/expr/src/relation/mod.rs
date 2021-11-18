@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use lowertest::{MzEnumReflect, MzStructReflect};
 use ore::collections::CollectionExt;
 use ore::id_gen::IdGen;
+use ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, TableFunc};
@@ -31,6 +32,18 @@ use crate::{
 pub mod canonicalize;
 pub mod func;
 pub mod join_input_mapper;
+
+/// A recursion limit to be used for stack-safe traversals of [`MirRelationExpr`] trees.
+///
+/// The recursion limit must be large enough to accomodate for the linear representation
+/// of some pathological but frequently occurring query fragments.
+///
+/// For example, in MIR we could have long chains of
+/// - (1) `Let` bindings,
+/// - (2) `CallBinary` calls with associative functions such as `OR` and `+`
+///
+/// Until we fix those, we need to stick with the larger recursion limit.
+pub const RECURSION_LIMIT: usize = 1024;
 
 /// An abstract syntax tree which defines a collection.
 ///
@@ -676,7 +689,9 @@ impl MirRelationExpr {
     /// The number of child relations this relation has.
     pub fn num_inputs(&self) -> usize {
         let mut count = 0;
+
         self.visit1(|_| count += 1);
+
         count
     }
 
@@ -971,312 +986,6 @@ impl MirRelationExpr {
         self.visit1(|expr| expr.global_uses_into(out))
     }
 
-    /// Applies a fallible `f` to each child `MirRelationExpr`.
-    pub fn try_visit1<'a, F, E>(&'a self, mut f: F) -> Result<(), E>
-    where
-        F: FnMut(&'a Self) -> Result<(), E>,
-    {
-        match self {
-            MirRelationExpr::Constant { .. } | MirRelationExpr::Get { .. } => (),
-            MirRelationExpr::Let { value, body, .. } => {
-                f(value)?;
-                f(body)?;
-            }
-            MirRelationExpr::Project { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Map { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::FlatMap { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Filter { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Join { inputs, .. } => {
-                for input in inputs {
-                    f(input)?;
-                }
-            }
-            MirRelationExpr::Reduce { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::TopK { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Negate { input } => f(input)?,
-            MirRelationExpr::Threshold { input } => f(input)?,
-            MirRelationExpr::Union { base, inputs } => {
-                f(base)?;
-                for input in inputs {
-                    f(input)?;
-                }
-            }
-            MirRelationExpr::ArrangeBy { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::DeclareKeys { input, .. } => {
-                f(input)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Applies an infallible `f` to each child `MirRelationExpr`.
-    pub fn visit1<'a, F>(&'a self, mut f: F)
-    where
-        F: FnMut(&'a Self),
-    {
-        self.try_visit1(|e| {
-            f(e);
-            Ok::<_, ()>(())
-        })
-        .unwrap()
-    }
-
-    /// Post-order fallible visitor for each `MirRelationExpr`.
-    pub fn try_visit<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
-    where
-        F: FnMut(&'a Self) -> Result<(), E>,
-    {
-        self.try_visit1(|e| e.try_visit(f))?;
-        f(self)
-    }
-
-    /// Post-order infallible visitor for each `MirRelationExpr`.
-    pub fn visit<'a, F>(&'a self, f: &mut F)
-    where
-        F: FnMut(&'a Self),
-    {
-        self.visit1(|e| e.visit(f));
-        f(self)
-    }
-
-    /// Applies fallible `f` to each child `MirRelationExpr`.
-    pub fn try_visit1_mut<'a, F, E>(&'a mut self, mut f: F) -> Result<(), E>
-    where
-        F: FnMut(&'a mut Self) -> Result<(), E>,
-    {
-        match self {
-            MirRelationExpr::Constant { .. } | MirRelationExpr::Get { .. } => (),
-            MirRelationExpr::Let { value, body, .. } => {
-                f(value)?;
-                f(body)?;
-            }
-            MirRelationExpr::Project { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Map { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::FlatMap { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Filter { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Join { inputs, .. } => {
-                for input in inputs {
-                    f(input)?;
-                }
-            }
-            MirRelationExpr::Reduce { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::TopK { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Negate { input } => f(input)?,
-            MirRelationExpr::Threshold { input } => f(input)?,
-            MirRelationExpr::Union { base, inputs } => {
-                f(base)?;
-                for input in inputs {
-                    f(input)?;
-                }
-            }
-            MirRelationExpr::ArrangeBy { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::DeclareKeys { input, .. } => {
-                f(input)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Applies infallible `f` to each child `MirRelationExpr`.
-    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
-    where
-        F: FnMut(&'a mut Self),
-    {
-        self.try_visit1_mut(|e| {
-            f(e);
-            Ok::<_, ()>(())
-        })
-        .unwrap()
-    }
-
-    /// Post-order fallible visitor for each `MirRelationExpr`.
-    pub fn try_visit_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
-    where
-        F: FnMut(&mut Self) -> Result<(), E>,
-    {
-        self.try_visit1_mut(|e| e.try_visit_mut(f))?;
-        f(self)
-    }
-
-    /// Post-order infallible visitor for each `MirRelationExpr`.
-    pub fn visit_mut<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut Self),
-    {
-        self.visit1_mut(|e| e.visit_mut(f));
-        f(self)
-    }
-
-    /// Pre-order fallible visitor for each `MirRelationExpr`.
-    pub fn try_visit_mut_pre<F, E>(&mut self, f: &mut F) -> Result<(), E>
-    where
-        F: FnMut(&mut Self) -> Result<(), E>,
-    {
-        f(self)?;
-        self.try_visit1_mut(|e| e.try_visit_mut_pre(f))
-    }
-
-    /// Pre-order fallible visitor for each `MirRelationExpr`.
-    pub fn visit_mut_pre<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut Self),
-    {
-        f(self);
-        self.visit1_mut(|e| e.visit_mut_pre(f))
-    }
-
-    /// A generalization of `visit`. The function `pre` runs on a
-    /// `MirRelationExpr` before it runs on any of the child `MirRelationExpr`s.
-    /// The function `post` runs on child `MirRelationExpr`s first before the
-    /// parent. Optionally, `pre` can return which child `MirRelationExpr`s, if
-    /// any, should be visited (default is to visit all children).
-    pub fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
-    where
-        F1: FnMut(&Self) -> Option<Vec<&MirRelationExpr>>,
-        F2: FnMut(&Self),
-    {
-        let to_visit = pre(self);
-        if let Some(to_visit) = to_visit {
-            for e in to_visit {
-                e.visit_pre_post(pre, post);
-            }
-        } else {
-            self.visit1(|e| e.visit_pre_post(pre, post));
-        }
-        post(self);
-    }
-
-    /// Fallible visitor for the [`MirScalarExpr`]s in the relation expression.
-    /// Note that this does not recurse into the `MirScalarExpr`s themselves.
-    pub fn try_visit_scalars_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
-    where
-        F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
-    {
-        // Match written out explicitly to reduce the possibility of adding a
-        // new field with a `MirScalarExpr` within and forgetting to account for it
-        // here.
-        self.try_visit_mut(&mut |e| e.try_visit_scalars_mut1(f))
-    }
-
-    /// Fallible visitor for the [`MirScalarExpr`]s directly owned by this relation expression.
-    /// This does not recursively descend into owned [`MirRelationExpr`]s.
-    pub fn try_visit_scalars_mut1<F, E>(&mut self, f: &mut F) -> Result<(), E>
-    where
-        F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
-    {
-        match self {
-            MirRelationExpr::Map { scalars, input: _ }
-            | MirRelationExpr::Filter {
-                predicates: scalars,
-                input: _,
-            } => {
-                for s in scalars {
-                    f(s)?;
-                }
-                Ok(())
-            }
-            MirRelationExpr::FlatMap {
-                exprs,
-                input: _,
-                func: _,
-            } => {
-                for expr in exprs {
-                    f(expr)?;
-                }
-                Ok(())
-            }
-            MirRelationExpr::Join {
-                equivalences: keys,
-                inputs: _,
-                implementation: _,
-            }
-            | MirRelationExpr::ArrangeBy { input: _, keys } => {
-                for key in keys {
-                    for s in key {
-                        f(s)?;
-                    }
-                }
-                Ok(())
-            }
-            MirRelationExpr::Reduce {
-                group_key,
-                aggregates,
-                ..
-            } => {
-                for s in group_key {
-                    f(s)?;
-                }
-                for agg in aggregates {
-                    f(&mut agg.expr)?;
-                }
-                Ok(())
-            }
-            MirRelationExpr::Constant { rows: _, typ: _ }
-            | MirRelationExpr::Get { id: _, typ: _ }
-            | MirRelationExpr::Let {
-                id: _,
-                value: _,
-                body: _,
-            }
-            | MirRelationExpr::Project {
-                input: _,
-                outputs: _,
-            }
-            | MirRelationExpr::TopK {
-                input: _,
-                group_key: _,
-                order_key: _,
-                limit: _,
-                offset: _,
-                monotonic: _,
-            }
-            | MirRelationExpr::Negate { input: _ }
-            | MirRelationExpr::Threshold { input: _ }
-            | MirRelationExpr::DeclareKeys { input: _, keys: _ }
-            | MirRelationExpr::Union { base: _, inputs: _ } => Ok(()),
-        }
-    }
-
-    /// Like `try_visit_scalars_mut`, but the closure must be infallible.
-    pub fn visit_scalars_mut<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut MirScalarExpr),
-    {
-        self.try_visit_scalars_mut(&mut |s| {
-            f(s);
-            Ok::<_, ()>(())
-        })
-        .unwrap()
-    }
-
     /// Pretty-print this MirRelationExpr to a string.
     ///
     /// This method allows an additional `ExprHumanizer` which can annotate
@@ -1435,6 +1144,507 @@ impl MirRelationExpr {
                 ..
             }
         )
+    }
+
+    /// Applies a fallible immutable `f` to each child of type `MirRelationExpr`.
+    pub fn try_visit1<'a, F, E>(&'a self, f: F) -> Result<(), E>
+    where
+        F: FnMut(&'a MirRelationExpr) -> Result<(), E>,
+    {
+        MirRelationExprVisitor::new().try_visit1(self, f)
+    }
+
+    /// Applies a fallible mutable `f` to each child of type `MirRelationExpr`.
+    pub fn try_visit1_mut<'a, F, E>(&'a mut self, f: F) -> Result<(), E>
+    where
+        F: FnMut(&'a mut MirRelationExpr) -> Result<(), E>,
+    {
+        MirRelationExprVisitor::new().try_visit1_mut(self, f)
+    }
+
+    /// Applies an infallible immutable `f` to each child of type `MirRelationExpr`.
+    pub fn visit1<'a, F>(&'a self, f: F)
+    where
+        F: FnMut(&'a MirRelationExpr),
+    {
+        MirRelationExprVisitor::new().visit1(self, f)
+    }
+
+    /// Applies an infallible mutable `f` to each child of type `MirRelationExpr`.
+    pub fn visit1_mut<'a, F>(&'a mut self, f: F)
+    where
+        F: FnMut(&'a mut MirRelationExpr),
+    {
+        MirRelationExprVisitor::new().visit1_mut(self, f)
+    }
+
+    /// Post-order immutable fallible `MirRelationExpr` visitor.
+    pub fn try_visit<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&'a MirRelationExpr) -> Result<(), E>,
+    {
+        MirRelationExprVisitor::new().try_visit(self, f)
+    }
+
+    /// Post-order mutable fallible `MirRelationExpr` visitor.
+    pub fn try_visit_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
+    {
+        MirRelationExprVisitor::new().try_visit_mut(self, f)
+    }
+
+    /// Post-order immutable infallible `MirRelationExpr` visitor.
+    pub fn visit<'a, F>(&'a self, f: &mut F)
+    where
+        F: FnMut(&'a MirRelationExpr),
+    {
+        MirRelationExprVisitor::new().visit(self, f)
+    }
+
+    /// Post-order mutable infallible `MirRelationExpr` visitor.
+    pub fn visit_mut<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut MirRelationExpr),
+    {
+        MirRelationExprVisitor::new().visit_mut(self, f)
+    }
+
+    /// Pre-order immutable fallible `MirRelationExpr` visitor.
+    pub fn try_visit_pre<F, E>(&self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&MirRelationExpr) -> Result<(), E>,
+    {
+        MirRelationExprVisitor::new().try_visit_pre(self, f)
+    }
+
+    /// Pre-order mutable fallible `MirRelationExpr` visitor.
+    pub fn try_visit_mut_pre<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
+    {
+        MirRelationExprVisitor::new().try_visit_mut_pre(self, f)
+    }
+
+    /// Pre-order immutable infallible `MirRelationExpr` visitor.
+    pub fn visit_pre<F>(&self, f: &mut F)
+    where
+        F: FnMut(&MirRelationExpr),
+    {
+        MirRelationExprVisitor::new().visit_pre(self, f)
+    }
+
+    /// Pre-order mutable infallible `MirRelationExpr` visitor.
+    pub fn visit_mut_pre<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut MirRelationExpr),
+    {
+        MirRelationExprVisitor::new().visit_mut_pre(self, f)
+    }
+
+    /// A generalization of [`Self::visit_pre`] and [`Self::visit`].
+    ///
+    /// The function `pre` runs on a `MirRelationExpr` before it runs on any of the
+    /// child `MirRelationExpr`s. The function `post` runs on child `MirRelationExpr`s
+    /// first before the parent.
+    ///
+    /// Optionally, `pre` can return which child `MirRelationExpr`s, if any, should be
+    /// visited (default is to visit all children).
+    pub fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
+    where
+        F1: FnMut(&MirRelationExpr) -> Option<Vec<&MirRelationExpr>>,
+        F2: FnMut(&MirRelationExpr),
+    {
+        MirRelationExprVisitor::new().visit_pre_post(self, pre, post)
+    }
+
+    /// Fallible visitor for the [`MirScalarExpr`]s directly owned by this relation expression.
+    ///
+    /// The `f` visitor should not recursively descend into owned [`MirRelationExpr`]s.
+    pub fn try_visit_scalars_mut1<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
+    {
+        MirRelationExprVisitor::new().try_visit_scalars_mut1(self, f)
+    }
+
+    /// Fallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `self`.
+    ///
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    pub fn try_visit_scalars_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
+    {
+        MirRelationExprVisitor::new().try_visit_scalars_mut(self, f)
+    }
+
+    /// Infallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at at `self`.
+    ///
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    pub fn visit_scalars_mut<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut MirScalarExpr),
+    {
+        MirRelationExprVisitor::new().visit_scalars_mut(self, f)
+    }
+}
+
+#[derive(Debug)]
+struct MirRelationExprVisitor {
+    recursion_guard: RecursionGuard,
+}
+
+/// Contains visitor implementations.
+///
+/// [child, pre, post] x [fallible, infallible] x [immutable, mutable]
+impl MirRelationExprVisitor {
+    /// Constructs a new MirRelationExprVisitor using a [`RecursionGuard`] with [`RECURSION_LIMIT`].
+    fn new() -> MirRelationExprVisitor {
+        MirRelationExprVisitor {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+
+    /// Applies a fallible immutable `f` to each `expr` child of type `MirRelationExpr`.
+    fn try_visit1<'a, F, E>(&self, expr: &'a MirRelationExpr, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&'a MirRelationExpr) -> Result<(), E>,
+    {
+        match expr {
+            MirRelationExpr::Constant { .. } | MirRelationExpr::Get { .. } => (),
+            MirRelationExpr::Let { value, body, .. } => {
+                f(value)?;
+                f(body)?;
+            }
+            MirRelationExpr::Project { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::Map { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::FlatMap { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::Filter { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::Join { inputs, .. } => {
+                for input in inputs {
+                    f(input)?;
+                }
+            }
+            MirRelationExpr::Reduce { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::TopK { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::Negate { input } => f(input)?,
+            MirRelationExpr::Threshold { input } => f(input)?,
+            MirRelationExpr::Union { base, inputs } => {
+                f(base)?;
+                for input in inputs {
+                    f(input)?;
+                }
+            }
+            MirRelationExpr::ArrangeBy { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::DeclareKeys { input, .. } => {
+                f(input)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies a fallible mutable `f` to each `expr` child of type `MirRelationExpr`.
+    fn try_visit1_mut<'a, F, E>(&self, expr: &'a mut MirRelationExpr, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&'a mut MirRelationExpr) -> Result<(), E>,
+    {
+        match expr {
+            MirRelationExpr::Constant { .. } | MirRelationExpr::Get { .. } => (),
+            MirRelationExpr::Let { value, body, .. } => {
+                f(value)?;
+                f(body)?;
+            }
+            MirRelationExpr::Project { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::Map { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::FlatMap { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::Filter { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::Join { inputs, .. } => {
+                for input in inputs {
+                    f(input)?;
+                }
+            }
+            MirRelationExpr::Reduce { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::TopK { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::Negate { input } => f(input)?,
+            MirRelationExpr::Threshold { input } => f(input)?,
+            MirRelationExpr::Union { base, inputs } => {
+                f(base)?;
+                for input in inputs {
+                    f(input)?;
+                }
+            }
+            MirRelationExpr::ArrangeBy { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::DeclareKeys { input, .. } => {
+                f(input)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies an infallible immutable `f` to each `expr` child of type `MirRelationExpr`.
+    fn visit1<'a, F>(&self, expr: &'a MirRelationExpr, mut f: F)
+    where
+        F: FnMut(&'a MirRelationExpr),
+    {
+        self.try_visit1(expr, |e| {
+            f(e);
+            Ok::<_, ()>(())
+        })
+        .unwrap()
+    }
+
+    /// Applies an infallible mutable `f` to each `expr` child of type `MirRelationExpr`.
+    fn visit1_mut<'a, F>(&self, expr: &'a mut MirRelationExpr, mut f: F)
+    where
+        F: FnMut(&'a mut MirRelationExpr),
+    {
+        self.try_visit1_mut(expr, |e| {
+            f(e);
+            Ok::<_, ()>(())
+        })
+        .unwrap()
+    }
+
+    /// Post-order immutable fallible `MirRelationExpr` visitor for `expr`.
+    fn try_visit<'a, F, E>(&self, expr: &'a MirRelationExpr, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&'a MirRelationExpr) -> Result<(), E>,
+    {
+        self.try_visit1(expr, |e| self.try_visit(e, f))?;
+        f(expr)
+    }
+
+    /// Post-order mutable fallible `MirRelationExpr` visitor for `expr`.
+    fn try_visit_mut<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
+    {
+        self.try_visit1_mut(expr, |e| self.try_visit_mut(e, f))?;
+        f(expr)
+    }
+
+    /// Post-order immutable infallible `MirRelationExpr` visitor for `expr`.
+    fn visit<'a, F>(&self, expr: &'a MirRelationExpr, f: &mut F)
+    where
+        F: FnMut(&'a MirRelationExpr),
+    {
+        self.visit1(expr, |e| self.visit(e, f));
+        f(expr)
+    }
+
+    /// Post-order mutable infallible `MirRelationExpr` visitor for `expr`.
+    fn visit_mut<F>(&self, expr: &mut MirRelationExpr, f: &mut F)
+    where
+        F: FnMut(&mut MirRelationExpr),
+    {
+        self.visit1_mut(expr, |e| self.visit_mut(e, f));
+        f(expr)
+    }
+
+    /// Pre-order immutable fallible `MirRelationExpr` visitor for `expr`.
+    fn try_visit_pre<F, E>(&self, expr: &MirRelationExpr, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&MirRelationExpr) -> Result<(), E>,
+    {
+        f(expr)?;
+        self.try_visit1(expr, |e| self.try_visit_pre(e, f))
+    }
+
+    /// Pre-order mutable fallible `MirRelationExpr` visitor for `expr`.
+    fn try_visit_mut_pre<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
+    {
+        f(expr)?;
+        self.try_visit1_mut(expr, |e| self.try_visit_mut_pre(e, f))
+    }
+
+    /// Pre-order immutable infallible `MirRelationExpr` visitor for `expr`.
+    fn visit_pre<F>(&self, expr: &MirRelationExpr, f: &mut F)
+    where
+        F: FnMut(&MirRelationExpr),
+    {
+        f(expr);
+        self.visit1(expr, |e| self.visit_pre(e, f))
+    }
+
+    /// Pre-order mutable infallible `MirRelationExpr` visitor for `expr`.
+    fn visit_mut_pre<F>(&self, expr: &mut MirRelationExpr, f: &mut F)
+    where
+        F: FnMut(&mut MirRelationExpr),
+    {
+        f(expr);
+        self.visit1_mut(expr, |e| self.visit_mut_pre(e, f))
+    }
+
+    /// A generalization of [`Self::visit_pre`] and [`Self::visit`].
+    ///
+    /// The function `pre` runs on a `MirRelationExpr` before it runs on any of the
+    /// child `MirRelationExpr`s. The function `post` runs on child `MirRelationExpr`s
+    /// first before the parent.
+    ///
+    /// Optionally, `pre` can return which child `MirRelationExpr`s, if any, should be
+    /// visited (default is to visit all children).
+    fn visit_pre_post<F1, F2>(&self, expr: &MirRelationExpr, pre: &mut F1, post: &mut F2)
+    where
+        F1: FnMut(&MirRelationExpr) -> Option<Vec<&MirRelationExpr>>,
+        F2: FnMut(&MirRelationExpr),
+    {
+        if let Some(to_visit) = pre(expr) {
+            for e in to_visit {
+                self.visit_pre_post(e, pre, post);
+            }
+        } else {
+            self.visit1(expr, |e| self.visit_pre_post(e, pre, post));
+        }
+        post(expr);
+    }
+
+    /// Fallible visitor for the [`MirScalarExpr`]s directly owned by this relation expression.
+    ///
+    /// The `f` visitor should not recursively descend into owned [`MirRelationExpr`]s.
+    fn try_visit_scalars_mut1<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
+    {
+        // Match written out explicitly to reduce the possibility of adding a
+        // new field with a `MirScalarExpr` within and forgetting to account for it
+        // here.
+        match expr {
+            MirRelationExpr::Map { scalars, input: _ } => {
+                for s in scalars {
+                    f(s)?;
+                }
+                Ok(())
+            }
+            MirRelationExpr::Filter {
+                predicates,
+                input: _,
+            } => {
+                for p in predicates {
+                    f(p)?;
+                }
+                Ok(())
+            }
+            MirRelationExpr::FlatMap {
+                exprs,
+                input: _,
+                func: _,
+            } => {
+                for expr in exprs {
+                    f(expr)?;
+                }
+                Ok(())
+            }
+            MirRelationExpr::Join {
+                equivalences,
+                inputs: _,
+                implementation: _,
+            } => {
+                for equivalence in equivalences {
+                    for expr in equivalence {
+                        f(expr)?;
+                    }
+                }
+                Ok(())
+            }
+            MirRelationExpr::ArrangeBy { input: _, keys } => {
+                for key in keys {
+                    for s in key {
+                        f(s)?;
+                    }
+                }
+                Ok(())
+            }
+            MirRelationExpr::Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                for s in group_key {
+                    f(s)?;
+                }
+                for agg in aggregates {
+                    f(&mut agg.expr)?;
+                }
+                Ok(())
+            }
+            MirRelationExpr::Constant { rows: _, typ: _ }
+            | MirRelationExpr::Get { id: _, typ: _ }
+            | MirRelationExpr::Let {
+                id: _,
+                value: _,
+                body: _,
+            }
+            | MirRelationExpr::Project {
+                input: _,
+                outputs: _,
+            }
+            | MirRelationExpr::TopK {
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+                monotonic: _,
+            }
+            | MirRelationExpr::Negate { input: _ }
+            | MirRelationExpr::Threshold { input: _ }
+            | MirRelationExpr::DeclareKeys { input: _, keys: _ }
+            | MirRelationExpr::Union { base: _, inputs: _ } => Ok(()),
+        }
+    }
+
+    /// Fallible mutable visitor for all [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `expr`.
+    ///
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees wrapped in [`MirScalarExpr`] nodes.
+    fn try_visit_scalars_mut<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
+    {
+        self.try_visit_mut(expr, &mut |e| self.try_visit_scalars_mut1(e, f))
+    }
+
+    /// Infallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `expr`.
+    ///
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    fn visit_scalars_mut<F>(&self, expr: &mut MirRelationExpr, f: &mut F)
+    where
+        F: FnMut(&mut MirScalarExpr),
+    {
+        self.try_visit_scalars_mut(expr, &mut |s| {
+            f(s);
+            Ok::<_, ()>(())
+        })
+        .unwrap()
     }
 }
 
