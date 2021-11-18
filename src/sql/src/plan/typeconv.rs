@@ -196,12 +196,15 @@ lazy_static! {
             //                 'type \"' || $1 || '\" does not exist'
             //             ) as text
             // )"),
+            // (RegType, String) => Explicit: sql_impl_cast("(
+            //     SELECT
+            //         CASE
+            //         WHEN $1 IS NULL THEN NULL
+            //         ELSE (SELECT name FROM mz_catalog.mz_types WHERE oid = $1)
+            //         END
+            // )"),
             (RegType, String) => Explicit: sql_impl_cast("(
-                SELECT
-                    CASE
-                    WHEN $1 IS NULL THEN NULL
-                    ELSE (SELECT name FROM mz_catalog.mz_types WHERE oid = $1)
-                    END
+                SELECT name FROM mz_catalog.mz_types WHERE oid = $1
             )"),
 
             // FLOAT32
