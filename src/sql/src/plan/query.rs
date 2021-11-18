@@ -38,8 +38,8 @@ use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     Assignment, AstInfo, Cte, DataType, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     Ident, InsertSource, IsExprConstruct, JoinConstraint, JoinOperator, Limit, OrderByExpr, Query,
-    Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement, TableAlias, TableFactor,
-    TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
+    Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement, SubscriptPosition,
+    TableAlias, TableFactor, TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -493,7 +493,7 @@ pub fn plan_insert_query(
                     expr
                 }
                 _ => {
-                    let (expr, _scope) = plan_subquery(&mut qcx, &query)?;
+                    let (expr, _scope) = plan_nested_query(&mut qcx, &query)?;
                     expr
                 }
             }
@@ -1199,7 +1199,7 @@ fn plan_query_inner(
         used_names.insert(cte_name.clone());
 
         // Plan CTE.
-        let (val, scope) = plan_subquery(qcx, &cte.query)?;
+        let (val, scope) = plan_nested_query(qcx, &cte.query)?;
         let typ = qcx.relation_type(&val);
         let mut val_desc = RelationDesc::new(typ, scope.column_names());
         val_desc = plan_utils::maybe_rename_columns(
@@ -1279,7 +1279,7 @@ fn plan_query_inner(
     result
 }
 
-pub fn plan_subquery(
+pub fn plan_nested_query(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
@@ -1387,7 +1387,7 @@ fn plan_set_expr(
         }
         SetExpr::Values(Values(values)) => plan_values(qcx, values, None),
         SetExpr::Query(query) => {
-            let (expr, scope) = plan_subquery(qcx, query)?;
+            let (expr, scope) = plan_nested_query(qcx, query)?;
             Ok((expr, scope))
         }
     }
@@ -2073,7 +2073,7 @@ fn plan_table_factor(
             alias,
         } => {
             let mut qcx = (*qcx).clone();
-            let (expr, scope) = plan_subquery(&mut qcx, &subquery)?;
+            let (expr, scope) = plan_nested_query(&mut qcx, &subquery)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
             (expr, scope)
         }
@@ -2280,7 +2280,7 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ScopeItemNa
             // A bit silly to have to plan the query here just to get its column
             // name, since we throw away the planned expression, but fixing this
             // requires a separate semantic analysis phase.
-            let (_expr, scope) = plan_subquery(&mut ecx.derived_query_context(), query).ok()?;
+            let (_expr, scope) = plan_nested_query(&mut ecx.derived_query_context(), query).ok()?;
             scope
                 .items
                 .first()
@@ -2696,352 +2696,57 @@ fn plan_expr_inner<'a>(
         return Ok(HirScalarExpr::Column(i).into());
     }
 
-    Ok(match e {
+    match e {
         // Names.
         Expr::Identifier(names) | Expr::QualifiedWildcard(names) => {
-            plan_identifier(ecx, names)?.into()
+            Ok(plan_identifier(ecx, names)?.into())
         }
 
         // Literals.
-        Expr::Value(val) => plan_literal(val)?,
-        Expr::Parameter(n) => {
-            if !ecx.allow_subqueries {
-                bail!("{} does not allow subqueries", ecx.name)
-            }
-            if *n == 0 || *n > 65536 {
-                bail!("there is no parameter ${}", n);
-            }
-            if ecx.param_types().borrow().contains_key(n) {
-                HirScalarExpr::Parameter(*n).into()
-            } else {
-                CoercibleScalarExpr::Parameter(*n)
-            }
-        }
-        Expr::Array(exprs) => plan_array(ecx, exprs, None)?,
-        Expr::List(exprs) => plan_list(ecx, exprs, None)?,
-        Expr::Row { exprs } => {
-            let mut out = vec![];
-            for e in exprs {
-                out.push(plan_expr(ecx, e)?);
-            }
-            CoercibleScalarExpr::LiteralRecord(out)
-        }
+        Expr::Value(val) => plan_literal(val),
+        Expr::Parameter(n) => plan_parameter(ecx, *n),
+        Expr::Array(exprs) => plan_array(ecx, exprs, None),
+        Expr::List(exprs) => plan_list(ecx, exprs, None),
+        Expr::Row { exprs } => plan_row(ecx, exprs),
 
         // Generalized functions, operators, and casts.
-        Expr::Op { op, expr1, expr2 } => plan_op(ecx, op, expr1, expr2.as_deref())?.into(),
-        Expr::Cast { expr, data_type } => {
-            let to_scalar_type = scalar_type_from_sql(ecx.qcx.scx, data_type)?;
-            let expr = match &**expr {
-                // Special case a direct cast of an ARRAY or LIST expression so
-                // we can pass in the target type as a type hint. This is
-                // a limited form of the coercion that we do for string literals
-                // via CoercibleScalarExpr. We used to let CoercibleScalarExpr
-                // handle ARRAY/LIST coercion too, but doing so causes
-                // PostgreSQL compatibility trouble.
-                //
-                // See: https://github.com/postgres/postgres/blob/31f403e95/src/backend/parser/parse_expr.c#L2762-L2768
-                Expr::Array(exprs) => plan_array(ecx, exprs, Some(&to_scalar_type))?,
-                Expr::List(exprs) => plan_list(ecx, exprs, Some(&to_scalar_type))?,
-                _ => plan_expr(ecx, expr)?,
-            };
-
-            let expr = match expr {
-                // Maintain the stringness of literals strings to preserve any
-                // side effects of Explicit casts (going through plan_coerce
-                // uses Assignment casts).
-                CoercibleScalarExpr::LiteralString(..) => {
-                    expr.type_as(&ecx, &ScalarType::String)?
-                }
-                expr => typeconv::plan_coerce(ecx, expr, &to_scalar_type)?,
-            };
-
-            typeconv::plan_cast("CAST", ecx, CastContext::Explicit, expr, &to_scalar_type)?.into()
-        }
-        Expr::Function(func) => plan_function(ecx, func)?.into(),
+        Expr::Op { op, expr1, expr2 } => Ok(plan_op(ecx, op, expr1, expr2.as_deref())?.into()),
+        Expr::Cast { expr, data_type } => plan_cast(ecx, expr, data_type),
+        Expr::Function(func) => Ok(plan_function(ecx, func)?.into()),
 
         // Special functions and operators.
-        Expr::Not { expr } => {
-            let ecx = ecx.with_name("NOT argument");
-            HirScalarExpr::CallUnary {
-                func: UnaryFunc::Not(expr_func::Not),
-                expr: Box::new(plan_expr(&ecx, expr)?.type_as(&ecx, &ScalarType::Bool)?),
-            }
-            .into()
-        }
-        Expr::And { left, right } => {
-            let ecx = ecx.with_name("AND argument");
-            HirScalarExpr::CallBinary {
-                func: BinaryFunc::And,
-                expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?),
-                expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?),
-            }
-            .into()
-        }
-        Expr::Or { left, right } => {
-            let ecx = ecx.with_name("OR argument");
-            HirScalarExpr::CallBinary {
-                func: BinaryFunc::Or,
-                expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?),
-                expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?),
-            }
-            .into()
-        }
+        Expr::Not { expr } => plan_not(ecx, expr),
+        Expr::And { left, right } => plan_and(ecx, left, right),
+        Expr::Or { left, right } => plan_or(ecx, left, right),
         Expr::IsExpr {
             expr,
             construct,
             negated,
-        } => plan_is_expr(ecx, expr, *construct, *negated)?.into(),
+        } => Ok(plan_is_expr(ecx, expr, *construct, *negated)?.into()),
         Expr::Case {
             operand,
             conditions,
             results,
             else_result,
-        } => plan_case(ecx, operand, conditions, results, else_result)?.into(),
-        Expr::Coalesce { exprs } => {
-            assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
-            let expr = HirScalarExpr::CallVariadic {
-                func: VariadicFunc::Coalesce,
-                exprs: coerce_homogeneous_exprs("coalesce", ecx, plan_exprs(ecx, exprs)?, None)?,
-            };
-            expr.into()
-        }
-        Expr::NullIf { l_expr, r_expr } => plan_case(
+        } => Ok(plan_case(ecx, operand, conditions, results, else_result)?.into()),
+        Expr::Coalesce { exprs } => plan_coalesce(ecx, exprs),
+        Expr::NullIf { l_expr, r_expr } => Ok(plan_case(
             ecx,
             &None,
             &[l_expr.clone().equals(*r_expr.clone())],
             &[Expr::null()],
             &Some(Box::new(*l_expr.clone())),
         )?
-        .into(),
-        Expr::FieldAccess { expr, field } => {
-            let field = normalize::column_name(field.clone());
-            let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
-            let ty = ecx.scalar_type(&expr);
-            let i = match &ty {
-                ScalarType::Record { fields, .. } => {
-                    fields.iter().position(|(name, _ty)| *name == field)
-                }
-                ty => bail!(
-                    "column notation applied to type {}, which is not a composite type",
-                    ecx.humanize_scalar_type(&ty)
-                ),
-            };
-            match i {
-                None => bail!(
-                    "field {} not found in data type {}",
-                    field,
-                    ecx.humanize_scalar_type(&ty)
-                ),
-                Some(i) => expr.call_unary(UnaryFunc::RecordGet(i)).into(),
-            }
-        }
-        Expr::WildcardAccess(expr) => plan_expr(ecx, expr)?,
-        Expr::SubscriptIndex { expr, subscript } => {
-            let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
-            let ty = ecx.scalar_type(&expr);
-            let func = match &ty {
-                ScalarType::List { .. } => BinaryFunc::ListIndex,
-                ScalarType::Array(_) => BinaryFunc::ArrayIndex,
-                ty => bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
-            };
-
-            expr.call_binary(
-                plan_expr(ecx, subscript)?.cast_to(
-                    "subscript (indexing)",
-                    ecx,
-                    CastContext::Explicit,
-                    &ScalarType::Int64,
-                )?,
-                func,
-            )
-            .into()
-        }
-
-        Expr::SubscriptSlice { expr, positions } => {
-            assert_ne!(
-                positions.len(),
-                0,
-                "subscript expression must contain at least one position"
-            );
-            if positions.len() > 1 {
-                ecx.require_experimental_mode("layered/multidimensional slicing")?;
-            }
-            let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
-            let ty = ecx.scalar_type(&expr);
-            match &ty {
-                ScalarType::List { .. } => {
-                    let pos_len = positions.len();
-                    let n_dims = ty.unwrap_list_n_dims();
-                    if pos_len > n_dims {
-                        bail!(
-                            "cannot slice into {} layers; list only has {} layer{}",
-                            pos_len,
-                            n_dims,
-                            if n_dims == 1 { "" } else { "s" }
-                        )
-                    }
-                }
-                ty => bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
-            };
-
-            let mut exprs = vec![expr];
-            let op_str = "subscript (slicing)";
-
-            for p in positions {
-                let start = if let Some(start) = &p.start {
-                    plan_expr(ecx, start)?.cast_to(
-                        op_str,
-                        ecx,
-                        CastContext::Explicit,
-                        &ScalarType::Int64,
-                    )?
-                } else {
-                    HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)
-                };
-
-                let end = if let Some(end) = &p.end {
-                    plan_expr(ecx, end)?.cast_to(
-                        op_str,
-                        ecx,
-                        CastContext::Explicit,
-                        &ScalarType::Int64,
-                    )?
-                } else {
-                    HirScalarExpr::literal(Datum::Int64(i64::MAX - 1), ScalarType::Int64)
-                };
-
-                exprs.push(start);
-                exprs.push(end);
-            }
-
-            HirScalarExpr::CallVariadic {
-                func: VariadicFunc::ListSlice,
-                exprs,
-            }
-            .into()
-        }
+        .into()),
+        Expr::FieldAccess { expr, field } => plan_field_access(ecx, expr, field),
+        Expr::WildcardAccess(expr) => plan_expr(ecx, expr),
+        Expr::SubscriptIndex { expr, subscript } => plan_subscript_index(ecx, expr, subscript),
+        Expr::SubscriptSlice { expr, positions } => plan_subscript_slice(ecx, expr, positions),
 
         // Subqueries.
-        Expr::Exists(query) => {
-            if !ecx.allow_subqueries {
-                bail!("{} does not allow subqueries", ecx.name)
-            }
-            let mut qcx = ecx.derived_query_context();
-            let (expr, _scope) = plan_subquery(&mut qcx, query)?;
-            expr.exists().into()
-        }
-        Expr::Subquery(query) => {
-            if !ecx.allow_subqueries {
-                bail!("{} does not allow subqueries", ecx.name)
-            }
-            let mut qcx = ecx.derived_query_context();
-            let (expr, _scope) = plan_subquery(&mut qcx, query)?;
-            let column_types = qcx.relation_type(&expr).column_types;
-            if column_types.len() != 1 {
-                bail!(
-                    "Expected subselect to return 1 column, got {} columns",
-                    column_types.len()
-                );
-            }
-            expr.select().into()
-        }
-        Expr::ListSubquery(query) => {
-            if !ecx.allow_subqueries {
-                bail!("{} does not allow subqueries", ecx.name)
-            }
-            let mut qcx = ecx.derived_query_context();
-            let (mut expr, _scope, finishing) = plan_query(&mut qcx, query)?;
-            if finishing.limit.is_some() || finishing.offset > 0 {
-                expr = HirRelationExpr::TopK {
-                    input: Box::new(expr),
-                    group_key: vec![],
-                    order_key: finishing.order_by.clone(),
-                    limit: finishing.limit,
-                    offset: finishing.offset,
-                };
-            }
-
-            if finishing.project.len() != 1 {
-                bail!(
-                    "Expected subselect to return 1 column, got {} columns",
-                    finishing.project.len()
-                );
-            }
-
-            let project_column = *finishing.project.get(0).unwrap();
-            let elem_type = qcx
-                .relation_type(&expr)
-                .column_types
-                .get(project_column)
-                .cloned()
-                .unwrap()
-                .scalar_type();
-
-            // `ColumnRef`s in `aggregation_exprs` refers to the columns produced by planning the
-            // subquery above.
-            let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::CallVariadic {
-                func: VariadicFunc::ListCreate {
-                    elem_type: elem_type.clone(),
-                },
-                exprs: vec![HirScalarExpr::Column(ColumnRef {
-                    column: project_column,
-                    level: 0,
-                })],
-            })
-            .chain(finishing.order_by.iter().map(|co| {
-                HirScalarExpr::Column(ColumnRef {
-                    column: co.column,
-                    level: 0,
-                })
-            }))
-            .collect();
-
-            // However, column references for `aggregation_projection` and `aggregation_order_by`
-            // are with reference to the `exprs` of the aggregation expression.  Here that is
-            // `aggregation_exprs`.
-            let aggregation_projection = vec![0];
-            let aggregation_order_by = finishing
-                .order_by
-                .into_iter()
-                .enumerate()
-                .map(|(i, ColumnOrder { column: _, desc })| ColumnOrder { column: i, desc })
-                .collect();
-
-            let reduced_expr = expr
-                .reduce(
-                    vec![],
-                    vec![AggregateExpr {
-                        func: AggregateFunc::ListConcat {
-                            order_by: aggregation_order_by,
-                        },
-                        expr: Box::new(HirScalarExpr::CallVariadic {
-                            func: VariadicFunc::RecordCreate {
-                                field_names: iter::repeat(ColumnName::from(""))
-                                    .take(aggregation_exprs.len())
-                                    .collect(),
-                            },
-                            exprs: aggregation_exprs,
-                        }),
-                        distinct: false,
-                    }],
-                    None,
-                )
-                .project(aggregation_projection);
-
-            // If `expr` has no rows, return an empty list rather than NULL.
-            HirScalarExpr::CallBinary {
-                func: BinaryFunc::ListListConcat,
-                expr1: Box::new(HirScalarExpr::Select(Box::new(reduced_expr))),
-                expr2: Box::new(HirScalarExpr::literal(
-                    Datum::empty_list(),
-                    ScalarType::List {
-                        element_type: Box::new(elem_type),
-                        custom_oid: None,
-                    },
-                )),
-            }
-            .into()
-        }
+        Expr::Exists(query) => plan_exists(ecx, query),
+        Expr::Subquery(query) => plan_subquery(ecx, query),
+        Expr::ListSubquery(query) => plan_list_subquery(ecx, query),
 
         Expr::Collate { .. } => bail_unsupported!("COLLATE"),
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
@@ -3052,7 +2757,355 @@ fn plan_expr_inner<'a>(
         Expr::AnySubquery { .. } => unreachable!("Expr::AnySubquery not desugared"),
         Expr::AllSubquery { .. } => unreachable!("Expr::AllSubquery not desugared"),
         Expr::Between { .. } => unreachable!("Expr::Between not desugared"),
+    }
+}
+
+fn plan_parameter(ecx: &ExprContext, n: usize) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    if !ecx.allow_subqueries {
+        bail!("{} does not allow subqueries", ecx.name)
+    }
+    if n == 0 || n > 65536 {
+        bail!("there is no parameter ${}", n);
+    }
+    if ecx.param_types().borrow().contains_key(&n) {
+        Ok(HirScalarExpr::Parameter(n).into())
+    } else {
+        Ok(CoercibleScalarExpr::Parameter(n))
+    }
+}
+
+fn plan_row(ecx: &ExprContext, exprs: &[Expr<Aug>]) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    let mut out = vec![];
+    for e in exprs {
+        out.push(plan_expr(ecx, e)?);
+    }
+    Ok(CoercibleScalarExpr::LiteralRecord(out))
+}
+
+fn plan_cast(
+    ecx: &ExprContext,
+    expr: &Expr<Aug>,
+    data_type: &DataType<Aug>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    let to_scalar_type = scalar_type_from_sql(ecx.qcx.scx, data_type)?;
+    let expr = match expr {
+        // Special case a direct cast of an ARRAY or LIST expression so
+        // we can pass in the target type as a type hint. This is
+        // a limited form of the coercion that we do for string literals
+        // via CoercibleScalarExpr. We used to let CoercibleScalarExpr
+        // handle ARRAY/LIST coercion too, but doing so causes
+        // PostgreSQL compatibility trouble.
+        //
+        // See: https://github.com/postgres/postgres/blob/31f403e95/src/backend/parser/parse_expr.c#L2762-L2768
+        Expr::Array(exprs) => plan_array(ecx, exprs, Some(&to_scalar_type))?,
+        Expr::List(exprs) => plan_list(ecx, exprs, Some(&to_scalar_type))?,
+        _ => plan_expr(ecx, expr)?,
+    };
+
+    let expr = match expr {
+        // Maintain the stringness of literals strings to preserve any
+        // side effects of Explicit casts (going through plan_coerce
+        // uses Assignment casts).
+        CoercibleScalarExpr::LiteralString(..) => expr.type_as(&ecx, &ScalarType::String)?,
+        expr => typeconv::plan_coerce(ecx, expr, &to_scalar_type)?,
+    };
+
+    Ok(typeconv::plan_cast("CAST", ecx, CastContext::Explicit, expr, &to_scalar_type)?.into())
+}
+
+fn plan_not(ecx: &ExprContext, expr: &Expr<Aug>) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    let ecx = ecx.with_name("NOT argument");
+    Ok(HirScalarExpr::CallUnary {
+        func: UnaryFunc::Not(expr_func::Not),
+        expr: Box::new(plan_expr(&ecx, expr)?.type_as(&ecx, &ScalarType::Bool)?),
+    }
+    .into())
+}
+
+fn plan_and(
+    ecx: &ExprContext,
+    left: &Expr<Aug>,
+    right: &Expr<Aug>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    let ecx = ecx.with_name("AND argument");
+    Ok(HirScalarExpr::CallBinary {
+        func: BinaryFunc::And,
+        expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?),
+        expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?),
+    }
+    .into())
+}
+
+fn plan_or(
+    ecx: &ExprContext,
+    left: &Expr<Aug>,
+    right: &Expr<Aug>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    let ecx = ecx.with_name("OR argument");
+    Ok(HirScalarExpr::CallBinary {
+        func: BinaryFunc::Or,
+        expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?),
+        expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?),
+    }
+    .into())
+}
+
+fn plan_coalesce(
+    ecx: &ExprContext,
+    exprs: &[Expr<Aug>],
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
+    let expr = HirScalarExpr::CallVariadic {
+        func: VariadicFunc::Coalesce,
+        exprs: coerce_homogeneous_exprs("coalesce", ecx, plan_exprs(ecx, exprs)?, None)?,
+    };
+    Ok(expr.into())
+}
+
+fn plan_field_access(
+    ecx: &ExprContext,
+    expr: &Expr<Aug>,
+    field: &Ident,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    let field = normalize::column_name(field.clone());
+    let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+    let ty = ecx.scalar_type(&expr);
+    let i = match &ty {
+        ScalarType::Record { fields, .. } => fields.iter().position(|(name, _ty)| *name == field),
+        ty => bail!(
+            "column notation applied to type {}, which is not a composite type",
+            ecx.humanize_scalar_type(&ty)
+        ),
+    };
+    match i {
+        None => bail!(
+            "field {} not found in data type {}",
+            field,
+            ecx.humanize_scalar_type(&ty)
+        ),
+        Some(i) => Ok(expr.call_unary(UnaryFunc::RecordGet(i)).into()),
+    }
+}
+
+fn plan_subscript_index(
+    ecx: &ExprContext,
+    expr: &Expr<Aug>,
+    subscript: &Expr<Aug>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+    let ty = ecx.scalar_type(&expr);
+    let func = match &ty {
+        ScalarType::List { .. } => BinaryFunc::ListIndex,
+        ScalarType::Array(_) => BinaryFunc::ArrayIndex,
+        ty => bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
+    };
+
+    Ok(expr
+        .call_binary(
+            plan_expr(ecx, subscript)?.cast_to(
+                "subscript (indexing)",
+                ecx,
+                CastContext::Explicit,
+                &ScalarType::Int64,
+            )?,
+            func,
+        )
+        .into())
+}
+
+fn plan_subscript_slice(
+    ecx: &ExprContext,
+    expr: &Expr<Aug>,
+    positions: &[SubscriptPosition<Aug>],
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    assert_ne!(
+        positions.len(),
+        0,
+        "subscript expression must contain at least one position"
+    );
+    if positions.len() > 1 {
+        ecx.require_experimental_mode("layered/multidimensional slicing")?;
+    }
+    let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+    let ty = ecx.scalar_type(&expr);
+    match &ty {
+        ScalarType::List { .. } => {
+            let pos_len = positions.len();
+            let n_dims = ty.unwrap_list_n_dims();
+            if pos_len > n_dims {
+                bail!(
+                    "cannot slice into {} layers; list only has {} layer{}",
+                    pos_len,
+                    n_dims,
+                    if n_dims == 1 { "" } else { "s" }
+                )
+            }
+        }
+        ty => bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
+    };
+
+    let mut exprs = vec![expr];
+    let op_str = "subscript (slicing)";
+
+    for p in positions {
+        let start = if let Some(start) = &p.start {
+            plan_expr(ecx, start)?.cast_to(
+                op_str,
+                ecx,
+                CastContext::Explicit,
+                &ScalarType::Int64,
+            )?
+        } else {
+            HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)
+        };
+
+        let end = if let Some(end) = &p.end {
+            plan_expr(ecx, end)?.cast_to(op_str, ecx, CastContext::Explicit, &ScalarType::Int64)?
+        } else {
+            HirScalarExpr::literal(Datum::Int64(i64::MAX - 1), ScalarType::Int64)
+        };
+
+        exprs.push(start);
+        exprs.push(end);
+    }
+
+    Ok(HirScalarExpr::CallVariadic {
+        func: VariadicFunc::ListSlice,
+        exprs,
+    }
+    .into())
+}
+
+fn plan_exists(
+    ecx: &ExprContext,
+    query: &Query<Aug>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    if !ecx.allow_subqueries {
+        bail!("{} does not allow subqueries", ecx.name)
+    }
+    let mut qcx = ecx.derived_query_context();
+    let (expr, _scope) = plan_nested_query(&mut qcx, query)?;
+    Ok(expr.exists().into())
+}
+
+fn plan_subquery(
+    ecx: &ExprContext,
+    query: &Query<Aug>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    if !ecx.allow_subqueries {
+        bail!("{} does not allow subqueries", ecx.name)
+    }
+    let mut qcx = ecx.derived_query_context();
+    let (expr, _scope) = plan_nested_query(&mut qcx, query)?;
+    let column_types = qcx.relation_type(&expr).column_types;
+    if column_types.len() != 1 {
+        bail!(
+            "Expected subselect to return 1 column, got {} columns",
+            column_types.len()
+        );
+    }
+    Ok(expr.select().into())
+}
+
+fn plan_list_subquery(
+    ecx: &ExprContext,
+    query: &Query<Aug>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    if !ecx.allow_subqueries {
+        bail!("{} does not allow subqueries", ecx.name)
+    }
+    let mut qcx = ecx.derived_query_context();
+    let (mut expr, _scope, finishing) = plan_query(&mut qcx, query)?;
+    if finishing.limit.is_some() || finishing.offset > 0 {
+        expr = HirRelationExpr::TopK {
+            input: Box::new(expr),
+            group_key: vec![],
+            order_key: finishing.order_by.clone(),
+            limit: finishing.limit,
+            offset: finishing.offset,
+        };
+    }
+
+    if finishing.project.len() != 1 {
+        bail!(
+            "Expected subselect to return 1 column, got {} columns",
+            finishing.project.len()
+        );
+    }
+
+    let project_column = *finishing.project.get(0).unwrap();
+    let elem_type = qcx
+        .relation_type(&expr)
+        .column_types
+        .get(project_column)
+        .cloned()
+        .unwrap()
+        .scalar_type();
+
+    // `ColumnRef`s in `aggregation_exprs` refers to the columns produced by planning the
+    // subquery above.
+    let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::CallVariadic {
+        func: VariadicFunc::ListCreate {
+            elem_type: elem_type.clone(),
+        },
+        exprs: vec![HirScalarExpr::Column(ColumnRef {
+            column: project_column,
+            level: 0,
+        })],
     })
+    .chain(finishing.order_by.iter().map(|co| {
+        HirScalarExpr::Column(ColumnRef {
+            column: co.column,
+            level: 0,
+        })
+    }))
+    .collect();
+
+    // However, column references for `aggregation_projection` and `aggregation_order_by`
+    // are with reference to the `exprs` of the aggregation expression.  Here that is
+    // `aggregation_exprs`.
+    let aggregation_projection = vec![0];
+    let aggregation_order_by = finishing
+        .order_by
+        .into_iter()
+        .enumerate()
+        .map(|(i, ColumnOrder { column: _, desc })| ColumnOrder { column: i, desc })
+        .collect();
+
+    let reduced_expr = expr
+        .reduce(
+            vec![],
+            vec![AggregateExpr {
+                func: AggregateFunc::ListConcat {
+                    order_by: aggregation_order_by,
+                },
+                expr: Box::new(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RecordCreate {
+                        field_names: iter::repeat(ColumnName::from(""))
+                            .take(aggregation_exprs.len())
+                            .collect(),
+                    },
+                    exprs: aggregation_exprs,
+                }),
+                distinct: false,
+            }],
+            None,
+        )
+        .project(aggregation_projection);
+
+    // If `expr` has no rows, return an empty list rather than NULL.
+    Ok(HirScalarExpr::CallBinary {
+        func: BinaryFunc::ListListConcat,
+        expr1: Box::new(HirScalarExpr::Select(Box::new(reduced_expr))),
+        expr2: Box::new(HirScalarExpr::literal(
+            Datum::empty_list(),
+            ScalarType::List {
+                element_type: Box::new(elem_type),
+                custom_oid: None,
+            },
+        )),
+    }
+    .into())
 }
 
 /// Plans a slice of expressions.
