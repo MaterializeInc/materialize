@@ -1,7 +1,7 @@
 ---
 title: "Change Data Capture (Postgres)"
 description: "How to create real-time materialized views from PostgreSQL changelog data with Materialize."
-weight: 10
+weight:
 menu:
   main:
     parent: guides
@@ -21,11 +21,13 @@ There are two ways to connect Materialize to a Postgres database for CDC:
 
 If Kafka is not part of your stack, you can use the [Postgres source](/sql/create-source/postgres/#postgresql-source-details) to connect directly to Materialize (v0.8.2+). This source uses Postgres’ native replication protocol to continuously ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database.
 
-### Database Setup
+### Database setup
 
 **Minimum requirements:** Postgres 10+
 
-Before creating a source in Materialize, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/10/logical-replication.html). As a _superuser_:
+Before creating a source in Materialize, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/10/logical-replication.html).
+
+As a _superuser_:
 
 1. Check the [`wal_level` configuration](https://www.postgresql.org/docs/current/wal-configuration.html) setting:
 
@@ -35,7 +37,7 @@ Before creating a source in Materialize, you need to ensure that the upstream da
 
     The default value is `replica`. For CDC, you'll need to set it to `logical` in the database configuration file (`postgresql.conf`). Keep in mind that changing the `wal_level` requires a restart of the Postgres instance and can affect database performance.
 
-    **Note:** Additional steps may be required if you're using Postgres on [Amazon RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication) or [Cloud SQL](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance).
+    **Note:** If you're using Postgres on a Cloud service like Amazon RDS, AWS Aurora, or Cloud SQL, you'll need to take some additional steps. For more information, see [Postgres in the Cloud](../postgres-cloud/).
 
 1. Grant the required privileges to the replication user:
 
@@ -140,11 +142,13 @@ GROUP BY field1;
 
 If Kafka is part of your stack, you can use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/avro-kafka/#debezium-envelope-details) to propagate CDC data from Postgres to Materialize. Debezium captures row-level changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database and publishes them as events to Kafka using Kafka Connect-compatible connectors.
 
-### Database Setup
+### Database setup
 
 **Minimum requirements:** Postgres 10+
 
-Before deploying a Debezium connector, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/10/logical-replication.html). As a _superuser_:
+Before deploying a Debezium connector, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/10/logical-replication.html).
+
+As a _superuser_:
 
 1. Check the [`wal_level` configuration](https://www.postgresql.org/docs/current/wal-configuration.html) setting:
 
@@ -154,7 +158,7 @@ Before deploying a Debezium connector, you need to ensure that the upstream data
 
     The default value is `replica`. For CDC, you'll need to set it to `logical` in the database configuration file (`postgresql.conf`). Keep in mind that changing the `wal_level` requires a restart of the Postgres instance and can affect database performance.
 
-    **Note:** Additional steps may be required if you're using Postgres on [Amazon RDS](https://debezium.io/documentation/reference/1.6/connectors/postgresql.html#postgresql-on-amazon-rds).
+    **Note:** If you're using Postgres on a Cloud service like Amazon RDS, AWS Aurora, or Cloud SQL, you'll need to take some additional steps. For more information, see [Postgres in the Cloud](../postgres-cloud/).
 
 1. Grant enough privileges to ensure Debezium can operate in the database. The specific privileges will depend on how much control you want to give to the replication user, so we recommend following the [Debezium documentation](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-replication-user-privileges).
 

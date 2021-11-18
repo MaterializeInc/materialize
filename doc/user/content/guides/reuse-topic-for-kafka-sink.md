@@ -1,7 +1,7 @@
 ---
 title: "Kafka Sink Topic Reuse"
 description: "Enable topic reuse for Kafka sinks (exactly-once Kafka sinks)."
-weight: 10
+weight:
 menu:
   main:
     parent: guides

@@ -1,7 +1,7 @@
 ---
 title: "Top K by Group"
 description: "Find the top- or bottom-K elements in a group."
-weight: 40
+weight:
 aliases:
   - /sql/idioms
 menu:

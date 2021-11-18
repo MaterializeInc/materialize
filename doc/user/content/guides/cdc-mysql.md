@@ -1,7 +1,7 @@
 ---
 title: "Change Data Capture (MySQL)"
 description: "How to create real-time materialized views from MySQL changelog data with Materialize."
-weight: 10
+weight:
 menu:
   main:
     parent: guides
