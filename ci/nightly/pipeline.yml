@@ -55,3 +55,11 @@
         composition: limits
         run: limits
   timeout_in_minutes: 50
+
+- id: cluster-testdrive
+  label: "Full testdrive against Cluster"
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: cluster
+        run: cluster-testdrive
+  timeout_in_minutes: 30

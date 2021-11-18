@@ -7,9 +7,19 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Coordd, Dataflowd, Testdrive, Workflow
+from materialize.mzcompose import (
+    Coordd,
+    Dataflowd,
+    Kafka,
+    SchemaRegistry,
+    Testdrive,
+    Workflow,
+    Zookeeper,
+)
 
-daemons = [
+prerequisites = [Zookeeper(), Kafka(), SchemaRegistry()]
+
+mz_daemons = [
     Dataflowd(
         name="dataflowd_1",
         options="--workers 2 --processes 2 --process 0 --hosts dataflowd_1:2101 dataflowd_2:2101",
@@ -31,13 +41,34 @@ daemons = [
     ),
 ]
 
-services = [*daemons, Testdrive()]
+services = [
+    *prerequisites,
+    *mz_daemons,
+    Testdrive(
+        shell_eval=True,
+        volumes=[
+            "mzdata:/share/mzdata",
+            "tmp:/share/tmp",
+            ".:/workdir/smoke",
+            "../testdrive:/workdir/testdrive",
+        ],
+    ),
+]
 
 
-def workflow_cluster(w: Workflow):
-    w.start_and_wait_for_tcp(services=daemons)
-    w.wait_for_mz()
-    w.run_service(
-        service="testdrive-svc",
-        command="*.td",
+def workflow_cluster_smoke(w: Workflow):
+    test_cluster(w, "ls -1 smoke/*.td")
+
+
+def workflow_cluster_testdrive(w: Workflow):
+    w.start_and_wait_for_tcp(services=prerequisites)
+    # Skip tests that use features that are not supported yet
+    test_cluster(
+        w, "grep -L -E 'mz_catalog|mz_kafka_|mz_records_|mz_metrics' testdrive/*.td"
     )
+
+
+def test_cluster(w: Workflow, glob: str):
+    w.start_and_wait_for_tcp(services=mz_daemons)
+    w.wait_for_mz()
+    w.run_service(service="testdrive-svc", command=glob)
