@@ -228,7 +228,7 @@ ts
 
 > INSERT INTO second_ts VALUES (NULL)
 
-> CREATE MATERIALIZED VIEW both_ts AS SELECT to_timestamp(first_ts.ts / 1000), to_timestamp(second_ts.ts / 1000) FROM first_ts, second_ts WHERE mz_logical_timestamp() BETWEEN first_ts.ts AND second_ts.ts
+> CREATE MATERIALIZED VIEW both_ts (first_ts_to_ts, second_ts_to_ts) AS SELECT to_timestamp(first_ts.ts / 1000), to_timestamp(second_ts.ts / 1000) FROM first_ts, second_ts WHERE mz_logical_timestamp() BETWEEN first_ts.ts AND second_ts.ts
 
 > SELECT * FROM both_ts
       to_timestamp
@@ -248,9 +248,9 @@ ts
 "2000-01-01 00:00:00 UTC" "2199-12-31 00:00:00 UTC"
 "2000-01-01 00:00:00 UTC" "2199-12-31 00:00:00 UTC"
 
-> CREATE MATERIALIZED VIEW v2 AS SELECT * FROM first_ts a, first_ts b WHERE mz_logical_timestamp() = a.ts;
+> CREATE MATERIALIZED VIEW v2 (first_ts_a, first_ts_b) AS SELECT * FROM first_ts a, first_ts b WHERE mz_logical_timestamp() = a.ts;
 
-> CREATE MATERIALIZED VIEW v3 AS SELECT * FROM first_ts a, first_ts b WHERE mz_logical_timestamp() = a.ts AND mz_logical_timestamp() = b.ts;
+> CREATE MATERIALIZED VIEW v3 (first_ts_a, first_ts_b) AS SELECT * FROM first_ts a, first_ts b WHERE mz_logical_timestamp() = a.ts AND mz_logical_timestamp() = b.ts;
 
 #
 # Various errors in the placement of mz_logical_timestamp()

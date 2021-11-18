@@ -159,10 +159,7 @@ pub fn plan_create_table(
         .collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
-        bail!(
-            "cannot CREATE TABLE: column {} specified more than once",
-            dup.as_str().quoted()
-        );
+        bail!("column {} specified more than once", dup.as_str().quoted());
     }
 
     // Build initial relation type that handles declared data types
@@ -1217,6 +1214,7 @@ pub fn plan_view(
         finishing,
         depends_on,
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
+
     expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     expr.finish(finishing);
@@ -1229,6 +1227,10 @@ pub fn plan_view(
     };
 
     desc = plan_utils::maybe_rename_columns(format!("view {}", name), desc, &columns)?;
+
+    if let Some(dup) = desc.iter_names().flatten().duplicates().next() {
+        bail!("column {} specified more than once", dup.as_str().quoted());
+    }
 
     let view = View {
         create_sql,

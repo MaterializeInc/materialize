@@ -92,7 +92,7 @@ $ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
 
 > CREATE MATERIALIZED VIEW bar AS SELECT b, sum(a) FROM data_bar GROUP BY b
 
-> CREATE MATERIALIZED VIEW join AS SELECT * FROM foo JOIN bar USING (b);
+> CREATE MATERIALIZED VIEW join (b, foo_sum, bar_sum) AS SELECT * FROM foo JOIN bar USING (b);
 
 ! SELECT * FROM bar;
 At least one input has no complete timestamps yet:
@@ -124,8 +124,8 @@ b  sum
 1  10
 
 > SELECT * FROM join;
-b sum sum
----------
+b foo_sum bar_sum
+-----------------
 1  1  10
 
 $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
@@ -151,8 +151,8 @@ b  sum
 3  30
 
 > SELECT * FROM join;
-b sum sum
----------
+b foo_sum bar_sum
+-----------------
 1  1  10
 
 $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
@@ -167,7 +167,7 @@ b  sum
 4  4
 
 > SELECT * FROM join;
-b sum sum
----------
+b foo_sum bar_sum
+-----------------
 1  1  10
 3  3  30

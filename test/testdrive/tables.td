@@ -39,7 +39,7 @@ DEFAULT expression does not support casting from integer to date
 column "a" does not exist
 
 ! CREATE TABLE t (a int, b int, a int);
-cannot CREATE TABLE: column "a" specified more than once
+column "a" specified more than once
 
 > SELECT * FROM t;
 

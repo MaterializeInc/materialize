@@ -105,6 +105,10 @@ List new features before bug fixes.
 
 {{% version-header v0.9.13 %}}
 
+- **Breaking change**: Disallow creating views (materialized or not) with
+  columns of the same name. This change brings views' structure into closer
+  alignment with tables.
+
 - Add support for `LIST(<subquery>)` constructor.
 
 - Fix a crash or incorrect results when a join consumes data from a distinct
