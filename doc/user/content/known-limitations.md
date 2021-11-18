@@ -11,9 +11,6 @@ The following links describe features that Materialize does not yet support, but
 plans to in future releases. If any of these issues impact you, feel free to let
 us know on the linked-to GitHub issue.
 
-For a complete and current overview, check out our [`known-limitations`
-tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue+label%3Aknown-limitation).
-
 ## SQL
 
 ### Types
@@ -54,8 +51,8 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 
 - Consistent Kinesis sources are not supported {{% gh 2191 %}}
 - Enhanced fan-out Kinesis consumers are not supported {{% gh 2192 %}}
-- Reading from a Kinesis stream as of a sequence number or timestamp is not
-  supported {{% gh 2294 %}}
+- Reading from a Kinesis stream as of a sequence number or timestamp is not supported {{% gh 2294 %}}
+- Kinesis resharding is not supported {{% gh 8776 %}}
 - Kinesis sinks are not supported {{% gh 2372 %}}
 
 ### File sources
