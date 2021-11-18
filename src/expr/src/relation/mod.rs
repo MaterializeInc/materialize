@@ -1159,6 +1159,7 @@ impl MirRelationExpr {
     pub fn try_visit_mut_children<'a, F, E>(&'a mut self, f: F) -> Result<(), E>
     where
         F: FnMut(&'a mut MirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         MirRelationExprVisitor::new().try_visit_mut_children(self, f)
     }
@@ -1192,6 +1193,7 @@ impl MirRelationExpr {
     pub fn try_visit_mut_post<F, E>(&mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         MirRelationExprVisitor::new().try_visit_mut_post(self, f)
     }
@@ -1225,6 +1227,7 @@ impl MirRelationExpr {
     pub fn try_visit_mut_pre<F, E>(&mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         MirRelationExprVisitor::new().try_visit_mut_pre(self, f)
     }
@@ -1277,6 +1280,7 @@ impl MirRelationExpr {
     pub fn try_visit_scalars_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         MirRelationExprVisitor::new().try_visit_scalars_mut(self, f)
     }
@@ -1314,7 +1318,7 @@ impl MirRelationExprVisitor {
         F: FnMut(&'a MirRelationExpr) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        self.checked_recur(|_| {
+        self.checked_recur(move |_| {
             match expr {
                 MirRelationExpr::Constant { .. } | MirRelationExpr::Get { .. } => (),
                 MirRelationExpr::Let { value, body, .. } => {
@@ -1371,52 +1375,55 @@ impl MirRelationExprVisitor {
     ) -> Result<(), E>
     where
         F: FnMut(&'a mut MirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
-        match expr {
-            MirRelationExpr::Constant { .. } | MirRelationExpr::Get { .. } => (),
-            MirRelationExpr::Let { value, body, .. } => {
-                f(value)?;
-                f(body)?;
-            }
-            MirRelationExpr::Project { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Map { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::FlatMap { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Filter { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Join { inputs, .. } => {
-                for input in inputs {
+        self.checked_recur(move |_| {
+            match expr {
+                MirRelationExpr::Constant { .. } | MirRelationExpr::Get { .. } => (),
+                MirRelationExpr::Let { value, body, .. } => {
+                    f(value)?;
+                    f(body)?;
+                }
+                MirRelationExpr::Project { input, .. } => {
+                    f(input)?;
+                }
+                MirRelationExpr::Map { input, .. } => {
+                    f(input)?;
+                }
+                MirRelationExpr::FlatMap { input, .. } => {
+                    f(input)?;
+                }
+                MirRelationExpr::Filter { input, .. } => {
+                    f(input)?;
+                }
+                MirRelationExpr::Join { inputs, .. } => {
+                    for input in inputs {
+                        f(input)?;
+                    }
+                }
+                MirRelationExpr::Reduce { input, .. } => {
+                    f(input)?;
+                }
+                MirRelationExpr::TopK { input, .. } => {
+                    f(input)?;
+                }
+                MirRelationExpr::Negate { input } => f(input)?,
+                MirRelationExpr::Threshold { input } => f(input)?,
+                MirRelationExpr::Union { base, inputs } => {
+                    f(base)?;
+                    for input in inputs {
+                        f(input)?;
+                    }
+                }
+                MirRelationExpr::ArrangeBy { input, .. } => {
+                    f(input)?;
+                }
+                MirRelationExpr::DeclareKeys { input, .. } => {
                     f(input)?;
                 }
             }
-            MirRelationExpr::Reduce { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::TopK { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::Negate { input } => f(input)?,
-            MirRelationExpr::Threshold { input } => f(input)?,
-            MirRelationExpr::Union { base, inputs } => {
-                f(base)?;
-                for input in inputs {
-                    f(input)?;
-                }
-            }
-            MirRelationExpr::ArrangeBy { input, .. } => {
-                f(input)?;
-            }
-            MirRelationExpr::DeclareKeys { input, .. } => {
-                f(input)?;
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Applies an infallible immutable `f` to each `expr` child of type `MirRelationExpr`.
@@ -1461,6 +1468,7 @@ impl MirRelationExprVisitor {
     fn try_visit_mut_post<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         self.try_visit_mut_children(expr, |e| self.try_visit_mut_post(e, f))?;
         f(expr)
@@ -1502,6 +1510,7 @@ impl MirRelationExprVisitor {
     fn try_visit_mut_pre<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         f(expr)?;
         self.try_visit_mut_children(expr, |e| self.try_visit_mut_pre(e, f))
@@ -1658,6 +1667,7 @@ impl MirRelationExprVisitor {
     fn try_visit_scalars_mut<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         self.try_visit_mut_post(expr, &mut |e| self.try_visit_scalar_children_mut(e, f))
     }
