@@ -62,7 +62,7 @@ copyright_files=$(grep -vE \
     -e 'test/pgtest-mz/.*\.pt' \
     -e 'test/coordtest/.*\.ct' \
     -e 'gen/.*\.rs' \
-    -e 'misc/python/MANIFEST\.in'
+    -e 'misc/python/MANIFEST\.in' \
     <<< "$files"
 )
 
