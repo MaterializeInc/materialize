@@ -314,6 +314,7 @@ impl<'a> FromSql<'a> for Slt {
             PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
             PgType::OID => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
             PgType::REGPROC => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
+            PgType::REGTYPE => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
             PgType::TEXT | PgType::BPCHAR | PgType::VARCHAR => {
                 Self(Value::Text(types::text_from_sql(raw)?.to_string()))
             }
@@ -387,6 +388,7 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::NUMERIC
                 | PgType::OID
                 | PgType::REGPROC
+                | PgType::REGTYPE
                 | PgType::RECORD
                 | PgType::TEXT
                 | PgType::BPCHAR

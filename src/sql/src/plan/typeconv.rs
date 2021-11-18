@@ -144,6 +144,7 @@ lazy_static! {
             (Int32, Bool) => Explicit: CastInt32ToBool,
             (Int32, Oid) => Implicit: CastInt32ToOid,
             (Int32, RegProc) => Implicit: CastInt32ToRegProc,
+            (Int32, RegType) => Implicit: CastInt32ToRegType,
             (Int32, Int16) => Assignment: CastInt32ToInt16,
             (Int32, Int64) => Implicit: CastInt32ToInt64,
             (Int32, Float32) => Implicit: CastInt32ToFloat32,
@@ -170,9 +171,13 @@ lazy_static! {
             (Oid, Int32) => Assignment: CastOidToInt32,
             (Oid, String) => Explicit: CastInt32ToString,
             (Oid, RegProc) => Assignment: CastOidToRegProc,
+            (Oid, RegType) => Assignment: CastOidToRegType,
 
             // REGPROC
             (RegProc,Oid) => Implicit: CastRegProcToOid,
+
+            // REGTYPE
+            (RegType,Oid) => Implicit: CastRegTypeToOid,
 
             // FLOAT32
             (Float32, Int16) => Assignment: CastFloat32ToInt16(func::CastFloat32ToInt16),
@@ -247,6 +252,29 @@ lazy_static! {
                         mz_internal.mz_error_if_null(
                             (SELECT oid::pg_catalog.regproc FROM mz_catalog.mz_functions WHERE name = $1),
                             'function \"' || $1 || '\" does not exist'
+                        )
+                    )
+                    END
+            )"),
+            // A regtype represents a type by oid. Converting from string to regtype
+            // does a lookup of the function name and expects exactly one type to
+            // match it. You can also specify (in postgres) a string that's a valid
+            // int4 and it'll happily cast it (without verifying that the int4 matches
+            // a type oid). To support this, use a SQL expression that checks if
+            // the input might be a valid int4 with a regex, otherwise try to lookup in
+            // mz_types. CASE will return NULL if the subquery returns zero results,
+            // so use mz_error_if_null to coerce that into an error. This is hacky and
+            // incomplete in a few ways, but gets us close enough to making drivers happy.
+            // TODO: Support the correct error code for does not exist (42883).
+            (String, RegType) => Explicit: sql_impl_cast("(
+                SELECT
+                    CASE
+                    WHEN $1 IS NULL THEN NULL
+                    WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regtype
+                    ELSE (
+                        mz_internal.mz_error_if_null(
+                            (SELECT oid::pg_catalog.regtype FROM mz_catalog.mz_types WHERE name = $1),
+                            'type \"' || $1 || '\" does not exist'
                         )
                     )
                     END

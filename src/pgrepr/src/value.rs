@@ -105,6 +105,7 @@ impl Value {
             (Datum::Int32(i), ScalarType::Int32) => Some(Value::Int4(i)),
             (Datum::Int32(i), ScalarType::Oid) => Some(Value::Int4(i)),
             (Datum::Int32(i), ScalarType::RegProc) => Some(Value::Int4(i)),
+            (Datum::Int32(i), ScalarType::RegType) => Some(Value::Int4(i)),
             (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
@@ -446,7 +447,9 @@ impl Value {
             Type::Float4 => Value::Float4(strconv::parse_float32(raw)?),
             Type::Float8 => Value::Float8(strconv::parse_float64(raw)?),
             Type::Int2 => Value::Int2(strconv::parse_int16(raw)?),
-            Type::Int4 | Type::Oid | Type::RegProc => Value::Int4(strconv::parse_int32(raw)?),
+            Type::Int4 | Type::Oid | Type::RegProc | Type::RegType => {
+                Value::Int4(strconv::parse_int32(raw)?)
+            }
             Type::Int8 => Value::Int8(strconv::parse_int64(raw)?),
             Type::Interval => Value::Interval(Interval(strconv::parse_interval(raw)?)),
             Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
@@ -494,7 +497,7 @@ impl Value {
             Type::Float4 => f32::from_sql(ty.inner(), raw).map(Value::Float4),
             Type::Float8 => f64::from_sql(ty.inner(), raw).map(Value::Float8),
             Type::Int2 => i16::from_sql(ty.inner(), raw).map(Value::Int2),
-            Type::Int4 | Type::Oid | Type::RegProc => {
+            Type::Int4 | Type::Oid | Type::RegProc | Type::RegType => {
                 i32::from_sql(ty.inner(), raw).map(Value::Int4)
             }
             Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
@@ -603,6 +606,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
             }
         }
         Type::RegProc => ScalarType::RegProc,
+        Type::RegType => ScalarType::RegType,
     };
     (Datum::Null, ty)
 }

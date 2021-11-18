@@ -832,3 +832,71 @@ query T
 SELECT format_type(26, -1);
 ----
 oid
+
+# 🔬🔬 regtype
+
+query T
+SELECT 1::regtype
+----
+1
+
+query T
+SELECT 1::int4::regtype
+----
+1
+
+query T
+SELECT 1::oid::regtype
+----
+1
+
+query T
+SELECT 1::oid::regtype::oid
+----
+1
+
+query T
+SELECT '1'::regtype
+----
+1
+
+query T
+SELECT '1'::pg_catalog.regtype
+----
+1
+
+query error CAST does not support casting from regtype to text
+SELECT '1'::regtype::text
+
+query error CAST does not support casting from regtype to text
+SELECT 'date'::regtype::text
+
+query T
+SELECT 'date'::regtype
+----
+1082
+
+query T
+SELECT 'date'::regtype::oid
+----
+1082
+
+query error type "nonexistent" does not exist
+SELECT 'nonexistent'::regtype
+
+query B
+SELECT 1082 = 'date'::regtype
+----
+true
+
+statement ok
+CREATE TABLE text_to_regtype (a text);
+
+statement ok
+INSERT INTO text_to_regtype VALUES (NULL), ('date');
+
+query I
+SELECT a::regtype FROM text_to_regtype ORDER BY a
+----
+1082
+NULL

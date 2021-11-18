@@ -3925,6 +3925,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
         }
         pgrepr::Type::Oid => Ok(ScalarType::Oid),
         pgrepr::Type::RegProc => Ok(ScalarType::RegProc),
+        pgrepr::Type::RegType => Ok(ScalarType::RegType),
         pgrepr::Type::Map { value_type } => Ok(ScalarType::Map {
             value_type: Box::new(scalar_type_from_pg(value_type)?),
             custom_oid: None,
