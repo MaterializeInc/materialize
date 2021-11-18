@@ -358,9 +358,9 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<(), anyhow::Error> {
-    panic::set_hook(Box::new(handle_panic));
-    sys::enable_sigbus_sigsegv_backtraces()?;
-    sys::enable_termination_signal_cleanup()?;
+    // panic::set_hook(Box::new(handle_panic));
+    // sys::enable_sigbus_sigsegv_backtraces()?;
+    // sys::enable_termination_signal_cleanup()?;
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
