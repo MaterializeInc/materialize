@@ -54,6 +54,7 @@ pub mod update_let;
 
 pub mod dataflow;
 pub use dataflow::optimize_dataflow;
+use ore::stack::RecursionLimitError;
 
 /// Arguments that get threaded through all transforms.
 #[derive(Debug)]
@@ -97,6 +98,12 @@ impl fmt::Display for TransformError {
 }
 
 impl Error for TransformError {}
+
+impl From<RecursionLimitError> for TransformError {
+    fn from(error: RecursionLimitError) -> Self {
+        TransformError::Internal(error.to_string())
+    }
+}
 
 /// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
