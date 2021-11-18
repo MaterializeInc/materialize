@@ -16,6 +16,7 @@
 use anyhow::bail;
 use uuid::Uuid;
 
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, OrderByExpr, Query, Raw, Select, SelectItem, TableAlias,
@@ -299,6 +300,13 @@ impl<'ast> VisitMut<'ast, Raw> for FuncRewriter<'_> {
 struct Desugarer<'a> {
     scx: &'a StatementContext<'a>,
     status: Result<(), anyhow::Error>,
+    recursion_guard: RecursionGuard,
+}
+
+impl<'a> CheckedRecursion for Desugarer<'a> {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
 }
 
 impl<'ast> VisitMut<'ast, Raw> for Desugarer<'_> {
@@ -319,7 +327,7 @@ impl<'a> Desugarer<'a> {
         if self.status.is_ok() {
             // self.status could have changed from a deeper call, so don't blindly
             // overwrite it with the result of this call.
-            let status = f(self, x);
+            let status = self.checked_recur_mut(|d| f(d, x));
             if self.status.is_ok() {
                 self.status = status;
             }
@@ -330,6 +338,7 @@ impl<'a> Desugarer<'a> {
         Desugarer {
             scx,
             status: Ok(()),
+            recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
 
