@@ -38,9 +38,9 @@ create_index ::=
     )
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_materialized_view ::=
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name 'AS' select_stmt |
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
-  'CREATE' 'OR REPLACE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name 'AS' select_stmt
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
+  'CREATE' 'OR REPLACE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt
 create_role ::=
     'CREATE' 'ROLE' role_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_schema ::=
@@ -231,9 +231,9 @@ create_type ::=
 create_user ::=
     'CREATE' 'USER' user_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_view ::=
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name 'AS' select_stmt |
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
-  'CREATE' 'OR REPLACE' 'VIEW' view_name 'AS' select_stmt
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
+  'CREATE' 'OR REPLACE' 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt
 create_views ::=
   'CREATE' ('MATERIALIZED')? ('TEMP' | 'TEMPORARY')? 'VIEWS' 'IF NOT EXISTS'? 'FROM' 'SOURCE' '"'src_name'"' ( '(' '"' upstream_table '"'  (AS '"' new_view_name '"' )? ')' )?
 create_table ::=
