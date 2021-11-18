@@ -26,8 +26,8 @@ use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
-use crate::render::Permutation;
 use crate::replay::MzReplay;
+use dataflow_types::plan::Permutation;
 use repr::{Datum, DatumVec, Row, Timestamp};
 
 /// Constructs the logging dataflow for differential logs.

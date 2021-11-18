@@ -39,6 +39,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use dataflow_types::logging::LoggingConfig;
+use dataflow_types::plan::Plan as RenderPlan;
 use dataflow_types::{
     Consistency, DataflowDescription, DataflowError, ExternalSourceConnector, MzOffset,
     PeekResponse, SourceConnector, TailResponse, TimestampSourceUpdate, Update,
@@ -55,7 +56,7 @@ use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::metrics::Metrics;
 use crate::operator::CollectionExt;
-use crate::render::{self, plan::Plan as RenderPlan, RenderState};
+use crate::render::{self, RenderState};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;

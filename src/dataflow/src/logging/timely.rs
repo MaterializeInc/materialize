@@ -24,9 +24,9 @@ use crate::activator::RcActivator;
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use crate::logging::ConsolidateBuffer;
-use crate::render::Permutation;
 use crate::replay::MzReplay;
 use dataflow_types::logging::LoggingConfig;
+use dataflow_types::plan::Permutation;
 use repr::{datum_list_size, datum_size, Datum, DatumVec, Row, Timestamp};
 
 /// Constructs the logging dataflow for timely logs.

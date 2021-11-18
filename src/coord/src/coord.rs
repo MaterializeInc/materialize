@@ -3449,7 +3449,7 @@ where
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
                 self.validate_timeline(decorrelated_plan.global_uses())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
-                let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
+                let dataflow_plan = dataflow_types::Plan::finalize_dataflow(dataflow)
                     .expect("Dataflow planning failed; unrecoverable error");
                 let catalog = self.catalog.for_session(session);
                 let mut explanation = dataflow_types::Explanation::new_from_dataflow(
@@ -4166,7 +4166,7 @@ where
     fn finalize_dataflow(
         &mut self,
         mut dataflow: DataflowDesc,
-    ) -> dataflow_types::DataflowDescription<dataflow::Plan> {
+    ) -> dataflow_types::DataflowDescription<dataflow_types::Plan> {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
@@ -4229,7 +4229,7 @@ where
 
         // Optimize the dataflow across views, and any other ways that appeal.
         transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
-        dataflow::Plan::finalize_dataflow(dataflow)
+        dataflow_types::Plan::finalize_dataflow(dataflow)
             .expect("Dataflow planning failed; unrecoverable error")
     }
 
@@ -4722,7 +4722,7 @@ pub mod fast_path_peek {
         PeekExisting(GlobalId, Option<Row>, expr::SafeMfpPlan),
         /// The view must be installed as a dataflow and then read.
         PeekDataflow(
-            dataflow_types::DataflowDescription<dataflow::Plan>,
+            dataflow_types::DataflowDescription<dataflow_types::Plan>,
             GlobalId,
         ),
     }
@@ -4733,7 +4733,7 @@ pub mod fast_path_peek {
     /// we can avoid building a dataflow (and either just return the results, or peek
     /// out of the arrangement, respectively).
     pub fn create_plan(
-        dataflow_plan: dataflow_types::DataflowDescription<dataflow::Plan>,
+        dataflow_plan: dataflow_types::DataflowDescription<dataflow_types::Plan>,
         view_id: GlobalId,
         index_id: GlobalId,
     ) -> Result<Plan, CoordError> {
@@ -4747,11 +4747,11 @@ pub mod fast_path_peek {
         {
             match &dataflow_plan.objects_to_build[0].view {
                 // In the case of a constant, we can return the result now.
-                dataflow::Plan::Constant { rows } => {
+                dataflow_types::Plan::Constant { rows } => {
                     return Ok(Plan::Constant(rows.clone()));
                 }
                 // In the case of a bare `Get`, we may be able to directly index an arrangement.
-                dataflow::Plan::Get {
+                dataflow_types::Plan::Get {
                     id,
                     keys: _,
                     mfp,

@@ -24,7 +24,6 @@ mod sink;
 pub mod logging;
 pub mod source;
 
-pub use render::plan::Plan;
 pub use server::{
     serve, Client, Command, Config, LocalClient, Response, Server, TimestampBindingFeedback,
     WorkerFeedback,
