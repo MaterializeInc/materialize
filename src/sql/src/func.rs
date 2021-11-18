@@ -372,7 +372,7 @@ fn sql_impl_table_func(sql: &'static str) -> Operation<(HirRelationExpr, Scope)>
 
         let query = query::resolve_names(&mut qcx, query)?;
 
-        query::plan_subquery(&mut qcx, &query)
+        query::plan_nested_query(&mut qcx, &query)
     };
 
     Operation::variadic(move |ecx, args| {
