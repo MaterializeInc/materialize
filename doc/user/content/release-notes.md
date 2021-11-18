@@ -109,6 +109,17 @@ List new features before bug fixes.
   columns of the same name. This change brings views' structure into closer
   alignment with tables.
 
+  When creating views whose `SELECT` statements return multiple columns with the
+  same identifier, you can use the optional column renaming syntax to provide
+  unique identifiers for all columns. For example:
+
+  ```sql
+  CREATE MATERIALIZED VIEW m (col_a, col_b) AS
+    SELECT a AS col, b AS col FROM t;
+  ```
+
+  For more details, see [`CREATE MATERIALIZED VIEW`] and [`CREATE VIEW`].
+
 - Add support for `LIST(<subquery>)` constructor.
 
 - Fix a crash or incorrect results when a join consumes data from a distinct
@@ -1233,7 +1244,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 - Simplify converting non-materialized views into materialized views with
   [`CREATE DEFAULT INDEX ON foo`](/sql/create-index). This creates the same
   [index](/overview/api-components/#indexes) on a view that would have been
-  created if you had used [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view).
+  created if you had used [`CREATE MATERIALIZED VIEW`].
 
 - Permit control over the timestamp selection logic on a per-Kafka-source basis
   via three new [`WITH` options](https://materialize.com/docs/sql/create-source/avro-kafka/#with-options):
