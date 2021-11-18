@@ -48,6 +48,7 @@ mod protobuf;
 /// Update row to blank out retractions of rows that we have never seen
 pub fn rewrite_for_upsert(
     val: Result<Row, DecodeError>,
+    metadata: Row,
     keys: &mut HashMap<Row, Row>,
     key: Row,
     metrics: &UIntGauge,
@@ -58,9 +59,13 @@ pub fn rewrite_for_upsert(
 
         let entry = keys.entry(key);
 
+        // Upsert-shaped data must be of shape Row[[before_row_as_list], [after_row_as_list]]
         let mut rowiter = row.iter();
         let before = rowiter.next().expect("must have a before list");
         let after = rowiter.next().expect("must have an after list");
+
+        let mut arena = Row::default();
+        let after_md = concat_datum_list(&mut arena, after, metadata);
 
         assert!(
             matches!(before, Datum::List { .. } | Datum::Null),
@@ -72,40 +77,35 @@ pub fn rewrite_for_upsert(
             Entry::Vacant(vacant) => {
                 // if the key is new, then we know that we always need to ignore the "before" part,
                 // so zero it out
-                vacant.insert(Row::pack_slice(&[after]));
+                vacant.insert(Row::pack_slice(&[after_md]));
 
-                if before.is_null() {
-                    Ok(row)
-                } else {
-                    Ok(Row::pack_slice(&[Datum::Null, after]))
-                }
+                Ok(Row::pack_slice(&[Datum::Null, after_md]))
             }
             Entry::Occupied(mut occupied) => {
-                if occupied.get().iter().next() == Some(before) {
-                    if after.is_null() {
-                        occupied.remove_entry();
-                    } else {
-                        occupied.insert(Row::pack_slice(&[after]));
-                    }
-                    // this matches the modifications we'd make in the next step
-                    Ok(row)
+                let previous_insert = if after.is_null() {
+                    // We are trying to retract something that doesn't exist, so just assume
+                    // that the key is supposed to be empty at this point
+                    let (_k, v) = occupied.remove_entry();
+                    v
                 } else {
-                    let previous_insert = if after.is_null() {
-                        // We are trying to retract something that doesn't exist, so just assume
-                        // that the key is supposed to be empty at this point
-                        let (_k, v) = occupied.remove_entry();
-                        v
-                    } else {
-                        occupied.insert(Row::pack_slice(&[after]))
-                    };
+                    occupied.insert(Row::pack_slice(&[after_md]))
+                };
 
-                    Ok(Row::pack_slice(&[previous_insert.unpack_first(), after]))
-                }
+                Ok(Row::pack_slice(&[previous_insert.unpack_first(), after_md]))
             }
         }
     } else {
         val
     }
+}
+
+fn concat_datum_list<'a, 'b: 'a>(arena: &'a mut Row, left: Datum<'b>, extra: Row) -> Datum<'a> {
+    if matches!(left, Datum::Null) {
+        return left;
+    }
+    let left = left.unwrap_list();
+    arena.push_list(left.into_iter().chain(extra.into_iter()));
+    arena.into_iter().next().unwrap()
 }
 
 pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
@@ -230,6 +230,7 @@ pub(crate) enum DataDecoderInner {
 #[derive(Debug)]
 struct DataDecoder {
     inner: DataDecoderInner,
+    //metadata: MetadataVec,
     metrics: Metrics,
 }
 

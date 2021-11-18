@@ -487,6 +487,19 @@ pub fn plan_create_source(
                 })
             };
 
+            if !include_metadata.is_empty()
+                && matches!(envelope, Envelope::Debezium(DbzMode::Plain))
+            {
+                for kind in include_metadata {
+                    if !matches!(kind.ty, SourceIncludeMetadataType::Key) {
+                        bail!(
+                            "INCLUDE {} with Debezium requires UPSERT semantics",
+                            kind.ty
+                        );
+                    }
+                }
+            }
+
             for (pos, item) in include_metadata.iter().cloned().enumerate() {
                 match item.ty {
                     SourceIncludeMetadataType::Timestamp => {
@@ -705,27 +718,6 @@ pub fn plan_create_source(
     // in the Upsert envelope's key_format so it can be validated like
     // a schema used to decode records.
 
-    let mut key_envelope = None;
-    for item in include_metadata {
-        match item.ty {
-            SourceIncludeMetadataType::Key => {
-                key_envelope = Some(get_key_envelope(item.alias.clone(), envelope, &encoding)?);
-            }
-            SourceIncludeMetadataType::Timestamp => {
-                bail_unsupported!("INCLUDE TIMESTAMP")
-            }
-            SourceIncludeMetadataType::Partition => {
-                bail_unsupported!("INCLUDE PARTITION")
-            }
-            SourceIncludeMetadataType::Topic => {
-                bail_unsupported!("INCLUDE TOPIC")
-            }
-            SourceIncludeMetadataType::Offset => {
-                bail_unsupported!("INCLUDE OFFSET")
-            }
-        }
-    }
-
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
         // TODO: fixup key envelope
@@ -826,7 +818,7 @@ pub fn plan_create_source(
     let metadata_columns = external_connector.metadata_columns(default_metadata);
     let (key_desc, value_desc) = encoding.desc()?;
     let metadata_desc = included_column_desc(metadata_columns.clone());
-    let mut bare_desc = envelope.desc(key_desc.clone(), value_desc)?.clone();
+    let mut bare_desc = envelope.desc(key_desc.clone(), value_desc, metadata_desc)?;
 
     // Append default metadata columns if column aliases were provided but do not include them.
     //

@@ -40,6 +40,7 @@ use crate::decode::rewrite_for_upsert;
 use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
+use crate::render::upsert::UpsertData;
 use crate::render::{RelevantTokens, RenderState};
 use crate::server::LocalInput;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
@@ -425,8 +426,10 @@ where
                             // render envelopes
                             match &envelope {
                                 SourceEnvelope::Debezium(dedupe_strategy, mode) => {
-                                    let keyval =
-                                        append_metadata_to_value(metadata_columns, results);
+                                    // TODO: this needs to happen separately from trackstate
+                                    let data =
+                                        append_metadata_to_value_upsert(metadata_columns, results);
+
                                     let results = match mode {
                                         DebeziumMode::Upsert => {
                                             let mut trackstate = (
@@ -436,7 +439,13 @@ where
                                                     self.dataflow_id,
                                                 ),
                                             );
-                                            keyval.flat_map(move |(key, value)| {
+                                            data.flat_map(move |data| {
+                                                let UpsertData {
+                                                    key,
+                                                    value,
+                                                    metadata,
+                                                    offset: _,
+                                                } = data;
                                                 let (keys, metrics) = &mut trackstate;
                                                 value.map(|value| match key {
                                                     None => Err(DecodeError::Text(
@@ -445,12 +454,19 @@ where
                                                     )),
                                                     Some(Err(e)) => Err(e),
                                                     Some(Ok(key)) => rewrite_for_upsert(
-                                                        value, keys, key, metrics,
+                                                        value, metadata, keys, key, metrics,
                                                     ),
                                                 })
                                             })
                                         }
-                                        DebeziumMode::Plain => keyval.flat_map(|(_key, val)| val),
+                                        DebeziumMode::Plain => data.flat_map(|data| {
+                                            data.value.map(|res| {
+                                                res.map(|mut val| {
+                                                    val.extend(data.metadata.into_iter());
+                                                    val
+                                                })
+                                            })
+                                        }),
                                     };
 
                                     let (stream, errors) = results.ok_err(ResultExt::err_into);
@@ -475,7 +491,6 @@ where
                                         None
                                     };
 
-                                    // TODO: insert metadata columns here
                                     let stream = dedupe_strategy.clone().render(
                                         stream,
                                         self.debug_name.to_string(),
@@ -492,6 +507,9 @@ where
                                     // TODO: use the key envelope to figure out when to add keys.
                                     // The opeator currently does it unconditionally
                                     let upsert_operator_name = format!("{}-upsert", source_name);
+
+                                    let results =
+                                        append_metadata_to_value_upsert(metadata_columns, results);
 
                                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                                         &upsert_operator_name,
@@ -749,6 +767,57 @@ struct KV {
 
 pub type MetadataVec = SmallVec<[IncludedColumnSource; 4]>;
 
+fn append_metadata_to_value<G>(
+    included_columns: MetadataVec,
+    results: timely::dataflow::Stream<G, DecodeResult>,
+) -> timely::dataflow::Stream<G, KV>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    results.map(move |res| {
+        let val = res.value.map(|val_result| {
+            val_result.map(|mut val| {
+                include_metadata(
+                    included_columns.clone(),
+                    res.position,
+                    res.metadata,
+                    &mut val,
+                );
+                val
+            })
+        });
+
+        KV { val, key: res.key }
+    })
+}
+
+fn append_metadata_to_value_upsert<G>(
+    included_columns: SmallVec<[IncludedColumnSource; 4]>,
+    results: timely::dataflow::Stream<G, DecodeResult>,
+) -> timely::dataflow::Stream<G, UpsertData>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    results.map(move |res| {
+        let mut metadata = Row::default();
+        include_metadata(
+            included_columns.clone(),
+            res.position,
+            res.metadata,
+            &mut metadata,
+        );
+
+        UpsertData {
+            key: res.key,
+            value: res.value,
+            // TODO: turn this into a bail. Need to handle persistence and other upsert things that
+            // don't have any error handling.
+            offset: res.position.expect("Kafka must have offset"),
+            metadata,
+        }
+    })
+}
+
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results_prepend_keys<G>(
     key_envelope: &KeyEnvelope,
@@ -788,35 +857,6 @@ where
                 })
         }
     }
-}
-
-type KeyValRow = (
-    Option<Result<Row, DecodeError>>,
-    Option<Result<Row, DecodeError>>,
-);
-
-fn append_metadata_to_value<G>(
-    included_columns: SmallVec<[IncludedColumnSource; 4]>,
-    results: timely::dataflow::Stream<G, DecodeResult>,
-) -> timely::dataflow::Stream<G, KV>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    results.map(move |res| {
-        let val = res.value.map(|val_result| {
-            val_result.map(|mut val| {
-                include_metadata(
-                    included_columns.clone(),
-                    res.position,
-                    res.metadata,
-                    &mut val,
-                );
-                val
-            })
-        });
-
-        KV { val, key: res.key }
-    })
 }
 
 fn include_metadata(

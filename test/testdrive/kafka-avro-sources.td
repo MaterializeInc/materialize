@@ -226,6 +226,31 @@ a b
 1 2
 2 3
 
+# test INCLUDE metadata
+> CREATE MATERIALIZED SOURCE non_dbz_data_metadata
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  INCLUDE PARTITION, OFFSET
+  ENVELOPE NONE
+
+> SELECT * FROM non_dbz_data_metadata
+a b partition offset
+--------------------
+1 2 0         1
+2 3 0         2
+
+> CREATE MATERIALIZED SOURCE non_dbz_data_metadata_named
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  INCLUDE PARTITION as part, OFFSET as mzo
+  ENVELOPE NONE
+
+> SELECT * FROM non_dbz_data_metadata_named
+a b  part  mzo
+--------------
+1 2  0     1
+2 3  0     2
+
 # Test an Avro source without a Debezium envelope starting at specified partition offsets.
 
 $ kafka-create-topic topic=non-dbz-data-multi-partition partitions=2

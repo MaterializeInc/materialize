@@ -500,3 +500,18 @@ melon  2
 k1        k2
 -----------
 librairie 10
+
+> CREATE MATERIALIZED SOURCE include_metadata
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
+  WITH (start_offset=1)
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE PARTITION, OFFSET
+  ENVELOPE UPSERT
+
+> SELECT * FROM include_metadata
+f3        f1        f1           f2   partition  offset
+-------------------------------------------------------
+<null>    yin       dog          243   0         15
+air       qi        chicken      47    0         13
+earth     dao       rhinoceros   211   0         12

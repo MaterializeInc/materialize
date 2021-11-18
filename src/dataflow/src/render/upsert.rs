@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 
+use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, Operator};
@@ -26,8 +27,21 @@ use persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
 use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 use crate::operator::StreamExt;
-use crate::source::DecodeResult;
 use crate::source::SourceData;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct UpsertData {
+    pub key: Option<Result<Row, DecodeError>>,
+    pub value: Option<Result<Row, DecodeError>>,
+    pub offset: i64,
+    pub metadata: Row,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+struct UpsertSourceData {
+    raw_data: SourceData,
+    metadata: Row,
+}
 
 /// Entrypoint to the upsert-specific transformations involved
 /// in rendering a stream that came from an upsert source.
@@ -39,9 +53,9 @@ use crate::source::SourceData;
 /// When `persist_config` is `Some` this will write upsert state to the configured persistent
 /// collection and restore state from it. This does now, however, seal the backing collection. It
 /// is the responsibility of the caller to ensure that the collection is sealed up.
-pub fn upsert<G>(
+pub(crate) fn upsert<G>(
     source_name: &str,
-    stream: &Stream<G, DecodeResult>,
+    stream: &Stream<G, UpsertData>,
     as_of_frontier: Antichain<Timestamp>,
     operators: &mut Option<LinearOperator>,
     source_arity: usize,
@@ -161,8 +175,8 @@ where
                     error!("Encountered empty key in: {:?}", decode_result);
                     return None;
                 }
-                let position = decode_result.position.expect("missing Kafka offset");
-                Some((decode_result.key.unwrap(), decode_result.value, position))
+                let offset = decode_result.offset;
+                Some((decode_result.key.unwrap(), decode_result.value, offset))
             });
 
             let mut row_packer = repr::Row::default();
@@ -268,7 +282,7 @@ fn evaluate(
 
 /// Internal core upsert logic.
 fn upsert_core<G>(
-    stream: &Stream<G, DecodeResult>,
+    stream: &Stream<G, UpsertData>,
     source_arity: usize,
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
@@ -278,14 +292,15 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let result_stream = stream.unary_frontier(
-        Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
+        Exchange::new(move |UpsertData { key, .. }| key.hashed()),
         "Upsert",
         move |_cap, _info| {
-            // this is a map of (time) -> (capability, ((key) -> (value with max
-            // offset))) This is a BTreeMap because we want to ensure that if we
-            // receive (key1, value1, time 5) and (key1, value2, time 7) that we
-            // send (key1, value1, time 5) before (key1, value2, time 7)
-            let mut to_send = BTreeMap::<_, (_, HashMap<_, SourceData>)>::new();
+            // This is a map of (time) -> (capability, ((key) -> (value with max // offset)))
+            //
+            // This is a BTreeMap because we want to ensure that if we receive (key1, value1, time
+            // 5) and (key1, value2, time 7) that we send (key1, value1, time 5) before (key1,
+            // value2, time 7)
+            let mut to_send = BTreeMap::<_, (_, HashMap<_, UpsertSourceData>)>::new();
             // this is a map of (decoded key) -> (decoded_value). We store the
             // latest value for a given key that way we know what to retract if
             // a new value with the same key comes along
@@ -298,11 +313,11 @@ where
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
                     data.swap(&mut vector);
-                    for DecodeResult {
+                    for UpsertData {
                         key,
                         value: new_value,
-                        position: new_position,
-                        metadata: _,
+                        offset: new_position,
+                        metadata,
                     } in vector.drain(..)
                     {
                         let mut time = cap.time().clone();
@@ -312,37 +327,36 @@ where
                             continue;
                         }
 
-                        if let Some(new_offset) = new_position {
-                            let entry = to_send
-                                .entry(time)
-                                .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
-                                .1
-                                .entry(key)
-                                .or_insert_with(Default::default);
+                        let entry = to_send
+                            .entry(time)
+                            .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
+                            .1
+                            .entry(key)
+                            .or_insert_with(Default::default);
 
-                            let new_entry = SourceData {
+                        let new_entry = UpsertSourceData {
+                            raw_data: SourceData {
                                 value: new_value.map(ResultExt::err_into),
-                                position: new_position,
-                                upstream_time_millis: None, // upsert sources don't have a column for this, so setting it to `None` is fine.
-                            };
+                                position: Some(new_position),
+                                // upsert sources don't have a column for this, so setting it to
+                                // `None` is fine.
+                                upstream_time_millis: None,
+                            },
+                            metadata,
+                        };
 
-                            if let Some(offset) = entry.position {
-                                // If the time is equal, toss out the row with the
-                                // lower offset
-                                if offset < new_offset {
-                                    *entry = new_entry;
-                                }
-                            } else {
-                                // If there was not a previous entry, we'll have
-                                // inserted a blank default value, and the
-                                // offset would be none.
-                                // Just insert new entry into the hashmap.
+                        if let Some(offset) = entry.raw_data.position {
+                            // If the time is equal, toss out the row with the
+                            // lower offset
+                            if offset < new_position {
                                 *entry = new_entry;
                             }
                         } else {
-                            // This case should be unreachable because kafka
-                            // records should always come with an offset.
-                            error!("Encountered row with empty offset {:?}", key);
+                            // If there was not a previous entry, we'll have
+                            // inserted a blank default value, and the
+                            // offset would be none.
+                            // Just insert new entry into the hashmap.
+                            *entry = new_entry;
                         }
                     }
                 });
@@ -361,14 +375,13 @@ where
                             // we could produce and then remove the error from the output).
                             match key {
                                 Some(Ok(decoded_key)) => {
-                                    let decoded_value = if data.value.is_none() {
-                                        Ok(None)
-                                    } else {
-                                        let value = data.value.unwrap();
-                                        value.and_then(|row| {
+                                    let decoded_value = match data.raw_data.value {
+                                        None => Ok(None),
+                                        Some(value) => value.and_then(|row| {
                                             let mut datums = Vec::with_capacity(source_arity);
                                             datums.extend(decoded_key.iter());
                                             datums.extend(row.iter());
+                                            datums.extend(data.metadata.iter());
                                             evaluate(
                                                 &datums,
                                                 &predicates,
@@ -376,7 +389,7 @@ where
                                                 &mut row_packer,
                                             )
                                             .map_err(DataflowError::from)
-                                        })
+                                        }),
                                     };
                                     // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
                                     // We store errors as well as non-None values, so that they can be

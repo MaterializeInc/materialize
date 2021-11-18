@@ -602,15 +602,16 @@ impl SourceEnvelope {
         &self,
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
+        metadata_desc: RelationDesc,
     ) -> anyhow::Result<RelationDesc> {
         Ok(match self {
             SourceEnvelope::None(key_envelope) | SourceEnvelope::Upsert(key_envelope) => {
                 let key_desc = match key_desc {
                     Some(desc) => desc,
-                    None => return Ok(value_desc),
+                    None => return Ok(value_desc.concat(metadata_desc)),
                 };
 
-                match key_envelope {
+                let keyed = match key_envelope {
                     KeyEnvelope::None => value_desc,
                     KeyEnvelope::Flattened => {
                         // Add the key columns as a key.
@@ -656,14 +657,42 @@ impl SourceEnvelope {
                         // In all cases the first column is the key
                         key_desc.with_key(vec![0]).concat(value_desc)
                     }
-                }
+                };
+                keyed.concat(metadata_desc)
             }
             SourceEnvelope::Debezium(..) => {
                 // TODO [btv] - Get rid of this, when we can. Right now source processing is still
                 // not fully orthogonal, so we have some special logic in the debezium processor
                 // that only passes on the first two columns ("before" and "after"), and uses the
                 // information in the other ones itself
-                RelationDesc::from_names_and_types(value_desc.into_iter().take(2))
+                let mut diter = value_desc.into_iter();
+                let mut key = diter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("Spec does not contain key"))?;
+                match &mut key.1.scalar_type {
+                    ScalarType::Record { fields, .. } => fields.extend(
+                        metadata_desc
+                            .iter()
+                            .map(|(k, v)| (k.unwrap().clone(), v.clone())),
+                    ),
+                    ty => bail!(
+                        "Incorrect type for Debezium value, expected Record, got {:?}",
+                        ty
+                    ),
+                }
+                let mut value = diter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("Spec does not contain value"))?;
+                match &mut value.1.scalar_type {
+                    ScalarType::Record { fields, .. } => {
+                        fields.extend(metadata_desc.into_iter().map(|(k, v)| (k.unwrap(), v)))
+                    }
+                    ty => bail!(
+                        "Incorrect type for Debezium value, expected Record, got {:?}",
+                        ty
+                    ),
+                }
+                RelationDesc::from_names_and_types([key, value].into_iter())
             }
             SourceEnvelope::CdcV2 => {
                 // TODO: Validate that the value schema has an `updates` and `progress` column of

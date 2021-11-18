@@ -91,15 +91,15 @@ $ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflict
 # ------------
 # 1 2 3
 
-> CREATE MATERIALIZED SOURCE include_partition
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE PARTITION
+# > CREATE MATERIALIZED SOURCE include_partition
+#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+#   FORMAT AVRO USING SCHEMA '${schema}'
+#   INCLUDE PARTITION
 
-> SELECT * FROM include_partition
-id b partition
---------------
-2 3 0
+# > SELECT * FROM include_partition
+# id b partition
+# --------------
+# 2 3 0
 
 > CREATE MATERIALIZED SOURCE avro_data_as
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
