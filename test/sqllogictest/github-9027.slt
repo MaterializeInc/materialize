@@ -1,0 +1,978 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/8713
+mode cockroach
+
+statement ok
+CREATE TABLE orders ( o_orderkey integer, o_custkey integer NOT NULL, o_orderstatus text NOT NULL, o_totalprice decimal(15, 2) NOT NULL, o_orderdate DATE NOT NULL, o_orderpriority text NOT NULL, o_clerk text NOT NULL, o_shippriority integer NOT NULL, o_comment text NOT NULL);
+
+statement ok
+CREATE TABLE lineitem ( l_orderkey integer NOT NULL, l_partkey integer NOT NULL, l_suppkey integer NOT NULL, l_linenumber integer NOT NULL, l_quantity decimal(15, 2) NOT NULL, l_extendedprice decimal(15, 2) NOT NULL, l_discount decimal(15, 2) NOT NULL, l_tax decimal(15, 2) NOT NULL, l_returnflag text NOT NULL, l_linestatus text NOT NULL, l_shipdate date NOT NULL, l_commitdate date NOT NULL, l_receiptdate date NOT NULL, l_shipinstruct text NOT NULL, l_shipmode text NOT NULL, l_comment text NOT NULL
+);
+
+statement ok
+INSERT INTO "lineitem" VALUES (581,7,1,1,41,37187,0.09,0.07,'N','O','1997-05-26','1997-04-06','1997-06-10','TAKE BACK RETURN','MAIL','even, bold excuses about the'),(581,10,1,2,14,12740.14,0.06,0.08,'N','O','1997-05-17','1997-04-14','1997-06-08','NONE','MAIL','furiously silent depths'),(581,11,1,3,49,44639.49,0.1,0.02,'N','O','1997-02-27','1997-04-24','1997-03-10','TAKE BACK RETURN','MAIL','furiously regular theodolites wake qu'),(581,8,1,4,30,27240,0.1,0.08,'N','O','1997-06-19','1997-05-21','1997-06-22','TAKE BACK RETURN','TRUCK','even deposits wa'),(582,6,1,1,7,6342,0.07,0,'N','O','1997-11-16','1997-11-29','1997-12-10','TAKE BACK RETURN','FOB','carefully final requests sleep slyly. even,'),(582,6,1,2,49,44394,0.05,0.03,'N','O','1997-12-17','1998-01-12','1997-12-31','COLLECT COD','REG AIR','carefully regular'),(582,15,1,3,42,38430.42,0.07,0,'N','O','1997-11-15','1997-12-21','1997-12-03','COLLECT COD','SHIP','pending, spe'),(582,17,1,4,36,33012.36,0.06,0.01,'N','O','1997-12-09','1997-11-27','1997-12-26','TAKE BACK RETURN','SHIP','slyly final foxes nag permanen');
+
+statement ok
+INSERT INTO "orders" VALUES (547,10,'O',87538.95,'1996-06-22','3-MEDIUM','Clerk#000000976',0,'bold instructions print fluffily carefully id'),(548,13,'F',91796.96,'1994-09-21','1-URGENT','Clerk#000000435',0,'quickly regular accounts daz'),(549,11,'F',129199.61,'1992-07-13','1-URGENT','Clerk#000000196',0,'carefully regular foxes integrate ironic, fina'),(550,4,'O',27927.38,'1995-08-02','1-URGENT','Clerk#000000204',0,'carefully even asymptotes sleep furiously sp'),(551,10,'O',40845.41,'1995-05-30','1-URGENT','Clerk#000000179',0,'unusual, final accounts use above the special excuses. final depo'),(576,4,'O',17143.74,'1997-05-13','3-MEDIUM','Clerk#000000955',0,'pending theodolites about the carefu'),(577,7,'F',33465.32,'1994-12-19','5-LOW','Clerk#000000154',0,'blithely unusual packages sl'),(578,10,'O',60466.97,'1997-01-10','5-LOW','Clerk#000000281',0,'blithely pending asymptotes wake quickly across the carefully final'),(579,7,'O',116780.04,'1998-03-11','2-HIGH','Clerk#000000862',0,'slyly even requests cajole slyly. sil'),(580,7,'O',77490.74,'1997-07-05','2-HIGH','Clerk#000000314',0,'final ideas must have to are carefully quickly furious requests'),(581,7,'O',116599.09,'1997-02-23','4-NOT SPECIFIED','Clerk#000000239',0,'carefully regular dolphins cajole ruthlessl'),(582,5,'O',116419.79,'1997-10-21','1-URGENT','Clerk#000000378',0,'quietly ironic pinto beans wake carefully. ironic accounts across the dol');
+
+query I
+SELECT
+ 1
+FROM
+ lineitem JOIN orders ON true
+WHERE
+ l_orderkey
+ = ANY (
+ SELECT
+ o_orderkey
+ FROM
+ lineitem RIGHT JOIN orders ON true
+ WHERE
+ l_receiptdate IN ('1997-07-06')
+ OR l_commitdate = o_orderdate - ' 7 DAY '
+ );
+----
+
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SELECT
+ 1
+FROM
+ lineitem JOIN orders ON true
+WHERE
+ l_orderkey
+ = ANY (
+ SELECT
+ o_orderkey
+ FROM
+ lineitem RIGHT JOIN orders ON true
+ WHERE
+ l_receiptdate IN ('1997-07-06')
+ OR l_commitdate = o_orderdate - ' 7 DAY '
+ );
+----
+{
+  "Let": {
+    "id": 0,
+    "value": {
+      "Join": {
+        "inputs": [
+          {
+            "ArrangeBy": {
+              "input": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 3
+                    }
+                  },
+                  "keys": [
+                    [
+                      {
+                        "Column": 0
+                      },
+                      {
+                        "Column": 1
+                      },
+                      {
+                        "Column": 2
+                      },
+                      {
+                        "Column": 3
+                      },
+                      {
+                        "Column": 4
+                      },
+                      {
+                        "Column": 5
+                      },
+                      {
+                        "Column": 6
+                      },
+                      {
+                        "Column": 7
+                      },
+                      {
+                        "Column": 8
+                      },
+                      {
+                        "Column": 9
+                      },
+                      {
+                        "Column": 10
+                      },
+                      {
+                        "Column": 11
+                      },
+                      {
+                        "Column": 12
+                      },
+                      {
+                        "Column": 13
+                      },
+                      {
+                        "Column": 14
+                      },
+                      {
+                        "Column": 15
+                      }
+                    ]
+                  ],
+                  "mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [
+                      0
+                    ],
+                    "input_arity": 16
+                  },
+                  "key_val": null
+                }
+              },
+              "ensure_arrangements": [
+                [
+                  [],
+                  {
+                    "key_arity": 0,
+                    "permutation": [
+                      0
+                    ]
+                  },
+                  [
+                    0
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "keys": [
+                [
+                  {
+                    "Column": 0
+                  },
+                  {
+                    "Column": 1
+                  },
+                  {
+                    "Column": 2
+                  },
+                  {
+                    "Column": 3
+                  },
+                  {
+                    "Column": 4
+                  },
+                  {
+                    "Column": 5
+                  },
+                  {
+                    "Column": 6
+                  },
+                  {
+                    "Column": 7
+                  },
+                  {
+                    "Column": 8
+                  }
+                ]
+              ],
+              "mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [],
+                "input_arity": 9
+              },
+              "key_val": null
+            }
+          }
+        ],
+        "plan": {
+          "Linear": {
+            "source_relation": 1,
+            "initial_closure": null,
+            "stage_plans": [
+              {
+                "lookup_relation": 0,
+                "stream_key": [],
+                "stream_permutation": {
+                  "key_arity": 0,
+                  "permutation": []
+                },
+                "stream_thinning": [],
+                "lookup_key": [],
+                "lookup_permutation": {
+                  "key_arity": 0,
+                  "permutation": [
+                    0
+                  ]
+                },
+                "lookup_thinning": [
+                  0
+                ],
+                "closure": {
+                  "ready_equivalences": [],
+                  "before": {
+                    "mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0
+                      ],
+                      "input_arity": 1
+                    }
+                  }
+                }
+              }
+            ],
+            "final_closure": null
+          }
+        }
+      }
+    },
+    "body": {
+      "Join": {
+        "inputs": [
+          {
+            "Get": {
+              "id": {
+                "Local": 0
+              },
+              "keys": [],
+              "mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0
+                ],
+                "input_arity": 1
+              },
+              "key_val": null
+            }
+          },
+          {
+            "ArrangeBy": {
+              "input": {
+                "Reduce": {
+                  "input": {
+                    "Join": {
+                      "inputs": [
+                        {
+                          "ArrangeBy": {
+                            "input": {
+                              "Get": {
+                                "id": {
+                                  "Global": {
+                                    "User": 3
+                                  }
+                                },
+                                "keys": [
+                                  [
+                                    {
+                                      "Column": 0
+                                    },
+                                    {
+                                      "Column": 1
+                                    },
+                                    {
+                                      "Column": 2
+                                    },
+                                    {
+                                      "Column": 3
+                                    },
+                                    {
+                                      "Column": 4
+                                    },
+                                    {
+                                      "Column": 5
+                                    },
+                                    {
+                                      "Column": 6
+                                    },
+                                    {
+                                      "Column": 7
+                                    },
+                                    {
+                                      "Column": 8
+                                    },
+                                    {
+                                      "Column": 9
+                                    },
+                                    {
+                                      "Column": 10
+                                    },
+                                    {
+                                      "Column": 11
+                                    },
+                                    {
+                                      "Column": 12
+                                    },
+                                    {
+                                      "Column": 13
+                                    },
+                                    {
+                                      "Column": 14
+                                    },
+                                    {
+                                      "Column": 15
+                                    }
+                                  ]
+                                ],
+                                "mfp": {
+                                  "expressions": [],
+                                  "predicates": [],
+                                  "projection": [
+                                    11,
+                                    12
+                                  ],
+                                  "input_arity": 16
+                                },
+                                "key_val": null
+                              }
+                            },
+                            "ensure_arrangements": [
+                              [
+                                [],
+                                {
+                                  "key_arity": 0,
+                                  "permutation": [
+                                    0,
+                                    1
+                                  ]
+                                },
+                                [
+                                  0,
+                                  1
+                                ]
+                              ]
+                            ]
+                          }
+                        },
+                        {
+                          "ArrangeBy": {
+                            "input": {
+                              "Reduce": {
+                                "input": {
+                                  "Get": {
+                                    "id": {
+                                      "Local": 0
+                                    },
+                                    "keys": [],
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0
+                                      ],
+                                      "input_arity": 1
+                                    },
+                                    "key_val": null
+                                  }
+                                },
+                                "key_val_plan": {
+                                  "key_plan": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0
+                                      ],
+                                      "input_arity": 1
+                                    }
+                                  },
+                                  "val_plan": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [],
+                                      "input_arity": 1
+                                    }
+                                  }
+                                },
+                                "plan": "Distinct",
+                                "permutation": {
+                                  "key_arity": 1,
+                                  "permutation": [
+                                    0
+                                  ]
+                                }
+                              }
+                            },
+                            "ensure_arrangements": [
+                              [
+                                [
+                                  {
+                                    "Column": 0
+                                  }
+                                ],
+                                {
+                                  "key_arity": 1,
+                                  "permutation": [
+                                    0
+                                  ]
+                                },
+                                []
+                              ]
+                            ]
+                          }
+                        },
+                        {
+                          "ArrangeBy": {
+                            "input": {
+                              "Get": {
+                                "id": {
+                                  "Global": {
+                                    "User": 1
+                                  }
+                                },
+                                "keys": [
+                                  [
+                                    {
+                                      "Column": 0
+                                    },
+                                    {
+                                      "Column": 1
+                                    },
+                                    {
+                                      "Column": 2
+                                    },
+                                    {
+                                      "Column": 3
+                                    },
+                                    {
+                                      "Column": 4
+                                    },
+                                    {
+                                      "Column": 5
+                                    },
+                                    {
+                                      "Column": 6
+                                    },
+                                    {
+                                      "Column": 7
+                                    },
+                                    {
+                                      "Column": 8
+                                    }
+                                  ]
+                                ],
+                                "mfp": {
+                                  "expressions": [],
+                                  "predicates": [
+                                    [
+                                      1,
+                                      {
+                                        "CallUnary": {
+                                          "func": {
+                                            "Not": null
+                                          },
+                                          "expr": {
+                                            "CallUnary": {
+                                              "func": {
+                                                "IsNull": null
+                                              },
+                                              "expr": {
+                                                "Column": 0
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  ],
+                                  "projection": [
+                                    0,
+                                    4
+                                  ],
+                                  "input_arity": 9
+                                },
+                                "key_val": null
+                              }
+                            },
+                            "ensure_arrangements": [
+                              [
+                                [
+                                  {
+                                    "Column": 0
+                                  }
+                                ],
+                                {
+                                  "key_arity": 1,
+                                  "permutation": [
+                                    0,
+                                    1
+                                  ]
+                                },
+                                [
+                                  1
+                                ]
+                              ]
+                            ]
+                          }
+                        }
+                      ],
+                      "plan": {
+                        "Linear": {
+                          "source_relation": 1,
+                          "initial_closure": null,
+                          "stage_plans": [
+                            {
+                              "lookup_relation": 2,
+                              "stream_key": [
+                                {
+                                  "Column": 0
+                                }
+                              ],
+                              "stream_permutation": {
+                                "key_arity": 1,
+                                "permutation": [
+                                  0
+                                ]
+                              },
+                              "stream_thinning": [],
+                              "lookup_key": [
+                                {
+                                  "Column": 0
+                                }
+                              ],
+                              "lookup_permutation": {
+                                "key_arity": 1,
+                                "permutation": [
+                                  0,
+                                  1
+                                ]
+                              },
+                              "lookup_thinning": [
+                                1
+                              ],
+                              "closure": {
+                                "ready_equivalences": [],
+                                "before": {
+                                  "mfp": {
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0,
+                                      2
+                                    ],
+                                    "input_arity": 3
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "lookup_relation": 0,
+                              "stream_key": [],
+                              "stream_permutation": {
+                                "key_arity": 0,
+                                "permutation": [
+                                  0,
+                                  1
+                                ]
+                              },
+                              "stream_thinning": [
+                                0,
+                                1
+                              ],
+                              "lookup_key": [],
+                              "lookup_permutation": {
+                                "key_arity": 0,
+                                "permutation": [
+                                  0,
+                                  1
+                                ]
+                              },
+                              "lookup_thinning": [
+                                0,
+                                1
+                              ],
+                              "closure": {
+                                "ready_equivalences": [],
+                                "before": {
+                                  "mfp": {
+                                    "expressions": [],
+                                    "predicates": [
+                                      [
+                                        4,
+                                        {
+                                          "CallBinary": {
+                                            "func": "Or",
+                                            "expr1": {
+                                              "CallBinary": {
+                                                "func": "Eq",
+                                                "expr1": {
+                                                  "Column": 3
+                                                },
+                                                "expr2": {
+                                                  "Literal": [
+                                                    {
+                                                      "Ok": {
+                                                        "data": [
+                                                          8,
+                                                          205,
+                                                          7,
+                                                          0,
+                                                          0,
+                                                          187,
+                                                          0,
+                                                          0,
+                                                          0
+                                                        ]
+                                                      }
+                                                    },
+                                                    {
+                                                      "scalar_type": "Date",
+                                                      "nullable": false
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            "expr2": {
+                                              "CallBinary": {
+                                                "func": "Eq",
+                                                "expr1": {
+                                                  "CallUnary": {
+                                                    "func": "CastDateToTimestamp",
+                                                    "expr": {
+                                                      "Column": 2
+                                                    }
+                                                  }
+                                                },
+                                                "expr2": {
+                                                  "CallBinary": {
+                                                    "func": "SubDateInterval",
+                                                    "expr1": {
+                                                      "Column": 1
+                                                    },
+                                                    "expr2": {
+                                                      "Literal": [
+                                                        {
+                                                          "Ok": {
+                                                            "data": [
+                                                              12,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              41,
+                                                              249,
+                                                              15,
+                                                              38,
+                                                              2,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0
+                                                            ]
+                                                          }
+                                                        },
+                                                        {
+                                                          "scalar_type": "Interval",
+                                                          "nullable": false
+                                                        }
+                                                      ]
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    ],
+                                    "projection": [
+                                      0
+                                    ],
+                                    "input_arity": 4
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "final_closure": null
+                        }
+                      }
+                    }
+                  },
+                  "key_val_plan": {
+                    "key_plan": {
+                      "mfp": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0
+                        ],
+                        "input_arity": 1
+                      }
+                    },
+                    "val_plan": {
+                      "mfp": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [],
+                        "input_arity": 1
+                      }
+                    }
+                  },
+                  "plan": "Distinct",
+                  "permutation": {
+                    "key_arity": 1,
+                    "permutation": [
+                      0
+                    ]
+                  }
+                }
+              },
+              "ensure_arrangements": [
+                [
+                  [
+                    {
+                      "Column": 0
+                    }
+                  ],
+                  {
+                    "key_arity": 1,
+                    "permutation": [
+                      0
+                    ]
+                  },
+                  []
+                ]
+              ]
+            }
+          }
+        ],
+        "plan": {
+          "Linear": {
+            "source_relation": 0,
+            "initial_closure": null,
+            "stage_plans": [
+              {
+                "lookup_relation": 1,
+                "stream_key": [
+                  {
+                    "Column": 0
+                  }
+                ],
+                "stream_permutation": {
+                  "key_arity": 1,
+                  "permutation": [
+                    0
+                  ]
+                },
+                "stream_thinning": [],
+                "lookup_key": [
+                  {
+                    "Column": 0
+                  }
+                ],
+                "lookup_permutation": {
+                  "key_arity": 1,
+                  "permutation": [
+                    0
+                  ]
+                },
+                "lookup_thinning": [],
+                "closure": {
+                  "ready_equivalences": [],
+                  "before": {
+                    "mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [],
+                      "input_arity": 2
+                    }
+                  }
+                }
+              }
+            ],
+            "final_closure": {
+              "ready_equivalences": [],
+              "before": {
+                "mfp": {
+                  "expressions": [
+                    {
+                      "Literal": [
+                        {
+                          "Ok": {
+                            "data": [
+                              4,
+                              1,
+                              0,
+                              0,
+                              0
+                            ]
+                          }
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": false
+                        }
+                      ]
+                    }
+                  ],
+                  "predicates": [],
+                  "projection": [
+                    0
+                  ],
+                  "input_arity": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+EOF
+
+query I
+SELECT
+	CASE o_orderkey
+	WHEN 1 THEN l_orderkey
+	ELSE (
+		SELECT
+			l_orderkey
+		WHERE
+			l_shipdate = o_orderdate + ' 3 MONTH '
+			OR o_orderdate = l_shipdate - ' 9 DAY '
+				AND EXISTS(
+						SELECT
+							1
+						WHERE
+							true
+							AND l_orderkey
+								= ANY (
+										SELECT
+											o_orderkey
+										FROM
+											lineitem RIGHT JOIN orders ON true
+										WHERE
+											l_receiptdate IN ('1997-07-06') OR l_commitdate = o_orderdate - ' 7 DAY '
+									)
+					)
+	)
+	END
+FROM
+	lineitem JOIN orders ON true;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
