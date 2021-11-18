@@ -16,7 +16,7 @@ the account; if you don't have access and believe you should, check with your on
 If you are a member of a different org but feel that access to AWS resources could
 be useful to you, ask in #eng-infra on Slack.
 
-To access scratch resources from the AWS console, use [our SSO app](materialize.awsapps.com/start/).
+To access scratch resources from the AWS console, use [our SSO app](https://materialize.awsapps.com/start/).
 
 To access scratch resources from the command line, follow the instructions [here](https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md#cli-and-api-access).
 
