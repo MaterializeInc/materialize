@@ -177,6 +177,32 @@ lazy_static! {
 
             // REGTYPE
             (RegType,Oid) => Implicit: CastRegTypeToOid,
+            // (RegType, String) => Explicit: sql_impl_cast("(
+            //     SELECT
+            //         CASE
+            //         WHEN $1 IS NULL THEN NULL
+            //         ELSE (
+            //             mz_internal.mz_error_if_null(
+            //                 (SELECT name FROM mz_catalog.mz_types WHERE oid = $1),
+            //                 'type \"' || $1 || '\" does not exist'
+            //             )
+            //         )
+            //         END
+            // )"),
+            // (RegType, String) => Explicit: sql_impl_cast("(
+            //     SELECT
+            //             mz_internal.mz_error_if_null(
+            //                 (SELECT name FROM mz_catalog.mz_types WHERE oid = $1),
+            //                 'type \"' || $1 || '\" does not exist'
+            //             ) as text
+            // )"),
+            (RegType, String) => Explicit: sql_impl_cast("(
+                SELECT
+                    CASE
+                    WHEN $1 IS NULL THEN NULL
+                    ELSE (SELECT name FROM mz_catalog.mz_types WHERE oid = $1)
+                    END
+            )"),
 
             // FLOAT32
             (Float32, Int16) => Assignment: CastFloat32ToInt16(func::CastFloat32ToInt16),
