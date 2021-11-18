@@ -22,10 +22,46 @@ use std::fmt;
 /// The red zone is the amount of stack space that must be available on the
 /// current stack in order for [`maybe_grow`] to call the supplied closure
 /// without allocating a new stack.
+///
+/// We use a much larger red zone in debug builds because several functions have
+/// been observed to have 32KB+ stack frames when compiled without
+/// optimizations. In particular, match statements on large enums are
+/// problematic, because *each arm* of the match statement gets its own
+/// dedicated stack space. For example, consider the following function:
+///
+/// ```ignore
+/// fn big_stack(input: SomeEnum) {
+///     match input {
+///         SomeEnum::Variant1 => {
+///             let a_local = SomeBigType::new();
+///         }
+///         SomeEnum::Variant2 => {
+///             let b_local = SomeBigType::new();
+///         }
+///         // ...
+///         SomeEnum::Variant10 => {
+///             let z_local = SomeBigType::new();
+///         }
+///     }
+/// }
+/// ```
+///
+/// In debug builds, the compiler will generate a stack frame that contains
+/// space for 10 separate copies of `SomeBigType`. This can quickly result in
+/// massive stack frames for perfectly reasonable code.
+#[cfg(debug_assertions)]
+pub const STACK_RED_ZONE: usize = 256 << 10; // 256KiB
+#[cfg(not(debug_assertions))]
 pub const STACK_RED_ZONE: usize = 32 << 10; // 32KiB
 
-/// The size of any freshly allocated stacks. It was chosen to match the
-/// default stack size for threads in Rust.
+/// The size of any freshly allocated stacks. It was chosen to match the default
+/// stack size for threads in Rust.
+///
+/// The default stack size is larger in debug builds to correspond to the the
+/// larger [`STACK_RED_ZONE`].
+#[cfg(debug_assertions)]
+pub const STACK_SIZE: usize = 16 << 20; // 16MiB
+#[cfg(not(debug_assertions))]
 pub const STACK_SIZE: usize = 2 << 20; // 2MiB
 
 /// Grows the stack if necessary before invoking `f`.
