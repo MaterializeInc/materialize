@@ -1131,13 +1131,39 @@ pub fn memoize_expr(
     )
 }
 
+pub mod util {
+    use std::collections::HashMap;
+
+    /// Takes a permutation represented as an array
+    /// (where the `i`th column being `j` implies that column `i` in the original row
+    ///  corresponds to column `j` in the permuted row; see `dataflow::render::Permutation`)
+    /// and converts it to a column map along with the arity of the permuted representation
+    pub fn permutation_to_map_and_new_arity(
+        permutation: &[usize],
+    ) -> (HashMap<usize, usize>, usize) {
+        (
+            permutation.iter().cloned().enumerate().collect(),
+            permutation
+                .iter()
+                .cloned()
+                .max()
+                .map(|x| x + 1)
+                .unwrap_or(0),
+        )
+    }
+}
+
 pub mod plan {
+
+    use std::collections::HashMap;
 
     use serde::{Deserialize, Serialize};
 
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc};
     use repr::adt::numeric::Numeric;
     use repr::{Datum, Diff, Row, RowArena, ScalarType};
+
+    use super::util::permutation_to_map_and_new_arity;
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1146,6 +1172,9 @@ pub mod plan {
     }
 
     impl SafeMfpPlan {
+        pub fn permute(&mut self, map: HashMap<usize, usize>, new_arity: usize) {
+            self.mfp.permute(map, new_arity);
+        }
         /// Evaluates the linear operator on a supplied list of datums.
         ///
         /// The arguments are the initial datums associated with the row,
@@ -1181,7 +1210,7 @@ pub mod plan {
         /// A version of `evaluate` which produces an iterator over `Datum`
         /// as output.
         ///
-        /// This version can be usefulwhen one wants to capture the resulting
+        /// This version can be useful when one wants to capture the resulting
         /// datums without packing and then unpacking a row.
         #[inline(always)]
         pub fn evaluate_iter<'b, 'a: 'b>(
@@ -1239,7 +1268,7 @@ pub mod plan {
     /// They must directly constrain `MzLogicalTimestamp` from below or above,
     /// by expressions that do not themselves contain `MzLogicalTimestamp`.
     /// Conjunctions of such constraints are also ok.
-    #[derive(Debug)]
+    #[derive(Clone, Debug)]
     pub struct MfpPlan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
         mfp: SafeMfpPlan,
@@ -1250,6 +1279,19 @@ pub mod plan {
     }
 
     impl MfpPlan {
+        /// Prepares `self` to act on permuted input, according to the permutation array
+        /// `permutation` (see for example the documentation on `util::permutation_to_map_and_new_arity`
+        /// for a description of the input).
+        pub fn permute(&mut self, permutation: &[usize]) {
+            let (map, new_arity) = permutation_to_map_and_new_arity(permutation);
+            self.mfp.mfp.permute(map, new_arity);
+            for lb in &mut self.lower_bounds {
+                lb.permute(permutation);
+            }
+            for ub in &mut self.upper_bounds {
+                ub.permute(permutation);
+            }
+        }
         /// Partitions `predicates` into non-temporal, and lower and upper temporal bounds.
         ///
         /// The first returned list is of predicates that do not contain `mz_logical_timestamp`.

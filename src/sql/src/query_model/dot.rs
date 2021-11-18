@@ -9,10 +9,12 @@
 
 //! Generates a graphviz graph from a Query Graph Model.
 
-use crate::query_model::{BoxScalarExpr, BoxType, Model, Quantifier, QuantifierId, QueryBox};
+#![cfg(test)]
+
+use crate::query_model::{BoxType, Model, Quantifier, QuantifierId, QueryBox};
 use itertools::Itertools;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 /// Generates a graphviz graph from a Query Graph Model, defined in the DOT language.
 /// See <https://graphviz.org/doc/info/lang.html>.
@@ -181,38 +183,21 @@ impl DotGenerator {
     /// Adds red arrows from correlated quantifiers to the sibling quantifiers they
     /// are correlated with.
     fn add_correlation_info(&mut self, model: &Model, b: &QueryBox) {
-        let mut correlation_info: BTreeMap<QuantifierId, Vec<QuantifierId>> = BTreeMap::new();
-        for q_id in b.quantifiers.iter() {
-            // collect the column references from the current context within
-            // the subgraph under the current quantifier
-            let mut column_refs = HashSet::new();
-            let mut f = |inner_box: &RefCell<QueryBox>| -> Result<(), ()> {
-                inner_box.borrow().visit_expressions(
-                    &mut |expr: &BoxScalarExpr| -> Result<(), ()> {
-                        expr.collect_column_references_from_context(
-                            &b.quantifiers,
-                            &mut column_refs,
-                        );
-                        Ok(())
-                    },
+        let correlation_info: BTreeMap<QuantifierId, Vec<QuantifierId>> = b
+            .correlation_info(model)
+            .into_iter()
+            .map(|(id, column_refs)| {
+                (
+                    id,
+                    column_refs
+                        .iter()
+                        .map(|c| c.quantifier_id)
+                        .sorted()
+                        .unique()
+                        .collect::<Vec<_>>(),
                 )
-            };
-            let q = model.get_quantifier(*q_id).borrow();
-            model
-                .visit_pre_boxes_in_subgraph(&mut f, q.input_box)
-                .unwrap();
-            // collect the unique quantifiers referenced by the subgraph
-            // under the current quantifier
-            correlation_info.insert(
-                q.id,
-                column_refs
-                    .iter()
-                    .map(|c| c.quantifier_id)
-                    .sorted()
-                    .unique()
-                    .collect::<Vec<_>>(),
-            );
-        }
+            })
+            .collect();
 
         for (correlated_q, quantifiers) in correlation_info.iter() {
             for q in quantifiers.iter() {

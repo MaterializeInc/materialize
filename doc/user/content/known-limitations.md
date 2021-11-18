@@ -15,8 +15,7 @@ us know on the linked-to GitHub issue.
 
 ### Types
 
-- Numeric precision is not always equivalent to PostgreSQL {{% gh 1824 %}}
-- Numeric to float conversions are susceptible to floating point errors {{% gh 1102 %}}
+- `char list` is not yet supported {{% gh 7613 %}}
 
 ### Performance
 
@@ -24,7 +23,10 @@ us know on the linked-to GitHub issue.
 
 ### Functions
 
-- Materialize does not support [window functions](https://www.postgresql.org/docs/current/tutorial-window.html). In some cases, you may be able to achieve the desired results with [temporal filters](https://materialize.com/temporal-filters/) or the [TOP K by group](/guides/top-k/) idiom instead. {{% gh 213 %}}
+- Materialize does not support [window functions](https://www.postgresql.org/docs/current/tutorial-window.html). In some cases, you may be able to achieve the desired results with [temporal filters](/guides/temporal-filters/) or the [TOP K by group](/guides/top-k/) idiom instead. {{% gh 213 %}}
+- Table functions in scalar positions are only partially supported. We currently
+  support no more than one table function in scalar position, which can only be
+  situated in the query's outermost projection. {{% gh 1546 %}}
 
 ### Common table expressions (CTEs)
 
@@ -33,6 +35,11 @@ us know on the linked-to GitHub issue.
   unexpected performance characteristics for especially complex expressions. {{%
   gh 4867 %}}
 - `WITH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
+
+### `COPY FROM`
+
+- CSV-formatted data does not strictly adhere to Postgres' semantics.
+  {{% gh 9074 9075 %}}
 
 ## Sources & sinks
 
@@ -77,6 +84,8 @@ specified version.
 
 Fixed in | Known limitation
 --------------|-----------------
+[v0.8.3] | Numeric precision is not always equivalent to PostgreSQL
+[v0.8.3] | Numeric to float conversions are susceptible to floating point errors
 [v0.4.0] | Column names generated in returned column set are not available to `GROUP BY` {{% gh 1673 %}}
 [v0.3.0] | JSON-encoded streams are not supported {{% gh 207 %}}
 [v0.3.0] | Connecting Kafka sinks back in as sources is not supported {{% gh 1665 %}}
@@ -88,11 +97,12 @@ Fixed in | Known limitation
 [v0.3.0] | Connecting to Kafka brokers with SSL (client) authentication is not supported {{% gh 1785 %}}
 [v0.3.0] | Kafka sources with more than one partition are not supported {{% gh 2169 %}}
 [v0.3.0] | Formatting regular expression is not resurface-able through `SHOW CREATE SOURCE` {{% gh 1762 %}}
-[v0.3.0] |  `EXPLAIN DATAFLOW` does not include details about `ORDER BY` and `LIMIT` {{% gh 477 %}}
+[v0.3.0] | `EXPLAIN DATAFLOW` does not include details about `ORDER BY` and `LIMIT` {{% gh 477 %}}
 [v0.2.1] | Kinesis sources with more than one shard are not supported {{% gh 2222 %}}
 [v0.2.0] | CSV files with header rows are not supported {{% gh 1982 %}}
 [v0.1.3] | Intervals do not support addition or subtraction with other intervals {{% gh 1682 %}}
 
+[v0.8.3]: /release-notes/#v0.8.3
 [v0.4.0]: /release-notes/#v0.4.0
 [v0.3.0]: /release-notes/#v0.3.0
 [v0.2.1]: /release-notes/#v0.2.1

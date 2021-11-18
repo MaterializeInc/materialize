@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="603" height="365">
+<svg xmlns="http://www.w3.org/2000/svg" width="603" height="425">
    <polygon points="9 17 1 13 1 21"/>
    <polygon points="17 17 9 13 9 21"/>
    <rect x="31" y="3" width="76" height="32" rx="10"/>
@@ -73,22 +73,49 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="351" y="207">MATERIALIZED VIEW</text>
-   <rect x="307" y="331" width="92" height="32"/>
-   <rect x="305" y="329" width="92" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="315" y="349">view_name</text>
-   <rect x="419" y="331" width="40" height="32" rx="10"/>
-   <rect x="417"
+   <rect x="37" y="375" width="92" height="32"/>
+   <rect x="35" y="373" width="92" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="45" y="393">view_name</text>
+   <rect x="169" y="375" width="26" height="32" rx="10"/>
+   <rect x="167"
+         y="373"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="177" y="393">(</text>
+   <rect x="235" y="375" width="78" height="32"/>
+   <rect x="233" y="373" width="78" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="243" y="393">col_ident</text>
+   <rect x="235" y="331" width="24" height="32" rx="10"/>
+   <rect x="233"
          y="329"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="243" y="349">,</text>
+   <rect x="353" y="375" width="26" height="32" rx="10"/>
+   <rect x="351"
+         y="373"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="361" y="393">)</text>
+   <rect x="419" y="375" width="40" height="32" rx="10"/>
+   <rect x="417"
+         y="373"
          width="40"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="427" y="349">AS</text>
-   <rect x="479" y="331" width="96" height="32"/>
-   <rect x="477" y="329" width="96" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="487" y="349">select_stmt</text>
+   <text class="terminal" x="427" y="393">AS</text>
+   <rect x="479" y="375" width="96" height="32"/>
+   <rect x="477" y="373" width="96" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="487" y="393">select_stmt</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m76 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-126 66 l2 0 m2 0 l2 0 m2 0 l2 0 m42 0 h10 m0 0 h120 m-150 0 h20 m130 0 h20 m-170 0 q10 0 10 10 m150 0 q0 -10 10 -10 m-160 10 v12 m150 0 v-12 m-150 12 q0 10 10 10 m130 0 q10 0 10 -10 m-140 10 h10 m60 0 h10 m0 0 h50 m-140 -10 v20 m150 0 v-20 m-150 20 v24 m150 0 v-24 m-150 24 q0 10 10 10 m130 0 q10 0 10 -10 m-140 10 h10 m110 0 h10 m20 -76 h10 m166 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m-536 -32 h20 m536 0 h20 m-576 0 q10 0 10 10 m556 0 q0 -10 10 -10 m-566 10 v100 m556 0 v-100 m-556 100 q0 10 10 10 m536 0 q10 0 10 -10 m-546 10 h10 m108 0 h10 m20 0 h10 m0 0 h120 m-150 0 h20 m130 0 h20 m-170 0 q10 0 10 10 m150 0 q0 -10 10 -10 m-160 10 v12 m150 0 v-12 m-150 12 q0 10 10 10 m130 0 q10 0 10 -10 m-140 10 h10 m60 0 h10 m0 0 h50 m-140 -10 v20 m150 0 v-20 m-150 20 v24 m150 0 v-24 m-150 24 q0 10 10 10 m130 0 q10 0 10 -10 m-140 10 h10 m110 0 h10 m20 -76 h10 m166 0 h10 m0 0 h52 m22 -120 l2 0 m2 0 l2 0 m2 0 l2 0 m-318 262 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m92 0 h10 m0 0 h10 m40 0 h10 m0 0 h10 m96 0 h10 m3 0 h-3"/>
-   <polygon points="593 345 601 341 601 349"/>
-   <polygon points="593 345 585 341 585 349"/>
+         d="m17 17 h2 m0 0 h10 m76 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-126 66 l2 0 m2 0 l2 0 m2 0 l2 0 m42 0 h10 m0 0 h120 m-150 0 h20 m130 0 h20 m-170 0 q10 0 10 10 m150 0 q0 -10 10 -10 m-160 10 v12 m150 0 v-12 m-150 12 q0 10 10 10 m130 0 q10 0 10 -10 m-140 10 h10 m60 0 h10 m0 0 h50 m-140 -10 v20 m150 0 v-20 m-150 20 v24 m150 0 v-24 m-150 24 q0 10 10 10 m130 0 q10 0 10 -10 m-140 10 h10 m110 0 h10 m20 -76 h10 m166 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m-536 -32 h20 m536 0 h20 m-576 0 q10 0 10 10 m556 0 q0 -10 10 -10 m-566 10 v100 m556 0 v-100 m-556 100 q0 10 10 10 m536 0 q10 0 10 -10 m-546 10 h10 m108 0 h10 m20 0 h10 m0 0 h120 m-150 0 h20 m130 0 h20 m-170 0 q10 0 10 10 m150 0 q0 -10 10 -10 m-160 10 v12 m150 0 v-12 m-150 12 q0 10 10 10 m130 0 q10 0 10 -10 m-140 10 h10 m60 0 h10 m0 0 h50 m-140 -10 v20 m150 0 v-20 m-150 20 v24 m150 0 v-24 m-150 24 q0 10 10 10 m130 0 q10 0 10 -10 m-140 10 h10 m110 0 h10 m20 -76 h10 m166 0 h10 m0 0 h52 m22 -120 l2 0 m2 0 l2 0 m2 0 l2 0 m-588 306 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m92 0 h10 m20 0 h10 m26 0 h10 m20 0 h10 m78 0 h10 m-118 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m98 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-98 0 h10 m24 0 h10 m0 0 h54 m20 44 h10 m26 0 h10 m-250 0 h20 m230 0 h20 m-270 0 q10 0 10 10 m250 0 q0 -10 10 -10 m-260 10 v14 m250 0 v-14 m-250 14 q0 10 10 10 m230 0 q10 0 10 -10 m-240 10 h10 m0 0 h220 m20 -34 h10 m40 0 h10 m0 0 h10 m96 0 h10 m3 0 h-3"/>
+   <polygon points="593 389 601 385 601 393"/>
+   <polygon points="593 389 585 385 585 393"/>
 </svg>

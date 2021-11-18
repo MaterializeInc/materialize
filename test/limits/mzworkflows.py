@@ -966,7 +966,7 @@ class RowsJoinLargeRetraction(Generator):
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT});")
 
         print(
-            "> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = a2.f1;"
+            "> CREATE MATERIALIZED VIEW v1 AS SELECT a1.f1 AS col1 , a2.f1 AS col2 FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = a2.f1;"
         )
 
         print("> SELECT COUNT(*) > 0 FROM v1;")

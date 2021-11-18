@@ -39,7 +39,7 @@ DEFAULT expression does not support casting from integer to date
 column "a" does not exist
 
 ! CREATE TABLE t (a int, b int, a int);
-cannot CREATE TABLE: column "a" specified more than once
+column "a" specified more than once
 
 > SELECT * FROM t;
 
@@ -349,8 +349,9 @@ INSERT has more expressions than target columns
 > INSERT INTO nocols SELECT UNION ALL SELECT
 > SELECT count(*) FROM nocols
 2
-> SELECT count(DISTINCT *) FROM nocols
-1
+! SELECT DISTINCT * FROM nocols
+SELECT DISTINCT must have at least one column
+
 
 # Test that show columns preserves the column order
 > CREATE TABLE column_order (b int, a int);

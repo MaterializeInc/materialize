@@ -30,6 +30,7 @@ use std::mem;
 use anyhow::{anyhow, bail, ensure, Context};
 use expr::{func as expr_func, LocalId};
 use itertools::Itertools;
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use ore::str::StrExt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::fold::Fold;
@@ -1174,6 +1175,13 @@ fn plan_query(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope, RowSetFinishing), anyhow::Error> {
+    qcx.checked_recur_mut(|qcx| plan_query_inner(qcx, q))
+}
+
+fn plan_query_inner(
+    qcx: &mut QueryContext,
+    q: &Query<Aug>,
+) -> Result<(HirRelationExpr, Scope, RowSetFinishing), anyhow::Error> {
     // Retain the old values of various CTE names so that we can restore them
     // after we're done planning this SELECT.
     let mut old_cte_values = Vec::new();
@@ -1745,12 +1753,13 @@ fn plan_view_select(
 
     // Step 8. Handle intrusive ORDER BY and DISTINCT.
     let order_by = {
+        let relation_type = qcx.relation_type(&relation_expr);
         let (mut order_by, mut map_exprs) = plan_projected_order_by_exprs(
             &ExprContext {
                 qcx,
                 name: "ORDER BY clause",
                 scope: &map_scope,
-                relation_type: &qcx.relation_type(&relation_expr),
+                relation_type: &relation_type,
                 allow_aggregates: true,
                 allow_subqueries: true,
             },
@@ -1761,6 +1770,9 @@ fn plan_view_select(
         match distinct {
             None => relation_expr = relation_expr.map(map_exprs),
             Some(Distinct::EntireRow) => {
+                if relation_type.arity() == 0 {
+                    bail!("SELECT DISTINCT must have at least one column");
+                }
                 // `SELECT DISTINCT` only distincts on the columns in the SELECT
                 // list, so we can't proceed if `ORDER BY` has introduced any
                 // columns for arbitrary expressions. This matches PostgreSQL.
@@ -2112,9 +2124,8 @@ fn plan_table_function(
     };
     let resolved_name = normalize::unresolved_object_name(name.clone())?;
 
-    let impls = match resolve_func(ecx, name, args)? {
-        Func::Table(impls) => impls,
-        Func::Set(impls) => {
+    let (call, mut scope) = match resolve_func(ecx, name, args)? {
+        Func::Table(impls) => {
             let tf = func::select_impl(
                 ecx,
                 FuncSpec::Func(&resolved_name),
@@ -2122,33 +2133,58 @@ fn plan_table_function(
                 scalar_args,
                 vec![],
             )?;
-            return Ok(tf);
+            let call = HirRelationExpr::CallTable {
+                func: tf.func,
+                exprs: tf.exprs,
+            };
+            let scope = Scope::from_source(
+                Some(PartialName {
+                    database: None,
+                    schema: None,
+                    item: resolved_name.item.clone(),
+                }),
+                tf.column_names,
+                Some(ecx.qcx.outer_scope.clone()),
+            );
+            (call, scope)
+        }
+        Func::Set(impls) => {
+            let (call, scope) = func::select_impl(
+                ecx,
+                FuncSpec::Func(&resolved_name),
+                impls,
+                scalar_args,
+                vec![],
+            )?;
+            let scope = Scope::from_source(
+                Some(PartialName {
+                    database: None,
+                    schema: None,
+                    item: resolved_name.item.clone(),
+                }),
+                scope.column_names(),
+                Some(ecx.qcx.outer_scope.clone()),
+            );
+            (call, scope)
         }
         _ => bail!("{} is not a table function", name),
     };
-    let name = resolved_name;
-    let args = scalar_args;
-    let tf = func::select_impl(ecx, FuncSpec::Func(&name), impls, args, vec![])?;
-    let call = HirRelationExpr::CallTable {
-        func: tf.func,
-        exprs: tf.exprs,
-    };
-    let scope = Scope::from_source(
-        Some(PartialName {
-            database: None,
-            schema: None,
-            item: name.item,
-        }),
-        tf.column_names,
-        Some(ecx.qcx.outer_scope.clone()),
-    );
-    let mut scope = plan_table_alias(scope, alias)?;
+
     if let Some(alias) = alias {
-        if let [item] = &mut *scope.items {
+        scope = if alias.columns.is_empty()
+            && scope.len() == 1
+            && scope
+                .resolve_table_column(
+                    &resolved_name,
+                    &normalize::column_name(Ident::from(resolved_name.item.clone())),
+                )
+                .is_ok()
+        {
             // Strange special case for table functions that ouput one column.
             // If a table alias is provided but not a column alias, the column
             // implicitly takes on the same alias in addition to its inherent
-            // name.
+            // name unless the column has a given name different from the function's name
+            // (like jsonb_array_elements, which has a single `value` column).
             //
             // Concretely, this means `SELECT x FROM generate_series(1, 5) AS x`
             // returns a single column of type int, even though
@@ -2157,6 +2193,25 @@ fn plan_table_function(
             //     SELECT x FROM t AS x
             //
             // would return a single column of type record(int).
+            plan_table_alias(
+                scope,
+                Some(&TableAlias {
+                    name: alias.name.clone(),
+                    columns: vec![alias.name.clone()],
+                    strict: true,
+                }),
+            )?
+        } else {
+            plan_table_alias(scope, Some(&alias))?
+        };
+        if let [item] = &mut *scope.items {
+            // The single column case also has the property that you can select the table
+            // name and get the column (not the full table row wrapped in a record), named
+            // by the table:
+            //
+            //     SELECT g FROM generate_series(1, 1) AS g(a);
+            //
+            // Returns `1` (not `(1)`) with a column named `g` (not `a`).
             item.names.push(ScopeItemName {
                 table_name: None,
                 column_name: Some(normalize::column_name(alias.name.clone())),
@@ -2626,6 +2681,13 @@ fn plan_using_constraint(
 }
 
 pub fn plan_expr<'a>(
+    ecx: &'a ExprContext,
+    e: &Expr<Aug>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    ecx.checked_recur(|ecx| plan_expr_inner(ecx, e))
+}
+
+fn plan_expr_inner<'a>(
     ecx: &'a ExprContext,
     e: &Expr<Aug>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
@@ -3160,7 +3222,13 @@ fn plan_function_order_by(
 
 fn plan_aggregate(
     ecx: &ExprContext,
-    sql_func: &Function<Aug>,
+    Function::<Aug> {
+        name,
+        args,
+        filter,
+        over,
+        distinct,
+    }: &Function<Aug>,
 ) -> Result<AggregateExpr, anyhow::Error> {
     // Normal aggregate functions, like `sum`, expect as input a single expression
     // which yields the datum to aggregate. Order sensitive aggregate functions,
@@ -3175,16 +3243,16 @@ fn plan_aggregate(
     // most, so explicitly drop it if the function doesn't care about order. This
     // prevents the projection into Record below from triggering on unspported
     // functions.
-    let impls = match resolve_func(ecx, &sql_func.name, &sql_func.args)? {
+    let impls = match resolve_func(ecx, &name, &args)? {
         Func::Aggregate(impls) => impls,
         _ => unreachable!("plan_aggregate called on non-aggregate function,"),
     };
 
-    if sql_func.over.is_some() {
+    if over.is_some() {
         bail_unsupported!("aggregate window functions");
     }
 
-    let name = normalize::unresolved_object_name(sql_func.name.clone())?;
+    let name = normalize::unresolved_object_name(name.clone())?;
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
     // generalized function selection framework. The rule is simple: the user
@@ -3194,7 +3262,7 @@ fn plan_aggregate(
     // rules to all aggregates, not just `count`, since we may one day support
     // user-defined aggregates, including user-defined aggregates that take no
     // parameters.
-    let (args, order_by) = match &sql_func.args {
+    let (args, order_by) = match &args {
         FunctionArgs::Star => (vec![], vec![]),
         FunctionArgs::Args { args, order_by } => {
             if args.is_empty() {
@@ -3211,7 +3279,7 @@ fn plan_aggregate(
     let (order_by_exprs, col_orders) = plan_function_order_by(ecx, &order_by)?;
 
     let (mut expr, func) = func::select_impl(ecx, FuncSpec::Func(&name), impls, args, col_orders)?;
-    if let Some(filter) = &sql_func.filter {
+    if let Some(filter) = &filter {
         // If a filter is present, as in
         //
         //     <agg>(<expr>) FILTER (WHERE <cond>)
@@ -3263,7 +3331,7 @@ fn plan_aggregate(
     Ok(AggregateExpr {
         func,
         expr: Box::new(expr),
-        distinct: sql_func.distinct,
+        distinct: *distinct,
     })
 }
 
@@ -3925,6 +3993,13 @@ pub struct QueryContext<'a> {
     pub ctes: HashMap<LocalId, CteDesc>,
     /// The GlobalIds of the items the `Query` is dependent upon.
     pub ids: HashSet<GlobalId>,
+    pub recursion_guard: RecursionGuard,
+}
+
+impl CheckedRecursion for QueryContext<'_> {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
 }
 
 impl<'a> QueryContext<'a> {
@@ -3936,6 +4011,7 @@ impl<'a> QueryContext<'a> {
             outer_relation_types: vec![],
             ctes: HashMap::new(),
             ids: HashSet::new(),
+            recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
 
@@ -3963,6 +4039,7 @@ impl<'a> QueryContext<'a> {
                 .collect(),
             ctes,
             ids: HashSet::new(),
+            recursion_guard: self.recursion_guard.clone(),
         }
     }
 
@@ -4038,6 +4115,12 @@ pub struct ExprContext<'a> {
     pub allow_aggregates: bool,
     /// Are subqueries allowed in this context
     pub allow_subqueries: bool,
+}
+
+impl CheckedRecursion for ExprContext<'_> {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.qcx.recursion_guard
+    }
 }
 
 impl<'a> ExprContext<'a> {

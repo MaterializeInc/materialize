@@ -11,7 +11,7 @@ In Materialize, `now()` doesn't represent the system time, as it does in most sy
 `mz_logical_timestamp()` comes closer to what `now()` typically indicates. It represents the logical time at which a query executes. Its typical uses are:
 
 * Internal debugging
-* Defining [temporal filters](https://materialize.com/temporal-filters/)
+* Defining [temporal filters](/guides/temporal-filters/)
 
 ## Internal debugging
 

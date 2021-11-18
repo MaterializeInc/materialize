@@ -25,14 +25,14 @@ $ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
 
 # Test that invented field names do not clash with named columns.
 
-> CREATE VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b, 5 as b;
+> CREATE VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
 
 > CREATE SINK clashing_cols_sink FROM clashing_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'clashing-cols-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
-{"before": null, "after": {"row": {"column1": 1, "column1_1": 2, "b": 3, "b1": 4, "b2": 5}}}
+{"before": null, "after": {"row": {"column1": 1, "column1_1": 2, "b": 3, "b2": 4, "b3": 5}}}
 
 # Test date/time types.
 
@@ -97,11 +97,3 @@ $ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Repeated column name in sink key: a
-
-> CREATE VIEW ambiguous (a, a) AS SELECT * FROM (VALUES (1, 2))
-
-! CREATE SINK bad_sink FROM ambiguous
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
-  FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Ambiguous column: a

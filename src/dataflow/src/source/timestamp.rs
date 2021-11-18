@@ -28,7 +28,7 @@ use std::mem::size_of;
 use std::rc::Rc;
 use std::time::Instant;
 
-use log::{debug, error};
+use log::error;
 use persist_types::Codec;
 use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
@@ -334,20 +334,30 @@ impl TimestampBindingBox {
     }
 
     fn add_partition(&mut self, partition: PartitionId, restored_offset: Option<MzOffset>) {
-        // Let sources know of the new partition, when calling partitions(). We allow overwriting
-        // existing bindings, so that partitions that are restored from persistence can overwrite
-        // initially added partitions, because we read from persistence last.
+        // Let sources know of the new partition, when calling partitions(). We don't overwrite an
+        // offset if we already have one and just ignore calls that would replace `Some` offset
+        // with a `None`. We need to do this because both restoring from persisted timestamp
+        // bindings and the partition discovery thread running on the coordinator can lead to this
+        // method being called, and the order is indeterminate.
         self.known_partitions
-            .insert(partition.clone(), restored_offset);
-
-        if self.partitions.contains_key(&partition) {
-            debug!("already inserted partition {:?}, ignoring", partition);
-            return;
-        }
+            .entry(partition.clone())
+            .and_modify(|existing_offset| {
+                if existing_offset.is_some() {
+                    log::debug!(
+                        "Already have offset {} for partition {}, ignoring.",
+                        existing_offset.expect("known to exist"),
+                        partition
+                    );
+                } else {
+                    let _ = std::mem::replace(existing_offset, restored_offset);
+                }
+            })
+            .or_insert(restored_offset);
 
         // Update our internal state to also keep track of the new partition.
         self.partitions
-            .insert(partition.clone(), PartitionTimestamps::new(partition));
+            .entry(partition.clone())
+            .or_insert_with(|| PartitionTimestamps::new(partition));
     }
 
     fn add_binding(

@@ -20,11 +20,14 @@
 //! small to warrant their own crate.
 
 #![warn(missing_docs, missing_debug_implementations)]
+#![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
 #[cfg(feature = "test")]
 pub mod assert;
 pub mod cast;
 pub mod cgroup;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "cli")))]
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod codegen;
@@ -32,6 +35,7 @@ pub mod collections;
 pub mod display;
 pub mod env;
 pub mod fmt;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
 #[cfg(feature = "network")]
 pub mod future;
 pub mod hash;
@@ -39,18 +43,25 @@ pub mod hint;
 pub mod id_gen;
 pub mod iter;
 pub mod lex;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
 #[cfg(feature = "metrics")]
 pub mod metrics;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
 #[cfg(feature = "network")]
 pub mod netio;
 pub mod now;
 pub mod option;
 pub mod panic;
 pub mod result;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
 #[cfg(feature = "network")]
 pub mod retry;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
+#[cfg(feature = "stack")]
+pub mod stack;
 pub mod stats;
 pub mod str;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
 #[cfg(feature = "test")]
 pub mod test;
 pub mod thread;

@@ -48,6 +48,7 @@ pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod lowering;
+pub(crate) mod optimize;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
@@ -59,6 +60,7 @@ pub(crate) mod typeconv;
 pub use self::expr::{HirRelationExpr, HirScalarExpr};
 pub use error::PlanError;
 pub use explain::Explanation;
+pub use optimize::OptimizerConfig;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
 pub use query::{
     plan_default_expr, resolve_names, resolve_names_data_type, resolve_names_stmt,
@@ -483,11 +485,15 @@ impl Params {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Copy)]
 pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
+    pub qgm_optimizations: bool,
 }
 
 impl PlanContext {
-    pub fn new(wall_time: DateTime<Utc>) -> Self {
-        Self { wall_time }
+    pub fn new(wall_time: DateTime<Utc>, qgm_optimizations: bool) -> Self {
+        Self {
+            wall_time,
+            qgm_optimizations,
+        }
     }
 
     /// Return a PlanContext with zero values. This should only be used when
@@ -496,6 +502,7 @@ impl PlanContext {
     pub fn zero() -> Self {
         PlanContext {
             wall_time: now::to_datetime(NOW_ZERO()),
+            qgm_optimizations: false,
         }
     }
 }

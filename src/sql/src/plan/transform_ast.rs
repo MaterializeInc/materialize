@@ -16,12 +16,14 @@
 use anyhow::bail;
 use uuid::Uuid;
 
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, OrderByExpr, Query, Raw, Select, SelectItem, TableAlias,
     TableFactor, TableWithJoins, UnresolvedObjectName, Value,
 };
 
+use crate::func::Func;
 use crate::normalize;
 use crate::plan::StatementContext;
 
@@ -48,7 +50,7 @@ where
     f(&mut func_rewriter, ast);
     func_rewriter.status?;
 
-    let mut desugarer = Desugarer::new();
+    let mut desugarer = Desugarer::new(scx);
     f(&mut desugarer, ast);
     desugarer.status
 }
@@ -295,21 +297,109 @@ impl<'ast> VisitMut<'ast, Raw> for FuncRewriter<'_> {
 ///
 /// For example, `<expr> NOT IN (<subquery>)` is rewritten to `expr <> ALL
 /// (<subquery>)`.
-struct Desugarer {
+struct Desugarer<'a> {
+    scx: &'a StatementContext<'a>,
     status: Result<(), anyhow::Error>,
+    recursion_guard: RecursionGuard,
 }
 
-impl<'ast> VisitMut<'ast, Raw> for Desugarer {
-    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
-        if self.status.is_ok() {
-            self.status = self.visit_expr_mut_internal(expr);
-        }
+impl<'a> CheckedRecursion for Desugarer<'a> {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
     }
 }
 
-impl Desugarer {
-    fn new() -> Desugarer {
-        Desugarer { status: Ok(()) }
+impl<'ast> VisitMut<'ast, Raw> for Desugarer<'_> {
+    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
+        self.visit_internal(Self::visit_expr_mut_internal, expr);
+    }
+
+    fn visit_select_mut(&mut self, node: &'ast mut Select<Raw>) {
+        self.visit_internal(Self::visit_select_mut_internal, node);
+    }
+}
+
+impl<'a> Desugarer<'a> {
+    fn visit_internal<F, X>(&mut self, f: F, x: X)
+    where
+        F: Fn(&mut Self, X) -> Result<(), anyhow::Error>,
+    {
+        if self.status.is_ok() {
+            // self.status could have changed from a deeper call, so don't blindly
+            // overwrite it with the result of this call.
+            let status = self.checked_recur_mut(|d| f(d, x));
+            if self.status.is_ok() {
+                self.status = status;
+            }
+        }
+    }
+
+    fn new(scx: &'a StatementContext<'a>) -> Desugarer {
+        Desugarer {
+            scx,
+            status: Ok(()),
+            recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
+        }
+    }
+
+    fn visit_select_mut_internal(&mut self, node: &mut Select<Raw>) -> Result<(), anyhow::Error> {
+        // `SELECT .., $table_func, .. FROM x`
+        // =>
+        // `SELECT .., table_func, .. FROM x, LATERAL $table_func`
+        //
+        // We do not support LATERAL ROWS FROM, so we can only support a single select
+        // item. Additionally, we do not attempt to identify table functions wrapped by
+        // other functions.
+        //
+        // See: https://www.postgresql.org/docs/14/xfunc-sql.html#XFUNC-SQL-FUNCTIONS-RETURNING-SET
+        // See: https://www.postgresql.org/docs/14/queries-table-expressions.html#QUERIES-FROM
+        let mut rewrote_table_func = false;
+        for sel_item in node.projection.iter_mut() {
+            let (func, alias) = match sel_item {
+                SelectItem::Expr {
+                    expr: Expr::Function(func),
+                    alias,
+                } => (func, alias),
+                _ => {
+                    continue;
+                }
+            };
+            let item = match self.scx.resolve_function(func.name.clone()) {
+                Ok(item) => item,
+                Err(_) => continue,
+            };
+            if !matches!(item.func()?, Func::Set(_) | Func::Table(_)) {
+                continue;
+            }
+            if rewrote_table_func {
+                bail_unsupported!("multiple table functions in select projections");
+            }
+            let name = Ident::new(item.name().item.clone());
+            // We have a table func in a select item's position, move it to FROM.
+            node.from.push(TableWithJoins {
+                relation: TableFactor::Function {
+                    name: func.name.clone(),
+                    args: func.args.clone(),
+                    alias: Some(TableAlias {
+                        name: name.clone(),
+                        columns: vec![],
+                        strict: false,
+                    }),
+                },
+                joins: vec![],
+            });
+            *sel_item = SelectItem::Expr {
+                expr: Expr::Identifier(vec![name]),
+                alias: alias.clone(),
+            };
+
+            // We don't support LATERAL ROWS FROM (#9076), so can only support a single
+            // table function.
+            rewrote_table_func = true;
+        }
+
+        visit_mut::visit_select_mut(self, node);
+        Ok(())
     }
 
     fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), anyhow::Error> {

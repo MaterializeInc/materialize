@@ -39,7 +39,7 @@ Term | Definition
 
 A collection provides a data stream of updates as they happen. To provide fast access to the changes to individual records, the collection can be represented in an alternate form, indexed on `data` to present the sequence of changes (`time, diff`) the collection has undergone. This indexed representation is called an **arrangement**.
 
-Materialize builds and maintains indexes on both the input and output collections as well as for man. Because queries can overlap, Materialize might need to build the exact same indexes for multiple queries. Instead of performing redundant work, Materialize builds the index once and maintains it in memory, sharing the required resources across all queries that use the indexed data. The index is then effectively a sunk cost, and the cost of each query is determined only by the new work it introduces.
+Materialize builds and maintains indexes on both the input and output collections as well as for many intermediate collections created when processing a query. Because queries can overlap, Materialize might need to build the exact same indexes for multiple queries. Instead of performing redundant work, Materialize builds the index once and maintains it in memory, sharing the required resources across all queries that use the indexed data. The index is then effectively a sunk cost, and the cost of each query is determined only by the new work it introduces.
 
 You can find a more detailed analysis of the arrangements built for different types of queries in our blog post on [Joins in Materialize](https://materialize.com/joins-in-materialize).
 

@@ -185,60 +185,60 @@ unexpected parameters for CREATE SOURCE: epoch_ms_timeline
 
 > CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
 
-! CREATE VIEW must_fail AS SELECT * FROM source_byo, source_system;
+! CREATE VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo, source_system;
 multiple timelines within one dataflow are not supported
 
-! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_system, source_byo;
+! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_byo;
 multiple timelines within one dataflow are not supported
 
-! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_system, source_byo;
+! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_byo;
 multiple timelines within one dataflow are not supported
 
-! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_system, source_cdcv2;
+! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_cdcv2;
 multiple timelines within one dataflow are not supported
 
-! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_byo, source_cdcv2;
+! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo, source_cdcv2;
 multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT (SELECT a FROM source_system LIMIT 1) FROM source_byo;
 multiple timelines within one dataflow are not supported
 
 # Verify that user timelines don't allow things to be joinable with their non-user versions.
-! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_system, source_system_user;
+! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_system_user;
 multiple timelines within one dataflow are not supported
-! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_byo, source_byo_user;
+! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo, source_byo_user;
 multiple timelines within one dataflow are not supported
 
 # Can join static view with anything.
 > CREATE VIEW values_table_view AS SELECT * FROM input_values_view, input_table;
-> CREATE VIEW values_values_view AS SELECT * FROM input_values_view, input_values_mview LIMIT 0;
+> CREATE VIEW values_values_view (a, b) AS SELECT * FROM input_values_view, input_values_mview LIMIT 0;
 > CREATE VIEW values_system_view AS SELECT * FROM input_values_view, source_system;
 > CREATE VIEW values_system_user_view AS SELECT * FROM input_values_view, source_system_user;
 > CREATE VIEW values_cdcv2_view AS SELECT * FROM input_values_view, source_cdcv2;
 > CREATE VIEW values_byo_view AS SELECT * FROM input_values_view, source_byo;
 > CREATE VIEW values_byo_user_view AS SELECT * FROM input_values_view, source_byo_user;
-> CREATE VIEW values_mz_catalog_view AS SELECT * FROM input_values_view, mz_catalog_names, mz_views, mz_source_info;
+> CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k, l, m, n) AS SELECT * FROM input_values_view, mz_catalog_names, mz_views, mz_source_info;
 
 # System sources, tables, and logs should be joinable with eachother.
-> CREATE VIEW various_system AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info;
+> CREATE VIEW various_system (a, b, c, d, e, f, g, h, i, j, k, l, m) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info;
 
 # System things should be joinable only with system sources.
-! CREATE VIEW must_fail AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_byo;
+! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_byo;
 multiple timelines within one dataflow are not supported
-! CREATE VIEW must_fail AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_cdcv2;
+! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_cdcv2;
 multiple timelines within one dataflow are not supported
-> CREATE VIEW various_system_no_byo AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_system;
-> CREATE VIEW various_system_table AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, input_table;
+> CREATE VIEW various_system_no_byo (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_system;
+> CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k, l, m, n) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, input_table;
 
 # EXPLAIN should complain too.
 ! EXPLAIN SELECT * FROM source_system, source_byo;
 multiple timelines within one dataflow are not supported
 
 # Can join user-specified timelines.
-> CREATE MATERIALIZED VIEW source_system_byo_user AS SELECT * FROM source_system_user, source_byo_user, source_cdcv2_user;
+> CREATE MATERIALIZED VIEW source_system_byo_user (a, b, c, d, e, f) AS SELECT * FROM source_system_user, source_byo_user, source_cdcv2_user;
 
 # Unless they are from different user timelines.
-! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_byo_user, source_byo_user2;
+! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo_user, source_byo_user2;
 multiple timelines within one dataflow are not supported
 
 # CDCv2 can only be joined with system time stuff if specified

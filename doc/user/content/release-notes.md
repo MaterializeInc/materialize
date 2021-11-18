@@ -101,7 +101,24 @@ List new features before bug fixes.
 
 {{< /comment >}}
 
+{{% version-header v0.9.14 %}}
+
 {{% version-header v0.9.13 %}}
+
+- **Breaking change**: Disallow creating views (materialized or not) with
+  columns of the same name. This change brings views' structure into closer
+  alignment with tables.
+
+  When creating views whose `SELECT` statements return multiple columns with the
+  same identifier, you can use the optional column renaming syntax to provide
+  unique identifiers for all columns. For example:
+
+  ```sql
+  CREATE MATERIALIZED VIEW m (col_a, col_b) AS
+    SELECT a AS col, b AS col FROM t;
+  ```
+
+  For more details, see [`CREATE MATERIALIZED VIEW`] and [`CREATE VIEW`].
 
 - Add support for `LIST(<subquery>)` constructor.
 
@@ -111,6 +128,12 @@ List new features before bug fixes.
 - Support protobuf sources that contain imported messages and enums.
 
 - Correctly handle protobuf messages where the value is omitted instead of dropping them.
+
+- Disallow calls to functions with using `DISTINCT *` as their arguments, e.g.
+  `COUNT(DISTINCT *)`.
+
+- Disallow `DISTINCT` expressions on 0-column objects, such as tables with no
+  columns.
 
 {{% version-header v0.9.12 %}}
 
@@ -1221,7 +1244,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 - Simplify converting non-materialized views into materialized views with
   [`CREATE DEFAULT INDEX ON foo`](/sql/create-index). This creates the same
   [index](/overview/api-components/#indexes) on a view that would have been
-  created if you had used [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view).
+  created if you had used [`CREATE MATERIALIZED VIEW`].
 
 - Permit control over the timestamp selection logic on a per-Kafka-source basis
   via three new [`WITH` options](https://materialize.com/docs/sql/create-source/avro-kafka/#with-options):

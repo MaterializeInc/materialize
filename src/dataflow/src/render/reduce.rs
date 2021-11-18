@@ -608,8 +608,6 @@ pub struct KeyValPlan {
     key_plan: expr::SafeMfpPlan,
     /// Extracts the columns used to feed the aggregations.
     val_plan: expr::SafeMfpPlan,
-    /// Steps to take over the columns of the input row.
-    skips: Vec<usize>,
 }
 
 impl KeyValPlan {
@@ -628,32 +626,12 @@ impl KeyValPlan {
             .map(aggregates.iter().map(|a| a.expr.clone()))
             .project(input_arity..(input_arity + aggregates.len()));
 
-        // Determine the columns we'll need from the row.
-        let mut demand = Vec::new();
-        demand.extend(key_mfp.demand());
-        demand.extend(val_mfp.demand());
-        demand.sort();
-        demand.dedup();
-        // remap column references to the subset we use.
-        let mut demand_map = std::collections::HashMap::new();
-        for column in demand.iter() {
-            demand_map.insert(*column, demand_map.len());
-        }
-        key_mfp.permute(demand_map.clone(), demand_map.len());
         key_mfp.optimize();
         let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();
-        let demand_map_len = demand_map.len();
-        val_mfp.permute(demand_map, demand_map_len);
         val_mfp.optimize();
         let val_plan = val_mfp.into_plan().unwrap().into_nontemporal().unwrap();
 
-        let skips = convert_indexes_to_skips(demand);
-
-        Self {
-            key_plan,
-            val_plan,
-            skips,
-        }
+        Self { key_plan, val_plan }
     }
 
     /// The arity of the key plan
@@ -678,9 +656,8 @@ where
         permutation: Permutation,
     ) -> CollectionBundle<G, Row, T> {
         let KeyValPlan {
-            key_plan,
-            val_plan,
-            skips,
+            mut key_plan,
+            mut val_plan,
         } = key_val_plan;
         let key_arity = key_plan.projection.len();
         let mut row_packer = Row::default();
@@ -691,13 +668,29 @@ where
             timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
             _,
         ) = input.flat_map(None, |permutation| {
+            if let Some(permutation) = permutation {
+                permutation.permute_safe_mfp_plan(&mut key_plan);
+                permutation.permute_safe_mfp_plan(&mut val_plan);
+            }
+            // Determine the columns we'll need from the row.
+            let mut demand = Vec::new();
+            demand.extend(key_plan.demand());
+            demand.extend(val_plan.demand());
+            demand.sort();
+            demand.dedup();
+            // remap column references to the subset we use.
+            let mut demand_map = std::collections::HashMap::new();
+            for column in demand.iter() {
+                demand_map.insert(*column, demand_map.len());
+            }
+            let demand_map_len = demand_map.len();
+            key_plan.permute(demand_map.clone(), demand_map_len);
+            val_plan.permute(demand_map, demand_map_len);
+            let skips = convert_indexes_to_skips(demand);
             move |row_parts, time, diff| {
                 let temp_storage = RowArena::new();
 
                 let mut row_datums = row_datums.borrow_with_many(row_parts);
-                if let Some(permutation) = &permutation {
-                    permutation.permute_in_place(&mut row_datums);
-                }
 
                 let mut row_iter = row_datums.drain(..);
                 let mut datums_local = datums.borrow();

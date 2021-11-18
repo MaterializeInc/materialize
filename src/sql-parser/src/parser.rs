@@ -28,10 +28,16 @@ use log::{debug, warn};
 
 use ore::collections::CollectionExt;
 use ore::option::OptionExt;
+use ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 
 use crate::ast::*;
 use crate::keywords::*;
 use crate::lexer::{self, Token};
+
+// NOTE(benesch): this recursion limit was chosen based on the maximum amount of
+// nesting I've ever seen in a production SQL query (i.e., about a dozen) times
+// a healthy factor to be conservative.
+const RECURSION_LIMIT: usize = 128;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -116,6 +122,18 @@ impl fmt::Display for ParserError {
 
 impl Error for ParserError {}
 
+impl From<RecursionLimitError> for ParserError {
+    fn from(_: RecursionLimitError) -> ParserError {
+        ParserError {
+            pos: 0,
+            message: format!(
+                "statement exceeds nested expression limit of {}",
+                RECURSION_LIMIT
+            ),
+        }
+    }
+}
+
 impl ParserError {
     /// Constructs an error with the provided message at the provided position.
     pub(crate) fn new<S>(pos: usize, message: S) -> ParserError
@@ -135,8 +153,7 @@ struct Parser<'a> {
     tokens: Vec<(Token, usize)>,
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
-    /// Tracks recursion depth.
-    depth: usize,
+    recursion_guard: RecursionGuard,
 }
 
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
@@ -173,7 +190,7 @@ impl<'a> Parser<'a> {
             sql,
             tokens,
             index: 0,
-            depth: 0,
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
 
@@ -269,7 +286,7 @@ impl<'a> Parser<'a> {
 
     /// Parse tokens until the precedence changes
     fn parse_subexpr(&mut self, precedence: Precedence) -> Result<Expr<Raw>, ParserError> {
-        let expr = self.check_descent(|parser| parser.parse_prefix())?;
+        let expr = self.checked_recur_mut(|parser| parser.parse_prefix())?;
         self.parse_subexpr_seeded(precedence, expr)
     }
 
@@ -278,7 +295,7 @@ impl<'a> Parser<'a> {
         precedence: Precedence,
         mut expr: Expr<Raw>,
     ) -> Result<Expr<Raw>, ParserError> {
-        self.check_descent(|parser| {
+        self.checked_recur_mut(|parser| {
             debug!("prefix: {:?}", expr);
             loop {
                 let next_precedence = parser.get_next_precedence();
@@ -478,7 +495,7 @@ impl<'a> Parser<'a> {
                 // whether it belongs to the query or the expression.
 
                 // Parse to the closing parenthesis.
-                let either = parser.check_descent(parse)?;
+                let either = parser.checked_recur_mut(parse)?;
                 parser.expect_token(&Token::RParen)?;
 
                 // Decide if we need to associate any tokens after the closing
@@ -535,6 +552,14 @@ impl<'a> Parser<'a> {
             Some(DISTINCT),
         );
         let args = self.parse_optional_args(true)?;
+
+        if distinct && matches!(args, FunctionArgs::Star) {
+            return Err(self.error(
+                self.peek_prev_pos() - 1,
+                "DISTINCT * not supported as function args".to_string(),
+            ));
+        }
+
         let filter = if self.parse_keyword(FILTER) {
             self.expect_token(&Token::LParen)?;
             self.expect_keyword(WHERE)?;
@@ -3247,7 +3272,7 @@ impl<'a> Parser<'a> {
     /// by `ORDER BY`. Unlike some other parse_... methods, this one doesn't
     /// expect the initial keyword to be already consumed
     fn parse_query(&mut self) -> Result<Query<Raw>, ParserError> {
-        self.check_descent(|parser| {
+        self.checked_recur_mut(|parser| {
             let ctes = if parser.parse_keyword(WITH) {
                 // TODO: optional RECURSIVE
                 parser.parse_comma_separated(Parser::parse_cte)?
@@ -4311,55 +4336,10 @@ impl<'a> Parser<'a> {
             options,
         }))
     }
+}
 
-    /// Checks whether it is safe to descend another layer of nesting in the
-    /// parse tree, and calls `f` if so.
-    ///
-    /// The nature of a recursive descent parser, like this SQL parser, is that
-    /// deeply nested queries can easily cause a stack overflow, as each level
-    /// of nesting requires a new stack frame of a few dozen bytes, and those
-    /// bytes add up over time. That means that user input can trivially cause a
-    /// process crash, which does not make for a good user experience.
-    ///
-    /// This method uses the [`stacker`] crate to automatically grow the stack
-    /// as necessary. It also enforces a hard but arbitrary limit on the maximum
-    /// depth, as it's good practice to have *some* limit. Real-world queries
-    /// tend not to have more than a dozen or so layers of nesting.
-    ///
-    /// Calls to this function must be manually inserted in the parser at any
-    /// point that mutual recursion occurs; i.e., whenever parsing of a nested
-    /// expression or nested SQL query begins.
-    fn check_descent<F, R>(&mut self, f: F) -> Result<R, ParserError>
-    where
-        F: FnOnce(&mut Parser) -> Result<R, ParserError>,
-    {
-        // NOTE(benesch): this recursion limit was chosen based on the maximum
-        // amount of nesting I've ever seen in a production SQL query (i.e.,
-        // about a dozen) times a healthy factor to be conservative.
-        const RECURSION_LIMIT: usize = 128;
-
-        // The red zone is the amount of stack space that must be available on
-        // the current stack in order to call `f` without allocating a new
-        // stack.
-        const STACK_RED_ZONE: usize = 32 << 10; // 32KiB
-
-        // The size of any freshly-allocated stacks. It was chosen to match the
-        // default stack size for threads in Rust.
-        const STACK_SIZE: usize = 2 << 20; // 2MiB
-
-        if self.depth > RECURSION_LIMIT {
-            return parser_err!(
-                self,
-                self.peek_prev_pos(),
-                "query exceeds nested expression limit of {}",
-                RECURSION_LIMIT
-            );
-        }
-
-        self.depth += 1;
-        let out = stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, || f(self));
-        self.depth -= 1;
-
-        out
+impl CheckedRecursion for Parser<'_> {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
     }
 }

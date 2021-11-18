@@ -185,7 +185,7 @@ materialize.public.oppositional_view "CREATE VIEW \"materialize\".\"public\".\"o
 > ALTER VIEW renamed_mz_view RENAME TO t1
 > CREATE VIEW a AS SELECT 1 AS a
 > CREATE VIEW v0 AS SELECT 2 AS b
-> CREATE VIEW t2 AS
+> CREATE VIEW t2 (a, b, t1_a, t1_b, mz_obj_no) AS
   SELECT * FROM a
   JOIN v0
   ON a.a = v0.b
@@ -704,7 +704,7 @@ materialize.public.unnatural "CREATE VIEW \"materialize\".\"public\".\"unnatural
 > CREATE VIEW no_func AS
   SELECT 1 AS a;
 
-> CREATE VIEW func_dependency AS
+> CREATE VIEW func_dependency (a, x_a) AS
   SELECT * FROM no_func
   JOIN (
     SELECT * FROM no_func
@@ -721,9 +721,9 @@ renaming conflict
 > SHOW CREATE VIEW func_dependency
 View                                "Create View"
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.func_dependency "CREATE VIEW \"materialize\".\"public\".\"func_dependency\" AS SELECT * FROM \"materialize\".\"public\".\"count\" JOIN (SELECT * FROM \"materialize\".\"public\".\"count\") AS \"x\" ON \"count\".\"a\" = \"x\".\"a\""
+materialize.public.func_dependency "CREATE VIEW \"materialize\".\"public\".\"func_dependency\" (\"a\", \"x_a\") AS SELECT * FROM \"materialize\".\"public\".\"count\" JOIN (SELECT * FROM \"materialize\".\"public\".\"count\") AS \"x\" ON \"count\".\"a\" = \"x\".\"a\""
 
-> CREATE VIEW "materialize"."public"."func_dependency_test" AS SELECT * FROM count JOIN (SELECT * FROM count) AS x ON count.a = x.a
+> CREATE VIEW "materialize"."public"."func_dependency_test" ("a", "x_a") AS SELECT * FROM count JOIN (SELECT * FROM count) AS x ON count.a = x.a
 
 > SHOW CREATE VIEW count
 View                     "Create View"
