@@ -23,7 +23,7 @@ impl crate::Transform for ProjectionExtraction {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
+        relation.visit_mut_post(&mut |e| {
             self.action(e);
         });
         Ok(())

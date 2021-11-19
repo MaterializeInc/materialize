@@ -24,7 +24,7 @@ impl crate::Transform for ReductionPushdown {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
+        relation.visit_mut_post(&mut |e| {
             self.action(e);
         });
         Ok(())

@@ -690,7 +690,7 @@ impl MirRelationExpr {
     pub fn num_inputs(&self) -> usize {
         let mut count = 0;
 
-        self.visit1(|_| count += 1);
+        self.visit_children(|_| count += 1);
 
         count
     }
@@ -983,7 +983,7 @@ impl MirRelationExpr {
         {
             out.push(*id);
         }
-        self.visit1(|expr| expr.global_uses_into(out))
+        self.visit_children(|expr| expr.global_uses_into(out))
     }
 
     /// Pretty-print this MirRelationExpr to a string.
@@ -1147,67 +1147,67 @@ impl MirRelationExpr {
     }
 
     /// Applies a fallible immutable `f` to each child of type `MirRelationExpr`.
-    pub fn try_visit1<'a, F, E>(&'a self, f: F) -> Result<(), E>
+    pub fn try_visit_children<'a, F, E>(&'a self, f: F) -> Result<(), E>
     where
         F: FnMut(&'a MirRelationExpr) -> Result<(), E>,
     {
-        MirRelationExprVisitor::new().try_visit1(self, f)
+        MirRelationExprVisitor::new().try_visit_children(self, f)
     }
 
     /// Applies a fallible mutable `f` to each child of type `MirRelationExpr`.
-    pub fn try_visit1_mut<'a, F, E>(&'a mut self, f: F) -> Result<(), E>
+    pub fn try_visit_mut_children<'a, F, E>(&'a mut self, f: F) -> Result<(), E>
     where
         F: FnMut(&'a mut MirRelationExpr) -> Result<(), E>,
     {
-        MirRelationExprVisitor::new().try_visit1_mut(self, f)
+        MirRelationExprVisitor::new().try_visit_mut_children(self, f)
     }
 
     /// Applies an infallible immutable `f` to each child of type `MirRelationExpr`.
-    pub fn visit1<'a, F>(&'a self, f: F)
+    pub fn visit_children<'a, F>(&'a self, f: F)
     where
         F: FnMut(&'a MirRelationExpr),
     {
-        MirRelationExprVisitor::new().visit1(self, f)
+        MirRelationExprVisitor::new().visit_children(self, f)
     }
 
     /// Applies an infallible mutable `f` to each child of type `MirRelationExpr`.
-    pub fn visit1_mut<'a, F>(&'a mut self, f: F)
+    pub fn visit_mut_children<'a, F>(&'a mut self, f: F)
     where
         F: FnMut(&'a mut MirRelationExpr),
     {
-        MirRelationExprVisitor::new().visit1_mut(self, f)
+        MirRelationExprVisitor::new().visit_mut_children(self, f)
     }
 
     /// Post-order immutable fallible `MirRelationExpr` visitor.
-    pub fn try_visit<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
+    pub fn try_visit_post<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a MirRelationExpr) -> Result<(), E>,
     {
-        MirRelationExprVisitor::new().try_visit(self, f)
+        MirRelationExprVisitor::new().try_visit_post(self, f)
     }
 
     /// Post-order mutable fallible `MirRelationExpr` visitor.
-    pub fn try_visit_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    pub fn try_visit_mut_post<F, E>(&mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
     {
-        MirRelationExprVisitor::new().try_visit_mut(self, f)
+        MirRelationExprVisitor::new().try_visit_mut_post(self, f)
     }
 
     /// Post-order immutable infallible `MirRelationExpr` visitor.
-    pub fn visit<'a, F>(&'a self, f: &mut F)
+    pub fn visit_post<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a MirRelationExpr),
     {
-        MirRelationExprVisitor::new().visit(self, f)
+        MirRelationExprVisitor::new().visit_post(self, f)
     }
 
     /// Post-order mutable infallible `MirRelationExpr` visitor.
-    pub fn visit_mut<F>(&mut self, f: &mut F)
+    pub fn visit_mut_post<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut MirRelationExpr),
     {
-        MirRelationExprVisitor::new().visit_mut(self, f)
+        MirRelationExprVisitor::new().visit_mut_post(self, f)
     }
 
     /// Pre-order immutable fallible `MirRelationExpr` visitor.
@@ -1242,7 +1242,7 @@ impl MirRelationExpr {
         MirRelationExprVisitor::new().visit_mut_pre(self, f)
     }
 
-    /// A generalization of [`Self::visit_pre`] and [`Self::visit`].
+    /// A generalization of [`Self::visit_pre`] and [`Self::visit_post`].
     ///
     /// The function `pre` runs on a `MirRelationExpr` before it runs on any of the
     /// child `MirRelationExpr`s. The function `post` runs on child `MirRelationExpr`s
@@ -1265,7 +1265,7 @@ impl MirRelationExpr {
     where
         F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
     {
-        MirRelationExprVisitor::new().try_visit_scalars_mut1(self, f)
+        MirRelationExprVisitor::new().try_visit_scalar_children_mut(self, f)
     }
 
     /// Fallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `self`.
@@ -1306,7 +1306,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Applies a fallible immutable `f` to each `expr` child of type `MirRelationExpr`.
-    fn try_visit1<'a, F, E>(&self, expr: &'a MirRelationExpr, mut f: F) -> Result<(), E>
+    fn try_visit_children<'a, F, E>(&self, expr: &'a MirRelationExpr, mut f: F) -> Result<(), E>
     where
         F: FnMut(&'a MirRelationExpr) -> Result<(), E>,
     {
@@ -1358,7 +1358,11 @@ impl MirRelationExprVisitor {
     }
 
     /// Applies a fallible mutable `f` to each `expr` child of type `MirRelationExpr`.
-    fn try_visit1_mut<'a, F, E>(&self, expr: &'a mut MirRelationExpr, mut f: F) -> Result<(), E>
+    fn try_visit_mut_children<'a, F, E>(
+        &self,
+        expr: &'a mut MirRelationExpr,
+        mut f: F,
+    ) -> Result<(), E>
     where
         F: FnMut(&'a mut MirRelationExpr) -> Result<(), E>,
     {
@@ -1410,11 +1414,11 @@ impl MirRelationExprVisitor {
     }
 
     /// Applies an infallible immutable `f` to each `expr` child of type `MirRelationExpr`.
-    fn visit1<'a, F>(&self, expr: &'a MirRelationExpr, mut f: F)
+    fn visit_children<'a, F>(&self, expr: &'a MirRelationExpr, mut f: F)
     where
         F: FnMut(&'a MirRelationExpr),
     {
-        self.try_visit1(expr, |e| {
+        self.try_visit_children(expr, |e| {
             f(e);
             Ok::<_, ()>(())
         })
@@ -1422,11 +1426,11 @@ impl MirRelationExprVisitor {
     }
 
     /// Applies an infallible mutable `f` to each `expr` child of type `MirRelationExpr`.
-    fn visit1_mut<'a, F>(&self, expr: &'a mut MirRelationExpr, mut f: F)
+    fn visit_mut_children<'a, F>(&self, expr: &'a mut MirRelationExpr, mut f: F)
     where
         F: FnMut(&'a mut MirRelationExpr),
     {
-        self.try_visit1_mut(expr, |e| {
+        self.try_visit_mut_children(expr, |e| {
             f(e);
             Ok::<_, ()>(())
         })
@@ -1434,38 +1438,38 @@ impl MirRelationExprVisitor {
     }
 
     /// Post-order immutable fallible `MirRelationExpr` visitor for `expr`.
-    fn try_visit<'a, F, E>(&self, expr: &'a MirRelationExpr, f: &mut F) -> Result<(), E>
+    fn try_visit_post<'a, F, E>(&self, expr: &'a MirRelationExpr, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a MirRelationExpr) -> Result<(), E>,
     {
-        self.try_visit1(expr, |e| self.try_visit(e, f))?;
+        self.try_visit_children(expr, |e| self.try_visit_post(e, f))?;
         f(expr)
     }
 
     /// Post-order mutable fallible `MirRelationExpr` visitor for `expr`.
-    fn try_visit_mut<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
+    fn try_visit_mut_post<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
     {
-        self.try_visit1_mut(expr, |e| self.try_visit_mut(e, f))?;
+        self.try_visit_mut_children(expr, |e| self.try_visit_mut_post(e, f))?;
         f(expr)
     }
 
     /// Post-order immutable infallible `MirRelationExpr` visitor for `expr`.
-    fn visit<'a, F>(&self, expr: &'a MirRelationExpr, f: &mut F)
+    fn visit_post<'a, F>(&self, expr: &'a MirRelationExpr, f: &mut F)
     where
         F: FnMut(&'a MirRelationExpr),
     {
-        self.visit1(expr, |e| self.visit(e, f));
+        self.visit_children(expr, |e| self.visit_post(e, f));
         f(expr)
     }
 
     /// Post-order mutable infallible `MirRelationExpr` visitor for `expr`.
-    fn visit_mut<F>(&self, expr: &mut MirRelationExpr, f: &mut F)
+    fn visit_mut_post<F>(&self, expr: &mut MirRelationExpr, f: &mut F)
     where
         F: FnMut(&mut MirRelationExpr),
     {
-        self.visit1_mut(expr, |e| self.visit_mut(e, f));
+        self.visit_mut_children(expr, |e| self.visit_mut_post(e, f));
         f(expr)
     }
 
@@ -1475,7 +1479,7 @@ impl MirRelationExprVisitor {
         F: FnMut(&MirRelationExpr) -> Result<(), E>,
     {
         f(expr)?;
-        self.try_visit1(expr, |e| self.try_visit_pre(e, f))
+        self.try_visit_children(expr, |e| self.try_visit_pre(e, f))
     }
 
     /// Pre-order mutable fallible `MirRelationExpr` visitor for `expr`.
@@ -1484,7 +1488,7 @@ impl MirRelationExprVisitor {
         F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
     {
         f(expr)?;
-        self.try_visit1_mut(expr, |e| self.try_visit_mut_pre(e, f))
+        self.try_visit_mut_children(expr, |e| self.try_visit_mut_pre(e, f))
     }
 
     /// Pre-order immutable infallible `MirRelationExpr` visitor for `expr`.
@@ -1493,7 +1497,7 @@ impl MirRelationExprVisitor {
         F: FnMut(&MirRelationExpr),
     {
         f(expr);
-        self.visit1(expr, |e| self.visit_pre(e, f))
+        self.visit_children(expr, |e| self.visit_pre(e, f))
     }
 
     /// Pre-order mutable infallible `MirRelationExpr` visitor for `expr`.
@@ -1502,10 +1506,10 @@ impl MirRelationExprVisitor {
         F: FnMut(&mut MirRelationExpr),
     {
         f(expr);
-        self.visit1_mut(expr, |e| self.visit_mut_pre(e, f))
+        self.visit_mut_children(expr, |e| self.visit_mut_pre(e, f))
     }
 
-    /// A generalization of [`Self::visit_pre`] and [`Self::visit`].
+    /// A generalization of [`Self::visit_pre`] and [`Self::visit_post`].
     ///
     /// The function `pre` runs on a `MirRelationExpr` before it runs on any of the
     /// child `MirRelationExpr`s. The function `post` runs on child `MirRelationExpr`s
@@ -1523,7 +1527,7 @@ impl MirRelationExprVisitor {
                 self.visit_pre_post(e, pre, post);
             }
         } else {
-            self.visit1(expr, |e| self.visit_pre_post(e, pre, post));
+            self.visit_children(expr, |e| self.visit_pre_post(e, pre, post));
         }
         post(expr);
     }
@@ -1531,7 +1535,11 @@ impl MirRelationExprVisitor {
     /// Fallible visitor for the [`MirScalarExpr`]s directly owned by this relation expression.
     ///
     /// The `f` visitor should not recursively descend into owned [`MirRelationExpr`]s.
-    fn try_visit_scalars_mut1<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
+    fn try_visit_scalar_children_mut<F, E>(
+        &self,
+        expr: &mut MirRelationExpr,
+        f: &mut F,
+    ) -> Result<(), E>
     where
         F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
     {
@@ -1630,7 +1638,7 @@ impl MirRelationExprVisitor {
     where
         F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
     {
-        self.try_visit_mut(expr, &mut |e| self.try_visit_scalars_mut1(e, f))
+        self.try_visit_mut_post(expr, &mut |e| self.try_visit_scalar_children_mut(e, f))
     }
 
     /// Infallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `expr`.

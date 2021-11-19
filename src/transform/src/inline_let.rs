@@ -102,7 +102,7 @@ impl InlineLet {
             // might be another Let in the body so have to recur here
             self.action(relation, lets);
         } else {
-            relation.visit1_mut(|child| self.action(child, lets));
+            relation.visit_mut_children(|child| self.action(child, lets));
         }
     }
 }

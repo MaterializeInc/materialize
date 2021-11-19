@@ -127,7 +127,7 @@ impl Transform for Fixpoint {
         // stable shape.
         loop {
             let mut original_count = 0;
-            relation.visit(&mut |_| original_count += 1);
+            relation.visit_post(&mut |_| original_count += 1);
             for _ in 0..self.limit {
                 let original = relation.clone();
                 for transform in self.transforms.iter() {
@@ -144,7 +144,7 @@ impl Transform for Fixpoint {
                 }
             }
             let mut final_count = 0;
-            relation.visit(&mut |_| final_count += 1);
+            relation.visit_post(&mut |_| final_count += 1);
             if final_count >= original_count {
                 break;
             }
