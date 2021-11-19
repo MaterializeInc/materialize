@@ -429,6 +429,7 @@ SELECT a::regproc FROM text_to_regproc ORDER BY a
 750
 NULL
 
+# Regression for 9194
 query I
 select 'now'::regproc::oid::text::regproc
 ----
@@ -906,6 +907,7 @@ SELECT a::regtype FROM text_to_regtype ORDER BY a
 1082
 NULL
 
+# Regression for 9194
 query I
 select 'date'::regtype::oid::text::regtype
 ----
