@@ -230,7 +230,7 @@ impl RecursionGuard {
             *depth += 1;
             Ok(())
         } else {
-            Err(RecursionLimitError)
+            Err(RecursionLimitError { limit: self.limit })
         }
     }
 
@@ -241,11 +241,13 @@ impl RecursionGuard {
 
 /// A [`RecursionGuard`]'s recursion limit was reached.
 #[derive(Clone, Debug)]
-pub struct RecursionLimitError;
+pub struct RecursionLimitError {
+    limit: usize,
+}
 
 impl fmt::Display for RecursionLimitError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("recursion limit exceeded")
+        write!(f, "exceeded recursion limit of {}", self.limit)
     }
 }
 
