@@ -384,11 +384,25 @@ SELECT '1'::pg_catalog.regproc
 ----
 1
 
-query error CAST does not support casting from regproc to text
+query T
 SELECT '1'::regproc::text
+----
+NULL
 
-query error CAST does not support casting from regproc to text
+query T
 SELECT 'now'::regproc::text
+----
+now
+
+query T
+SELECT 'now'::regproc::text::regproc
+----
+1299
+
+query T
+SELECT 'now'::regproc::text::regproc::text
+----
+now
 
 query T
 SELECT 'now'::regproc
@@ -871,11 +885,15 @@ SELECT '1'::pg_catalog.regtype
 ----
 1
 
-query error CAST does not support casting from regtype to text
+query T
 SELECT '1'::regtype::text
+----
+NULL
 
-query error CAST does not support casting from regtype to text
+query T
 SELECT 'date'::regtype::text
+----
+date
 
 query T
 SELECT 'date'::regtype
@@ -912,6 +930,16 @@ query I
 select 'date'::regtype::oid::text::regtype
 ----
 1082
+
+query T
+SELECT 'date'::regtype::text::regtype
+----
+1082
+
+query T
+SELECT 'date'::regtype::text::regtype::text
+----
+date
 
 # Make sure that there are no functions with duplicate OIDs
 query I

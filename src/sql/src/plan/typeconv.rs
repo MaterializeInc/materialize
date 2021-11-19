@@ -174,35 +174,12 @@ lazy_static! {
 
             // REGPROC
             (RegProc,Oid) => Implicit: CastRegProcToOid,
+            (RegProc, String) => Explicit: sql_impl_cast("(
+                SELECT DISTINCT(name) FROM mz_catalog.mz_functions WHERE oid = $1
+            )"), // DISTINCT is required to handle overridden functions such as generate_series
 
             // REGTYPE
             (RegType,Oid) => Implicit: CastRegTypeToOid,
-            // (RegType, String) => Explicit: sql_impl_cast("(
-            //     SELECT
-            //         CASE
-            //         WHEN $1 IS NULL THEN NULL
-            //         ELSE (
-            //             mz_internal.mz_error_if_null(
-            //                 (SELECT name FROM mz_catalog.mz_types WHERE oid = $1),
-            //                 'type \"' || $1 || '\" does not exist'
-            //             )
-            //         )
-            //         END
-            // )"),
-            // (RegType, String) => Explicit: sql_impl_cast("(
-            //     SELECT
-            //             mz_internal.mz_error_if_null(
-            //                 (SELECT name FROM mz_catalog.mz_types WHERE oid = $1),
-            //                 'type \"' || $1 || '\" does not exist'
-            //             ) as text
-            // )"),
-            // (RegType, String) => Explicit: sql_impl_cast("(
-            //     SELECT
-            //         CASE
-            //         WHEN $1 IS NULL THEN NULL
-            //         ELSE (SELECT name FROM mz_catalog.mz_types WHERE oid = $1)
-            //         END
-            // )"),
             (RegType, String) => Explicit: sql_impl_cast("(
                 SELECT name FROM mz_catalog.mz_types WHERE oid = $1
             )"),
