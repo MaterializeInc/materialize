@@ -1414,6 +1414,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Applies an infallible immutable `f` to each `expr` child of type `MirRelationExpr`.
+    #[inline(always)]
     fn visit_children<'a, F>(&self, expr: &'a MirRelationExpr, mut f: F)
     where
         F: FnMut(&'a MirRelationExpr),
@@ -1426,6 +1427,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Applies an infallible mutable `f` to each `expr` child of type `MirRelationExpr`.
+    #[inline(always)]
     fn visit_mut_children<'a, F>(&self, expr: &'a mut MirRelationExpr, mut f: F)
     where
         F: FnMut(&'a mut MirRelationExpr),
@@ -1438,6 +1440,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Post-order immutable fallible `MirRelationExpr` visitor for `expr`.
+    #[inline(always)]
     fn try_visit_post<'a, F, E>(&self, expr: &'a MirRelationExpr, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a MirRelationExpr) -> Result<(), E>,
@@ -1447,6 +1450,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Post-order mutable fallible `MirRelationExpr` visitor for `expr`.
+    #[inline(always)]
     fn try_visit_mut_post<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
@@ -1456,6 +1460,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Post-order immutable infallible `MirRelationExpr` visitor for `expr`.
+    #[inline(always)]
     fn visit_post<'a, F>(&self, expr: &'a MirRelationExpr, f: &mut F)
     where
         F: FnMut(&'a MirRelationExpr),
@@ -1465,6 +1470,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Post-order mutable infallible `MirRelationExpr` visitor for `expr`.
+    #[inline(always)]
     fn visit_mut_post<F>(&self, expr: &mut MirRelationExpr, f: &mut F)
     where
         F: FnMut(&mut MirRelationExpr),
@@ -1474,6 +1480,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Pre-order immutable fallible `MirRelationExpr` visitor for `expr`.
+    #[inline(always)]
     fn try_visit_pre<F, E>(&self, expr: &MirRelationExpr, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&MirRelationExpr) -> Result<(), E>,
@@ -1483,6 +1490,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Pre-order mutable fallible `MirRelationExpr` visitor for `expr`.
+    #[inline(always)]
     fn try_visit_mut_pre<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirRelationExpr) -> Result<(), E>,
@@ -1492,6 +1500,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Pre-order immutable infallible `MirRelationExpr` visitor for `expr`.
+    #[inline(always)]
     fn visit_pre<F>(&self, expr: &MirRelationExpr, f: &mut F)
     where
         F: FnMut(&MirRelationExpr),
@@ -1501,6 +1510,7 @@ impl MirRelationExprVisitor {
     }
 
     /// Pre-order mutable infallible `MirRelationExpr` visitor for `expr`.
+    #[inline(always)]
     fn visit_mut_pre<F>(&self, expr: &mut MirRelationExpr, f: &mut F)
     where
         F: FnMut(&mut MirRelationExpr),
@@ -1517,6 +1527,7 @@ impl MirRelationExprVisitor {
     ///
     /// Optionally, `pre` can return which child `MirRelationExpr`s, if any, should be
     /// visited (default is to visit all children).
+    #[inline(always)]
     fn visit_pre_post<F1, F2>(&self, expr: &MirRelationExpr, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&MirRelationExpr) -> Option<Vec<&MirRelationExpr>>,
@@ -1535,6 +1546,7 @@ impl MirRelationExprVisitor {
     /// Fallible visitor for the [`MirScalarExpr`]s directly owned by this relation expression.
     ///
     /// The `f` visitor should not recursively descend into owned [`MirRelationExpr`]s.
+    #[inline(always)]
     fn try_visit_scalar_children_mut<F, E>(
         &self,
         expr: &mut MirRelationExpr,
@@ -1634,6 +1646,7 @@ impl MirRelationExprVisitor {
     /// Fallible mutable visitor for all [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `expr`.
     ///
     /// Note that this does not recurse into [`MirRelationExpr`] subtrees wrapped in [`MirScalarExpr`] nodes.
+    #[inline(always)]
     fn try_visit_scalars_mut<F, E>(&self, expr: &mut MirRelationExpr, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
@@ -1644,6 +1657,7 @@ impl MirRelationExprVisitor {
     /// Infallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `expr`.
     ///
     /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    #[inline(always)]
     fn visit_scalars_mut<F>(&self, expr: &mut MirRelationExpr, f: &mut F)
     where
         F: FnMut(&mut MirScalarExpr),
