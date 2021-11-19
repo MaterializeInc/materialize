@@ -42,6 +42,7 @@ use anyhow::bail;
 use itertools::Itertools;
 
 use ore::collections::CollectionExt;
+use ore::stack::maybe_grow;
 use repr::RelationType;
 use repr::*;
 
@@ -158,379 +159,387 @@ impl HirRelationExpr {
         get_outer: expr::MirRelationExpr,
         col_map: &ColumnMap,
     ) -> expr::MirRelationExpr {
-        use self::HirRelationExpr::*;
-        use expr::MirRelationExpr as SR;
-        if let expr::MirRelationExpr::Get { .. } = &get_outer {
-        } else {
-            panic!(
-                "get_outer: expected a MirRelationExpr::Get, found {:?}",
-                get_outer
-            );
-        }
-        assert_eq!(col_map.len(), get_outer.arity());
-        match self {
-            Constant { rows, typ } => {
-                // Constant expressions are not correlated with `get_outer`, and should be cross-products.
-                get_outer.product(SR::Constant {
-                    rows: Ok(rows.into_iter().map(|row| (row, 1)).collect()),
-                    typ,
-                })
+        maybe_grow(|| {
+            use self::HirRelationExpr::*;
+            use expr::MirRelationExpr as SR;
+            if let expr::MirRelationExpr::Get { .. } = &get_outer {
+            } else {
+                panic!(
+                    "get_outer: expected a MirRelationExpr::Get, found {:?}",
+                    get_outer
+                );
             }
-            Get { id, typ } => {
-                // Get statements are only to external sources, and are not correlated with `get_outer`.
-                get_outer.product(SR::Get { id, typ })
-            }
-            Project { input, outputs } => {
-                // Projections should be applied to the decorrelated `inner`, and to its columns,
-                // which means rebasing `outputs` to start `get_outer.arity()` columns later.
-                let input = input.applied_to(id_gen, get_outer.clone(), col_map);
-                let outputs = (0..get_outer.arity())
-                    .chain(outputs.into_iter().map(|i| get_outer.arity() + i))
-                    .collect::<Vec<_>>();
-                input.project(outputs)
-            }
-            Map { input, mut scalars } => {
-                // Scalar expressions may contain correlated subqueries. We must be cautious!
-                let mut input = input.applied_to(id_gen, get_outer, col_map);
+            assert_eq!(col_map.len(), get_outer.arity());
+            match self {
+                Constant { rows, typ } => {
+                    // Constant expressions are not correlated with `get_outer`, and should be cross-products.
+                    get_outer.product(SR::Constant {
+                        rows: Ok(rows.into_iter().map(|row| (row, 1)).collect()),
+                        typ,
+                    })
+                }
+                Get { id, typ } => {
+                    // Get statements are only to external sources, and are not correlated with `get_outer`.
+                    get_outer.product(SR::Get { id, typ })
+                }
+                Project { input, outputs } => {
+                    // Projections should be applied to the decorrelated `inner`, and to its columns,
+                    // which means rebasing `outputs` to start `get_outer.arity()` columns later.
+                    let input = input.applied_to(id_gen, get_outer.clone(), col_map);
+                    let outputs = (0..get_outer.arity())
+                        .chain(outputs.into_iter().map(|i| get_outer.arity() + i))
+                        .collect::<Vec<_>>();
+                    input.project(outputs)
+                }
+                Map { input, mut scalars } => {
+                    // Scalar expressions may contain correlated subqueries. We must be cautious!
+                    let mut input = input.applied_to(id_gen, get_outer, col_map);
 
-                // Lower subqueries in maximally sized batches, such as no subquery in the current
-                // batch depends on columns from the same batch.
-                // Note that subqueries in this projection may reference columns added by this
-                // Map operator, so we need to ensure these columns exist before lowering the
-                // subquery.
-                while !scalars.is_empty() {
-                    let old_arity = input.arity();
+                    // Lower subqueries in maximally sized batches, such as no subquery in the current
+                    // batch depends on columns from the same batch.
+                    // Note that subqueries in this projection may reference columns added by this
+                    // Map operator, so we need to ensure these columns exist before lowering the
+                    // subquery.
+                    while !scalars.is_empty() {
+                        let old_arity = input.arity();
 
-                    let end_idx = scalars
-                        .iter_mut()
-                        .position(|s| {
-                            let mut requires_nonexistent_column = false;
-                            s.visit_columns(0, &mut |depth, col| {
-                                if col.level == depth {
-                                    requires_nonexistent_column |= (col.column + 1) > old_arity
-                                }
-                            });
-                            requires_nonexistent_column
-                        })
-                        .unwrap_or(scalars.len());
+                        let end_idx = scalars
+                            .iter_mut()
+                            .position(|s| {
+                                let mut requires_nonexistent_column = false;
+                                s.visit_columns(0, &mut |depth, col| {
+                                    if col.level == depth {
+                                        requires_nonexistent_column |= (col.column + 1) > old_arity
+                                    }
+                                });
+                                requires_nonexistent_column
+                            })
+                            .unwrap_or(scalars.len());
 
-                    let scalars = scalars.drain(0..end_idx).collect_vec();
-                    let (with_subqueries, subquery_map) =
-                        HirScalarExpr::lower_subqueries(&scalars, id_gen, col_map, input);
-                    input = with_subqueries;
+                        let scalars = scalars.drain(0..end_idx).collect_vec();
+                        let (with_subqueries, subquery_map) =
+                            HirScalarExpr::lower_subqueries(&scalars, id_gen, col_map, input);
+                        input = with_subqueries;
 
-                    // We will proceed sequentially through the scalar expressions, for each transforming
-                    // the decorrelated `input` into a relation with potentially more columns capable of
-                    // addressing the needs of the scalar expression.
-                    // Having done so, we add the scalar value of interest and trim off any other newly
-                    // added columns.
-                    //
-                    // The sequential traversal is present as expressions are allowed to depend on the
-                    // values of prior expressions.
-                    let mut scalar_columns = Vec::new();
-                    for scalar in scalars {
-                        let scalar =
-                            scalar.applied_to(id_gen, col_map, &mut input, &Some(&subquery_map));
-                        input = input.map(vec![scalar]);
-                        scalar_columns.push(input.arity() - 1);
+                        // We will proceed sequentially through the scalar expressions, for each transforming
+                        // the decorrelated `input` into a relation with potentially more columns capable of
+                        // addressing the needs of the scalar expression.
+                        // Having done so, we add the scalar value of interest and trim off any other newly
+                        // added columns.
+                        //
+                        // The sequential traversal is present as expressions are allowed to depend on the
+                        // values of prior expressions.
+                        let mut scalar_columns = Vec::new();
+                        for scalar in scalars {
+                            let scalar = scalar.applied_to(
+                                id_gen,
+                                col_map,
+                                &mut input,
+                                &Some(&subquery_map),
+                            );
+                            input = input.map(vec![scalar]);
+                            scalar_columns.push(input.arity() - 1);
+                        }
+
+                        // Discard any new columns added by the lowering of the scalar expressions
+                        input = input.project((0..old_arity).chain(scalar_columns).collect());
                     }
 
-                    // Discard any new columns added by the lowering of the scalar expressions
-                    input = input.project((0..old_arity).chain(scalar_columns).collect());
+                    input
                 }
+                CallTable { func, exprs } => {
+                    // FlatMap expressions may contain correlated subqueries. Unlike Map they are not
+                    // allowed to refer to the results of previous expressions, and we have a simpler
+                    // implementation that appends all relevant columns first, then applies the flatmap
+                    // operator to the result, then strips off any columns introduce by subqueries.
 
-                input
-            }
-            CallTable { func, exprs } => {
-                // FlatMap expressions may contain correlated subqueries. Unlike Map they are not
-                // allowed to refer to the results of previous expressions, and we have a simpler
-                // implementation that appends all relevant columns first, then applies the flatmap
-                // operator to the result, then strips off any columns introduce by subqueries.
-
-                let mut input = get_outer;
-                let old_arity = input.arity();
-
-                let exprs = exprs
-                    .into_iter()
-                    .map(|e| e.applied_to(id_gen, col_map, &mut input, &None))
-                    .collect::<Vec<_>>();
-
-                let new_arity = input.arity();
-                let output_arity = func.output_arity();
-                input = input.flat_map(func, exprs);
-                if old_arity != new_arity {
-                    // this means we added some columns to handle subqueries, and now we need to get rid of them
-                    input = input.project(
-                        (0..old_arity)
-                            .chain(new_arity..new_arity + output_arity)
-                            .collect(),
-                    );
-                }
-                input
-            }
-            Filter { input, predicates } => {
-                // Filter expressions may contain correlated subqueries.
-                // We extend `get_outer` with sufficient values to determine the value of the predicate,
-                // then filter the results, then strip off any columns that were added for this purpose.
-                let mut input = input.applied_to(id_gen, get_outer, col_map);
-                for predicate in predicates {
+                    let mut input = get_outer;
                     let old_arity = input.arity();
-                    let predicate = predicate.applied_to(id_gen, col_map, &mut input, &None);
+
+                    let exprs = exprs
+                        .into_iter()
+                        .map(|e| e.applied_to(id_gen, col_map, &mut input, &None))
+                        .collect::<Vec<_>>();
+
                     let new_arity = input.arity();
-                    input = input.filter(vec![predicate]);
+                    let output_arity = func.output_arity();
+                    input = input.flat_map(func, exprs);
                     if old_arity != new_arity {
                         // this means we added some columns to handle subqueries, and now we need to get rid of them
-                        input = input.project((0..old_arity).collect());
-                    }
-                }
-                input
-            }
-            Join {
-                left,
-                right,
-                on,
-                kind,
-            } if kind.is_lateral() => {
-                // A LATERAL join is a join in which the right expression has
-                // access to the columns in the left expression. It turns out
-                // this is *exactly* our branch operator, plus some additional
-                // null handling in the case of left joins. (Right and full
-                // lateral joins are not permitted.)
-                //
-                // As with normal joins, the `on` predicate may be correlated,
-                // and we treat it as a filter that follows the branch.
-
-                let left = left.applied_to(id_gen, get_outer, col_map);
-                left.let_in(id_gen, |id_gen, get_left| {
-                    let apply_requires_distinct_outer = false;
-                    let mut join = branch(
-                        id_gen,
-                        get_left.clone(),
-                        col_map,
-                        *right,
-                        apply_requires_distinct_outer,
-                        |id_gen, right, get_left, col_map| {
-                            right.applied_to(id_gen, get_left, col_map)
-                        },
-                    );
-
-                    // Plan the `on` predicate.
-                    let old_arity = join.arity();
-                    let on = on.applied_to(id_gen, col_map, &mut join, &None);
-                    join = join.filter(vec![on]);
-                    let new_arity = join.arity();
-                    if old_arity != new_arity {
-                        // This means we added some columns to handle
-                        // subqueries, and now we need to get rid of them.
-                        join = join.project((0..old_arity).collect());
-                    }
-
-                    // If a left join, reintroduce any rows from the left that
-                    // are missing, with nulls filled in for the right columns.
-                    if let JoinKind::LeftOuter { .. } = kind {
-                        let default = join
-                            .typ()
-                            .column_types
-                            .into_iter()
-                            .skip(get_left.arity())
-                            .map(|typ| (Datum::Null, typ.nullable(true)))
-                            .collect();
-                        get_left.lookup(id_gen, join, default)
-                    } else {
-                        join
-                    }
-                })
-            }
-            Join {
-                left,
-                right,
-                on,
-                kind,
-            } => {
-                // Both join expressions should be decorrelated, and then joined by their
-                // leading columns to form only those pairs corresponding to the same row
-                // of `get_outer`.
-                //
-                // The `on` predicate may contain correlated subqueries, and we treat it
-                // as though it was a filter, with the caveat that we also translate outer
-                // joins in this step. The post-filtration results need to be considered
-                // against the records present in the left and right (decorrelated) inputs,
-                // depending on the type of join.
-                let oa = get_outer.arity();
-                let left = left.applied_to(id_gen, get_outer.clone(), col_map);
-                let lt = left.typ();
-                let la = left.arity() - oa;
-                left.let_in(id_gen, |id_gen, get_left| {
-                    let right = right.applied_to(id_gen, get_outer.clone(), col_map);
-                    let rt = right.typ();
-                    let ra = right.arity() - oa;
-                    right.let_in(id_gen, |id_gen, get_right| {
-                        let mut product = SR::join(
-                            vec![get_left.clone(), get_right.clone()],
-                            (0..oa).map(|i| vec![(0, i), (1, i)]).collect(),
-                        )
-                        // Project away the repeated copy of get_outer's columns.
-                        .project(
-                            (0..(oa + la))
-                                .chain((oa + la + oa)..(oa + la + oa + ra))
+                        input = input.project(
+                            (0..old_arity)
+                                .chain(new_arity..new_arity + output_arity)
                                 .collect(),
                         );
-                        let old_arity = product.arity();
-                        let on = on.applied_to(id_gen, col_map, &mut product, &None);
-
-                        // Attempt an efficient equijoin implementation, in which outer joins are
-                        // more efficiently rendered than in general. This can return `None` if
-                        // such a plan is not possible, for example if `on` does not describe an
-                        // equijoin between columns of `left` and `right`.
-                        if let Some(joined) = attempt_outer_join(
-                            get_left.clone(),
-                            get_right.clone(),
-                            on.clone(),
-                            kind.clone(),
-                            oa,
-                            id_gen,
-                        ) {
-                            return joined;
-                        }
-
-                        // Otherwise, perform a more general join.
-                        let mut join = product.filter(vec![on]);
-                        let new_arity = join.arity();
+                    }
+                    input
+                }
+                Filter { input, predicates } => {
+                    // Filter expressions may contain correlated subqueries.
+                    // We extend `get_outer` with sufficient values to determine the value of the predicate,
+                    // then filter the results, then strip off any columns that were added for this purpose.
+                    let mut input = input.applied_to(id_gen, get_outer, col_map);
+                    for predicate in predicates {
+                        let old_arity = input.arity();
+                        let predicate = predicate.applied_to(id_gen, col_map, &mut input, &None);
+                        let new_arity = input.arity();
+                        input = input.filter(vec![predicate]);
                         if old_arity != new_arity {
                             // this means we added some columns to handle subqueries, and now we need to get rid of them
+                            input = input.project((0..old_arity).collect());
+                        }
+                    }
+                    input
+                }
+                Join {
+                    left,
+                    right,
+                    on,
+                    kind,
+                } if kind.is_lateral() => {
+                    // A LATERAL join is a join in which the right expression has
+                    // access to the columns in the left expression. It turns out
+                    // this is *exactly* our branch operator, plus some additional
+                    // null handling in the case of left joins. (Right and full
+                    // lateral joins are not permitted.)
+                    //
+                    // As with normal joins, the `on` predicate may be correlated,
+                    // and we treat it as a filter that follows the branch.
+
+                    let left = left.applied_to(id_gen, get_outer, col_map);
+                    left.let_in(id_gen, |id_gen, get_left| {
+                        let apply_requires_distinct_outer = false;
+                        let mut join = branch(
+                            id_gen,
+                            get_left.clone(),
+                            col_map,
+                            *right,
+                            apply_requires_distinct_outer,
+                            |id_gen, right, get_left, col_map| {
+                                right.applied_to(id_gen, get_left, col_map)
+                            },
+                        );
+
+                        // Plan the `on` predicate.
+                        let old_arity = join.arity();
+                        let on = on.applied_to(id_gen, col_map, &mut join, &None);
+                        join = join.filter(vec![on]);
+                        let new_arity = join.arity();
+                        if old_arity != new_arity {
+                            // This means we added some columns to handle
+                            // subqueries, and now we need to get rid of them.
                             join = join.project((0..old_arity).collect());
                         }
-                        join.let_in(id_gen, |id_gen, get_join| {
-                            let mut result = get_join.clone();
-                            if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter { .. } = kind {
-                                let left_outer = get_left.clone().anti_lookup(
-                                    id_gen,
-                                    get_join.clone(),
-                                    rt.column_types
-                                        .into_iter()
-                                        .skip(oa)
-                                        .map(|typ| (Datum::Null, typ.nullable(true)))
-                                        .collect(),
-                                );
-                                result = result.union(left_outer);
+
+                        // If a left join, reintroduce any rows from the left that
+                        // are missing, with nulls filled in for the right columns.
+                        if let JoinKind::LeftOuter { .. } = kind {
+                            let default = join
+                                .typ()
+                                .column_types
+                                .into_iter()
+                                .skip(get_left.arity())
+                                .map(|typ| (Datum::Null, typ.nullable(true)))
+                                .collect();
+                            get_left.lookup(id_gen, join, default)
+                        } else {
+                            join
+                        }
+                    })
+                }
+                Join {
+                    left,
+                    right,
+                    on,
+                    kind,
+                } => {
+                    // Both join expressions should be decorrelated, and then joined by their
+                    // leading columns to form only those pairs corresponding to the same row
+                    // of `get_outer`.
+                    //
+                    // The `on` predicate may contain correlated subqueries, and we treat it
+                    // as though it was a filter, with the caveat that we also translate outer
+                    // joins in this step. The post-filtration results need to be considered
+                    // against the records present in the left and right (decorrelated) inputs,
+                    // depending on the type of join.
+                    let oa = get_outer.arity();
+                    let left = left.applied_to(id_gen, get_outer.clone(), col_map);
+                    let lt = left.typ();
+                    let la = left.arity() - oa;
+                    left.let_in(id_gen, |id_gen, get_left| {
+                        let right = right.applied_to(id_gen, get_outer.clone(), col_map);
+                        let rt = right.typ();
+                        let ra = right.arity() - oa;
+                        right.let_in(id_gen, |id_gen, get_right| {
+                            let mut product = SR::join(
+                                vec![get_left.clone(), get_right.clone()],
+                                (0..oa).map(|i| vec![(0, i), (1, i)]).collect(),
+                            )
+                            // Project away the repeated copy of get_outer's columns.
+                            .project(
+                                (0..(oa + la))
+                                    .chain((oa + la + oa)..(oa + la + oa + ra))
+                                    .collect(),
+                            );
+                            let old_arity = product.arity();
+                            let on = on.applied_to(id_gen, col_map, &mut product, &None);
+
+                            // Attempt an efficient equijoin implementation, in which outer joins are
+                            // more efficiently rendered than in general. This can return `None` if
+                            // such a plan is not possible, for example if `on` does not describe an
+                            // equijoin between columns of `left` and `right`.
+                            if let Some(joined) = attempt_outer_join(
+                                get_left.clone(),
+                                get_right.clone(),
+                                on.clone(),
+                                kind.clone(),
+                                oa,
+                                id_gen,
+                            ) {
+                                return joined;
                             }
-                            if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
-                                let right_outer = get_right
-                                    .clone()
-                                    .anti_lookup(
+
+                            // Otherwise, perform a more general join.
+                            let mut join = product.filter(vec![on]);
+                            let new_arity = join.arity();
+                            if old_arity != new_arity {
+                                // this means we added some columns to handle subqueries, and now we need to get rid of them
+                                join = join.project((0..old_arity).collect());
+                            }
+                            join.let_in(id_gen, |id_gen, get_join| {
+                                let mut result = get_join.clone();
+                                if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter { .. } =
+                                    kind
+                                {
+                                    let left_outer = get_left.clone().anti_lookup(
                                         id_gen,
-                                        get_join
-                                            // need to swap left and right to make the anti_lookup work
-                                            .project(
-                                                (0..oa)
-                                                    .chain((oa + la)..(oa + la + ra))
-                                                    .chain((oa)..(oa + la))
-                                                    .collect(),
-                                            ),
-                                        lt.column_types
+                                        get_join.clone(),
+                                        rt.column_types
                                             .into_iter()
                                             .skip(oa)
                                             .map(|typ| (Datum::Null, typ.nullable(true)))
                                             .collect(),
-                                    )
-                                    // swap left and right back again
-                                    .project(
-                                        (0..oa)
-                                            .chain((oa + ra)..(oa + ra + la))
-                                            .chain((oa)..(oa + ra))
-                                            .collect(),
                                     );
-                                result = result.union(right_outer);
-                            }
-                            result
+                                    result = result.union(left_outer);
+                                }
+                                if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
+                                    let right_outer = get_right
+                                        .clone()
+                                        .anti_lookup(
+                                            id_gen,
+                                            get_join
+                                                // need to swap left and right to make the anti_lookup work
+                                                .project(
+                                                    (0..oa)
+                                                        .chain((oa + la)..(oa + la + ra))
+                                                        .chain((oa)..(oa + la))
+                                                        .collect(),
+                                                ),
+                                            lt.column_types
+                                                .into_iter()
+                                                .skip(oa)
+                                                .map(|typ| (Datum::Null, typ.nullable(true)))
+                                                .collect(),
+                                        )
+                                        // swap left and right back again
+                                        .project(
+                                            (0..oa)
+                                                .chain((oa + ra)..(oa + ra + la))
+                                                .chain((oa)..(oa + ra))
+                                                .collect(),
+                                        );
+                                    result = result.union(right_outer);
+                                }
+                                result
+                            })
                         })
                     })
-                })
-            }
-            Union { base, inputs } => {
-                // Union is uncomplicated.
-                SR::Union {
-                    base: Box::new(base.applied_to(id_gen, get_outer.clone(), col_map)),
-                    inputs: inputs
+                }
+                Union { base, inputs } => {
+                    // Union is uncomplicated.
+                    SR::Union {
+                        base: Box::new(base.applied_to(id_gen, get_outer.clone(), col_map)),
+                        inputs: inputs
+                            .into_iter()
+                            .map(|input| input.applied_to(id_gen, get_outer.clone(), col_map))
+                            .collect(),
+                    }
+                }
+                Reduce {
+                    input,
+                    group_key,
+                    aggregates,
+                    expected_group_size,
+                } => {
+                    // Reduce may contain expressions with correlated subqueries.
+                    // In addition, here an empty reduction key signifies that we need to supply default values
+                    // in the case that there are no results (as in a SQL aggregation without an explicit GROUP BY).
+                    let mut input = input.applied_to(id_gen, get_outer.clone(), col_map);
+                    let applied_group_key = (0..get_outer.arity())
+                        .chain(group_key.iter().map(|i| get_outer.arity() + i))
+                        .collect();
+                    let applied_aggregates = aggregates
                         .into_iter()
-                        .map(|input| input.applied_to(id_gen, get_outer.clone(), col_map))
-                        .collect(),
-                }
-            }
-            Reduce {
-                input,
-                group_key,
-                aggregates,
-                expected_group_size,
-            } => {
-                // Reduce may contain expressions with correlated subqueries.
-                // In addition, here an empty reduction key signifies that we need to supply default values
-                // in the case that there are no results (as in a SQL aggregation without an explicit GROUP BY).
-                let mut input = input.applied_to(id_gen, get_outer.clone(), col_map);
-                let applied_group_key = (0..get_outer.arity())
-                    .chain(group_key.iter().map(|i| get_outer.arity() + i))
-                    .collect();
-                let applied_aggregates = aggregates
-                    .into_iter()
-                    .map(|aggregate| aggregate.applied_to(id_gen, col_map, &mut input))
-                    .collect::<Vec<_>>();
-                let input_type = input.typ();
-                let default = applied_aggregates
-                    .iter()
-                    .map(|agg| {
-                        (
-                            agg.func.default(),
-                            agg.typ(&input_type).nullable(agg.func.default().is_null()),
-                        )
-                    })
-                    .collect();
-                // NOTE we don't need to remove any extra columns from aggregate.applied_to above because the reduce will do that anyway
-                let mut reduced =
-                    input.reduce(applied_group_key, applied_aggregates, expected_group_size);
+                        .map(|aggregate| aggregate.applied_to(id_gen, col_map, &mut input))
+                        .collect::<Vec<_>>();
+                    let input_type = input.typ();
+                    let default = applied_aggregates
+                        .iter()
+                        .map(|agg| {
+                            (
+                                agg.func.default(),
+                                agg.typ(&input_type).nullable(agg.func.default().is_null()),
+                            )
+                        })
+                        .collect();
+                    // NOTE we don't need to remove any extra columns from aggregate.applied_to above because the reduce will do that anyway
+                    let mut reduced =
+                        input.reduce(applied_group_key, applied_aggregates, expected_group_size);
 
-                // Introduce default values in the case the group key is empty.
-                if group_key.is_empty() {
-                    reduced = get_outer.lookup(id_gen, reduced, default);
+                    // Introduce default values in the case the group key is empty.
+                    if group_key.is_empty() {
+                        reduced = get_outer.lookup(id_gen, reduced, default);
+                    }
+                    reduced
                 }
-                reduced
+                Distinct { input } => {
+                    // Distinct is uncomplicated.
+                    input.applied_to(id_gen, get_outer, col_map).distinct()
+                }
+                TopK {
+                    input,
+                    group_key,
+                    order_key,
+                    limit,
+                    offset,
+                } => {
+                    // TopK is uncomplicated, except that we must group by the columns of `get_outer` as well.
+                    let input = input.applied_to(id_gen, get_outer.clone(), col_map);
+                    let applied_group_key = (0..get_outer.arity())
+                        .chain(group_key.iter().map(|i| get_outer.arity() + i))
+                        .collect();
+                    let applied_order_key = order_key
+                        .iter()
+                        .map(|column_order| ColumnOrder {
+                            column: column_order.column + get_outer.arity(),
+                            desc: column_order.desc,
+                        })
+                        .collect();
+                    input.top_k(applied_group_key, applied_order_key, limit, offset)
+                }
+                Negate { input } => {
+                    // Negate is uncomplicated.
+                    input.applied_to(id_gen, get_outer, col_map).negate()
+                }
+                Threshold { input } => {
+                    // Threshold is uncomplicated.
+                    input.applied_to(id_gen, get_outer, col_map).threshold()
+                }
+                DeclareKeys { input, keys } => input
+                    .applied_to(id_gen, get_outer, col_map)
+                    .declare_keys(keys),
             }
-            Distinct { input } => {
-                // Distinct is uncomplicated.
-                input.applied_to(id_gen, get_outer, col_map).distinct()
-            }
-            TopK {
-                input,
-                group_key,
-                order_key,
-                limit,
-                offset,
-            } => {
-                // TopK is uncomplicated, except that we must group by the columns of `get_outer` as well.
-                let input = input.applied_to(id_gen, get_outer.clone(), col_map);
-                let applied_group_key = (0..get_outer.arity())
-                    .chain(group_key.iter().map(|i| get_outer.arity() + i))
-                    .collect();
-                let applied_order_key = order_key
-                    .iter()
-                    .map(|column_order| ColumnOrder {
-                        column: column_order.column + get_outer.arity(),
-                        desc: column_order.desc,
-                    })
-                    .collect();
-                input.top_k(applied_group_key, applied_order_key, limit, offset)
-            }
-            Negate { input } => {
-                // Negate is uncomplicated.
-                input.applied_to(id_gen, get_outer, col_map).negate()
-            }
-            Threshold { input } => {
-                // Threshold is uncomplicated.
-                input.applied_to(id_gen, get_outer, col_map).threshold()
-            }
-            DeclareKeys { input, keys } => input
-                .applied_to(id_gen, get_outer, col_map)
-                .declare_keys(keys),
-        }
+        })
     }
 }
 
@@ -552,308 +561,344 @@ impl HirScalarExpr {
         inner: &mut expr::MirRelationExpr,
         subquery_map: &Option<&HashMap<HirScalarExpr, usize>>,
     ) -> expr::MirScalarExpr {
-        use self::HirScalarExpr::*;
-        use expr::MirScalarExpr as SS;
+        maybe_grow(|| {
+            use self::HirScalarExpr::*;
+            use expr::MirScalarExpr as SS;
 
-        if let Some(subquery_map) = subquery_map {
-            if let Some(col) = subquery_map.get(&self) {
-                return SS::Column(*col);
-            }
-        }
-
-        match self {
-            Column(col_ref) => SS::Column(col_map.get(&col_ref)),
-            Literal(row, typ) => SS::Literal(Ok(row), typ),
-            Parameter(_) => panic!("cannot decorrelate expression with unbound parameters"),
-            CallNullary(func) => SS::CallNullary(func),
-            CallUnary { func, expr } => SS::CallUnary {
-                func,
-                expr: Box::new(expr.applied_to(id_gen, col_map, inner, subquery_map)),
-            },
-            CallBinary { func, expr1, expr2 } => SS::CallBinary {
-                func,
-                expr1: Box::new(expr1.applied_to(id_gen, col_map, inner, subquery_map)),
-                expr2: Box::new(expr2.applied_to(id_gen, col_map, inner, subquery_map)),
-            },
-            CallVariadic { func, exprs } => SS::CallVariadic {
-                func,
-                exprs: exprs
-                    .into_iter()
-                    .map(|expr| expr.applied_to(id_gen, col_map, inner, subquery_map))
-                    .collect::<Vec<_>>(),
-            },
-            If { cond, then, els } => {
-                // The `If` case is complicated by the fact that we do not want to
-                // apply the `then` or `else` logic to tuples that respectively do
-                // not or do pass the `cond` test. Our strategy is to independently
-                // decorrelate the `then` and `else` logic, and apply each to tuples
-                // that respectively pass and do not pass the `cond` logic (which is
-                // executed, and so decorrelated, for all tuples).
-                //
-                // Informally, we turn the `if` statement into:
-                //
-                //   let then_case = inner.filter(cond).map(then);
-                //   let else_case = inner.filter(!cond).map(else);
-                //   return then_case.concat(else_case);
-                //
-                // We only require this if either expression would result in any
-                // computation beyond the expr itself, which we will interpret as
-                // "introduces additional columns". In the absence of correlation,
-                // we should just retain a `ScalarExpr::If` expression; the inverse
-                // transformation as above is complicated to recover after the fact,
-                // and we would benefit from not introducing the complexity.
-
-                let inner_arity = inner.arity();
-                let cond_expr = cond.applied_to(id_gen, col_map, inner, subquery_map);
-
-                // Defensive copies, in case we mangle these in decorrelation.
-                let inner_clone = inner.clone();
-                let then_clone = then.clone();
-                let else_clone = els.clone();
-
-                let cond_arity = inner.arity();
-                let then_expr = then.applied_to(id_gen, col_map, inner, subquery_map);
-                let else_expr = els.applied_to(id_gen, col_map, inner, subquery_map);
-
-                if cond_arity == inner.arity() {
-                    // If no additional columns were added, we simply return the
-                    // `If` variant with the updated expressions.
-                    SS::If {
-                        cond: Box::new(cond_expr),
-                        then: Box::new(then_expr),
-                        els: Box::new(else_expr),
-                    }
-                } else {
-                    // If columns were added, we need a more careful approach, as
-                    // described above. First, we need to de-correlate each of
-                    // the two expressions independently, and apply their cases
-                    // as `MirRelationExpr::Map` operations.
-
-                    *inner = inner_clone.let_in(id_gen, |id_gen, get_inner| {
-                        // Restrict to records satisfying `cond_expr` and apply `then` as a map.
-                        let mut then_inner = get_inner.clone().filter(vec![cond_expr.clone()]);
-                        let then_expr =
-                            then_clone.applied_to(id_gen, col_map, &mut then_inner, subquery_map);
-                        let then_arity = then_inner.arity();
-                        then_inner = then_inner
-                            .map(vec![then_expr])
-                            .project((0..inner_arity).chain(Some(then_arity)).collect());
-
-                        // Restrict to records not satisfying `cond_expr` and apply `els` as a map.
-                        let mut else_inner = get_inner.filter(vec![SS::CallBinary {
-                            func: expr::BinaryFunc::Or,
-                            expr1: Box::new(SS::CallBinary {
-                                func: expr::BinaryFunc::Eq,
-                                expr1: Box::new(cond_expr.clone()),
-                                expr2: Box::new(SS::literal_ok(Datum::False, ScalarType::Bool)),
-                            }),
-                            expr2: Box::new(SS::CallUnary {
-                                func: expr::UnaryFunc::IsNull(expr::func::IsNull),
-                                expr: Box::new(cond_expr.clone()),
-                            }),
-                        }]);
-                        let else_expr =
-                            else_clone.applied_to(id_gen, col_map, &mut else_inner, subquery_map);
-                        let else_arity = else_inner.arity();
-                        else_inner = else_inner
-                            .map(vec![else_expr])
-                            .project((0..inner_arity).chain(Some(else_arity)).collect());
-
-                        // concatenate the two results.
-                        then_inner.union(else_inner)
-                    });
-
-                    SS::Column(inner_arity)
+            if let Some(subquery_map) = subquery_map {
+                if let Some(col) = subquery_map.get(&self) {
+                    return SS::Column(*col);
                 }
             }
 
-            // Subqueries!
-            // These are surprisingly subtle. Things to be careful of:
+            match self {
+                Column(col_ref) => SS::Column(col_map.get(&col_ref)),
+                Literal(row, typ) => SS::Literal(Ok(row), typ),
+                Parameter(_) => panic!("cannot decorrelate expression with unbound parameters"),
+                CallNullary(func) => SS::CallNullary(func),
+                CallUnary { func, expr } => SS::CallUnary {
+                    func,
+                    expr: Box::new(expr.applied_to(id_gen, col_map, inner, subquery_map)),
+                },
+                CallBinary { func, expr1, expr2 } => SS::CallBinary {
+                    func,
+                    expr1: Box::new(expr1.applied_to(id_gen, col_map, inner, subquery_map)),
+                    expr2: Box::new(expr2.applied_to(id_gen, col_map, inner, subquery_map)),
+                },
+                CallVariadic { func, exprs } => SS::CallVariadic {
+                    func,
+                    exprs: exprs
+                        .into_iter()
+                        .map(|expr| expr.applied_to(id_gen, col_map, inner, subquery_map))
+                        .collect::<Vec<_>>(),
+                },
+                If { cond, then, els } => {
+                    // The `If` case is complicated by the fact that we do not want to
+                    // apply the `then` or `else` logic to tuples that respectively do
+                    // not or do pass the `cond` test. Our strategy is to independently
+                    // decorrelate the `then` and `else` logic, and apply each to tuples
+                    // that respectively pass and do not pass the `cond` logic (which is
+                    // executed, and so decorrelated, for all tuples).
+                    //
+                    // Informally, we turn the `if` statement into:
+                    //
+                    //   let then_case = inner.filter(cond).map(then);
+                    //   let else_case = inner.filter(!cond).map(else);
+                    //   return then_case.concat(else_case);
+                    //
+                    // We only require this if either expression would result in any
+                    // computation beyond the expr itself, which we will interpret as
+                    // "introduces additional columns". In the absence of correlation,
+                    // we should just retain a `ScalarExpr::If` expression; the inverse
+                    // transformation as above is complicated to recover after the fact,
+                    // and we would benefit from not introducing the complexity.
 
-            // Anything in the subquery that cares about row counts (Reduce/Distinct/Negate/Threshold) must not:
-            // * change the row counts of the outer query
-            // * accidentally compute its own value using the row counts of the outer query
-            // Use `branch` to calculate the subquery once for each __distinct__ key in the outer
-            // query and then join the answers back on to the original rows of the outer query.
+                    let inner_arity = inner.arity();
+                    let cond_expr = cond.applied_to(id_gen, col_map, inner, subquery_map);
 
-            // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
-            // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
-            Exists(expr) => {
-                let apply_requires_distinct_outer = true;
-                *inner = apply_existential_subquery(
-                    id_gen,
-                    inner.take_dangerous(),
-                    col_map,
-                    *expr,
-                    apply_requires_distinct_outer,
-                );
-                SS::Column(inner.arity() - 1)
-            }
+                    // Defensive copies, in case we mangle these in decorrelation.
+                    let inner_clone = inner.clone();
+                    let then_clone = then.clone();
+                    let else_clone = els.clone();
 
-            Select(expr) => {
-                let apply_requires_distinct_outer = true;
-                *inner = apply_scalar_subquery(
-                    id_gen,
-                    inner.take_dangerous(),
-                    col_map,
-                    *expr,
-                    apply_requires_distinct_outer,
-                );
-                SS::Column(inner.arity() - 1)
-            }
-            Windowing(expr) => {
-                // - For Scalar window functions we need to put a FlatMap operator on top of inner
+                    let cond_arity = inner.arity();
+                    let then_expr = then.applied_to(id_gen, col_map, inner, subquery_map);
+                    let else_expr = els.applied_to(id_gen, col_map, inner, subquery_map);
 
-                let partition = expr.partition;
-                let order_by = expr.order_by;
+                    if cond_arity == inner.arity() {
+                        // If no additional columns were added, we simply return the
+                        // `If` variant with the updated expressions.
+                        SS::If {
+                            cond: Box::new(cond_expr),
+                            then: Box::new(then_expr),
+                            els: Box::new(else_expr),
+                        }
+                    } else {
+                        // If columns were added, we need a more careful approach, as
+                        // described above. First, we need to de-correlate each of
+                        // the two expressions independently, and apply their cases
+                        // as `MirRelationExpr::Map` operations.
 
-                match expr.func {
-                    WindowExprType::Scalar(func) => {
-                        *inner = inner
-                            .take_dangerous()
-                            .let_in(id_gen, |id_gen, mut get_inner| {
-                                let order_by = order_by
-                                    .into_iter()
-                                    .map(|o| {
-                                        o.applied_to(id_gen, col_map, &mut get_inner, subquery_map)
-                                    })
-                                    .collect_vec();
+                        *inner = inner_clone.let_in(id_gen, |id_gen, get_inner| {
+                            // Restrict to records satisfying `cond_expr` and apply `then` as a map.
+                            let mut then_inner = get_inner.clone().filter(vec![cond_expr.clone()]);
+                            let then_expr = then_clone.applied_to(
+                                id_gen,
+                                col_map,
+                                &mut then_inner,
+                                subquery_map,
+                            );
+                            let then_arity = then_inner.arity();
+                            then_inner = then_inner
+                                .map(vec![then_expr])
+                                .project((0..inner_arity).chain(Some(then_arity)).collect());
 
-                                // Record input arity here so that any group_keys that need to mutate get_inner
-                                // don't add those columns to the aggregate input.
-                                let input_arity = get_inner.typ().arity();
-                                // The reduction that computes the window function must be keyed on the columns
-                                // from the outer context, plus the expressions in the partition key. The current
-                                // subquery will be 'executed' for every distinct row from the outer context so
-                                // by putting the outer columns in the grouping key we isolate each re-execution.
-                                let mut group_key = col_map
-                                    .inner
-                                    .iter()
-                                    .map(|(_, outer_col)| *outer_col)
-                                    .sorted()
-                                    .collect_vec();
-                                for p in partition {
-                                    let key =
-                                        p.applied_to(id_gen, col_map, &mut get_inner, subquery_map);
-                                    if let expr::MirScalarExpr::Column(c) = key {
-                                        group_key.push(c);
-                                    } else {
-                                        get_inner = get_inner.map(vec![key]);
-                                        group_key.push(get_inner.arity() - 1);
-                                    }
-                                }
+                            // Restrict to records not satisfying `cond_expr` and apply `els` as a map.
+                            let mut else_inner = get_inner.filter(vec![SS::CallBinary {
+                                func: expr::BinaryFunc::Or,
+                                expr1: Box::new(SS::CallBinary {
+                                    func: expr::BinaryFunc::Eq,
+                                    expr1: Box::new(cond_expr.clone()),
+                                    expr2: Box::new(SS::literal_ok(Datum::False, ScalarType::Bool)),
+                                }),
+                                expr2: Box::new(SS::CallUnary {
+                                    func: expr::UnaryFunc::IsNull(expr::func::IsNull),
+                                    expr: Box::new(cond_expr.clone()),
+                                }),
+                            }]);
+                            let else_expr = else_clone.applied_to(
+                                id_gen,
+                                col_map,
+                                &mut else_inner,
+                                subquery_map,
+                            );
+                            let else_arity = else_inner.arity();
+                            else_inner = else_inner
+                                .map(vec![else_expr])
+                                .project((0..inner_arity).chain(Some(else_arity)).collect());
 
-                                get_inner.let_in(id_gen, |_id_gen, get_inner| {
-                                    let to_reduce = get_inner;
-                                    let input_type = to_reduce.typ();
-                                    let fields = input_type
-                                        .column_types
-                                        .iter()
-                                        .take(input_arity)
-                                        .map(|t| (ColumnName::from("?column?"), t.clone()))
-                                        .collect_vec();
-                                    let agg_input = expr::MirScalarExpr::CallVariadic {
-                                        func: expr::VariadicFunc::RecordCreate {
-                                            field_names: fields
-                                                .iter()
-                                                .map(|(name, _)| name.clone())
-                                                .collect_vec(),
-                                        },
-                                        exprs: (0..input_arity)
-                                            .map(|column| expr::MirScalarExpr::Column(column))
-                                            .collect_vec(),
-                                    };
-                                    let record_type = ScalarType::Record {
-                                        fields,
-                                        custom_oid: None,
-                                        custom_name: None,
-                                    };
-                                    let agg_input = expr::MirScalarExpr::CallVariadic {
-                                        func: expr::VariadicFunc::ListCreate {
-                                            elem_type: record_type.clone(),
-                                        },
-                                        exprs: vec![agg_input],
-                                    };
-                                    let mut agg_input = vec![agg_input];
-                                    agg_input.extend(order_by.clone());
-                                    let agg_input = expr::MirScalarExpr::CallVariadic {
-                                        func: expr::VariadicFunc::RecordCreate {
-                                            field_names: (0..1)
-                                                .map(|_| ColumnName::from("?column?"))
-                                                .collect_vec(),
-                                        },
-                                        exprs: agg_input,
-                                    };
-                                    let list_type = ScalarType::List {
-                                        element_type: Box::new(record_type),
-                                        custom_oid: None,
-                                    };
-                                    let agg_input_type = ScalarType::Record {
-                                        fields: std::iter::once(&list_type)
-                                            .map(|t| {
-                                                (
-                                                    ColumnName::from("?column?"),
-                                                    t.clone().nullable(false),
+                            // concatenate the two results.
+                            then_inner.union(else_inner)
+                        });
+
+                        SS::Column(inner_arity)
+                    }
+                }
+
+                // Subqueries!
+                // These are surprisingly subtle. Things to be careful of:
+
+                // Anything in the subquery that cares about row counts (Reduce/Distinct/Negate/Threshold) must not:
+                // * change the row counts of the outer query
+                // * accidentally compute its own value using the row counts of the outer query
+                // Use `branch` to calculate the subquery once for each __distinct__ key in the outer
+                // query and then join the answers back on to the original rows of the outer query.
+
+                // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
+                // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
+                Exists(expr) => {
+                    let apply_requires_distinct_outer = true;
+                    *inner = apply_existential_subquery(
+                        id_gen,
+                        inner.take_dangerous(),
+                        col_map,
+                        *expr,
+                        apply_requires_distinct_outer,
+                    );
+                    SS::Column(inner.arity() - 1)
+                }
+
+                Select(expr) => {
+                    let apply_requires_distinct_outer = true;
+                    *inner = apply_scalar_subquery(
+                        id_gen,
+                        inner.take_dangerous(),
+                        col_map,
+                        *expr,
+                        apply_requires_distinct_outer,
+                    );
+                    SS::Column(inner.arity() - 1)
+                }
+                Windowing(expr) => {
+                    // - For Scalar window functions we need to put a FlatMap operator on top of inner
+
+                    let partition = expr.partition;
+                    let order_by = expr.order_by;
+
+                    match expr.func {
+                        WindowExprType::Scalar(func) => {
+                            *inner =
+                                inner
+                                    .take_dangerous()
+                                    .let_in(id_gen, |id_gen, mut get_inner| {
+                                        let order_by = order_by
+                                            .into_iter()
+                                            .map(|o| {
+                                                o.applied_to(
+                                                    id_gen,
+                                                    col_map,
+                                                    &mut get_inner,
+                                                    subquery_map,
                                                 )
                                             })
-                                            .collect_vec(),
-                                        custom_oid: None,
-                                        custom_name: None,
-                                    }
-                                    .nullable(false);
-                                    let func = func.into_expr();
-                                    let aggregate = expr::AggregateExpr {
-                                        func,
-                                        expr: agg_input,
-                                        distinct: false,
-                                    };
-                                    let mut reduce = to_reduce
-                                        .reduce(group_key.clone(), vec![aggregate.clone()], None)
-                                        .flat_map(
-                                            expr::TableFunc::UnnestList {
-                                                el_typ: aggregate
-                                                    .func
-                                                    .output_type(agg_input_type)
-                                                    .scalar_type
-                                                    .unwrap_list_element_type()
-                                                    .clone(),
-                                            },
-                                            vec![expr::MirScalarExpr::Column(group_key.len())],
-                                        );
-                                    let record_col = reduce.arity() - 1;
+                                            .collect_vec();
 
-                                    // Unpack the record
-                                    for c in 0..input_arity {
-                                        reduce = reduce.take_dangerous().map(vec![
-                                            expr::MirScalarExpr::CallUnary {
-                                                func: expr::UnaryFunc::RecordGet(c),
-                                                expr: Box::new(expr::MirScalarExpr::CallUnary {
-                                                    func: expr::UnaryFunc::RecordGet(1),
+                                        // Record input arity here so that any group_keys that need to mutate get_inner
+                                        // don't add those columns to the aggregate input.
+                                        let input_arity = get_inner.typ().arity();
+                                        // The reduction that computes the window function must be keyed on the columns
+                                        // from the outer context, plus the expressions in the partition key. The current
+                                        // subquery will be 'executed' for every distinct row from the outer context so
+                                        // by putting the outer columns in the grouping key we isolate each re-execution.
+                                        let mut group_key = col_map
+                                            .inner
+                                            .iter()
+                                            .map(|(_, outer_col)| *outer_col)
+                                            .sorted()
+                                            .collect_vec();
+                                        for p in partition {
+                                            let key = p.applied_to(
+                                                id_gen,
+                                                col_map,
+                                                &mut get_inner,
+                                                subquery_map,
+                                            );
+                                            if let expr::MirScalarExpr::Column(c) = key {
+                                                group_key.push(c);
+                                            } else {
+                                                get_inner = get_inner.map(vec![key]);
+                                                group_key.push(get_inner.arity() - 1);
+                                            }
+                                        }
+
+                                        get_inner.let_in(id_gen, |_id_gen, get_inner| {
+                                            let to_reduce = get_inner;
+                                            let input_type = to_reduce.typ();
+                                            let fields = input_type
+                                                .column_types
+                                                .iter()
+                                                .take(input_arity)
+                                                .map(|t| (ColumnName::from("?column?"), t.clone()))
+                                                .collect_vec();
+                                            let agg_input = expr::MirScalarExpr::CallVariadic {
+                                                func: expr::VariadicFunc::RecordCreate {
+                                                    field_names: fields
+                                                        .iter()
+                                                        .map(|(name, _)| name.clone())
+                                                        .collect_vec(),
+                                                },
+                                                exprs: (0..input_arity)
+                                                    .map(|column| {
+                                                        expr::MirScalarExpr::Column(column)
+                                                    })
+                                                    .collect_vec(),
+                                            };
+                                            let record_type = ScalarType::Record {
+                                                fields,
+                                                custom_oid: None,
+                                                custom_name: None,
+                                            };
+                                            let agg_input = expr::MirScalarExpr::CallVariadic {
+                                                func: expr::VariadicFunc::ListCreate {
+                                                    elem_type: record_type.clone(),
+                                                },
+                                                exprs: vec![agg_input],
+                                            };
+                                            let mut agg_input = vec![agg_input];
+                                            agg_input.extend(order_by.clone());
+                                            let agg_input = expr::MirScalarExpr::CallVariadic {
+                                                func: expr::VariadicFunc::RecordCreate {
+                                                    field_names: (0..1)
+                                                        .map(|_| ColumnName::from("?column?"))
+                                                        .collect_vec(),
+                                                },
+                                                exprs: agg_input,
+                                            };
+                                            let list_type = ScalarType::List {
+                                                element_type: Box::new(record_type),
+                                                custom_oid: None,
+                                            };
+                                            let agg_input_type = ScalarType::Record {
+                                                fields: std::iter::once(&list_type)
+                                                    .map(|t| {
+                                                        (
+                                                            ColumnName::from("?column?"),
+                                                            t.clone().nullable(false),
+                                                        )
+                                                    })
+                                                    .collect_vec(),
+                                                custom_oid: None,
+                                                custom_name: None,
+                                            }
+                                            .nullable(false);
+                                            let func = func.into_expr();
+                                            let aggregate = expr::AggregateExpr {
+                                                func,
+                                                expr: agg_input,
+                                                distinct: false,
+                                            };
+                                            let mut reduce = to_reduce
+                                                .reduce(
+                                                    group_key.clone(),
+                                                    vec![aggregate.clone()],
+                                                    None,
+                                                )
+                                                .flat_map(
+                                                    expr::TableFunc::UnnestList {
+                                                        el_typ: aggregate
+                                                            .func
+                                                            .output_type(agg_input_type)
+                                                            .scalar_type
+                                                            .unwrap_list_element_type()
+                                                            .clone(),
+                                                    },
+                                                    vec![expr::MirScalarExpr::Column(
+                                                        group_key.len(),
+                                                    )],
+                                                );
+                                            let record_col = reduce.arity() - 1;
+
+                                            // Unpack the record
+                                            for c in 0..input_arity {
+                                                reduce = reduce.take_dangerous().map(vec![
+                                                    expr::MirScalarExpr::CallUnary {
+                                                        func: expr::UnaryFunc::RecordGet(c),
+                                                        expr: Box::new(
+                                                            expr::MirScalarExpr::CallUnary {
+                                                                func: expr::UnaryFunc::RecordGet(1),
+                                                                expr: Box::new(
+                                                                    expr::MirScalarExpr::Column(
+                                                                        record_col,
+                                                                    ),
+                                                                ),
+                                                            },
+                                                        ),
+                                                    },
+                                                ]);
+                                            }
+
+                                            // Append the column with the result of the window function.
+                                            reduce = reduce.take_dangerous().map(vec![
+                                                expr::MirScalarExpr::CallUnary {
+                                                    func: expr::UnaryFunc::RecordGet(0),
                                                     expr: Box::new(expr::MirScalarExpr::Column(
                                                         record_col,
                                                     )),
-                                                }),
-                                            },
-                                        ]);
-                                    }
+                                                },
+                                            ]);
 
-                                    // Append the column with the result of the window function.
-                                    reduce = reduce.take_dangerous().map(vec![
-                                        expr::MirScalarExpr::CallUnary {
-                                            func: expr::UnaryFunc::RecordGet(0),
-                                            expr: Box::new(expr::MirScalarExpr::Column(record_col)),
-                                        },
-                                    ]);
-
-                                    let agg_col = record_col + 1 + input_arity;
-                                    reduce.project((record_col + 1..agg_col + 1).collect_vec())
-                                })
-                            });
-                        SS::Column(inner.arity() - 1)
+                                            let agg_col = record_col + 1 + input_arity;
+                                            reduce.project(
+                                                (record_col + 1..agg_col + 1).collect_vec(),
+                                            )
+                                        })
+                                    });
+                            SS::Column(inner.arity() - 1)
+                        }
                     }
                 }
             }
-        }
+        })
     }
 
     /// Applies the subqueries in the given list of scalar expressions to every distinct
