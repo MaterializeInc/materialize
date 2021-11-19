@@ -21,7 +21,6 @@ dec = { version = "0.4.5", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 enum-iterator = "0.7.0"
-enum-kinds = "0.5.1"
 expr = { path = "../expr" }
 flate2 = "1.0.22"
 futures = "0.3.17"
@@ -33,7 +32,6 @@ kafka-util = { path = "../kafka-util" }
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
-num_enum = "0.5.4"
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
 persist = { path = "../persist" }

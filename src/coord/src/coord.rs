@@ -108,7 +108,7 @@ use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use build_info::BuildInfo;
-use dataflow::{TimestampBindingFeedback, WorkerFeedback};
+use dataflow_types::client::{TimestampBindingFeedback, WorkerFeedback};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, DataflowDescription, ExternalSourceConnector, IndexDesc, PeekResponse,
@@ -176,7 +176,7 @@ mod prometheus;
 #[derive(Debug)]
 pub enum Message {
     Command(Command),
-    Worker(dataflow::Response),
+    Worker(dataflow_types::client::Response),
     AdvanceSourceTimestamp(AdvanceSourceTimestamp),
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
@@ -253,7 +253,7 @@ pub struct LoggingConfig {
 /// Configures a coordinator.
 pub struct Config<'a, C>
 where
-    C: dataflow::Client,
+    C: dataflow_types::client::Client,
 {
     pub dataflow_client: C,
     pub symbiosis_url: Option<&'a str>,
@@ -274,7 +274,7 @@ where
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<C>
 where
-    C: dataflow::Client,
+    C: dataflow_types::client::Client,
 {
     /// A client to a running dataflow cluster.
     dataflow_client: C,
@@ -391,7 +391,7 @@ macro_rules! guard_write_critical_section {
 
 impl<C> Coordinator<C>
 where
-    C: dataflow::Client + 'static,
+    C: dataflow_types::client::Client + 'static,
 {
     fn num_workers(&self) -> usize {
         self.dataflow_client.num_workers()
@@ -496,7 +496,7 @@ where
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
                         // Indexes on logging views are special, as they are
                         // already installed in the dataflow plane via
-                        // `dataflow::Command::EnableLogging`. Just teach the
+                        // `dataflow_types::client::Command::EnableLogging`. Just teach the
                         // coordinator of their existence, without creating a
                         // dataflow for the index.
                         //
@@ -725,7 +725,7 @@ where
                 });
             }
 
-            self.broadcast(dataflow::Command::AdvanceAllLocalInputs {
+            self.broadcast(dataflow_types::client::Command::AdvanceAllLocalInputs {
                 advance_to: next_ts,
             })
             .await;
@@ -735,7 +735,7 @@ where
 
     async fn message_worker(
         &mut self,
-        dataflow::Response { worker_id, message }: dataflow::Response,
+        dataflow_types::client::Response { worker_id, message }: dataflow_types::client::Response,
     ) {
         match message {
             WorkerFeedback::PeekResponse(conn_id, response) => {
@@ -856,7 +856,7 @@ where
 
                 // Announce the new frontiers that have been durably persisted.
                 if !durability_updates.is_empty() {
-                    self.broadcast(dataflow::Command::DurabilityFrontierUpdates(
+                    self.broadcast(dataflow_types::client::Command::DurabilityFrontierUpdates(
                         durability_updates,
                     ))
                     .await;
@@ -966,7 +966,7 @@ where
         &mut self,
         AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
     ) {
-        self.broadcast(dataflow::Command::AdvanceSourceTimestamp { id, update })
+        self.broadcast(dataflow_types::client::Command::AdvanceSourceTimestamp { id, update })
             .await;
     }
 
@@ -1469,8 +1469,10 @@ where
 
         if !since_updates.is_empty() {
             self.persisted_table_allow_compaction(&since_updates);
-            self.broadcast(dataflow::Command::AllowCompaction(since_updates))
-                .await;
+            self.broadcast(dataflow_types::client::Command::AllowCompaction(
+                since_updates,
+            ))
+            .await;
         }
     }
 
@@ -1647,7 +1649,7 @@ where
             let _ = conn_meta.cancel_tx.send(Cancelled::Cancelled);
 
             // Allow dataflow to cancel any pending peeks.
-            self.broadcast(dataflow::Command::CancelPeek { conn_id })
+            self.broadcast(dataflow_types::client::Command::CancelPeek { conn_id })
                 .await;
         }
     }
@@ -2852,8 +2854,11 @@ where
                             );
                         } else {
                             for (id, updates) in volatile_updates {
-                                self.broadcast(dataflow::Command::Insert { id, updates })
-                                    .await;
+                                self.broadcast(dataflow_types::client::Command::Insert {
+                                    id,
+                                    updates,
+                                })
+                                .await;
                             }
                         }
                     }
@@ -3449,7 +3454,7 @@ where
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
                 self.validate_timeline(decorrelated_plan.global_uses())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
-                let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
+                let dataflow_plan = dataflow_types::Plan::finalize_dataflow(dataflow)
                     .expect("Dataflow planning failed; unrecoverable error");
                 let catalog = self.catalog.for_session(session);
                 let mut explanation = dataflow_types::Explanation::new_from_dataflow(
@@ -3922,14 +3927,16 @@ where
                 self.catalog.delete_timestamp_bindings(id)?;
                 self.sources.remove(&id);
             }
-            self.broadcast(dataflow::Command::DropSources(sources_to_drop))
-                .await;
+            self.broadcast(dataflow_types::client::Command::DropSources(
+                sources_to_drop,
+            ))
+            .await;
         }
         if !sinks_to_drop.is_empty() {
             for id in sinks_to_drop.iter() {
                 self.sink_writes.remove(id);
             }
-            self.broadcast(dataflow::Command::DropSinks(sinks_to_drop))
+            self.broadcast(dataflow_types::client::Command::DropSinks(sinks_to_drop))
                 .await;
         }
         if !indexes_to_drop.is_empty() {
@@ -3999,7 +4006,7 @@ where
                 let write_fut = persist.write_handle.write(&updates);
                 let _ = tokio::spawn(write_fut);
             } else {
-                self.broadcast(dataflow::Command::Insert { id, updates })
+                self.broadcast(dataflow_types::client::Command::Insert { id, updates })
                     .await
             }
         }
@@ -4016,7 +4023,7 @@ where
 
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
-            self.broadcast(dataflow::Command::DropSinks(dataflow_names))
+            self.broadcast(dataflow_types::client::Command::DropSinks(dataflow_names))
                 .await;
         }
     }
@@ -4029,7 +4036,7 @@ where
             }
         }
         if !trace_keys.is_empty() {
-            self.broadcast(dataflow::Command::DropIndexes(trace_keys))
+            self.broadcast(dataflow_types::client::Command::DropIndexes(trace_keys))
                 .await
         }
     }
@@ -4144,8 +4151,10 @@ where
         for dataflow in dataflows.into_iter() {
             dataflow_plans.push(self.finalize_dataflow(dataflow));
         }
-        self.broadcast(dataflow::Command::CreateDataflows(dataflow_plans))
-            .await;
+        self.broadcast(dataflow_types::client::Command::CreateDataflows(
+            dataflow_plans,
+        ))
+        .await;
     }
 
     /// Finalizes a dataflow.
@@ -4166,7 +4175,7 @@ where
     fn finalize_dataflow(
         &mut self,
         mut dataflow: DataflowDesc,
-    ) -> dataflow_types::DataflowDescription<dataflow::Plan> {
+    ) -> dataflow_types::DataflowDescription<dataflow_types::Plan> {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
@@ -4229,11 +4238,11 @@ where
 
         // Optimize the dataflow across views, and any other ways that appeal.
         transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
-        dataflow::Plan::finalize_dataflow(dataflow)
+        dataflow_types::Plan::finalize_dataflow(dataflow)
             .expect("Dataflow planning failed; unrecoverable error")
     }
 
-    async fn broadcast(&mut self, cmd: dataflow::Command) {
+    async fn broadcast(&mut self, cmd: dataflow_types::client::Command) {
         self.dataflow_client.send(cmd).await;
     }
 
@@ -4250,7 +4259,7 @@ where
                         .send(TimestampMessage::Add(source_id, s.connector.clone()))
                         .expect("Failed to send CREATE Instance notice to timestamper");
                     let connector = s.connector.clone();
-                    self.broadcast(dataflow::Command::AddSourceTimestamping {
+                    self.broadcast(dataflow_types::client::Command::AddSourceTimestamping {
                         id: source_id,
                         connector,
                         bindings,
@@ -4262,8 +4271,10 @@ where
             self.ts_tx
                 .send(TimestampMessage::Drop(source_id))
                 .expect("Failed to send DROP Instance notice to timestamper");
-            self.broadcast(dataflow::Command::DropSourceTimestamping { id: source_id })
-                .await;
+            self.broadcast(dataflow_types::client::Command::DropSourceTimestamping {
+                id: source_id,
+            })
+            .await;
         }
     }
 
@@ -4398,7 +4409,7 @@ pub async fn serve<C>(
     }: Config<'_, C>,
 ) -> Result<(Handle, Client), CoordError>
 where
-    C: dataflow::Client + 'static,
+    C: dataflow_types::client::Client + 'static,
 {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
@@ -4486,18 +4497,22 @@ where
             };
             if let Some(config) = &logging {
                 handle.block_on(
-                    coord.broadcast(dataflow::Command::EnableLogging(DataflowLoggingConfig {
-                        granularity_ns: config.granularity.as_nanos(),
-                        active_logs: BUILTINS
-                            .logs()
-                            .map(|src| (src.variant.clone(), src.index_id))
-                            .collect(),
-                        log_logging: config.log_logging,
-                    })),
+                    coord.broadcast(dataflow_types::client::Command::EnableLogging(
+                        DataflowLoggingConfig {
+                            granularity_ns: config.granularity.as_nanos(),
+                            active_logs: BUILTINS
+                                .logs()
+                                .map(|src| (src.variant.clone(), src.index_id))
+                                .collect(),
+                            log_logging: config.log_logging,
+                        },
+                    )),
                 );
             }
             if let Some(persister) = persister {
-                handle.block_on(coord.broadcast(dataflow::Command::EnablePersistence(persister)));
+                handle.block_on(coord.broadcast(
+                    dataflow_types::client::Command::EnablePersistence(persister),
+                ));
             }
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
@@ -4722,7 +4737,7 @@ pub mod fast_path_peek {
         PeekExisting(GlobalId, Option<Row>, expr::SafeMfpPlan),
         /// The view must be installed as a dataflow and then read.
         PeekDataflow(
-            dataflow_types::DataflowDescription<dataflow::Plan>,
+            dataflow_types::DataflowDescription<dataflow_types::Plan>,
             GlobalId,
         ),
     }
@@ -4733,7 +4748,7 @@ pub mod fast_path_peek {
     /// we can avoid building a dataflow (and either just return the results, or peek
     /// out of the arrangement, respectively).
     pub fn create_plan(
-        dataflow_plan: dataflow_types::DataflowDescription<dataflow::Plan>,
+        dataflow_plan: dataflow_types::DataflowDescription<dataflow_types::Plan>,
         view_id: GlobalId,
         index_id: GlobalId,
     ) -> Result<Plan, CoordError> {
@@ -4747,11 +4762,11 @@ pub mod fast_path_peek {
         {
             match &dataflow_plan.objects_to_build[0].view {
                 // In the case of a constant, we can return the result now.
-                dataflow::Plan::Constant { rows } => {
+                dataflow_types::Plan::Constant { rows } => {
                     return Ok(Plan::Constant(rows.clone()));
                 }
                 // In the case of a bare `Get`, we may be able to directly index an arrangement.
-                dataflow::Plan::Get {
+                dataflow_types::Plan::Get {
                     id,
                     keys: _,
                     mfp,
@@ -4796,7 +4811,7 @@ pub mod fast_path_peek {
 
     impl<C> crate::coord::Coordinator<C>
     where
-        C: dataflow::Client + 'static,
+        C: dataflow_types::client::Client + 'static,
     {
         /// Implements a peek plan produced by `create_plan` above.
         pub async fn implement_fast_path_peek(
@@ -4852,7 +4867,7 @@ pub mod fast_path_peek {
             // If we must build the view, ship the dataflow.
             let (peek_command, drop_dataflow) = match fast_path {
                 Plan::PeekExisting(id, key, map_filter_project) => (
-                    dataflow::Command::Peek {
+                    dataflow_types::client::Command::Peek {
                         id,
                         key,
                         conn_id,
@@ -4864,8 +4879,10 @@ pub mod fast_path_peek {
                 ),
                 Plan::PeekDataflow(dataflow, index_id) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
-                    self.broadcast(dataflow::Command::CreateDataflows(vec![dataflow]))
-                        .await;
+                    self.broadcast(dataflow_types::client::Command::CreateDataflows(vec![
+                        dataflow,
+                    ]))
+                    .await;
 
                     // Create an identity MFP operator.
                     let map_filter_project = expr::MapFilterProject::new(source_arity)
@@ -4878,7 +4895,7 @@ pub mod fast_path_peek {
                             ))
                         })?;
                     (
-                        dataflow::Command::Peek {
+                        dataflow_types::client::Command::Peek {
                             id: index_id, // transient identifier produced by `dataflow_plan`.
                             key: None,
                             conn_id,

@@ -7,15 +7,21 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.45"
+async-trait = "0.1.51"
 aws-util = { path = "../aws-util" }
 ccsr = { path = "../ccsr" }
+crossbeam-channel = "0.5.1"
+enum-iterator = "0.7.0"
+enum-kinds = "0.5.1"
 expr = { path = "../expr" }
 globset = { version = "0.4.8", features = ["serde1"] }
 interchange = { path = "../interchange" }
 persist-types = { path = "../persist-types" }
 kafka-util = { path = "../kafka-util" }
 log = "0.4.13"
+num_enum = "0.5.4"
 ore = { path = "../ore" }
+persist = { path = "../persist" }
 regex = "1.5.4"
 repr = { path = "../repr" }
 rusoto_core = "0.47.0"

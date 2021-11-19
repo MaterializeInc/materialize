@@ -13,7 +13,9 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
+pub mod client;
 pub mod logging;
+pub mod plan;
 
 mod errors;
 mod explain;
@@ -23,4 +25,5 @@ pub use errors::*;
 pub use explain::DataflowGraphFormatter;
 pub use explain::Explanation;
 pub use explain::JsonViewFormatter;
+pub use plan::Plan;
 pub use types::*;

@@ -23,6 +23,7 @@ use ore::metrics::{
 };
 use timely::progress::frontier::{Antichain, AntichainRef};
 
+use dataflow_types::plan::Permutation;
 use dataflow_types::DataflowError;
 use expr::GlobalId;
 use repr::{Diff, Row, Timestamp};
@@ -35,7 +36,6 @@ pub type TraceErrHandle<K, T, R> = TraceAgent<ErrSpine<K, T, R>>;
 pub type KeysValsHandle = TraceRowHandle<Row, Row, Timestamp, Diff>;
 pub type ErrsHandle = TraceErrHandle<DataflowError, Timestamp, Diff>;
 
-use crate::render::Permutation;
 use prometheus::core::{AtomicF64, AtomicU64};
 use std::time::Instant;
 

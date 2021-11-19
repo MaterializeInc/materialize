@@ -29,7 +29,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use crate::operator::CollectionExt;
-use crate::render::Permutation;
+use dataflow_types::plan::Permutation;
 use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
 use repr::{DatumVec, Diff, Row, RowArena};
@@ -312,10 +312,6 @@ where
     }
 }
 
-/// Parameter type to [CollectionBundle::ensure_arrangements], describing a key, a permutation of
-/// data and a thinning expression.
-pub type EnsureArrangement = (Vec<MirScalarExpr>, Permutation, Vec<usize>);
-
 impl<S: Scope, T: Lattice> CollectionBundle<S, Row, T>
 where
     T: Timestamp + Lattice,
@@ -472,7 +468,7 @@ where
     }
 
     /// Ensures that arrangements in `keys` are present, creating them if they do not exist.
-    pub fn ensure_arrangements<K: IntoIterator<Item = EnsureArrangement>>(
+    pub fn ensure_arrangements<K: IntoIterator<Item = dataflow_types::plan::EnsureArrangement>>(
         mut self,
         keys: K,
     ) -> Self {

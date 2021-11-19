@@ -46,7 +46,7 @@
 //!   session contained the string `<TEMP>`, it will be replaced with a
 //!   temporary directory.
 //! - `update-upper`: Sends a batch of
-//!   [`FrontierUppers`](dataflow::WorkerFeedback::FrontierUppers) to the
+//!   [`FrontierUppers`](dataflow_types::client::WorkerFeedback::FrontierUppers) to the
 //!   Coordinator. Input is one update per line of the format
 //!   `database.schema.item N` where N is some numeric timestamp. No output.
 //! - `inc-timestamp`: Increments the timestamp by number in the input. No
@@ -74,7 +74,7 @@ use tokio::sync::Mutex as TokioMutex;
 use build_info::DUMMY_BUILD_INFO;
 use coord::session::{EndTransactionAction, Session};
 use coord::{ExecuteResponse, PersistConfig, SessionClient, StartupResponse};
-use dataflow::WorkerFeedback;
+use dataflow_types::client::WorkerFeedback;
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
 use ore::metrics::MetricsRegistry;
@@ -90,13 +90,13 @@ use timely::progress::change_batch::ChangeBatch;
 // The field order matters a lot here so the various threads/tasks are shut
 // down without ever panicing.
 pub struct CoordTest {
-    dataflow_client: InterceptingDataflowClient<dataflow::LocalClient>,
+    dataflow_client: InterceptingDataflowClient<dataflow_types::client::LocalClient>,
     coord_client: coord::Client,
     _coord_handle: coord::Handle,
     _dataflow_server: dataflow::Server,
     // Keep a queue of messages in the order received from dataflow_feedback_rx so
     // we can safely modify or inject things and maintain original message order.
-    queued_feedback: Vec<dataflow::Response>,
+    queued_feedback: Vec<dataflow_types::client::Response>,
     _data_directory: TempDir,
     temp_dir: TempDir,
     uppers: HashMap<GlobalId, Timestamp>,
@@ -233,7 +233,7 @@ impl CoordTest {
                 let mut requeue = uppers.clone();
                 requeue.retain(|(id, _data)| exclude_uppers.contains(id));
                 if !requeue.is_empty() {
-                    to_queue.push(dataflow::Response {
+                    to_queue.push(dataflow_types::client::Response {
                         worker_id: msg.worker_id,
                         message: WorkerFeedback::FrontierUppers(requeue),
                     });
@@ -497,10 +497,11 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                         batch.update(ts, 1);
                         updates.push((id, batch));
                     }
-                    ct.dataflow_client.forward_response(dataflow::Response {
-                        worker_id: 0,
-                        message: WorkerFeedback::FrontierUppers(updates),
-                    });
+                    ct.dataflow_client
+                        .forward_response(dataflow_types::client::Response {
+                            worker_id: 0,
+                            message: WorkerFeedback::FrontierUppers(updates),
+                        });
                     "".into()
                 }
                 "inc-timestamp" => {
@@ -536,7 +537,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
     tf
 }
 
-/// A [`dataflow::Client`] implementation that intercepts responses from the
+/// A [`dataflow_types::client::Client`] implementation that intercepts responses from the
 /// dataflow server.
 ///
 /// The implementation of the `send` method is unchanged. The implementation of
@@ -545,8 +546,8 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
 /// the underlying dataflow client, call `try_intercepting_recv`.
 struct InterceptingDataflowClient<C> {
     inner: Arc<TokioMutex<C>>,
-    feedback_tx: mpsc::UnboundedSender<dataflow::Response>,
-    feedback_rx: Arc<TokioMutex<mpsc::UnboundedReceiver<dataflow::Response>>>,
+    feedback_tx: mpsc::UnboundedSender<dataflow_types::client::Response>,
+    feedback_rx: Arc<TokioMutex<mpsc::UnboundedReceiver<dataflow_types::client::Response>>>,
 }
 
 impl<C> Clone for InterceptingDataflowClient<C> {
@@ -560,19 +561,19 @@ impl<C> Clone for InterceptingDataflowClient<C> {
 }
 
 #[async_trait]
-impl<C> dataflow::Client for InterceptingDataflowClient<C>
+impl<C> dataflow_types::client::Client for InterceptingDataflowClient<C>
 where
-    C: dataflow::Client,
+    C: dataflow_types::client::Client,
 {
     fn num_workers(&self) -> usize {
         1
     }
 
-    async fn send(&mut self, cmd: dataflow::Command) {
+    async fn send(&mut self, cmd: dataflow_types::client::Command) {
         self.inner.lock().await.send(cmd).await
     }
 
-    async fn recv(&mut self) -> Option<dataflow::Response> {
+    async fn recv(&mut self) -> Option<dataflow_types::client::Response> {
         let mut feedback_rx = self.feedback_rx.lock().await;
         feedback_rx.recv().await
     }
@@ -580,7 +581,7 @@ where
 
 impl<C> InterceptingDataflowClient<C>
 where
-    C: dataflow::Client,
+    C: dataflow_types::client::Client,
 {
     /// Creates a new intercepting dataflow client that wraps the provided
     /// dataflow client.
@@ -595,12 +596,12 @@ where
 
     /// Receives a response from the underlying dataflow client, if one is
     /// immediately available.
-    async fn intercepting_recv(&mut self) -> Option<dataflow::Response> {
+    async fn intercepting_recv(&mut self) -> Option<dataflow_types::client::Response> {
         self.inner.lock().await.recv().now_or_never().flatten()
     }
 
     /// Makes the specified response available via the normal `recv` method.
-    fn forward_response(&self, response: dataflow::Response) {
+    fn forward_response(&self, response: dataflow_types::client::Response) {
         self.feedback_tx.send(response).unwrap()
     }
 }

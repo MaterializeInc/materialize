@@ -25,7 +25,7 @@ pub struct DataflowBuilder<'a> {
 
 impl<C> Coordinator<C>
 where
-    C: dataflow::Client,
+    C: dataflow_types::client::Client,
 {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
     pub fn dataflow_builder<'a>(&'a mut self) -> DataflowBuilder {
