@@ -1314,7 +1314,11 @@ impl HirScalarExpr {
                 *e = params[*i - 1].clone();
                 // Correct any column references in the parameter expression for
                 // its new depth.
-                e.visit_columns(0, &mut |_, col| col.level += depth);
+                e.visit_columns(0, &mut |d, col| {
+                    if col.level >= d {
+                        col.level += depth
+                    }
+                });
             }
             HirScalarExpr::Exists(e) | HirScalarExpr::Select(e) => {
                 e.splice_parameters(params, depth + 1)

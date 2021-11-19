@@ -429,6 +429,11 @@ SELECT a::regproc FROM text_to_regproc ORDER BY a
 750
 NULL
 
+query I
+select 'now'::regproc::oid::text::regproc
+----
+1299
+
 # 🔬🔬🔬 oid alias
 
 query T
@@ -900,3 +905,8 @@ SELECT a::regtype FROM text_to_regtype ORDER BY a
 ----
 1082
 NULL
+
+query I
+select 'date'::regtype::oid::text::regtype
+----
+1082
