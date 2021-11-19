@@ -414,6 +414,11 @@ SELECT 'now'::regproc::oid
 ----
 1299
 
+query T
+SELECT NULL::regproc::text
+----
+NULL
+
 # TODO: improve this error message to match postgres.
 query error more than one record produced in subquery
 SELECT 'max'::regproc
@@ -931,6 +936,11 @@ select 'date'::regtype::oid::text::regtype
 ----
 1082
 
+# Make sure that there are no functions with duplicate OIDs
+query I
+select oid from (select count(*) as cnt, oid from mz_catalog.mz_functions group by oid) where cnt>1
+----
+
 query T
 SELECT 'date'::regtype::text::regtype
 ----
@@ -941,7 +951,7 @@ SELECT 'date'::regtype::text::regtype::text
 ----
 date
 
-# Make sure that there are no functions with duplicate OIDs
-query I
-select oid from (select count(*) as cnt, oid from mz_catalog.mz_functions group by oid) where cnt>1
+query T
+SELECT NULL::regtype::text
 ----
+NULL
