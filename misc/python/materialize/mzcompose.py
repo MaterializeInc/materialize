@@ -77,6 +77,8 @@ DEFAULT_CONFLUENT_PLATFORM_VERSION = "5.5.4"
 DEFAULT_DEBEZIUM_VERSION = "1.6"
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
+DEFAULT_MZ_VOLUMES = ["mzdata:/share/mzdata", "tmp:/share/tmp"]
+
 
 class LintError:
     def __init__(self, file: Path, message: str):
@@ -692,7 +694,7 @@ class Materialized(PythonService):
             "ALL_PROXY",
             "NO_PROXY",
         ],
-        volumes: List[str] = ["mzdata:/share/mzdata", "tmp:/share/tmp"],
+        volumes: List[str] = DEFAULT_MZ_VOLUMES,
     ) -> None:
         # Make sure MZ_DEV=1 is always present
         if "MZ_DEV=1" not in environment:
@@ -735,7 +737,7 @@ class Coordd(PythonService):
         data_directory: str = "/share/mzdata",
         options: str = "",
         environment: List[str] = [],
-        volumes: List[str] = ["mzdata:/share/mzdata", "tmp:/share/tmp"],
+        volumes: List[str] = DEFAULT_MZ_VOLUMES,
         mzbuild: str = "coordd",
         depends_on: List[str] = [],
     ) -> None:
@@ -785,7 +787,9 @@ class Dataflowd(PythonService):
             "MZ_LOG_FILTER",
             "MZ_SOFT_ASSERTIONS=1",
         ],
-        volumes: List[str] = [],
+        # We currently give dataflowd access to /tmp so that it can load CSV files
+        # but this requirement is expected to go away in the future.
+        volumes: List[str] = DEFAULT_MZ_VOLUMES,
         depends_on: List[str] = [],
     ) -> None:
         command = f"{options}"
@@ -1001,6 +1005,7 @@ class Testdrive(PythonService):
         default_timeout: Optional[int] = None,
         validate_catalog: bool = True,
         entrypoint: Optional[List[str]] = None,
+        shell_eval: Optional[bool] = False,
         environment: List[str] = [
             "TD_TEST",
             "TMPDIR=/share/tmp",
@@ -1012,7 +1017,7 @@ class Testdrive(PythonService):
             "TOXIPROXY_BYTES_ALLOWED",
             "UPGRADE_FROM_VERSION",
         ],
-        volumes: List[str] = [".:/workdir", "mzdata:/share/mzdata", "tmp:/share/tmp"],
+        volumes: List[str] = [*DEFAULT_MZ_VOLUMES, ".:/workdir"],
     ) -> None:
         if entrypoint is None:
             entrypoint = [
@@ -1020,8 +1025,14 @@ class Testdrive(PythonService):
                 "--kafka-addr=kafka:9092",
                 "--schema-registry-url=http://schema-registry:8081",
                 "--materialized-url=postgres://materialize@materialized:6875",
-                "${TD_TEST:-$$*}",
             ]
+
+        if shell_eval:
+            # Evaluate the arguments as a shell command
+            # This allows bashisms to be used to prepare the list of tests to run
+            entrypoint.append("`${TD_TEST:-$$*}`")
+        else:
+            entrypoint.append("${TD_TEST:-$$*}")
 
         if validate_catalog:
             entrypoint.append("--validate-catalog=/share/mzdata/catalog")
