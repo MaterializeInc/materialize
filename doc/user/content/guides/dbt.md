@@ -11,7 +11,7 @@ menu:
 The `dbt-materialize` adapter can only be used with dbt Core. We are working with the dbt community to bring native Materialize support to dbt Cloud!
 {{</ note >}}
 
-[dbt](https://docs.getdbt.com/docs/introduction) (data build tool) has become the standard for data transformation ("the T in ELT"). It combines the accessibility of SQL with software engineering best practices, allowing you to not only build reliable data pipelines, but also document, test and version-control them.
+[dbt](https://docs.getdbt.com/docs/introduction) has become the standard for data transformation ("the T in ELT"). It combines the accessibility of SQL with software engineering best practices, allowing you to not only build reliable data pipelines, but also document, test and version-control them.
 
 While dbt is a great fit for **batch** transformations, it can only **approximate** transforming streaming data (officially through [incremental models](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/configuring-incremental-models), and unofficially through [lambda views](https://discourse.getdbt.com/t/how-to-create-near-real-time-models-with-just-dbt-sql/1457)). In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in real time.
 
