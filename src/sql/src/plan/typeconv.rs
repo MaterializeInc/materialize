@@ -14,7 +14,6 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
 
 use anyhow::bail;
 use lazy_static::lazy_static;
@@ -710,7 +709,7 @@ pub fn plan_hypothetical_cast(
     // Reconstruct an expression context where the expression is evaluated on
     // the "first column" of some imaginary row.
     let mut scx = ecx.qcx.scx.clone();
-    scx.param_types = Rc::new(RefCell::new(BTreeMap::new()));
+    scx.param_types = RefCell::new(BTreeMap::new());
     let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
     let relation_type = RelationType {
         column_types: vec![ColumnType {

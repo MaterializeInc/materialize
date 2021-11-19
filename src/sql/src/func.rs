@@ -13,7 +13,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
 
 use anyhow::{bail, Context};
 use chrono::{DateTime, Utc};
@@ -281,13 +280,13 @@ pub fn sql_impl(
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
         let mut scx = qcx.scx.clone();
-        scx.param_types = Rc::new(RefCell::new(
+        scx.param_types = RefCell::new(
             types
                 .into_iter()
                 .enumerate()
                 .map(|(i, ty)| (i + 1, ty))
                 .collect(),
-        ));
+        );
         let mut qcx = QueryContext::root(&scx, qcx.lifetime);
 
         // Desugar the expression
@@ -359,13 +358,13 @@ fn sql_impl_table_func(sql: &'static str) -> Operation<(HirRelationExpr, Scope)>
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
         let mut scx = qcx.scx.clone();
-        scx.param_types = Rc::new(RefCell::new(
+        scx.param_types = RefCell::new(
             types
                 .into_iter()
                 .enumerate()
                 .map(|(i, ty)| (i + 1, ty))
                 .collect(),
-        ));
+        );
         let mut qcx = QueryContext::root(&scx, qcx.lifetime);
 
         let mut query = query.clone();
