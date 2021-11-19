@@ -671,11 +671,7 @@ pub fn plan_copy_from_rows(
     // Maps from table column index to position in the source query
     let col_to_source: HashMap<_, _> = columns.iter().enumerate().map(|(a, b)| (b, a)).collect();
 
-    let scx = StatementContext::new(
-        Some(pcx),
-        catalog,
-        std::rc::Rc::new(RefCell::new(BTreeMap::new())),
-    );
+    let scx = StatementContext::new(Some(pcx), catalog);
 
     let column_details = desc.iter_types().zip_eq(defaults).enumerate();
     for (col_idx, (col_typ, default)) in column_details {

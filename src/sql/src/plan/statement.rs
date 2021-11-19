@@ -13,7 +13,6 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::rc::Rc;
 
 use anyhow::bail;
 
@@ -102,7 +101,7 @@ pub fn describe(
     let scx = StatementContext {
         pcx: Some(pcx),
         catalog,
-        param_types: Rc::new(RefCell::new(param_types)),
+        param_types: RefCell::new(param_types),
     };
 
     let desc = match stmt {
@@ -189,7 +188,7 @@ pub fn plan(
     let scx = &StatementContext {
         pcx,
         catalog,
-        param_types: Rc::new(RefCell::new(param_types)),
+        param_types: RefCell::new(param_types),
     };
 
     match stmt {
@@ -295,19 +294,18 @@ pub struct StatementContext<'a> {
     pub catalog: &'a dyn SessionCatalog,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
-    pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
+    pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
 }
 
 impl<'a> StatementContext<'a> {
     pub fn new(
         pcx: Option<&'a PlanContext>,
         catalog: &'a dyn SessionCatalog,
-        param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
     ) -> StatementContext<'a> {
         StatementContext {
             pcx,
             catalog,
-            param_types,
+            param_types: Default::default(),
         }
     }
 
@@ -403,7 +401,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, anyhow::Error> {
-        let param_types = Rc::try_unwrap(self.param_types).unwrap().into_inner();
+        let param_types = self.param_types.into_inner();
         let mut out = vec![];
         for (i, (n, typ)) in param_types.into_iter().enumerate() {
             if n != i + 1 {

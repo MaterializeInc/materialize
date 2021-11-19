@@ -7,10 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::rc::Rc;
-
 use crate::catalog::{
     CatalogConfig, CatalogDatabase, CatalogError, CatalogItem, CatalogRole, CatalogSchema,
     SessionCatalog,
@@ -140,8 +136,7 @@ fn test_hir_generator() {
 
         f.run(move |s| -> String {
             let build_stmt = |stmt, dot_graph, lower| -> String {
-                let scx =
-                    &StatementContext::new(None, &catalog, Rc::new(RefCell::new(BTreeMap::new())));
+                let scx = &StatementContext::new(None, &catalog);
                 if let sql_parser::ast::Statement::Select(query) = stmt {
                     let planned_query = match crate::plan::query::plan_root_query(
                         scx,

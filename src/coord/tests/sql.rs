@@ -18,10 +18,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::rc::Rc;
-
 use tempfile::NamedTempFile;
 
 use coord::catalog::{Catalog, CatalogItem, Table};
@@ -77,11 +73,7 @@ fn datadriven() {
 
                     let parsed = sql::parse::parse(&test_case.input).unwrap();
                     let pcx = &PlanContext::zero();
-                    let scx = StatementContext::new(
-                        Some(pcx),
-                        &catalog,
-                        Rc::new(RefCell::new(BTreeMap::new())),
-                    );
+                    let scx = StatementContext::new(Some(pcx), &catalog);
                     let mut qcx =
                         QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
                     let q = parsed[0].clone();
