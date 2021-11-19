@@ -303,19 +303,38 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) OR f2 = (SELECT f1 FROM 
 %6 = Let l1 =
 | Union %2 %5
 
-%7 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy ()
+%7 = Let l2 =
+| Get %2 (l0)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
 
 %8 =
-| Get %6 (l1)
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#1))
 | ArrangeBy ()
 
 %9 =
-| Join %7 %8 %6
-| | implementation = Differential %6 %7.() %8.()
-| Filter ((#0 = #2) || (#1 = #3))
+| Get %6 (l1)
+| Project ()
+
+%10 =
+| Join %8 %9 %7 (= #1 #2)
+| | implementation = Differential %9 %8.() %7.(#0)
 | Project (#0, #1)
+
+%11 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+| ArrangeBy ()
+
+%12 =
+| Join %11 %7 %6 (= #0 #2)
+| | implementation = Differential %6 %11.() %7.(#0)
+| Filter (#1 != #3)
+| Project (#0, #1)
+
+%13 =
+| Union %10 %12
 
 EOF
 

@@ -34,6 +34,7 @@ pub mod canonicalize_mfp;
 pub mod column_knowledge;
 pub mod cse;
 pub mod demand;
+pub mod disjunctions;
 pub mod fusion;
 pub mod inline_let;
 pub mod join_implementation;
@@ -194,6 +195,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::top_k::TopK),
                 Box::new(crate::inline_let::InlineLet::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
+                Box::new(crate::disjunctions::DisjunctionToUnion),
                 Box::new(crate::fusion::union::Union),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
