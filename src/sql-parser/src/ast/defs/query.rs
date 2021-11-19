@@ -408,8 +408,11 @@ pub enum TableFactor<T: AstInfo> {
         alias: Option<TableAlias>,
     },
     Function {
-        name: UnresolvedObjectName,
-        args: FunctionArgs<T>,
+        function: TableFunction<T>,
+        alias: Option<TableAlias>,
+    },
+    RowsFrom {
+        functions: Vec<TableFunction<T>>,
         alias: Option<TableAlias>,
     },
     Derived {
@@ -437,15 +440,21 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                     f.write_node(alias);
                 }
             }
-            TableFactor::Function { name, args, alias } => {
-                f.write_node(name);
-                f.write_str("(");
-                f.write_node(args);
-                f.write_str(")");
+            TableFactor::Function { function, alias } => {
+                f.write_node(function);
+                if let Some(alias) = &alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
+            }
+            TableFactor::RowsFrom { functions, alias } => {
+                f.write_str("ROWS FROM(");
+                f.write_node(&display::comma_separated(functions));
                 if let Some(alias) = alias {
                     f.write_str(" AS ");
                     f.write_node(alias);
                 }
+                f.write_str(")");
             }
             TableFactor::Derived {
                 lateral,
@@ -476,6 +485,21 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
     }
 }
 impl_display_t!(TableFactor);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableFunction<T: AstInfo> {
+    pub name: UnresolvedObjectName,
+    pub args: FunctionArgs<T>,
+}
+impl<T: AstInfo> AstDisplay for TableFunction<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str("(");
+        f.write_node(&self.args);
+        f.write_str(")");
+    }
+}
+impl_display_t!(TableFunction);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableAlias {

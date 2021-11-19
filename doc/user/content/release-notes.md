@@ -110,6 +110,8 @@ List new features before bug fixes.
 - Support explicit reference to the default collation (`<expr> COLLATE pg_catalog.default`).
   Other collations are not yet supported.
 
+- Support `ROWS FROM` in `FROM` clauses.
+
 {{% version-header v0.10.0 %}}
 
 - Allow ingesting avro schemas whose top node is not a record type.

@@ -844,7 +844,7 @@ SELECT foo FROM LATERAL bar(1)
 ----
 SELECT foo FROM bar(1)
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Function { name: UnresolvedObjectName([Ident("bar")]), args: Args { args: [Value(Number("1"))], order_by: [] }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Function { function: TableFunction { name: UnresolvedObjectName([Ident("bar")]), args: Args { args: [Value(Number("1"))], order_by: [] } }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT foo FROM LATERAL bar
@@ -1045,14 +1045,21 @@ SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id) ON true
 ----
 SELECT * FROM customer LEFT JOIN generate_series(1, customer.id) ON true
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Function { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Identifier([Ident("customer"), Ident("id")])], order_by: [] }, alias: None }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Function { function: TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Identifier([Ident("customer"), Ident("id")])], order_by: [] } }, alias: None }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
-SELECT * FROM a LEFT JOIN LATERAL (b CROSS JOIN c)
+SELECT * FROM LATERAL ROWS FROM (generate_series(1, 2), generate_series(3, 5))
 ----
-error: Expected SELECT, VALUES, or a subquery in the query body, found identifier "b"
-SELECT * FROM a LEFT JOIN LATERAL (b CROSS JOIN c)
-                                   ^
+SELECT * FROM ROWS FROM(generate_series(1, 2), generate_series(3, 5))
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] } }], alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5))
+----
+SELECT * FROM ROWS FROM(generate_series(1, 2), generate_series(3, 5))
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] } }], alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 # Ensure parsing AS OF is case-insensitive
 parse-statement

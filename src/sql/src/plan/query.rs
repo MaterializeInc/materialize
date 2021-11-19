@@ -39,7 +39,8 @@ use sql_parser::ast::{
     Assignment, AstInfo, Cte, DataType, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     Ident, InsertSource, IsExprConstruct, JoinConstraint, JoinOperator, Limit, OrderByExpr, Query,
     Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement, SubscriptPosition,
-    TableAlias, TableFactor, TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
+    TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement,
+    Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -57,7 +58,7 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
     CoercibleScalarExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind,
-    ScalarWindowExpr, UnaryFunc, VariadicFunc, WindowExpr, WindowExprType,
+    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, VariadicFunc, WindowExpr, WindowExprType,
 };
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -2051,7 +2052,10 @@ fn plan_table_factor(
             (expr, scope)
         }
 
-        TableFactor::Function { name, args, alias } => {
+        TableFactor::Function {
+            function: TableFunction { name, args },
+            alias,
+        } => {
             let ecx = &ExprContext {
                 qcx: &qcx,
                 name: "FROM table function",
@@ -2061,6 +2065,18 @@ fn plan_table_factor(
                 allow_subqueries: true,
             };
             plan_table_function(ecx, &name, alias.as_ref(), args)?
+        }
+
+        TableFactor::RowsFrom { functions, alias } => {
+            let ecx = &ExprContext {
+                qcx: &qcx,
+                name: "FROM ROWS FROM",
+                scope: &Scope::empty(Some(qcx.outer_scope.clone())),
+                relation_type: &RelationType::empty(),
+                allow_aggregates: false,
+                allow_subqueries: true,
+            };
+            plan_rows_from(ecx, functions, alias.as_ref())?
         }
 
         TableFactor::Derived {
@@ -2094,6 +2110,117 @@ fn plan_table_factor(
     )
 }
 
+// ROWS FROM concatenates table functions into a single table, filling in
+// NULLs in places where one table function has fewer rows than another. We
+// can achieve this by augmenting each table function with a row number, doing
+// a FULL JOIN between each table function on the row number, then removing
+// (via Project) the row number columns. The following two SQL statemenst are
+// equivalent, with the former being the SQL version of the above explanation.
+//
+// SELECT
+//     gs1.generate_series, expand.x, expand.n, gs2.generate_series
+// FROM
+//     (SELECT row_number() OVER (), * FROM ROWS FROM (generate_series(1, 2))) AS gs1
+//     FULL JOIN (SELECT row_number() OVER (), * FROM ROWS FROM (information_schema._pg_expandarray(ARRAY[9])))
+//             AS expand ON gs1.row_number = expand.row_number
+//     FULL JOIN (SELECT row_number() OVER (), * FROM ROWS FROM (generate_series(3, 6))) AS gs2 ON
+//             gs1.row_number = gs2.row_number;
+//
+// and:
+//
+// SELECT
+//     *
+// FROM
+//     ROWS FROM (
+//         generate_series(1, 2),
+//         information_schema._pg_expandarray(ARRAY[9]),
+//         generate_series(3, 6)
+//     );
+//
+// This function creates a HirRelationExpr that is identical to what is
+// produced by the former.
+fn plan_rows_from(
+    ecx: &ExprContext,
+    functions: &[TableFunction<Aug>],
+    alias: Option<&TableAlias>,
+) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
+    let mut funcs = Vec::with_capacity(functions.len());
+    let mut project_outputs = Vec::new();
+    // last is the number of previous columns, including row number. It is used to
+    // project away the row number columns from the final plan.
+    let mut last = 0;
+    // Similar to table functions with one column, ROWS FROM that outputs a single
+    // column has an edge case aliasing behavior. Use the first function name below
+    // in plan_table_function_alias if this is the case. If there's more than one
+    // column or ROWS FROM argument it is ignored there. We do not parse ROWS FROM
+    // with 0 arguments, so we know the 0 index exists.
+    let name = normalize::unresolved_object_name(functions[0].name.clone())?;
+    // For each table function, augment it with a row number. The row number column
+    // is projected so it is the first column in each expression.
+    for func in functions {
+        let (expr, mut scope) = plan_table_function(ecx, &func.name, None, &func.args)?;
+        let expr = expr.map(vec![HirScalarExpr::Windowing(WindowExpr {
+            func: WindowExprType::Scalar(ScalarWindowExpr {
+                func: ScalarWindowFunc::RowNumber,
+                order_by: vec![],
+            }),
+            partition: vec![],
+            order_by: vec![],
+        })]);
+        let mut outputs = Vec::with_capacity(scope.items.len());
+        // Re-jigger the outputs so the row number is first.
+        outputs.push(scope.items.len());
+        outputs.extend(0..scope.items.len());
+        let expr = expr.project(outputs);
+        last += 1;
+        // Use a Project to remove the row number columns.
+        project_outputs.extend(last..(last + scope.len()));
+        last += scope.len();
+        // Remove table names from the scope, but only if there's exactly one table
+        // function. This is similar to the single column rule above, but this applies
+        // even to table functions that produce more than one column.
+        if functions.len() != 1 {
+            for item in scope.items.iter_mut() {
+                for name in item.names.iter_mut() {
+                    name.table_name = None;
+                }
+            }
+        }
+        funcs.push((expr, scope));
+    }
+    let mut funcs = funcs.into_iter();
+
+    // Extract the first table function, which must exist.
+    let (mut expr, mut scope) = funcs.next().unwrap();
+
+    // Join remaining functions.
+    for (idx, func) in funcs.enumerate() {
+        let (func, func_scope) = func;
+        let next_column = scope.items.len() + idx + 1;
+        expr = HirRelationExpr::Join {
+            left: Box::new(expr),
+            right: Box::new(func),
+            on: HirScalarExpr::CallBinary {
+                func: BinaryFunc::Eq,
+                expr1: Box::new(HirScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: 0,
+                })),
+                expr2: Box::new(HirScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: next_column,
+                })),
+            },
+            kind: JoinKind::FullOuter,
+        };
+        scope.items.extend(func_scope.items);
+    }
+    let expr = expr.project(project_outputs);
+    let scope = plan_table_function_alias(name, scope, alias)?;
+
+    Ok((expr, scope))
+}
+
 fn plan_table_function(
     ecx: &ExprContext,
     name: &UnresolvedObjectName,
@@ -2120,7 +2247,7 @@ fn plan_table_function(
     };
     let resolved_name = normalize::unresolved_object_name(name.clone())?;
 
-    let (call, mut scope) = match resolve_func(ecx, name, args)? {
+    let (call, scope) = match resolve_func(ecx, name, args)? {
         Func::Table(impls) => {
             let tf = func::select_impl(
                 ecx,
@@ -2166,13 +2293,22 @@ fn plan_table_function(
         _ => bail!("{} is not a table function", name),
     };
 
+    let scope = plan_table_function_alias(resolved_name, scope, alias)?;
+    Ok((call, scope))
+}
+
+fn plan_table_function_alias(
+    name: PartialName,
+    mut scope: Scope,
+    alias: Option<&TableAlias>,
+) -> Result<Scope, anyhow::Error> {
     if let Some(alias) = alias {
         scope = if alias.columns.is_empty()
             && scope.len() == 1
             && scope
                 .resolve_table_column(
-                    &resolved_name,
-                    &normalize::column_name(Ident::from(resolved_name.item.clone())),
+                    &name,
+                    &normalize::column_name(Ident::from(name.item.clone())),
                 )
                 .is_ok()
         {
@@ -2215,7 +2351,7 @@ fn plan_table_function(
             });
         }
     }
-    Ok((call, scope))
+    Ok(scope)
 }
 
 fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scope, anyhow::Error> {
