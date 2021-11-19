@@ -912,3 +912,8 @@ query I
 select 'date'::regtype::oid::text::regtype
 ----
 1082
+
+# Make sure that there are no functions with duplicate OIDs
+query I
+select oid from (select count(*) as cnt, oid from mz_catalog.mz_functions group by oid) where cnt>1
+----

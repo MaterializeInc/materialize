@@ -1988,7 +1988,7 @@ lazy_static! {
                         exprs,
                         column_names: vec![Some("generate_series".into())],
                     })
-                }), 1066;
+                }), 1068;
             },
             "jsonb_array_elements" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
