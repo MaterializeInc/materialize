@@ -175,13 +175,21 @@ lazy_static! {
             // REGPROC
             (RegProc, Oid) => Implicit: CastRegProcToOid,
             (RegProc, String) => Explicit: sql_impl_cast("(
-                SELECT DISTINCT(name) FROM mz_catalog.mz_functions WHERE oid = $1
+                SELECT DISTINCT(COALESCE(t.name, v.x::pg_catalog.text))
+                FROM (
+                    VALUES ($1::pg_catalog.oid)) AS v(x)
+                    LEFT JOIN mz_catalog.mz_functions AS t
+                    ON t.oid = v.x
             )"), // DISTINCT is required to handle overridden functions such as generate_series
 
             // REGTYPE
             (RegType, Oid) => Implicit: CastRegTypeToOid,
             (RegType, String) => Explicit: sql_impl_cast("(
-                SELECT name FROM mz_catalog.mz_types WHERE oid = $1
+                SELECT COALESCE(t.name, v.x::pg_catalog.text)
+                FROM (
+                    VALUES ($1::pg_catalog.oid)) AS v(x)
+                    LEFT JOIN mz_catalog.mz_types AS t
+                    ON t.oid = v.x
             )"),
 
             // FLOAT32

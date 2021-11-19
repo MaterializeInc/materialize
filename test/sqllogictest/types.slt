@@ -387,7 +387,7 @@ SELECT '1'::pg_catalog.regproc
 query T
 SELECT '1'::regproc::text
 ----
-NULL
+1
 
 query T
 SELECT 'now'::regproc::text
@@ -453,6 +453,9 @@ query I
 select 'now'::regproc::oid::text::regproc
 ----
 1299
+
+statement OK
+select oid, oid::regproc::text from (select oid from mz_catalog.mz_functions)
 
 # 🔬🔬🔬 oid alias
 
@@ -893,7 +896,7 @@ SELECT '1'::pg_catalog.regtype
 query T
 SELECT '1'::regtype::text
 ----
-NULL
+1
 
 query T
 SELECT 'date'::regtype::text
@@ -955,3 +958,6 @@ query T
 SELECT NULL::regtype::text
 ----
 NULL
+
+statement OK
+select oid, oid::regtype::text from (select oid from mz_catalog.mz_types)
