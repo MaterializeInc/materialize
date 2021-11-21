@@ -1984,9 +1984,9 @@ dependencies = [
 
 [[package]]
 name = "include_dir"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d7d2a17a8653f96bc15a7840946857891072b950c1c318473fa46bb4c1ac6cc"
+checksum = "7fe7734d776eb702d33f1b68730696db57c87facfd526d2044a308a0c8466318"
 dependencies = [
  "include_dir_macros",
 ]
