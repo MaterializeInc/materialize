@@ -33,7 +33,7 @@ lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
-pdqselect = "0.1.0"
+pdqselect = "0.1.1"
 persist = { path = "../persist" }
 persist-types = { path = "../persist-types" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
