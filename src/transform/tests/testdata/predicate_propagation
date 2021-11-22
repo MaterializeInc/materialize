@@ -1,0 +1,265 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [int32 (int32 false)])
+(defsource y [int32 int32])
+----
+ok
+
+# test column replacements
+
+# Filter
+
+build apply=PredicateKnowledge
+(filter (project (constant [[null]] [int64]) [#0 #0]) [(call_binary eq #0 #1)])
+----
+%0 =
+| Constant (null)
+| Project (#0, #0)
+| Filter (#0 = #0)
+
+build apply=PredicateKnowledge
+(filter (project (get x) [#0 #0]) [(call_binary eq #0 #1)])
+----
+%0 =
+| Get x (u0)
+| Project (#0, #0)
+| Filter (#0 = #0)
+
+build apply=PredicateKnowledge
+(filter (join [(get x) (get y)] [[#0 #2]]) [(call_binary eq #0 #2)])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get y (u1)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Filter (#0 = #0)
+----
+----
+
+build apply=PredicateKnowledge
+(filter (constant [[1] [1]] [int64]) [(call_binary eq #0 2)])
+----
+%0 =
+| Constant
+
+# Reduce
+
+build apply=PredicateKnowledge
+(reduce (project (get x) [#0 #0]) [#0 #1] [])
+----
+%0 =
+| Get x (u0)
+| Project (#0, #0)
+| Distinct group=(#0, #0)
+
+build apply=PredicateKnowledge
+(reduce (project (get x) [#0 #0]) [#0] [(sum_int32 #1)])
+----
+%0 =
+| Get x (u0)
+| Project (#0, #0)
+| Reduce group=(#0)
+| | agg sum(#0)
+
+# count(<non-nullable column>) -> count(true)
+build apply=PredicateKnowledge
+(reduce (get x) [#0] [(count #1)])
+----
+%0 =
+| Get x (u0)
+| Reduce group=(#0)
+| | agg count(true)
+
+# ... doesn't apply to count(distinct ...)
+build apply=PredicateKnowledge
+(reduce (get x) [#0] [(count #1 true)])
+----
+%0 =
+| Get x (u0)
+| Reduce group=(#0)
+| | agg count(distinct #1)
+
+# IS NOT NULL predicate lifted for aggregate columns
+build apply=PredicateKnowledge
+(filter (reduce (get x) [#0] [(count #1 true)]) [(call_unary is_null #1)])
+----
+%0 =
+| Constant
+
+build apply=PredicateKnowledge
+(filter (reduce (get x) [#0] [(sum_int32 #1)]) [(call_unary is_null #1)])
+----
+%0 =
+| Constant
+
+build apply=PredicateKnowledge
+(filter (reduce (get x) [#1] [(sum_int32 #0)]) [(call_unary is_null #1)])
+----
+%0 =
+| Get x (u0)
+| Reduce group=(#1)
+| | agg sum(#0)
+| Filter isnull(#1)
+
+# Map
+
+build apply=PredicateKnowledge
+(map (project (get x) [#0 #0]) [#1 (call_binary add_int32 #1 1)])
+----
+%0 =
+| Get x (u0)
+| Project (#0, #0)
+| Map #0, (#0 + 1)
+
+# Union
+
+# #0 = #1 lifted from all branches
+build apply=PredicateKnowledge
+(map (union [(project (get x) [#0 #0]) (project (get x) [#0 #0])]) [#1 (call_binary add_int32 #1 1)])
+----
+----
+%0 =
+| Get x (u0)
+| Project (#0, #0)
+
+%1 =
+| Get x (u0)
+| Project (#0, #0)
+
+%2 =
+| Union %0 %1
+| Map #0, (#0 + 1)
+----
+----
+
+# #0 = #1 not lifted from all branches
+build apply=PredicateKnowledge
+(map (union [(project (get x) [#0 #0]) (project (get x) [#0 #0]) (get x)]) [#1 (call_binary add_int32 #1 1)])
+----
+----
+%0 =
+| Get x (u0)
+| Project (#0, #0)
+
+%1 =
+| Get x (u0)
+| Project (#0, #0)
+
+%2 =
+| Get x (u0)
+
+%3 =
+| Union %0 %1 %2
+| Map #1, (#1 + 1)
+----
+----
+
+# #0 = #1 not lifted from all branches
+build apply=PredicateKnowledge
+(map (union [(project (get x) [#0 #0]) (get x) (project (get x) [#0 #0])]) [#1 (call_binary add_int32 #1 1)])
+----
+----
+%0 =
+| Get x (u0)
+| Project (#0, #0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Get x (u0)
+| Project (#0, #0)
+
+%3 =
+| Union %0 %1 %2
+| Map #1, (#1 + 1)
+----
+----
+
+# FlatMap
+
+build apply=PredicateKnowledge
+(flat_map (project (get x) [#0 #1 #0 #1]) generate_series_int32 [#3 #2])
+----
+%0 =
+| Get x (u0)
+| Project (#0, #1, #0, #1)
+| FlatMap generate_series(#1, #0)
+
+# test known_true predicates
+
+build apply=PredicateKnowledge
+(filter (filter (get x) [(call_binary gt #0 #1)]) [(call_binary gt #0 #1)])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 > #1)
+| Filter true
+
+# IS (NOT) NULL info comming from a Constant
+
+build apply=PredicateKnowledge
+(filter (constant [[null]] [int64]) [(call_unary is_null #0)])
+----
+%0 =
+| Constant (null)
+| Filter true
+
+build apply=PredicateKnowledge
+(filter (constant [[null]] [int64]) [(call_unary not (call_unary is_null #0))])
+----
+%0 =
+| Constant (null)
+| Filter !(true)
+
+build apply=PredicateKnowledge
+(filter (constant [[null] [1]] [int64]) [(call_unary is_null #0)])
+----
+%0 =
+| Constant (null) (1)
+| Filter isnull(#0)
+
+build apply=PredicateKnowledge
+(filter (constant [[2] [1]] [int64]) [(call_unary is_null #0)])
+----
+%0 =
+| Constant
+
+# IS (NOT) NULL info comming from a Get
+
+# nullable column
+build apply=PredicateKnowledge
+(filter (get x) [(call_unary is_null #0)])
+----
+%0 =
+| Get x (u0)
+| Filter isnull(#0)
+
+# non-nullable column
+build apply=PredicateKnowledge
+(filter (get x) [(call_unary is_null #1)])
+----
+%0 =
+| Constant
+
+# test known_false predicates
+
+build apply=PredicateKnowledge
+(filter (filter (get x) [(call_unary not (call_binary gt #0 #1))]) [(call_binary gt #0 #1)])
+----
+%0 =
+| Constant
