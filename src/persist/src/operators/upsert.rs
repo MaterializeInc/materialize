@@ -128,12 +128,14 @@ where
             let snapshot = persist_config.read_handle.snapshot();
             let (restored_oks, restored_errs) =
                 self.scope().replay(snapshot).ok_err(|x| split_ok_err(x));
-            let restored_upsert_oks = restored_oks.filter_and_retract_future_updates(
-                name,
-                persist_config.write_handle.clone(),
-                persist_config.upper_seal_ts,
-            );
-            (restored_upsert_oks, restored_errs)
+            let (restored_upsert_oks, retract_errs) = restored_oks
+                .filter_and_retract_future_updates(
+                    name,
+                    persist_config.write_handle.clone(),
+                    persist_config.upper_seal_ts,
+                );
+            let combined_errs = restored_errs.concat(&retract_errs);
+            (restored_upsert_oks, combined_errs)
         };
 
         let mut differential_state_ingester = Some(DifferentialStateIngester::new());
