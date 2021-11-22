@@ -720,6 +720,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::input::Handle;
     use timely::dataflow::operators::probe::Probe;
@@ -874,7 +875,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn conditional_seal() -> Result<(), Error> {
         ore::test::init_logging_default("trace");
         let mut registry = MemRegistry::new();
@@ -892,9 +892,33 @@ mod tests {
             Condition(u64),
         }
 
-        let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
-        primary_read.listen(listen_tx.clone())?;
-        condition_read.listen(listen_tx)?;
+        let (listen_primary_tx, listen_primary_rx) = crossbeam_channel::unbounded();
+        primary_read.listen(listen_primary_tx)?;
+
+        let (listen_condition_tx, listen_condition_rx) = crossbeam_channel::unbounded();
+        condition_read.listen(listen_condition_tx)?;
+
+        // best effort loop to categorize and forward incoming messages to an aggregate channel
+        // for later test validation logic
+        let (listen_aggregate_tx, listen_aggregate_rx) = crossbeam_channel::unbounded();
+        let _ = thread::spawn(move || loop {
+            match listen_primary_rx.try_recv() {
+                Ok(e) => match e {
+                    ListenEvent::Sealed(t) => listen_aggregate_tx.send(Sealed::Primary(t)).unwrap(),
+                    _ => panic!("unexpected data"),
+                },
+                _ => {}
+            }
+            match listen_condition_rx.try_recv() {
+                Ok(e) => match e {
+                    ListenEvent::Sealed(t) => {
+                        listen_aggregate_tx.send(Sealed::Condition(t)).unwrap()
+                    }
+                    _ => panic!("unexpected data"),
+                },
+                _ => {}
+            }
+        });
 
         timely::execute_directly(move |worker| {
             let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
@@ -942,14 +966,7 @@ mod tests {
             }
         });
 
-        let actual_seals: Vec<_> = listen_rx
-            .try_iter()
-            .map(|e| match e {
-                ListenEvent::Sealed(t) => Sealed::Primary(t),
-                //TODO need to differentiate between primary and condition
-                _ => panic!("unexpected data"),
-            })
-            .collect();
+        let actual_seals: Vec<_> = listen_aggregate_rx.try_iter().collect();
 
         // Assert that:
         //  a) We don't seal primary when condition has not sufficiently advanced.
