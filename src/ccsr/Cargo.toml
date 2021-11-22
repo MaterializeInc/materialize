@@ -17,7 +17,7 @@ serde_json = "1.0.71"
 url = { version = "2.2.2", features = ["serde"] }
 
 [dev-dependencies]
-hyper = { version = "0.14.14", features = ["server"] }
+hyper = { version = "0.14.15", features = ["server"] }
 lazy_static = "1.4.0"
 tokio = { version = "1.13.0", features = ["macros"] }
 tracing = { version = "0.1.29", features = ["log"] }
