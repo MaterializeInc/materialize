@@ -155,11 +155,6 @@ pub struct Arrangement {
 
     unsealed_batches: Vec<UnsealedBatchMeta>,
     trace_batches: Vec<TraceBatchMeta>,
-
-    // TODO: next_blob_id is deprecated, remove these once we can safely bump
-    // BlobMeta::CURRENT_VERSION.
-    deprecated_unsealed_next_blob_id: u64,
-    deprecated_trace_next_blob_id: u64,
 }
 
 impl Arrangement {
@@ -181,8 +176,6 @@ impl Arrangement {
             since: trace.since,
             unsealed_batches: unsealed.batches,
             trace_batches: trace.batches,
-            deprecated_unsealed_next_blob_id: unsealed.next_blob_id,
-            deprecated_trace_next_blob_id: trace.next_blob_id,
         }
     }
 
@@ -197,14 +190,12 @@ impl Arrangement {
             id: self.id,
             ts_lower: self.unsealed_ts_lower.clone(),
             batches: self.unsealed_batches.clone(),
-            next_blob_id: self.deprecated_unsealed_next_blob_id,
         };
         let trace = TraceMeta {
             id: self.id,
             batches: self.trace_batches.clone(),
             since: self.since.clone(),
             seal: self.seal.clone(),
-            next_blob_id: self.deprecated_trace_next_blob_id,
         };
         (unsealed, trace)
     }
@@ -966,7 +957,6 @@ mod tests {
                 id: Id(0),
                 ts_lower: Antichain::from_elem(2),
                 batches: vec![],
-                next_blob_id: 0,
             },
             TraceMeta::new(Id(0)),
         );
@@ -1004,7 +994,6 @@ mod tests {
                 id: Id(0),
                 ts_lower: Antichain::from_elem(0),
                 batches: vec![],
-                next_blob_id: 0,
             },
             TraceMeta::new(Id(0)),
         );
@@ -1033,7 +1022,6 @@ mod tests {
                 id: Id(0),
                 ts_lower: Antichain::from_elem(2),
                 batches: vec![],
-                next_blob_id: 0,
             },
             TraceMeta::new(Id(0)),
         );
@@ -1057,7 +1045,6 @@ mod tests {
                 id: Id(0),
                 ts_lower: Antichain::from_elem(0),
                 batches: vec![],
-                next_blob_id: 0,
             },
             TraceMeta::new(Id(0)),
         );
@@ -1129,7 +1116,6 @@ mod tests {
                 id: Id(0),
                 ts_lower: Antichain::from_elem(0),
                 batches: vec![],
-                next_blob_id: 0,
             },
             TraceMeta::new(Id(0)),
         );
@@ -1185,7 +1171,6 @@ mod tests {
                 id: Id(0),
                 ts_lower: Antichain::from_elem(0),
                 batches: vec![],
-                next_blob_id: 0,
             },
             TraceMeta::new(Id(0)),
         );
@@ -1237,7 +1222,6 @@ mod tests {
                 }],
                 since: Antichain::from_elem(5),
                 seal: Antichain::from_elem(10),
-                next_blob_id: 0,
             },
         );
 
@@ -1282,7 +1266,6 @@ mod tests {
                 }],
                 since: Antichain::from_elem(5),
                 seal: Antichain::from_elem(10),
-                next_blob_id: 0,
             },
         );
 

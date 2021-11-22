@@ -125,10 +125,6 @@ pub struct UnsealedMeta {
     pub ts_lower: Antichain<u64>,
     /// The batches that make up the Unsealed.
     pub batches: Vec<UnsealedBatchMeta>,
-
-    /// TODO: next_blob_id is deprecated, remove this once we can safely bump
-    /// BlobMeta::CURRENT_VERSION.
-    pub next_blob_id: u64,
 }
 
 /// The metadata necessary to reconstruct a [BlobUnsealedBatch].
@@ -174,10 +170,6 @@ pub struct TraceMeta {
     pub since: Antichain<u64>,
     /// Frontier this trace has been sealed up to.
     pub seal: Antichain<u64>,
-
-    /// TODO: next_blob_id is deprecated, remove this once we can safely bump
-    /// BlobMeta::CURRENT_VERSION.
-    pub next_blob_id: u64,
 }
 
 /// The metadata necessary to reconstruct a [BlobTraceBatch].
@@ -521,7 +513,6 @@ impl UnsealedMeta {
             id,
             ts_lower: Antichain::from_elem(Timestamp::minimum()),
             batches: Vec::new(),
-            next_blob_id: 0,
         }
     }
     /// Asserts Self's documented invariants, returning an error if any are
@@ -575,7 +566,6 @@ impl TraceMeta {
             batches: Vec::new(),
             since: Antichain::from_elem(Timestamp::minimum()),
             seal: Antichain::from_elem(Timestamp::minimum()),
-            next_blob_id: 0,
         }
     }
     /// Returns an open upper bound on the timestamps of data contained in this
@@ -1020,7 +1010,6 @@ mod tests {
             batches: vec![],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(0),
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -1030,7 +1019,6 @@ mod tests {
             batches: vec![batch_meta(0, 1), batch_meta(1, 2)],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(2),
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -1040,7 +1028,6 @@ mod tests {
             batches: vec![batch_meta(0, 1), batch_meta(2, 3)],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(3),
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch sequence: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [1] }, since: Antichain { elements: [0] } } followed by Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
 
@@ -1050,7 +1037,6 @@ mod tests {
             batches: vec![batch_meta(0, 2), batch_meta(1, 3)],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(3),
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch sequence: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } } followed by Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
 
@@ -1060,7 +1046,6 @@ mod tests {
             batches: vec![batch_meta(0, 1), batch_meta(1, 2)],
             since: Antichain::from_elem(1),
             seal: Antichain::from_elem(2),
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -1070,7 +1055,6 @@ mod tests {
             batches: vec![batch_meta(0, 2), batch_meta(2, 3)],
             since: Antichain::from_elem(3),
             seal: Antichain::from_elem(3),
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid trace since Antichain { elements: [3] } at or in advance of trace seal Antichain { elements: [3] }")));
 
@@ -1080,7 +1064,6 @@ mod tests {
             batches: vec![batch_meta(0, 2), batch_meta(2, 3)],
             since: Antichain::from_elem(4),
             seal: Antichain::from_elem(3),
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid trace since Antichain { elements: [4] } at or in advance of trace seal Antichain { elements: [3] }")));
 
@@ -1090,7 +1073,6 @@ mod tests {
             batches: vec![batch_meta(0, 1), batch_meta_full(1, 2, 1, 1)],
             since: Antichain::from_elem(1),
             seal: Antichain::from_elem(2),
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -1100,7 +1082,6 @@ mod tests {
             batches: vec![batch_meta(0, 1), batch_meta_full(1, 2, 2, 1)],
             since: Antichain::from_elem(1),
             seal: Antichain::from_elem(2),
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch since: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [2] } } in advance of trace since Antichain { elements: [1] }")));
 
@@ -1114,7 +1095,6 @@ mod tests {
             ],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(3),
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -1124,7 +1104,6 @@ mod tests {
             batches: vec![batch_meta_full(0, 1, 0, 1), batch_meta_full(1, 2, 0, 2)],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(2),
-            next_blob_id: 0,
         };
         assert_eq!(
             b.validate(),
@@ -1162,7 +1141,6 @@ mod tests {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![],
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -1171,7 +1149,6 @@ mod tests {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![unsealed_batch_meta(0, 1), unsealed_batch_meta(1, 2)],
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -1180,7 +1157,6 @@ mod tests {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![unsealed_batch_meta(0, 1), unsealed_batch_meta(2, 3)],
-            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()),);
 
@@ -1189,7 +1165,6 @@ mod tests {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![unsealed_batch_meta(0, 2), unsealed_batch_meta(1, 3)],
-            next_blob_id: 0,
         };
         assert_eq!(
             b.validate(),
@@ -1311,14 +1286,12 @@ mod tests {
                 id: Id(0),
                 ts_lower: vec![0].into(),
                 batches: vec![],
-                next_blob_id: 0,
             }],
             traces: vec![TraceMeta {
                 id: Id(0),
                 batches: vec![batch_meta(0, 1)],
                 since: Antichain::from_elem(0),
                 seal: Antichain::from_elem(1),
-                next_blob_id: 0,
             }],
             ..Default::default()
         };
@@ -1331,14 +1304,12 @@ mod tests {
                 id: Id(0),
                 ts_lower: vec![1].into(),
                 batches: vec![],
-                next_blob_id: 0,
             }],
             traces: vec![TraceMeta {
                 id: Id(0),
                 batches: vec![batch_meta(0, 1)],
                 since: Antichain::from_elem(0),
                 seal: Antichain::from_elem(1),
-                next_blob_id: 0,
             }],
             ..Default::default()
         };
@@ -1351,14 +1322,12 @@ mod tests {
                 id: Id(0),
                 ts_lower: vec![2].into(),
                 batches: vec![],
-                next_blob_id: 0,
             }],
             traces: vec![TraceMeta {
                 id: Id(0),
                 batches: vec![batch_meta(0, 1)],
                 since: Antichain::from_elem(0),
                 seal: Antichain::from_elem(1),
-                next_blob_id: 0,
             }],
             ..Default::default()
         };
@@ -1376,7 +1345,6 @@ mod tests {
             unsealeds: vec![UnsealedMeta {
                 id: Id(0),
                 batches: vec![unsealed_batch_meta(0, 3)],
-                next_blob_id: 0,
                 ts_lower: vec![0].into(),
             }],
             traces: vec![TraceMeta::new(Id(0))],
@@ -1462,13 +1430,11 @@ mod tests {
                     id: Id(0),
                     ts_lower: vec![0].into(),
                     batches: vec![unsealed_batch_meta(0, 1)],
-                    next_blob_id: 0,
                 },
                 UnsealedMeta {
                     id: Id(1),
                     ts_lower: vec![0].into(),
                     batches: vec![unsealed_batch_meta(0, 1)],
-                    next_blob_id: 0,
                 },
             ],
             traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(1))],
@@ -1489,14 +1455,12 @@ mod tests {
                     batches: vec![batch_meta(0, 1)],
                     since: Antichain::from_elem(0),
                     seal: Antichain::from_elem(1),
-                    next_blob_id: 0,
                 },
                 TraceMeta {
                     id: Id(1),
                     batches: vec![batch_meta(0, 1)],
                     since: Antichain::from_elem(0),
                     seal: Antichain::from_elem(1),
-                    next_blob_id: 0,
                 },
             ],
             ..Default::default()
