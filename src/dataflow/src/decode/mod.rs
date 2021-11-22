@@ -12,8 +12,6 @@ use std::collections::HashMap;
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use ::regex::Regex;
-use dataflow_types::AvroEncoding;
-use dataflow_types::AvroOcfEncoding;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
@@ -27,8 +25,10 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::LinearOperator;
-use dataflow_types::{DataEncoding, DebeziumMode, DecodeError, RegexEncoding, SourceEnvelope};
+use dataflow_types::{
+    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, KeyEnvelope,
+    LinearOperator, RegexEncoding, SourceEnvelope,
+};
 use interchange::avro::ConfluentAvroResolver;
 use log::error;
 use repr::Datum;
@@ -444,7 +444,7 @@ where
         get_decoder(
             key_encoding,
             debug_name,
-            &SourceEnvelope::None,
+            &SourceEnvelope::None(KeyEnvelope::None),
             operators,
             false,
             true,
@@ -597,7 +597,7 @@ where
         get_decoder(
             key_encoding,
             debug_name,
-            &SourceEnvelope::None,
+            &SourceEnvelope::None(KeyEnvelope::None),
             operators,
             false,
             false,

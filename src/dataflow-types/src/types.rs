@@ -19,10 +19,9 @@ use std::ops::Add;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{anyhow, bail, Context};
 use globset::Glob;
 use http::Uri;
-use log::warn;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -315,6 +314,13 @@ pub enum DataEncoding {
 }
 
 impl SourceDataEncoding {
+    pub fn key_ref(&self) -> Option<&DataEncoding> {
+        match self {
+            SourceDataEncoding::Single(_) => None,
+            SourceDataEncoding::KeyValue { key, .. } => Some(key),
+        }
+    }
+
     /// Return either the Single encoding if this was a `SourceDataEncoding::Single`, else return the value encoding
     pub fn value(self) -> DataEncoding {
         match self {
@@ -330,103 +336,12 @@ impl SourceDataEncoding {
         }
     }
 
-    pub fn desc(
-        &self,
-        envelope: &SourceEnvelope,
-        key_envelope: Option<&KeyEnvelope>,
-    ) -> Result<RelationDesc, anyhow::Error> {
-        match self {
-            SourceDataEncoding::Single(enc) => enc.desc(envelope, RelationDesc::empty(), None),
-            SourceDataEncoding::KeyValue { key, value } => match key_envelope {
-                None => value.desc(envelope, RelationDesc::empty(), None),
-                Some(KeyEnvelope::Flattened) => insert_flattened_key(key, value, envelope, false),
-                Some(KeyEnvelope::LegacyUpsert) => insert_flattened_key(key, value, envelope, true),
-                Some(KeyEnvelope::Named(key_name)) => {
-                    insert_named_key(key_name, key, value, envelope)
-                }
-            },
-        }
+    pub fn desc(&self) -> Result<(Option<RelationDesc>, RelationDesc), anyhow::Error> {
+        Ok(match self {
+            SourceDataEncoding::Single(value) => (None, value.desc()?),
+            SourceDataEncoding::KeyValue { key, value } => (Some(key.desc()?), value.desc()?),
+        })
     }
-}
-
-/// modify the desc to include the key using the appropriate name
-fn insert_named_key(
-    key_name: &str,
-    key: &DataEncoding,
-    value: &DataEncoding,
-    envelope: &SourceEnvelope,
-) -> Result<RelationDesc, anyhow::Error> {
-    let key_desc = {
-        let key_desc = key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
-
-        // It doesn't make sense for the key to have keys.
-        assert!(key_desc.typ().keys.is_empty());
-
-        // if the key has multiple objects, nest them as a record inside of a single name
-        if key_desc.arity() > 1 {
-            let key_type = key_desc.typ();
-            let key_as_record = RelationType::new(vec![ColumnType {
-                nullable: false,
-                scalar_type: ScalarType::Record {
-                    fields: key_desc
-                        .iter_names()
-                        .enumerate()
-                        .map(|(i, name)| {
-                            name.map(Clone::clone)
-                                .unwrap_or_else(|| format!("key{}", i).into())
-                        })
-                        .zip(key_type.column_types.iter())
-                        .map(|(name, typ)| (name, typ.clone()))
-                        .collect(),
-                    custom_oid: None,
-                    custom_name: None,
-                },
-            }]);
-
-            RelationDesc::new(key_as_record, vec![Some(key_name.to_string())])
-        } else {
-            key_desc.with_names(vec![Some(key_name.to_string())])
-        }
-    };
-    // In all cases the first column is the key
-    let key_desc = key_desc.with_key(vec![0]);
-
-    value.desc(envelope, key_desc, None)
-}
-
-fn insert_flattened_key(
-    key: &DataEncoding,
-    value: &DataEncoding,
-    envelope: &SourceEnvelope,
-    is_legacy_upsert: bool,
-) -> Result<RelationDesc, anyhow::Error> {
-    let key_desc = {
-        let key_desc = key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
-
-        // It doesn't make sense for the key to have keys.
-        assert!(key_desc.typ().keys.is_empty());
-
-        // Add the key columns as a key.
-        let key_indices = (0..key_desc.arity()).collect();
-        let key_desc = key_desc.with_key(key_indices);
-
-        if let DataEncoding::Avro(_) = key {
-            key_desc
-        } else if is_legacy_upsert {
-            // Rename key columns to "keyN" if the encoding is not Avro and we're in unadorned
-            // upsert mode
-            let names = (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
-            key_desc.with_names(names)
-        } else {
-            key_desc
-        }
-    };
-    let key_schema = if let DataEncoding::Avro(AvroEncoding { schema, .. }) = key {
-        Some(&**schema)
-    } else {
-        None
-    };
-    value.desc(envelope, key_desc, key_schema)
 }
 
 impl DataEncoding {
@@ -434,55 +349,19 @@ impl DataEncoding {
     /// data encoding and envelope.
     ///
     /// If a key desc is provided it will be prepended to the returned desc
-    fn desc(
-        &self,
-        envelope: &SourceEnvelope,
-        key_desc: RelationDesc,
-        key_schema: Option<&str>,
-    ) -> Result<RelationDesc, anyhow::Error> {
+    fn desc(&self) -> Result<RelationDesc, anyhow::Error> {
         // Add columns for the data, based on the encoding format.
         Ok(match self {
             DataEncoding::Bytes => {
-                key_desc.with_named_column("data", ScalarType::Bytes.nullable(false))
+                RelationDesc::empty().with_named_column("data", ScalarType::Bytes.nullable(false))
             }
-            DataEncoding::AvroOcf(AvroOcfEncoding { .. })
-            | DataEncoding::Avro(AvroEncoding { .. }) => {
-                let value_schema = match self {
-                    DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => (reader_schema),
-                    DataEncoding::Avro(AvroEncoding { schema, .. }) => schema,
-                    _ => unreachable!(),
-                };
-                let mut columns =
-                    avro::validate_value_schema(value_schema, envelope.get_avro_envelope_type())
-                        .context("validating avro value schema")?
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
-                    // TODO [btv] - Get rid of this, when we can. Right now source processing is still not fully orthogonal,
-                    // so we have some special logic in the debezium processor that only passes on
-                    // the first two columns ("before" and "after"), and uses the information in the other ones itself
-                    columns.truncate(2);
-                }
-                let desc = columns.into_iter().fold(key_desc, |desc, (name, ty)| {
-                    desc.with_named_column(name, ty)
-                });
-                let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
-                    avro::validate_key_schema(key_schema, &desc)
-                        .map(Some)
-                        .unwrap_or_else(|e| {
-                            warn!("Not using key due to error: {}", e);
-                            None
-                        })
-                });
-                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
-                    desc
-                } else {
-                    if let Some(key) = key_schema_indices {
-                        desc.with_key(key)
-                    } else {
-                        desc
-                    }
-                }
+            DataEncoding::AvroOcf(AvroOcfEncoding {
+                reader_schema: schema,
+                ..
+            })
+            | DataEncoding::Avro(AvroEncoding { schema, .. }) => {
+                let parsed_schema = avro::parse_schema(schema).context("validating avro schema")?;
+                avro::schema_to_relationdesc(parsed_schema).context("validating avro schema")?
             }
             DataEncoding::Protobuf(ProtobufEncoding {
                 descriptors,
@@ -491,7 +370,7 @@ impl DataEncoding {
                 protobuf::decode::DecodedDescriptors::from_bytes(descriptors, message_name.into())?
                     .validate()?
                     .into_iter()
-                    .fold(key_desc, |desc, (name, ty)| {
+                    .fold(RelationDesc::empty(), |desc, (name, ty)| {
                         desc.with_named_column(name.unwrap(), ty)
                     })
             }
@@ -503,7 +382,7 @@ impl DataEncoding {
                 // just surround their entire regex in an explicit capture
                 // group.
                 .skip(1)
-                .fold(key_desc, |desc, (i, name)| {
+                .fold(RelationDesc::empty(), |desc, (i, name)| {
                     let name = match name {
                         None => format!("column{}", i),
                         Some(name) => name.to_owned(),
@@ -512,22 +391,25 @@ impl DataEncoding {
                     desc.with_named_column(name, ty)
                 }),
             DataEncoding::Csv(CsvEncoding { columns, .. }) => match columns {
-                ColumnSpec::Count(n) => (1..=*n).into_iter().fold(key_desc, |desc, i| {
-                    desc.with_named_column(
-                        format!("column{}", i),
-                        ScalarType::String.nullable(false),
-                    )
-                }),
-                ColumnSpec::Header { names } => {
-                    names.iter().map(|s| &**s).fold(key_desc, |desc, name| {
-                        desc.with_named_column(name, ScalarType::String.nullable(false))
+                ColumnSpec::Count(n) => {
+                    (1..=*n).into_iter().fold(RelationDesc::empty(), |desc, i| {
+                        desc.with_named_column(
+                            format!("column{}", i),
+                            ScalarType::String.nullable(false),
+                        )
                     })
                 }
+                ColumnSpec::Header { names } => names
+                    .iter()
+                    .map(|s| &**s)
+                    .fold(RelationDesc::empty(), |desc, name| {
+                        desc.with_named_column(name, ScalarType::String.nullable(false))
+                    }),
             },
             DataEncoding::Text => {
-                key_desc.with_named_column("text", ScalarType::String.nullable(false))
+                RelationDesc::empty().with_named_column("text", ScalarType::String.nullable(false))
             }
-            DataEncoding::Postgres => key_desc
+            DataEncoding::Postgres => RelationDesc::empty()
                 .with_named_column("oid", ScalarType::Int32.nullable(false))
                 .with_named_column(
                     "row_data",
@@ -655,20 +537,144 @@ pub struct SinkAsOf {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceEnvelope {
-    None,
+    /// If present, include the key columns as an output column of the source with the given properties.
+    None(KeyEnvelope),
     Debezium(DebeziumDeduplicationStrategy, DebeziumMode),
-    Upsert,
+    Upsert(KeyEnvelope),
     CdcV2,
+}
+
+/// Computes the indices of the value's relation description that appear in the key.
+///
+/// Returns an error if it detects a common columns between the two relations that has the same
+/// name but a different type, if a key column is missing from the value, and if the key relation
+/// has a column with no name.
+pub fn match_key_indices(
+    key_desc: &RelationDesc,
+    value_desc: &RelationDesc,
+) -> anyhow::Result<Vec<usize>> {
+    let mut indices = Vec::new();
+    for (name, key_type) in key_desc.iter() {
+        let name = name.ok_or_else(|| anyhow!("Key description missing column name"))?;
+        let (index, value_type) = value_desc
+            .get_by_name(name)
+            .ok_or_else(|| anyhow!("Value schema missing primary key column: {}", name))?;
+
+        if key_type == value_type {
+            indices.push(index);
+        } else {
+            bail!(
+                "key and value column types do not match: key {:?} vs. value {:?}",
+                key_type,
+                value_type
+            );
+        }
+    }
+    Ok(indices)
 }
 
 impl SourceEnvelope {
     pub fn get_avro_envelope_type(&self) -> avro::EnvelopeType {
         match self {
-            SourceEnvelope::None => avro::EnvelopeType::None,
+            SourceEnvelope::None(_) => avro::EnvelopeType::None,
             SourceEnvelope::Debezium { .. } => avro::EnvelopeType::Debezium,
-            SourceEnvelope::Upsert => avro::EnvelopeType::Upsert,
+            SourceEnvelope::Upsert(_) => avro::EnvelopeType::Upsert,
             SourceEnvelope::CdcV2 => avro::EnvelopeType::CdcV2,
         }
+    }
+    /// Computes the output relation of this envelope when applied on top of the decoded key and
+    /// value relation desc
+    pub fn desc(
+        &self,
+        key_desc: Option<RelationDesc>,
+        value_desc: RelationDesc,
+    ) -> anyhow::Result<RelationDesc> {
+        Ok(match self {
+            SourceEnvelope::None(key_envelope) | SourceEnvelope::Upsert(key_envelope) => {
+                let key_desc = match key_desc {
+                    Some(desc) => desc,
+                    None => return Ok(value_desc),
+                };
+
+                match key_envelope {
+                    KeyEnvelope::None => value_desc,
+                    KeyEnvelope::Flattened => {
+                        // Add the key columns as a key.
+                        let key_indices = (0..key_desc.arity()).collect();
+                        let key_desc = key_desc.with_key(key_indices);
+                        key_desc.concat(value_desc)
+                    }
+                    KeyEnvelope::LegacyUpsert => {
+                        let key_indices = (0..key_desc.arity()).collect();
+                        let key_desc = key_desc.with_key(key_indices);
+                        let names = (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
+                        // Rename key columns to "keyN"
+                        key_desc.with_names(names).concat(value_desc)
+                    }
+                    KeyEnvelope::Named(key_name) => {
+                        let key_desc = {
+                            // if the key has multiple objects, nest them as a record inside of a single name
+                            if key_desc.arity() > 1 {
+                                let key_type = key_desc.typ();
+                                let key_as_record = RelationType::new(vec![ColumnType {
+                                    nullable: false,
+                                    scalar_type: ScalarType::Record {
+                                        fields: key_desc
+                                            .iter_names()
+                                            .enumerate()
+                                            .map(|(i, name)| {
+                                                name.map(Clone::clone)
+                                                    .unwrap_or_else(|| format!("key{}", i).into())
+                                            })
+                                            .zip(key_type.column_types.iter())
+                                            .map(|(name, typ)| (name, typ.clone()))
+                                            .collect(),
+                                        custom_oid: None,
+                                        custom_name: None,
+                                    },
+                                }]);
+
+                                RelationDesc::new(key_as_record, vec![Some(key_name.to_string())])
+                            } else {
+                                key_desc.with_names(vec![Some(key_name.to_string())])
+                            }
+                        };
+                        // In all cases the first column is the key
+                        key_desc.with_key(vec![0]).concat(value_desc)
+                    }
+                }
+            }
+            SourceEnvelope::Debezium(..) => {
+                // TODO [btv] - Get rid of this, when we can. Right now source processing is still
+                // not fully orthogonal, so we have some special logic in the debezium processor
+                // that only passes on the first two columns ("before" and "after"), and uses the
+                // information in the other ones itself
+                RelationDesc::from_names_and_types(value_desc.into_iter().take(2))
+            }
+            SourceEnvelope::CdcV2 => {
+                // TODO: Validate that the value schema has an `updates` and `progress` column of
+                // the correct types
+
+                // CdcV2 row data are in a record in a record in a list
+                match &value_desc.typ().column_types[0].scalar_type {
+                    ScalarType::List { element_type, .. } => match &**element_type {
+                        ScalarType::Record { fields, .. } => {
+                            // TODO maybe check this by name
+                            match &fields[0].1.scalar_type {
+                                ScalarType::Record { fields, .. } => {
+                                    RelationDesc::from_names_and_types(
+                                        fields.clone().into_iter().map(|(n, t)| (Some(n), t)),
+                                    )
+                                }
+                                ty => bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty),
+                            }
+                        }
+                        ty => bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty),
+                    },
+                    ty => bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty),
+                }
+            }
+        })
     }
 }
 
@@ -839,26 +845,6 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::PubNub(_) => None,
         }
     }
-
-    pub fn is_delimited(&self) -> bool {
-        match self {
-            ExternalSourceConnector::AvroOcf(_) => false,
-            ExternalSourceConnector::File(_) => false,
-            ExternalSourceConnector::S3(_) => false,
-            ExternalSourceConnector::Kafka(_) => true,
-            ExternalSourceConnector::Kinesis(_) => true,
-            ExternalSourceConnector::Postgres(_) => true,
-            ExternalSourceConnector::PubNub(_) => true,
-        }
-    }
-
-    pub fn key_envelope(&self) -> Option<&KeyEnvelope> {
-        if let ExternalSourceConnector::Kafka(KafkaSourceConnector { include_key, .. }) = &self {
-            include_key.as_ref()
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -941,8 +927,6 @@ pub struct KafkaSourceConnector {
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
     pub cluster_id: Uuid,
-    /// If present, include the key columns as an output column of the source with the given properties.
-    pub include_key: Option<KeyEnvelope>,
     /// If present, include the timestamp as an output column of the source with the given name
     pub include_timestamp: Option<String>,
     /// If present, include the partition as an output column of the source with the given name.
@@ -951,12 +935,11 @@ pub struct KafkaSourceConnector {
     pub include_topic: Option<String>,
 }
 
-/// Whether and how to include the key portion of a stream in dataflows
-///
-/// Currently only Kafka streams have Key parts of messages, but there do exist other streaming
-/// systems which we do not yet integrate with that have a similar concept.
+/// Whether and how to include the decoded key of a stream in dataflows
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KeyEnvelope {
+    /// Never include the key in the output row
+    None,
     /// For composite key encodings, pull the fields from the encoding into columns.
     Flattened,
     /// Upsert is identical to Flattened but differs for non-avro sources, for which key names are overwritten.

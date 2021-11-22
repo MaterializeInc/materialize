@@ -229,7 +229,7 @@ impl PersisterWithConfig {
         match connector {
             SourceConnector::External {
                 connector: ExternalSourceConnector::Kafka(_),
-                envelope: SourceEnvelope::Upsert,
+                envelope: SourceEnvelope::Upsert(_),
                 ..
             } if self.config.kafka_upsert_source_enabled => {
                 // NB: This gets written down in the catalog, so it should be

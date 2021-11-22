@@ -463,43 +463,17 @@ pub fn plan_create_source(
 
             let encoding = get_encoding(format, envelope, with_options_original)?;
 
-            let mut connector = KafkaSourceConnector {
+            let connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
                 topic: topic.clone(),
                 config_options,
                 start_offsets,
                 group_id_prefix,
                 cluster_id: scx.catalog.config().cluster_id,
-                include_key: None,
                 include_timestamp: None,
                 include_partition: None,
                 include_topic: None,
             };
-
-            for item in include_metadata {
-                match item.ty {
-                    SourceIncludeMetadataType::Key => {
-                        connector.include_key =
-                            Some(get_key_envelope(item.alias.clone(), envelope, &encoding)?)
-                    }
-                    SourceIncludeMetadataType::Timestamp => {
-                        bail_unsupported!("INCLUDE TIMESTAMP")
-                    }
-                    SourceIncludeMetadataType::Partition => {
-                        bail_unsupported!("INCLUDE PARTITION")
-                    }
-                    SourceIncludeMetadataType::Topic => {
-                        bail_unsupported!("INCLUDE TOPIC")
-                    }
-                    SourceIncludeMetadataType::Offset => {
-                        bail_unsupported!("INCLUDE OFFSET")
-                    }
-                }
-            }
-
-            if connector.include_key.is_none() && matches!(envelope, Envelope::Upsert) {
-                connector.include_key = Some(KeyEnvelope::LegacyUpsert)
-            }
 
             let connector = ExternalSourceConnector::Kafka(connector);
 
@@ -687,10 +661,35 @@ pub fn plan_create_source(
     // in the Upsert envelope's key_format so it can be validated like
     // a schema used to decode records.
 
+    let mut key_envelope = None;
+    for item in include_metadata {
+        match item.ty {
+            SourceIncludeMetadataType::Key => {
+                key_envelope = Some(get_key_envelope(item.alias.clone(), envelope, &encoding)?);
+            }
+            SourceIncludeMetadataType::Timestamp => {
+                bail_unsupported!("INCLUDE TIMESTAMP")
+            }
+            SourceIncludeMetadataType::Partition => {
+                bail_unsupported!("INCLUDE PARTITION")
+            }
+            SourceIncludeMetadataType::Topic => {
+                bail_unsupported!("INCLUDE TOPIC")
+            }
+            SourceIncludeMetadataType::Offset => {
+                bail_unsupported!("INCLUDE OFFSET")
+            }
+        }
+    }
+
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
-        sql_parser::ast::Envelope::None => SourceEnvelope::None,
+        // TODO: fixup key envelope
+        sql_parser::ast::Envelope::None => {
+            SourceEnvelope::None(key_envelope.unwrap_or(KeyEnvelope::None))
+        }
         sql_parser::ast::Envelope::Debezium(mode) => {
+            //TODO check that key envelope is not set
             let is_avro = match encoding.value_ref() {
                 DataEncoding::Avro(_) => true,
                 DataEncoding::AvroOcf(_) => true,
@@ -751,22 +750,19 @@ pub fn plan_create_source(
             }
             SourceEnvelope::Debezium(dedup_strat, mode)
         }
-        sql_parser::ast::Envelope::Upsert => match connector {
-            // Currently the get_encoding function rewrites Formats with either a CSR config to be a
-            // KeyValueDecoding, no other formats make sense.
-            //
-            // TODO(bwm): move key/value canonicalization entirely into the purify step, and turn
-            // this and the related code in `get_encoding` into internal errors.
-            CreateSourceConnector::Kafka { .. } => match format {
-                CreateSourceFormat::KeyValue { .. } => SourceEnvelope::Upsert,
-                CreateSourceFormat::Bare(Format::Avro(AvroSchema::Csr { .. })) => {
-                    SourceEnvelope::Upsert
-                }
-                _ => bail_unsupported!(format!("upsert requires a key/value format: {:?}", format)),
-            },
-            _ => bail_unsupported!("upsert envelope for non-Kafka sources"),
-        },
+        sql_parser::ast::Envelope::Upsert => {
+            if encoding.key_ref().is_none() {
+                bail_unsupported!(format!("upsert requires a key/value format: {:?}", format));
+            }
+            //TODO(petrosagg): remove this check. it will be a breaking change
+            let key_envelope = match encoding.key_ref() {
+                Some(DataEncoding::Avro(_)) => key_envelope.unwrap_or(KeyEnvelope::Flattened),
+                _ => key_envelope.unwrap_or(KeyEnvelope::LegacyUpsert),
+            };
+            SourceEnvelope::Upsert(key_envelope)
+        }
         sql_parser::ast::Envelope::CdcV2 => {
+            //TODO check that key envelope is not set
             if let CreateSourceConnector::AvroOcf { .. } = connector {
                 // TODO[btv] - there is no fundamental reason not to support this eventually,
                 // but OCF goes through a separate pipeline that it hasn't been implemented for.
@@ -780,23 +776,9 @@ pub fn plan_create_source(
         }
     };
 
-    if matches!(envelope, SourceEnvelope::Upsert) {
-        match &encoding {
-            SourceDataEncoding::Single(_) => {
-                bail_unsupported!("upsert envelopes must have a key")
-            }
-            SourceDataEncoding::KeyValue { .. } => (),
-        }
-    }
+    let (key_desc, value_desc) = encoding.desc()?;
+    let mut bare_desc = envelope.desc(key_desc.clone(), value_desc)?;
 
-    let mut bare_desc =
-        if let ExternalSourceConnector::Kafka(KafkaSourceConnector { include_key, .. }) =
-            &external_connector
-        {
-            encoding.desc(&envelope, include_key.as_ref())?
-        } else {
-            encoding.desc(&envelope, None)?
-        };
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
         Some(Value::Boolean(b)) => b,
@@ -807,34 +789,29 @@ pub fn plan_create_source(
     }
 
     let post_transform_key = if let SourceEnvelope::Debezium(_, _) = &envelope {
-        if let SourceDataEncoding::KeyValue {
-            key: DataEncoding::Avro(AvroEncoding { schema, .. }),
-            ..
-        } = &encoding
-        {
-            if ignore_source_keys {
-                None
-            } else {
-                match &bare_desc.typ().column_types[0].scalar_type {
+        if ignore_source_keys {
+            None
+        } else {
+            match key_desc {
+                Some(key_desc) => match &bare_desc.typ().column_types[0].scalar_type {
                     ScalarType::Record { fields, .. } => {
                         let row_desc = RelationDesc::from_names_and_types(
                             fields.clone().into_iter().map(|(n, t)| (Some(n), t)),
                         );
-                        let key_schema_indices = match avro::validate_key_schema(&schema, &row_desc)
-                        {
-                            Err(e) => bail!("Cannot use key due to error: {}", e),
-                            Ok(indices) => Some(indices),
-                        };
+                        let key_schema_indices =
+                            match dataflow_types::match_key_indices(&key_desc, &row_desc) {
+                                Err(e) => bail!("Cannot use key due to error: {}", e),
+                                Ok(indices) => Some(indices),
+                            };
                         key_schema_indices
                     }
                     _ => {
                         error!("Not using key: expected `before` record in first column");
                         None
                     }
-                }
+                },
+                None => None,
             }
-        } else {
-            None
         }
     } else {
         None

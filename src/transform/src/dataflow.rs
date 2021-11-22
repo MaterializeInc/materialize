@@ -434,7 +434,7 @@ pub mod monotonic {
         let mut monotonic = std::collections::HashSet::new();
         for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
             if let SourceConnector::External {
-                envelope: SourceEnvelope::None,
+                envelope: SourceEnvelope::None(_),
                 ..
             } = source_desc.connector
             {
