@@ -68,14 +68,19 @@ pub struct LogEntry {
 ///   streams.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BlobMeta {
-    /// The position of log the last time data was step'd into unsealeds.
+    /// Which mutations are included in the represented state.
+    ///
+    /// Persist is a state machine, with all mutating requests modeled as input
+    /// state changes sequenced into a log. Periodically those state changes are
+    /// applied and the resulting state is written out to blob storage. This
+    /// field indicates which prefix of the log (`0..=self.seqno`) has been
+    /// included in the state represented by this BlobMeta. SeqNo(0) represents
+    /// the initial empty state, the first mutation is SeqNo(1).
     ///
     /// Invariant: For each UnsealedMeta in `unsealeds`, this is >= the last
     /// batch's upper. If they are not equal, there is logically an empty batch
-    /// between [last batch's upper, unsealeds_seqno_upper).
-    ///
-    /// TODO: Rename this to seqno.
-    pub unsealeds_seqno_upper: SeqNo,
+    /// between [last batch's upper, self.seqno).
+    pub seqno: SeqNo,
     /// Internal stream id indexed by external stream name.
     ///
     /// Invariant: Each stream name and stream id are in here at most once.
@@ -258,7 +263,7 @@ impl LogEntry {
 impl Default for BlobMeta {
     fn default() -> Self {
         BlobMeta {
-            unsealeds_seqno_upper: SeqNo(0),
+            seqno: SeqNo(0),
             id_mapping: Vec::new(),
             graveyard: Vec::new(),
             unsealeds: Vec::new(),
@@ -441,10 +446,10 @@ impl BlobMeta {
                 Error::from(format!("id_mapping id {:?} not present in traces", id))
             })?;
             let unsealed_seqno_upper = unsealed.seqno_upper();
-            if !unsealed_seqno_upper.less_equal(&self.unsealeds_seqno_upper) {
+            if !unsealed_seqno_upper.less_equal(&self.seqno) {
                 return Err(Error::from(format!(
-                    "id {:?} unsealed seqno_upper {:?} is not less or equal to the blob's unsealed_seqno_upper {:?}",
-                    id, unsealed_seqno_upper, self.unsealeds_seqno_upper,
+                    "id {:?} unsealed seqno_upper {:?} is not less or equal to the blob's seqno {:?}",
+                    id, unsealed_seqno_upper, self.seqno,
                 )));
             }
             let trace_ts_upper = trace.ts_upper();
@@ -1370,10 +1375,10 @@ mod tests {
             ))
         );
 
-        // unsealed_seqno_upper less than one of the unsealed seqno uppers
+        // seqno less than one of the unsealed seqno uppers
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into()],
-            unsealeds_seqno_upper: SeqNo(2),
+            seqno: SeqNo(2),
             unsealeds: vec![UnsealedMeta {
                 id: Id(0),
                 batches: vec![unsealed_batch_meta(0, 3)],
@@ -1386,7 +1391,7 @@ mod tests {
         assert_eq!(
             b.validate(),
             Err(Error::from(
-                "id Id(0) unsealed seqno_upper Antichain { elements: [SeqNo(3)] } is not less or equal to the blob's unsealed_seqno_upper SeqNo(2)"
+                "id Id(0) unsealed seqno_upper Antichain { elements: [SeqNo(3)] } is not less or equal to the blob's seqno SeqNo(2)"
             ))
         );
 
@@ -1457,7 +1462,7 @@ mod tests {
 
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into(), ("1", Id(1)).into()],
-            unsealeds_seqno_upper: SeqNo(2),
+            seqno: SeqNo(2),
             unsealeds: vec![
                 UnsealedMeta {
                     id: Id(0),
@@ -1514,7 +1519,7 @@ mod tests {
         // Sanity check that encode/decode roundtrips and that we don't panic
         // (or erroneously succeed) on invalid data.
         let original = BlobMeta {
-            unsealeds_seqno_upper: SeqNo(2),
+            seqno: SeqNo(2),
             // This is not a test of bincode's roundtrip-ability, so don't
             // bother too much with the test data.
             id_mapping: vec![],

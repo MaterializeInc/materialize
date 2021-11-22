@@ -233,8 +233,8 @@ impl AppliedState {
             arrangements.insert(id, Arrangement::new(unsealed, trace));
         }
         AppliedState {
-            saved_seqno: meta.unsealeds_seqno_upper,
-            highest_assigned_seqno: meta.unsealeds_seqno_upper,
+            saved_seqno: meta.seqno,
+            highest_assigned_seqno: meta.seqno,
             id_mapping: meta.id_mapping,
             graveyard: meta.graveyard,
             arrangements,
@@ -282,7 +282,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             self.state = AppliedState::new(prev_meta);
             return Err(e);
         } else {
-            self.state.saved_seqno = new_meta.unsealeds_seqno_upper;
+            self.state.saved_seqno = new_meta.seqno;
         }
 
         self.metrics
@@ -1075,7 +1075,7 @@ impl AppliedState {
             traces.push(trace);
         }
         BlobMeta {
-            unsealeds_seqno_upper: self.highest_assigned_seqno,
+            seqno: self.highest_assigned_seqno,
             id_mapping: self.id_mapping.clone(),
             graveyard: self.graveyard.clone(),
             unsealeds,
