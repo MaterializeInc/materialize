@@ -101,7 +101,9 @@ List new features before bug fixes.
 
 {{< /comment >}}
 
-{{% version-header v0.9.14 %}}
+{{% version-header v0.10.1 %}}
+
+{{% version-header v0.10.0 %}}
 
 - Allow ingesting avro schemas whose top node is not a record type.
 
