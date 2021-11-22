@@ -576,7 +576,7 @@ cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
 cpu0: {cpu0}
 memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
 swap: {swap_total}KB total, {swap_used}KB used{swap_limit}
-Timely workers: {workers}",
+dataflow workers: {workers}",
         mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
         invocation = {
