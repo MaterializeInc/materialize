@@ -62,46 +62,48 @@ request. Please reach out to our sales team at <https://materialize.com/contact/
 
 ### Schedule
 
-We issue a new release of Materialize every two weeks. Most releases are *timed
-releases*, which are cut on schedule, irrespective of what features and bugfixes
-have been merged. In rare cases, if severe regressions are discovered, we may
-skip a timed release.
+We issue a new release of Materialize every week. Most releases are *timed
+releases*, which are cut on schedule, irrespective of what features and bug
+fixes have been merged. In rare cases, if severe regressions are discovered, we
+may skip a timed release.
 
-Approximately every six weeks, we designate the regularly-scheduled timed
-release as a *milestone release*. These releases indicate the completion of a
-[planned milestone](https://github.com/MaterializeInc/materialize/milestones),
-and may be delayed as necessary to allow for the completion of all scheduled
-tasks. Milestone releases are accompanied by a blog post that showcase the
-use cases enabled by the features added since the last milestone release.
+Occasionally, we may issue an *emergency release* to address a severe bug
+or security vulnerability. Emergency releases are based on the most recent
+release and contain only the code changes necessary to address the bug or
+security vulnerability. We do not backport emergency fixes to older releases.
 
-Every year or two, we expect to designate a milestone release as a *major
-release* to mark a new era in Materialize's development. The first major release
-of Materialize will be v1.0.0 and will bring improved stability,
-backward-compatibility, and support guarantees. We do not yet have a planned
-release date for v1.0.0.
+Every year or two, we expect to issue a *major release* to mark a new era in
+Materialize's development. The first major release of Materialize will be v1.0.0
+and will bring improved stability, backwards-compatibility, and support
+guarantees. We do not yet have a planned release date for v1.0.0.
+
+{{< version-changed v0.10.0 >}}
+Releases of Materialize prior to v0.10.0 followed a different schedule and
+versioning scheme.
+{{< /version-changed >}}
 
 ### Version numbering
 
 * Major releases increment the first component of the version number, as in
-  v0.4.0 to v1.0.0.
-* Milestone releases increment the middle component of the version number, as in
-  v0.3.1 to v0.4.0.
-* Timed releases increment the last component of the version number, as
-  in v0.3.0 to v0.3.1.
+  v0.11.0 to v1.0.0.
+* Timed releases increment the middle component of the version number, as in
+  v0.10.1 to v0.11.0.
+* Emergency releases increment the last component of the version number, as
+  in v0.10.0 to v0.10.1.
 
 ### Upgrading
 
 We recommend that you upgrade to the latest version of Materialize as quickly
 as your schedule permits.
 
-You should not assume that milestone releases will be more stable than timed
-releases or vice versa. We do not issue "bugfix-only" releases; any release,
-whether timed, milestone, or major, may include behavior changes and new
-features in addition to bugfixes.
-
 Before upgrading, you should peruse the [release notes](/release-notes) for
 the new release to ensure your applications will not be affected adversely
 by any of the changes in the release.
+
+Upgrading to a new emergency release (e.g., from v0.10.0 to v0.10.2) should be
+considered lower risk than upgrading to a new timed release (e.g., from v0.10.2
+to v0.11.0), as emergency releases contain only the code changes required to fix
+the bug or security vulnerability that warranted the emergency release.
 
 Note that Materialize is not forwards compatible. Once you have upgraded to a
 newer version of Materialize, it may be impossible to roll back to an earlier
@@ -110,17 +112,24 @@ before upgrading your production cluster.
 
 ### Backwards compatibility
 
-Materialize maintains backward compatibility whenever possible. Applications
-that work with the current version of Materialize can expect to work with
-all future versions of Materialize with virtually no changes. Similarly,
-the [data directory](/cli/#data-directory) created by the current version of
-Materialize will be understood by all future versions of Materialize.
+Materialize maintains backwards compatibility whenever possible. Applications
+that work with the current version of Materialize can expect to work with all
+future versions of Materialize with only minor changes to the application's
+code. Similarly, the [data directory](/cli/#data-directory) created by the
+current version of Materialize will be understood by all future versions of
+Materialize.
 
-Very occasionally, a bugfix may require breaking backwards compatibility. These
+Very occasionally, a bug fix may require breaking backwards compatibility. These
 changes are approved only after weighing the severity of the bug against the
 number of users that will be affected by the backwards-incompatible change.
-Backwards-incompatible changes are always clearly marked as such in
-the [release notes](/release-notes).
+Backwards-incompatible changes are always clearly marked as such in the [release
+notes](/release-notes).
+
+Note that there is no correspondence between the versioning scheme and
+backwards-incompatible changes. Any new release of Materialize may contain
+backwards-incompatible changes as described above. Even emergency releases may
+contain backwards-incompatible changes if they are necessary to address the bug
+or security vulnerability that warranted the emergency release.
 
 There are several aspects of the product that are not considered part of
 Materialize's stable interface:
