@@ -20,7 +20,6 @@ pub mod trace;
 pub mod unsealed;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::time::Instant;
@@ -147,7 +146,7 @@ pub struct Indexed<L: Log, B: Blob> {
     log: L,
     blob: BlobCache<B>,
     maintainer: Maintainer<B>,
-    listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
+    listeners: HashMap<Id, Vec<crossbeam_channel::Sender<ListenEvent<Vec<u8>, Vec<u8>>>>>,
     metrics: Metrics,
     state: AppliedState,
     pending: Option<Pending>,
@@ -834,21 +833,22 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
 
         for (id, updates) in updates {
-            if let Some(listen_fns) = self.listeners.get(&id) {
-                if listen_fns.len() == 1 {
-                    listen_fns[0].0(ListenEvent::Records(updates));
+            if let Some(listeners) = self.listeners.get(&id) {
+                // writer to the listeners, this will plumb into the persist code
+                if listeners.len() == 1 {
+                    let _ = listeners[0].send(ListenEvent::Records(updates));
                 } else {
-                    for listen_fn in listen_fns.iter() {
-                        listen_fn.0(ListenEvent::Records(updates.clone()));
+                    for listener in listeners.iter() {
+                        let _ = listener.send(ListenEvent::Records(updates.clone()));
                     }
                 }
             }
         }
 
         for (id, seal) in seals {
-            if let Some(listen_fns) = self.listeners.get(&id) {
-                for listen_fn in listen_fns.iter() {
-                    listen_fn.0(ListenEvent::Sealed(seal));
+            if let Some(listeners) = self.listeners.get(&id) {
+                for listener in listeners.iter() {
+                    let _ = listener.send(ListenEvent::Sealed(seal));
                 }
             }
         }
@@ -1111,19 +1111,19 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     pub fn listen(
         &mut self,
         id: Id,
-        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+        listener: crossbeam_channel::Sender<ListenEvent<Vec<u8>, Vec<u8>>>,
         res: PFutureHandle<IndexedSnapshot>,
     ) {
         res.fill((|| {
             self.drain_pending()?;
-            self.do_listen(id, listen_fn)
+            self.do_listen(id, listener)
         })());
     }
 
     fn do_listen(
         &mut self,
         id: Id,
-        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+        listener: crossbeam_channel::Sender<ListenEvent<Vec<u8>, Vec<u8>>>,
     ) -> Result<IndexedSnapshot, Error> {
         // Verify that id has been registered.
         let _ = self.state.sealed_frontier(id)?;
@@ -1131,7 +1131,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         // NB: Keep this line after anything with an early return (aka anything
         // fallible). Otherwise, we might register the listener internally, but
         // fail the request.
-        self.listeners.entry(id).or_default().push(listen_fn);
+        self.listeners.entry(id).or_default().push(listener);
         Ok(snapshot)
     }
 }
@@ -1146,15 +1146,6 @@ pub enum ListenEvent<K, V> {
     Records(Vec<((K, V), u64, isize)>),
     /// Progress of the data stream.
     Sealed(u64),
-}
-
-/// The callback used by [Indexed::listen].
-pub struct ListenFn<K, V>(pub Box<dyn Fn(ListenEvent<K, V>) + Send>);
-
-impl<K, V> fmt::Debug for ListenFn<K, V> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ListenFn").finish_non_exhaustive()
-    }
 }
 
 /// An isolated, consistent read of previously written (Key, Value, Time, Diff)
@@ -1274,8 +1265,6 @@ impl Iterator for IndexedSnapshotIter {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-
     use crate::error::Error;
     use crate::mem::MemRegistry;
     use crate::pfuture::PFuture;
@@ -1318,18 +1307,8 @@ mod tests {
         assert_eq!(seal_frontier.elements(), &[0]);
 
         // Register a listener for writes.
-        let (listen_tx, listen_rx) = mpsc::channel();
-        let listen_fn: ListenFn<Vec<u8>, Vec<u8>> = ListenFn(Box::new(move |e| match e {
-            ListenEvent::Records(records) => {
-                for ((k, v), ts, diff) in records.iter() {
-                    listen_tx
-                        .send(((k.clone(), v.clone()), *ts, *diff))
-                        .expect("rx hasn't been dropped");
-                }
-            }
-            ListenEvent::Sealed(_) => {}
-        }));
-        block_on(|res| i.listen(id, listen_fn, res))?;
+        let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
+        block_on(|res| i.listen(id, listen_tx, res))?;
 
         // After a write, all data is in the unsealed.
         block_on_drain(&mut i, |i, handle| {
@@ -1382,7 +1361,14 @@ mod tests {
         let listen_received = {
             let mut buf = Vec::new();
             while let Ok(x) = listen_rx.try_recv() {
-                buf.push(x);
+                match x {
+                    ListenEvent::Records(records) => {
+                        for ((k, v), ts, diff) in records.iter() {
+                            buf.push(((k.clone(), v.clone()), *ts, *diff));
+                        }
+                    }
+                    ListenEvent::Sealed(_) => {}
+                };
             }
             buf
         };

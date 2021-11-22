@@ -32,7 +32,7 @@ use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Snapshot};
+use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenEvent, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 use futures_executor::block_on;
@@ -50,7 +50,7 @@ enum Cmd {
     Snapshot(Id, PFutureHandle<IndexedSnapshot>),
     Listen(
         Id,
-        ListenFn<Vec<u8>, Vec<u8>>,
+        crossbeam_channel::Sender<ListenEvent<Vec<u8>, Vec<u8>>>,
         PFutureHandle<IndexedSnapshot>,
     ),
     Stop(PFutureHandle<()>),
@@ -345,10 +345,10 @@ impl RuntimeClient {
     fn listen(
         &self,
         id: Id,
-        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+        listener: crossbeam_channel::Sender<ListenEvent<Vec<u8>, Vec<u8>>>,
         res: PFutureHandle<IndexedSnapshot>,
     ) {
-        self.core.send(Cmd::Listen(id, listen_fn, res))
+        self.core.send(Cmd::Listen(id, listener, res))
     }
 
     /// Synchronously closes the runtime, releasing exclusive-writer locks and
@@ -716,10 +716,10 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     /// duplicating or dropping data.
     pub fn listen(
         &self,
-        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
+        listener: crossbeam_channel::Sender<ListenEvent<Vec<u8>, Vec<u8>>>,
     ) -> Result<DecodedSnapshot<K, V>, Error> {
         let (tx, rx) = PFuture::new();
-        self.runtime.listen(self.id, listen_fn, tx);
+        self.runtime.listen(self.id, listener, tx);
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))
     }
@@ -847,8 +847,8 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 Cmd::Snapshot(id, res) => {
                     self.indexed.snapshot(id, res);
                 }
-                Cmd::Listen(id, listen_fn, res) => {
-                    self.indexed.listen(id, listen_fn, res);
+                Cmd::Listen(id, listener, res) => {
+                    self.indexed.listen(id, listener, res);
                 }
                 Cmd::Tick => {
                     // This is a no-op. It's only here to give us the

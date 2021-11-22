@@ -9,7 +9,6 @@
 
 //! A Timely Dataflow operator that mirrors a persisted stream.
 
-use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use persist_types::Codec;
@@ -21,7 +20,7 @@ use timely::Data as TimelyData;
 
 use crate::error::Error;
 use crate::indexed::runtime::StreamReadHandle;
-use crate::indexed::{ListenEvent, ListenFn};
+use crate::indexed::ListenEvent;
 use crate::operators::replay::Replay;
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
@@ -44,14 +43,8 @@ where
         &mut self,
         read: Result<StreamReadHandle<K, V>, Error>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
-        let (listen_tx, listen_rx) = mpsc::channel();
-        let listen_fn = ListenFn(Box::new(move |e| {
-            // TODO: If send fails, it means the operator is no longer running.
-            // We should probably allow the listen to deregister itself.
-            let _ = listen_tx.send(e);
-        }));
-
-        let snapshot = read.and_then(|read| read.listen(listen_fn));
+        let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
+        let snapshot = read.and_then(|read| read.listen(listen_tx));
 
         let snapshot_seal = snapshot
             .as_ref()
@@ -77,7 +70,7 @@ fn listen_source<G, K, V>(
     // initial frontier because an empty frontier would signal that we are at "the end of time",
     // meaning that there will be no more events in the future.
     initial_frontier: Option<Antichain<u64>>,
-    listen_rx: Receiver<ListenEvent<Vec<u8>, Vec<u8>>>,
+    listen_rx: crossbeam_channel::Receiver<ListenEvent<Vec<u8>, Vec<u8>>>,
 ) -> Stream<G, (Result<(K, V), String>, u64, isize)>
 where
     G: Scope<Timestamp = u64>,
@@ -126,12 +119,12 @@ where
                             activator.activate();
                         }
                     },
-                    Err(TryRecvError::Empty) => {
+                    Err(crossbeam_channel::TryRecvError::Empty) => {
                         // TODO: Hook the activator up to the callback instead of
                         // TryRecvError::Empty.
                         activator.activate_after(Duration::from_millis(100));
                     }
-                    Err(TryRecvError::Disconnected) => {
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
                         done = true;
                     }
                 }
@@ -151,7 +144,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{mpsc, Arc, Mutex};
 
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, OkErr, Probe};
