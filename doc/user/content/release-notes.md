@@ -103,6 +103,8 @@ List new features before bug fixes.
 
 {{% version-header v0.10.1 %}}
 
+- Support `generate_series` for [`timestamp`] data.
+
 {{% version-header v0.10.0 %}}
 
 - Allow ingesting avro schemas whose top node is not a record type.

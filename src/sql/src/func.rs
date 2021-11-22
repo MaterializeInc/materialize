@@ -1957,15 +1957,27 @@ lazy_static! {
 
             // Table functions.
             "generate_series" => Table {
-                params!(Int32, Int32) => Operation::binary(move |_ecx, start, stop| {
-                    let row = Row::pack(&[Datum::Int32(1)]);
-                    let column_type = ColumnType { scalar_type: ScalarType::Int32, nullable: false };
+                params!(Int32, Int32, Int32) => Operation::variadic(move |_ecx, exprs| {
                     Ok(TableFuncPlan {
                         func: TableFunc::GenerateSeriesInt32,
-                        exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
+                        exprs,
+                        column_names: vec![Some("generate_series".into())],
+                    })
+                }), 1066;
+                params!(Int32, Int32) => Operation::binary(move |_ecx, start, stop| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSeriesInt32,
+                        exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32)],
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1067;
+                params!(Int64, Int64, Int64) => Operation::variadic(move |_ecx, exprs| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSeriesInt64,
+                        exprs,
+                        column_names: vec![Some("generate_series".into())],
+                    })
+                }), 1068;
                 params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
                     let row = Row::pack(&[Datum::Int64(1)]);
                     let column_type = ColumnType { scalar_type: ScalarType::Int64, nullable: false };
@@ -1975,20 +1987,20 @@ lazy_static! {
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1069;
-                params!(Int32, Int32, Int32) => Operation::variadic(|_ecx, exprs| {
+                params!(Timestamp, Timestamp, Interval) => Operation::variadic(move |_ecx, exprs| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesInt32,
+                        func: TableFunc::GenerateSeriesTimestamp,
                         exprs,
                         column_names: vec![Some("generate_series".into())],
                     })
-                }), 1066;
-                params!(Int64, Int64, Int64) => Operation::variadic(|_ecx, exprs| {
+                }), 938;
+                params!(TimestampTz, TimestampTz, Interval) => Operation::variadic(move |_ecx, exprs| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesInt64,
+                        func: TableFunc::GenerateSeriesTimestampTz,
                         exprs,
                         column_names: vec![Some("generate_series".into())],
                     })
-                }), 1068;
+                }), 939;
             },
             "jsonb_array_elements" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {

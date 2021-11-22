@@ -107,11 +107,6 @@ x
 2
 3
 
-# TODO(justin): Don't currently support the timestamp version.
-query error arguments cannot be implicitly cast to any implementation's parameters
-SELECT * FROM generate_series(now() - '5m'::interval, now(), '5s'::interval)
-----
-
 # generate_series with lateral joins.
 
 statement ok
@@ -312,7 +307,7 @@ SELECT * FROM (values ('a')), repeat_row(-1)
 statement error constant folding encountered reduce on collection with non-positive multiplicities
 SELECT (SELECT 1 FROM repeat_row(-1))
 
-query error unable to determine which implementation to use
+query T
 SELECT generate_series FROM generate_series(null, null, null)
 ----
 
@@ -734,3 +729,190 @@ SELECT i, CASE WHEN i > 0 THEN generate_series(1, 5) ELSE 0 END FROM t
 
 query error multiple table functions in select projections not yet supported
 SELECT generate_series(1,2), generate_series(1,2)
+
+
+# timestamp-based generate series
+
+query T
+SELECT * FROM generate_series('2021-01-01 00:00:00'::TIMESTAMP, '2021-01-01 02:00:00'::TIMESTAMP, '1 hour') ORDER BY 1
+----
+2021-01-01 00:00:00
+2021-01-01 01:00:00
+2021-01-01 02:00:00
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-01-01 00:00:00'::TIMESTAMP, '-1 hour') ORDER BY 1
+----
+2021-01-01 00:00:00
+2021-01-01 01:00:00
+2021-01-01 02:00:00
+2021-01-01 03:00:00
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-01-03 00:00:00'::TIMESTAMP, '1 day') ORDER BY 1
+----
+2021-01-01 03:00:00
+2021-01-02 03:00:00
+
+query T
+SELECT * FROM generate_series('2021-01-03 00:00:00'::TIMESTAMP, '2021-01-01 03:00:00'::TIMESTAMP, '1 day') ORDER BY 1
+----
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-01-03 00:00:00'::TIMESTAMP, '-1 day') ORDER BY 1
+----
+
+query T
+SELECT * FROM generate_series('2021-01-31 03:00:00'::TIMESTAMP, '2022-01-31 00:00:00'::TIMESTAMP, '1 month') ORDER BY 1
+----
+2021-01-31 03:00:00
+2021-02-28 03:00:00
+2021-03-28 03:00:00
+2021-04-28 03:00:00
+2021-05-28 03:00:00
+2021-06-28 03:00:00
+2021-07-28 03:00:00
+2021-08-28 03:00:00
+2021-09-28 03:00:00
+2021-10-28 03:00:00
+2021-11-28 03:00:00
+2021-12-28 03:00:00
+2022-01-28 03:00:00
+
+query T
+SELECT * FROM generate_series('2021-01-31 03:00:00'::TIMESTAMP, '2021-04-30 00:00:00'::TIMESTAMP, '1 month') ORDER BY 1
+----
+2021-01-31 03:00:00
+2021-02-28 03:00:00
+2021-03-28 03:00:00
+2021-04-28 03:00:00
+
+# Leap years
+query T
+SELECT * FROM generate_series('2020-01-31 03:00:00'::TIMESTAMP, '2020-04-30 00:00:00'::TIMESTAMP, '1 month') ORDER BY 1
+----
+2020-01-31 03:00:00
+2020-02-29 03:00:00
+2020-03-29 03:00:00
+2020-04-29 03:00:00
+
+query T
+SELECT * FROM generate_series('2020-01-31 03:00:00'::TIMESTAMP, '2020-11-30 00:00:00'::TIMESTAMP, '2 month') ORDER BY 1
+----
+2020-01-31 03:00:00
+2020-03-31 03:00:00
+2020-05-31 03:00:00
+2020-07-31 03:00:00
+2020-09-30 03:00:00
+
+query T
+SELECT * FROM generate_series('2020-01-01 22:00:00'::TIMESTAMP, '2021-01-01 00:00:00'::TIMESTAMP, '1 month 1 day 1 hour') ORDER BY 1
+----
+2020-01-01 22:00:00
+2020-02-02 23:00:00
+2020-03-04 00:00:00
+2020-04-05 01:00:00
+2020-05-06 02:00:00
+2020-06-07 03:00:00
+2020-07-08 04:00:00
+2020-08-09 05:00:00
+2020-09-10 06:00:00
+2020-10-11 07:00:00
+2020-11-12 08:00:00
+2020-12-13 09:00:00
+
+query error step size cannot equal zero
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMP, '2021-01-03 00:00:00'::TIMESTAMP, '0 day');
+
+# timestamptz-based generate series
+
+query T
+SELECT * FROM generate_series('2021-01-01 00:00:00'::TIMESTAMPTZ, '2021-01-01 02:00:00'::TIMESTAMPTZ, '1 hour') ORDER BY 1
+----
+2021-01-01 00:00:00+00
+2021-01-01 01:00:00+00
+2021-01-01 02:00:00+00
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMPTZ, '2021-01-01 00:00:00'::TIMESTAMPTZ, '-1 hour') ORDER BY 1
+----
+2021-01-01 00:00:00+00
+2021-01-01 01:00:00+00
+2021-01-01 02:00:00+00
+2021-01-01 03:00:00+00
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMPTZ, '2021-01-03 00:00:00'::TIMESTAMPTZ, '1 day') ORDER BY 1
+----
+2021-01-01 03:00:00+00
+2021-01-02 03:00:00+00
+
+query T
+SELECT * FROM generate_series('2021-01-03 00:00:00'::TIMESTAMPTZ, '2021-01-01 03:00:00'::TIMESTAMPTZ, '1 day') ORDER BY 1
+----
+
+query T
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMPTZ, '2021-01-03 00:00:00'::TIMESTAMPTZ, '-1 day') ORDER BY 1
+----
+
+query T
+SELECT * FROM generate_series('2021-01-31 03:00:00'::TIMESTAMPTZ, '2022-01-31 00:00:00'::TIMESTAMPTZ, '1 month') ORDER BY 1
+----
+2021-01-31 03:00:00+00
+2021-02-28 03:00:00+00
+2021-03-28 03:00:00+00
+2021-04-28 03:00:00+00
+2021-05-28 03:00:00+00
+2021-06-28 03:00:00+00
+2021-07-28 03:00:00+00
+2021-08-28 03:00:00+00
+2021-09-28 03:00:00+00
+2021-10-28 03:00:00+00
+2021-11-28 03:00:00+00
+2021-12-28 03:00:00+00
+2022-01-28 03:00:00+00
+
+query T
+SELECT * FROM generate_series('2021-01-31 03:00:00'::TIMESTAMPTZ, '2021-04-30 00:00:00'::TIMESTAMPTZ, '1 month') ORDER BY 1
+----
+2021-01-31 03:00:00+00
+2021-02-28 03:00:00+00
+2021-03-28 03:00:00+00
+2021-04-28 03:00:00+00
+
+# Leap years
+query T
+SELECT * FROM generate_series('2020-01-31 03:00:00'::TIMESTAMPTZ, '2020-04-30 00:00:00'::TIMESTAMPTZ, '1 month') ORDER BY 1
+----
+2020-01-31 03:00:00+00
+2020-02-29 03:00:00+00
+2020-03-29 03:00:00+00
+2020-04-29 03:00:00+00
+
+query T
+SELECT * FROM generate_series('2020-01-31 03:00:00'::TIMESTAMPTZ, '2020-11-30 00:00:00'::TIMESTAMPTZ, '2 month') ORDER BY 1
+----
+2020-01-31 03:00:00+00
+2020-03-31 03:00:00+00
+2020-05-31 03:00:00+00
+2020-07-31 03:00:00+00
+2020-09-30 03:00:00+00
+
+query T
+SELECT * FROM generate_series('2020-01-01 22:00:00'::TIMESTAMPTZ, '2021-01-01 00:00:00'::TIMESTAMPTZ, '1 month 1 day 1 hour') ORDER BY 1
+----
+2020-01-01 22:00:00+00
+2020-02-02 23:00:00+00
+2020-03-04 00:00:00+00
+2020-04-05 01:00:00+00
+2020-05-06 02:00:00+00
+2020-06-07 03:00:00+00
+2020-07-08 04:00:00+00
+2020-08-09 05:00:00+00
+2020-09-10 06:00:00+00
+2020-10-11 07:00:00+00
+2020-11-12 08:00:00+00
+2020-12-13 09:00:00+00
+
+query error step size cannot equal zero
+SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMPTZ, '2021-01-03 00:00:00'::TIMESTAMPTZ, '0 day');

@@ -845,27 +845,16 @@ fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let dt = a.unwrap_timestamp();
-    Datum::Timestamp(match b {
-        Datum::Interval(i) => {
-            let dt = add_timestamp_months(dt, i.months);
-            dt + i.duration_as_chrono()
-        }
-        _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
-    })
+    let i = b.unwrap_interval();
+    let dt = add_timestamp_months(dt, i.months);
+    Datum::Timestamp(dt + i.duration_as_chrono())
 }
 
 fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let dt = a.unwrap_timestamptz().naive_utc();
-
-    let new_ndt = match b {
-        Datum::Interval(i) => {
-            let dt = add_timestamp_months(dt, i.months);
-            dt + i.duration_as_chrono()
-        }
-        _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
-    };
-
-    Datum::TimestampTz(DateTime::<Utc>::from_utc(new_ndt, Utc))
+    let i = b.unwrap_interval();
+    let dt = add_timestamp_months(dt, i.months);
+    Datum::TimestampTz(DateTime::<Utc>::from_utc(dt + i.duration_as_chrono(), Utc))
 }
 
 fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1088,7 +1077,7 @@ fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     add_timestamptz_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
 
-fn add_timestamp_months(dt: NaiveDateTime, months: i32) -> NaiveDateTime {
+pub fn add_timestamp_months(dt: NaiveDateTime, months: i32) -> NaiveDateTime {
     if months == 0 {
         return dt;
     }
