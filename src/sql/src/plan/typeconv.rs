@@ -173,10 +173,24 @@ lazy_static! {
             (Oid, RegType) => Assignment: CastOidToRegType,
 
             // REGPROC
-            (RegProc,Oid) => Implicit: CastRegProcToOid,
+            (RegProc, Oid) => Implicit: CastRegProcToOid,
+            (RegProc, String) => Explicit: sql_impl_cast("(
+                SELECT COALESCE(t.name, v.x::pg_catalog.text)
+                FROM (
+                    VALUES ($1::pg_catalog.oid)) AS v(x)
+                    LEFT JOIN mz_catalog.mz_functions AS t
+                    ON t.oid = v.x
+            )"),
 
             // REGTYPE
-            (RegType,Oid) => Implicit: CastRegTypeToOid,
+            (RegType, Oid) => Implicit: CastRegTypeToOid,
+            (RegType, String) => Explicit: sql_impl_cast("(
+                SELECT COALESCE(t.name, v.x::pg_catalog.text)
+                FROM (
+                    VALUES ($1::pg_catalog.oid)) AS v(x)
+                    LEFT JOIN mz_catalog.mz_types AS t
+                    ON t.oid = v.x
+            )"),
 
             // FLOAT32
             (Float32, Int16) => Assignment: CastFloat32ToInt16(func::CastFloat32ToInt16),

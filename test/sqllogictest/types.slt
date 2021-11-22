@@ -384,11 +384,25 @@ SELECT '1'::pg_catalog.regproc
 ----
 1
 
-query error CAST does not support casting from regproc to text
+query T
 SELECT '1'::regproc::text
+----
+1
 
-query error CAST does not support casting from regproc to text
+query T
 SELECT 'now'::regproc::text
+----
+now
+
+query T
+SELECT 'now'::regproc::text::regproc
+----
+1299
+
+query T
+SELECT 'now'::regproc::text::regproc::text
+----
+now
 
 query T
 SELECT 'now'::regproc
@@ -399,6 +413,11 @@ query T
 SELECT 'now'::regproc::oid
 ----
 1299
+
+query T
+SELECT NULL::regproc::text
+----
+NULL
 
 # TODO: improve this error message to match postgres.
 query error more than one record produced in subquery
@@ -434,6 +453,10 @@ query I
 select 'now'::regproc::oid::text::regproc
 ----
 1299
+
+# ensure that all existing functions can be cast to their respective names (#9199)
+statement OK
+select oid, oid::regproc::text from (select oid from mz_catalog.mz_functions)
 
 # 🔬🔬🔬 oid alias
 
@@ -871,11 +894,15 @@ SELECT '1'::pg_catalog.regtype
 ----
 1
 
-query error CAST does not support casting from regtype to text
+query T
 SELECT '1'::regtype::text
+----
+1
 
-query error CAST does not support casting from regtype to text
+query T
 SELECT 'date'::regtype::text
+----
+date
 
 query T
 SELECT 'date'::regtype
@@ -917,3 +944,22 @@ select 'date'::regtype::oid::text::regtype
 query I
 select oid from (select count(*) as cnt, oid from mz_catalog.mz_functions group by oid) where cnt>1
 ----
+
+query T
+SELECT 'date'::regtype::text::regtype
+----
+1082
+
+query T
+SELECT 'date'::regtype::text::regtype::text
+----
+date
+
+query T
+SELECT NULL::regtype::text
+----
+NULL
+
+# ensure that all existing types can be cast to their respective names
+statement OK
+select oid, oid::regtype::text from (select oid from mz_catalog.mz_types)
