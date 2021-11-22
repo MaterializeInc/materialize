@@ -12,21 +12,26 @@
 # this query returns 150+ rows and could be subject to frequent change
 # rather than executing QUERY TTTTBT, just make sure that it does not fail
 statement OK
-SELECT  nsp.nspname schema_name,
-        cls.relname table_name,
-        att.attname column_name,
-        att.atttypid::regtype::text type_name,
-    att.atthasdef AS has_default,
-        pg_catalog.pg_get_expr(def.adbin, def.adrelid, true) as default
-FROM    pg_catalog.pg_attribute att
-    INNER JOIN pg_catalog.pg_class cls
-ON att.attrelid = cls.oid
-    INNER JOIN pg_catalog.pg_namespace nsp
-    ON cls.relnamespace = nsp.oid
-    LEFT OUTER JOIN pg_attrdef def
-    ON def.adrelid = att.attrelid
-    AND def.adnum = att.attnum
-WHERE   cls.relkind = ANY(ARRAY['r','p','f'])
-  AND NOT att.attisdropped
-  AND att.attnum  > 0
-ORDER BY 1, 2, att.attnum
+SELECT
+	nsp.nspname AS schema_name,
+	cls.relname AS table_name,
+	att.attname AS column_name,
+	att.atttypid::REGTYPE::STRING AS type_name,
+	att.atthasdef AS has_default,
+	pg_catalog.pg_get_expr(def.adbin, def.adrelid, true)
+		AS default
+FROM
+	pg_catalog.pg_attribute AS att
+	INNER JOIN pg_catalog.pg_class AS cls ON
+			att.attrelid = cls.oid
+	INNER JOIN pg_catalog.pg_namespace AS nsp ON
+			cls.relnamespace = nsp.oid
+	LEFT JOIN pg_attrdef AS def ON
+			def.adrelid = att.attrelid
+			AND def.adnum = att.attnum
+WHERE
+	cls.relkind = ANY (ARRAY['r', 'p', 'f'])
+	AND NOT att.attisdropped
+	AND att.attnum > 0
+ORDER BY
+	1, 2, att.attnum
