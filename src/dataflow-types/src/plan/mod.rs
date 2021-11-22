@@ -236,6 +236,22 @@ impl Plan {
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, Vec<Vec<MirScalarExpr>>>,
     ) -> Result<(Self, Vec<Vec<MirScalarExpr>>), ()> {
+        // This function is recursive and can overflow its stack, so grow it if
+        // needed. The growth here is unbounded. Our general solution for this problem
+        // is to use [`ore::stack::RecursionGuard`] to additionally limit the stack
+        // depth. That however requires upstream error handling. This function is
+        // currently called by the Coordinator after calls to `catalog_transact`,
+        // and thus are not allowed to fail. Until that allows errors, we choose
+        // to allow the unbounded growth here. We are though somewhat protected by
+        // higher levels enforcing their own limits on stack depth (in the parser,
+        // transformer/desugarer, and planner).
+        ore::stack::maybe_grow(|| Plan::from_mir_inner(expr, arrangements))
+    }
+
+    fn from_mir_inner(
+        expr: &MirRelationExpr,
+        arrangements: &mut BTreeMap<Id, Vec<Vec<MirScalarExpr>>>,
+    ) -> Result<(Self, Vec<Vec<MirScalarExpr>>), ()> {
         // Extract a maximally large MapFilterProject from `expr`.
         // We will then try and push this in to the resulting expression.
         //
