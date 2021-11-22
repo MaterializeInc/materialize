@@ -16,4 +16,4 @@ ore = { path = "../../../src/ore" }
 structopt = "0.3.25"
 tokio = { version = "1.13.0", features = ["macros", "net", "rt", "time"] }
 tracing = "0.1.29"
-tracing-subscriber = { version = "0.3.1", default-features = false, features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.2", default-features = false, features = ["env-filter", "fmt"] }
