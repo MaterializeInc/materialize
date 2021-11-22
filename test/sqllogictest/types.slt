@@ -454,6 +454,7 @@ select 'now'::regproc::oid::text::regproc
 ----
 1299
 
+# ensure that all existing functions can be cast to their respective names (#9199)
 statement OK
 select oid, oid::regproc::text from (select oid from mz_catalog.mz_functions)
 
@@ -959,5 +960,6 @@ SELECT NULL::regtype::text
 ----
 NULL
 
+# ensure that all existing types can be cast to their respective names
 statement OK
 select oid, oid::regtype::text from (select oid from mz_catalog.mz_types)
