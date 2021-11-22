@@ -575,7 +575,8 @@ os: {os}
 cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
 cpu0: {cpu0}
 memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
-swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
+swap: {swap_total}KB total, {swap_used}KB used{swap_limit}
+Timely workers: {workers}",
         mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
         invocation = {
@@ -608,6 +609,7 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         swap_total = system.total_swap(),
         swap_used = system.used_swap(),
         swap_limit = swap_max_str,
+        workers = args.workers.0,
     );
 
     sys::adjust_rlimits();
