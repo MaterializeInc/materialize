@@ -169,7 +169,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
             &config.kafka_url,
             &config.kafka_topic,
             config::KAFKA_SOURCE_NAME,
-            "billing.Batch",
+            ".billing.Batch",
             config.enable_persistence,
         )
         .await?;
