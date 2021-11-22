@@ -62,7 +62,7 @@ pub fn mzenumreflect_derive(input: TokenStream) -> TokenStream {
 
     let name = &ast.ident;
     let gen = quote! {
-      impl MzEnumReflect for #name {
+      impl lowertest::MzEnumReflect for #name {
         fn mz_enum_reflect() ->
             std::collections::HashMap<
                 &'static str,
@@ -100,7 +100,7 @@ pub fn mzstructreflect_derive(input: TokenStream) -> TokenStream {
 
     let name = &ast.ident;
     let gen = quote! {
-      impl MzStructReflect for #name {
+      impl lowertest::MzStructReflect for #name {
         fn mz_struct_reflect() -> (Vec<&'static str>, Vec<&'static str>)
         {
            #method_impl

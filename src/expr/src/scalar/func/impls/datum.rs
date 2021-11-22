@@ -7,75 +7,217 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::EvalError;
-use repr::Datum;
+use std::fmt;
 
-sqlfunc!(
-    #[sqlname = "isnull"]
-    #[propagates_nulls = false]
-    #[introduces_nulls = false]
-    #[preserves_uniqueness = false]
-    fn is_null(a: Datum<'_>) -> Result<Option<bool>, EvalError> {
-        Ok(Some(a == Datum::Null))
+use lowertest::MzStructReflect;
+use repr::{ColumnType, Datum, RowArena, ScalarType};
+use serde::{Deserialize, Serialize};
+
+use crate::scalar::func::LazyUnaryFunc;
+use crate::{EvalError, MirScalarExpr};
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
+)]
+pub struct IsNull;
+
+impl LazyUnaryFunc for IsNull {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        Ok(a.eval(datums, temp_storage)?.is_null().into())
     }
-);
 
-// TODO: Once issue #7581 is fixed, we can remove `IsTrue` and `IsFalse` and
-// replace them with `BinaryFunc::eq`.  We can't do this yet because that
-// function propagates NULLs which we do not want here.
-sqlfunc!(
-    #[sqlname = "istrue"]
-    #[propagates_nulls = false]
-    #[introduces_nulls = false]
-    #[preserves_uniqueness = false]
-    fn is_true(a: Datum<'_>) -> Result<Option<bool>, EvalError> {
-        Ok(Some(a == Datum::True))
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        ScalarType::Bool.nullable(false)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "isfalse"]
-    #[propagates_nulls = false]
-    #[introduces_nulls = false]
-    #[preserves_uniqueness = false]
-    fn is_false(a: Datum<'_>) -> Result<Option<bool>, EvalError> {
-        Ok(Some(a == Datum::False))
+    fn propagates_nulls(&self) -> bool {
+        false
     }
-);
 
-sqlfunc!(
-    #[sqlname = "pg_column_size"]
-    #[propagates_nulls = true]
-    #[introduces_nulls = false]
-    #[preserves_uniqueness = false]
-    fn pg_column_size(a: Datum<'_>) -> Result<Option<i32>, EvalError> {
-        match a {
-            Datum::Null => Ok(None),
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for IsNull {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("isnull")
+    }
+}
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
+)]
+pub struct IsTrue;
+
+impl LazyUnaryFunc for IsTrue {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        Ok((a.eval(datums, temp_storage)? == Datum::True).into())
+    }
+
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        ScalarType::Bool.nullable(false)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for IsTrue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("istrue")
+    }
+}
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
+)]
+pub struct IsFalse;
+
+impl LazyUnaryFunc for IsFalse {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        Ok((a.eval(datums, temp_storage)? == Datum::False).into())
+    }
+
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        ScalarType::Bool.nullable(false)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for IsFalse {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("isfalse")
+    }
+}
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
+)]
+pub struct PgColumnSize;
+
+impl LazyUnaryFunc for PgColumnSize {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        match a.eval(datums, temp_storage)? {
+            Datum::Null => Ok(Datum::Null),
             d => {
                 let sz = repr::datum_size(&d);
-                i32::try_from(sz)
-                    .map(Some)
-                    .or(Err(EvalError::Int32OutOfRange))
+                Ok(i32::try_from(sz)
+                    .or(Err(EvalError::Int32OutOfRange))?
+                    .into())
             }
         }
     }
-);
 
-sqlfunc!(
-    #[sqlname = "mz_row_size"]
-    #[propagates_nulls = true]
-    #[introduces_nulls = false]
-    #[preserves_uniqueness = false]
-    // Return the number of bytes this Record (List) datum would use if packed as a Row.
-    fn mz_row_size(a: Datum<'_>) -> Result<Option<i32>, EvalError> {
-        match a {
-            Datum::Null => Ok(None),
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        ScalarType::Int32.nullable(true)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for PgColumnSize {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("pg_column_size")
+    }
+}
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
+)]
+pub struct MzRowSize;
+
+impl LazyUnaryFunc for MzRowSize {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        match a.eval(datums, temp_storage)? {
+            Datum::Null => Ok(Datum::Null),
             d => {
                 let sz = repr::row_size(d.unwrap_list().iter());
-                i32::try_from(sz)
-                    .map(Some)
-                    .or(Err(EvalError::Int32OutOfRange))
+                Ok(i32::try_from(sz)
+                    .or(Err(EvalError::Int32OutOfRange))?
+                    .into())
             }
         }
     }
-);
+
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        ScalarType::Int32.nullable(true)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for MzRowSize {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("mz_row_size")
+    }
+}

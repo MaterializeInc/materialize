@@ -723,58 +723,6 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct WithArena<'a, T> {
-    arena: &'a RowArena,
-    data: T,
-}
-
-impl<'a, T> WithArena<'a, T> {
-    pub fn new(arena: &'a RowArena, data: T) -> Self {
-        WithArena { arena, data }
-    }
-}
-
-/// Blanket implementation for types that don't need access to an allocation context
-impl<'a, T> From<WithArena<'a, T>> for Datum<'a>
-where
-    Datum<'a>: From<T>,
-{
-    fn from(context: WithArena<'a, T>) -> Datum<'a> {
-        context.data.into()
-    }
-}
-
-impl<'a> From<WithArena<'a, String>> for Datum<'a> {
-    fn from(context: WithArena<'a, String>) -> Datum<'a> {
-        Datum::String(context.arena.push_string(context.data))
-    }
-}
-
-impl<'a> From<WithArena<'a, Option<String>>> for Datum<'a> {
-    fn from(context: WithArena<'a, Option<String>>) -> Datum<'a> {
-        match context.data {
-            Some(b) => Datum::String(context.arena.push_string(b)),
-            None => Datum::Null,
-        }
-    }
-}
-
-impl<'a> From<WithArena<'a, Vec<u8>>> for Datum<'a> {
-    fn from(context: WithArena<'a, Vec<u8>>) -> Datum<'a> {
-        Datum::Bytes(context.arena.push_bytes(context.data))
-    }
-}
-
-impl<'a> From<WithArena<'a, Option<Vec<u8>>>> for Datum<'a> {
-    fn from(context: WithArena<'a, Option<Vec<u8>>>) -> Datum<'a> {
-        match context.data {
-            Some(b) => Datum::Bytes(context.arena.push_bytes(b)),
-            None => Datum::Null,
-        }
-    }
-}
-
 fn write_delimited<T, TS, F>(
     f: &mut fmt::Formatter,
     delimiter: &str,
@@ -970,68 +918,153 @@ pub enum ScalarType {
     RegType,
 }
 
-/// [FromTy] is a utility trait for [ScalarType] that defines a mapping between a Rust type T and
-/// its runtime representation as a ScalarType. Not all ScalarType variants have a 1-1 mapping to a
-/// Rust type but for those variants can simply be ignored.
-///
-/// The main usecase of FromTy is to use rustc's inference to lift type information from compile
-/// time to runtime, a primitive form of reflection. See the implementation of the `fn_unary` macro
-/// in `expr` for an example use of this trait.
-pub trait FromTy<T> {
-    fn from_ty() -> Self;
+/// A bridge between native Rust types and the SQL runtime types that are wrapped in Datums
+pub trait DatumType<E>: Sized {
+    /// The SQL column type of this Rust type
+    fn as_column_type() -> ColumnType;
+
+    /// Try to convert a Result whose Ok variant is a Datum into this native Rust type (Self). If
+    /// it fails the error variant will contain the original result.
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>>;
+
+    /// Convert this Rust type into a Result containing a Datum, or an error
+    fn into_result(self, temp_storage: &RowArena) -> Result<Datum, E>;
 }
 
-impl FromTy<bool> for ScalarType {
-    fn from_ty() -> Self {
-        Self::Bool
+impl<E, B: DatumType<E>> DatumType<E> for Option<B> {
+    fn as_column_type() -> ColumnType {
+        B::as_column_type().nullable(true)
+    }
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+        match res {
+            Ok(Datum::Null) => Ok(None),
+            Ok(datum) => B::try_from_result(Ok(datum)).map(Some),
+            _ => Err(res),
+        }
+    }
+    fn into_result(self, temp_storage: &RowArena) -> Result<Datum, E> {
+        match self {
+            Some(inner) => inner.into_result(temp_storage),
+            None => Ok(Datum::Null),
+        }
     }
 }
 
-impl FromTy<String> for ScalarType {
-    fn from_ty() -> Self {
-        Self::String
+impl<E, B: DatumType<E>> DatumType<E> for Result<B, E> {
+    fn as_column_type() -> ColumnType {
+        B::as_column_type()
+    }
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+        B::try_from_result(res).map(Ok)
+    }
+    fn into_result(self, temp_storage: &RowArena) -> Result<Datum, E> {
+        self.and_then(|inner| inner.into_result(temp_storage))
     }
 }
 
-impl FromTy<Vec<u8>> for ScalarType {
-    fn from_ty() -> Self {
-        Self::Bytes
+/// Macro to derive DatumType for all Datum variants that are simple Copy types
+macro_rules! impl_datum_type_copy {
+    ($(($native:ty, $variant:ident)),+) => {
+        $(
+            impl<E> DatumType<E> for $native {
+                fn as_column_type() -> ColumnType {
+                    ScalarType::$variant.nullable(false)
+                }
+
+                fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+                    match res {
+                        Ok(Datum::$variant(f)) => Ok(f.into()),
+                        _ => Err(res),
+                    }
+                }
+
+                fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+                    Ok(Datum::$variant(self.into()))
+                }
+            }
+        )+
     }
 }
 
-impl FromTy<f32> for ScalarType {
-    fn from_ty() -> Self {
-        Self::Float32
+impl_datum_type_copy!(
+    (f32, Float32),
+    (f64, Float64),
+    (i16, Int16),
+    (i32, Int32),
+    (i64, Int64),
+    (DateTime<Utc>, TimestampTz)
+);
+
+impl<E> DatumType<E> for bool {
+    fn as_column_type() -> ColumnType {
+        ScalarType::Bool.nullable(false)
+    }
+
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+        match res {
+            Ok(Datum::True) => Ok(true),
+            Ok(Datum::False) => Ok(false),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+        if self {
+            Ok(Datum::True)
+        } else {
+            Ok(Datum::False)
+        }
     }
 }
 
-impl FromTy<f64> for ScalarType {
-    fn from_ty() -> Self {
-        Self::Float64
+impl<E> DatumType<E> for String {
+    fn as_column_type() -> ColumnType {
+        ScalarType::String.nullable(false)
+    }
+
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+        match res {
+            Ok(Datum::String(s)) => Ok(s.to_owned()),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &RowArena) -> Result<Datum, E> {
+        Ok(Datum::String(temp_storage.push_string(self)))
     }
 }
 
-impl FromTy<i16> for ScalarType {
-    fn from_ty() -> Self {
-        Self::Int16
+impl<E> DatumType<E> for Vec<u8> {
+    fn as_column_type() -> ColumnType {
+        ScalarType::Bytes.nullable(false)
+    }
+
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+        match res {
+            Ok(Datum::Bytes(b)) => Ok(b.to_owned()),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &RowArena) -> Result<Datum, E> {
+        Ok(Datum::Bytes(temp_storage.push_bytes(self)))
     }
 }
 
-impl FromTy<i32> for ScalarType {
-    fn from_ty() -> Self {
-        Self::Int32
+impl<E> DatumType<E> for Numeric {
+    fn as_column_type() -> ColumnType {
+        ScalarType::Numeric { scale: None }.nullable(false)
     }
-}
 
-impl FromTy<i64> for ScalarType {
-    fn from_ty() -> Self {
-        Self::Int64
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+        match res {
+            Ok(Datum::Numeric(n)) => Ok(n.into_inner()),
+            _ => Err(res),
+        }
     }
-}
 
-impl FromTy<DateTime<Utc>> for ScalarType {
-    fn from_ty() -> Self {
-        Self::TimestampTz
+    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+        Ok(Datum::from(self))
     }
 }
 

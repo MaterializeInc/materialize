@@ -7,6 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+use lowertest::MzStructReflect;
+use repr::adt::numeric::{self, Numeric};
+
+use crate::scalar::func::EagerUnaryFunc;
+use crate::EvalError;
+
 sqlfunc!(
     #[sqlname = "-"]
     fn neg_int16(a: i16) -> i16 {
@@ -27,3 +37,29 @@ sqlfunc!(
         a.abs()
     }
 );
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
+)]
+pub struct CastInt16ToNumeric(pub Option<u8>);
+
+impl EagerUnaryFunc for CastInt16ToNumeric {
+    type Input = i16;
+    type Output = Result<Numeric, EvalError>;
+
+    fn call(&self, a: i16) -> Result<Numeric, EvalError> {
+        let mut a = Numeric::from(i32::from(a));
+        if let Some(scale) = self.0 {
+            if numeric::rescale(&mut a, scale).is_err() {
+                return Err(EvalError::NumericFieldOverflow);
+            }
+        }
+        Ok(a)
+    }
+}
+
+impl fmt::Display for CastInt16ToNumeric {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("i16tonumeric")
+    }
+}

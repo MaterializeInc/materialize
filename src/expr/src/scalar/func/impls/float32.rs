@@ -54,7 +54,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "f32toi16"]
     fn cast_float32_to_int16(a: f32) -> Result<i16, EvalError> {
-        let f = round_float32(Some(a))?.unwrap();
+        let f = round_float32(a);
         if (f >= (i16::MIN as f32)) && (f < -(i16::MIN as f32)) {
             Ok(f as i16)
         } else {
@@ -66,7 +66,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "f32toi32"]
     fn cast_float32_to_int32(a: f32) -> Result<i32, EvalError> {
-        let f = round_float32(Some(a))?.unwrap();
+        let f = round_float32(a);
         // This condition is delicate because i32::MIN can be represented exactly by
         // an f32 but not i32::MAX. We follow PostgreSQL's approach here.
         //
@@ -82,7 +82,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "f32toi64"]
     fn cast_float32_to_int64(a: f32) -> Result<i64, EvalError> {
-        let f = round_float32(Some(a))?.unwrap();
+        let f = round_float32(a);
         // This condition is delicate because i64::MIN can be represented exactly by
         // an f32 but not i64::MAX. We follow PostgreSQL's approach here.
         //
