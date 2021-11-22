@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.45"
+anyhow = "1.0.47"
 async-trait = "0.1.51"
 aws-config = { version = "0.0.25-alpha", default-features = false, features = ["default-provider", "native-tls"] }
 aws-types = "0.0.25-alpha"

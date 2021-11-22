@@ -10,7 +10,7 @@ name = "protoc"
 path = "bin/protoc.rs"
 
 [dependencies]
-anyhow = "1.0.45"
+anyhow = "1.0.47"
 ore = { path = "../ore" }
 protobuf = "2.23.0"
 protobuf-codegen = "2.23.0"

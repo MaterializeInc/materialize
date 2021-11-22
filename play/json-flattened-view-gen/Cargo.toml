@@ -7,7 +7,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.45"
+anyhow = "1.0.47"
 serde = "1.0.130"
 serde_json = "1.0.71"
 structopt = "0.3.25"

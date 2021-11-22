@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.45"
+anyhow = "1.0.47"
 async-trait = "0.1.51"
 async-compression = { version = "0.3.8", features = ["tokio", "gzip"] }
 aws-sdk-kinesis = { version = "0.0.25-alpha", default-features = false }
