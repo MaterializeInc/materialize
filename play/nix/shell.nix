@@ -9,6 +9,12 @@
 
 with import <nixpkgs> {};
 
+let
+    target-analyzer = builtins.toString ./../../.rust-analyzer/target;
+    scoped-rust-analyzer = pkgs.writeShellScriptBin "rust-analyzer" ''
+      exec ${pkgs.coreutils}/bin/env CARGO_TARGET_DIR=${target-analyzer} ${pkgs.rust-analyzer}/bin/rust-analyzer
+    '';
+in
 stdenv.mkDerivation rec {
   name = "materialize";
   buildInputs = with pkgs; [
@@ -18,7 +24,8 @@ stdenv.mkDerivation rec {
       pkg-config
       lld_13
       python38Packages.pip
-    ];
+      scoped-rust-analyzer
+  ];
 
   hardeningDisable = [ "fortify" ];
 
