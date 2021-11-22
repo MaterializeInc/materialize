@@ -149,7 +149,6 @@ pub struct Indexed<L: Log, B: Blob> {
 /// BlobMeta is the serialized version of exactly this state.
 #[derive(Debug)]
 struct AppliedState {
-    next_stream_id: Id,
     saved_seqno: SeqNo,
     highest_assigned_seqno: SeqNo,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
@@ -234,7 +233,6 @@ impl AppliedState {
             arrangements.insert(id, Arrangement::new(unsealed, trace));
         }
         AppliedState {
-            next_stream_id: meta.next_stream_id,
             saved_seqno: meta.unsealeds_seqno_upper,
             highest_assigned_seqno: meta.unsealeds_seqno_upper,
             id_mapping: meta.id_mapping,
@@ -432,14 +430,13 @@ impl AppliedState {
                 s.id
             }
             None => {
-                let id = self.next_stream_id;
+                let id = self.serialize_meta().next_stream_id();
                 self.id_mapping.push(StreamRegistration {
                     name: id_str.to_owned(),
                     id,
                     key_codec_name: key_codec_name.to_owned(),
                     val_codec_name: val_codec_name.to_owned(),
                 });
-                self.next_stream_id = Id(id.0 + 1);
                 let arrangement = Arrangement::new(UnsealedMeta::new(id), TraceMeta::new(id));
                 if let Some(prev) = self.arrangements.insert(id, arrangement) {
                     return Err(format!(
@@ -1078,7 +1075,6 @@ impl AppliedState {
             traces.push(trace);
         }
         BlobMeta {
-            next_stream_id: self.next_stream_id,
             unsealeds_seqno_upper: self.highest_assigned_seqno,
             id_mapping: self.id_mapping.clone(),
             graveyard: self.graveyard.clone(),
