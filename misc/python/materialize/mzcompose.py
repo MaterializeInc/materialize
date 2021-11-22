@@ -700,7 +700,7 @@ class Materialized(PythonService):
         if "MZ_DEV=1" not in environment:
             environment.append("MZ_DEV=1")
 
-        command = f"--data-directory={data_directory} {options} --disable-telemetry --experimental --listen-addr 0.0.0.0:{port} --timestamp-frequency 100ms"
+        command = f"--data-directory={data_directory} {options} --disable-telemetry --experimental --listen-addr 0.0.0.0:{port} --timestamp-frequency 100ms --workers 1"
 
         config: PythonServiceConfig = (
             {"image": image} if image else {"mzbuild": "materialized"}

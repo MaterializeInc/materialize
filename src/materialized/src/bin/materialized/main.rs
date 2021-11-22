@@ -324,12 +324,7 @@ struct WorkerCount(usize);
 
 impl Default for WorkerCount {
     fn default() -> Self {
-        WorkerCount(cmp::max(
-            1,
-            // When inside a cgroup with a cpu limit,
-            // the logical cpus can be lower than the physical cpus.
-            cmp::min(num_cpus::get(), num_cpus::get_physical()) / 2,
-        ))
+        WorkerCount(1)
     }
 }
 

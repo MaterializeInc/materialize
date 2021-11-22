@@ -145,7 +145,7 @@ services:
     mzbuild: materialized
     command: >-
       --data-directory=/share/mzdata
-      -w5 --experimental
+      --workers 1 --experimental
       --timestamp-frequency 100ms
       --disable-telemetry
       --retain-prometheus-metrics 1s
