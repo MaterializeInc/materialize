@@ -28,11 +28,12 @@ use tokio::runtime::Runtime;
 use tokio::time;
 
 use crate::error::Error;
+use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenFn, Snapshot};
+use crate::indexed::{Indexed, ListenFn, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 use futures_executor::block_on;
@@ -47,11 +48,11 @@ enum Cmd {
     ),
     Seal(Vec<Id>, u64, PFutureHandle<SeqNo>),
     AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
-    Snapshot(Id, PFutureHandle<IndexedSnapshot>),
+    Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
     Listen(
         Id,
         ListenFn<Vec<u8>, Vec<u8>>,
-        PFutureHandle<IndexedSnapshot>,
+        PFutureHandle<ArrangementSnapshot>,
     ),
     Stop(PFutureHandle<()>),
     /// A no-op command sent on a regular interval so the runtime has an
@@ -336,7 +337,7 @@ impl RuntimeClient {
     /// This snapshot is guaranteed to include any previous writes.
     ///
     /// The id must have previously been registered.
-    fn snapshot(&self, id: Id, res: PFutureHandle<IndexedSnapshot>) {
+    fn snapshot(&self, id: Id, res: PFutureHandle<ArrangementSnapshot>) {
         self.core.send(Cmd::Snapshot(id, res))
     }
 
@@ -346,7 +347,7 @@ impl RuntimeClient {
         &self,
         id: Id,
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-        res: PFutureHandle<IndexedSnapshot>,
+        res: PFutureHandle<ArrangementSnapshot>,
     ) {
         self.core.send(Cmd::Listen(id, listen_fn, res))
     }
@@ -593,12 +594,12 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
 /// vals decoded.
 #[derive(Debug)]
 pub struct DecodedSnapshot<K, V> {
-    snap: IndexedSnapshot,
+    snap: ArrangementSnapshot,
     _phantom: PhantomData<(K, V)>,
 }
 
 impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
-    pub(crate) fn new(snap: IndexedSnapshot) -> Self {
+    pub(crate) fn new(snap: ArrangementSnapshot) -> Self {
         DecodedSnapshot {
             snap,
             _phantom: PhantomData,
@@ -645,7 +646,7 @@ impl<K: Codec, V: Codec> Snapshot<K, V> for DecodedSnapshot<K, V> {
 /// An [Iterator] representing one part of the data in a [DecodedSnapshot].
 #[derive(Debug)]
 pub struct DecodedSnapshotIter<K, V> {
-    iter: IndexedSnapshotIter,
+    iter: ArrangementSnapshotIter,
     _phantom: PhantomData<(K, V)>,
 }
 

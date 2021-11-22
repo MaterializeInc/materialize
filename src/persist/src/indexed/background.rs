@@ -18,9 +18,9 @@ use timely::PartialOrder;
 use tokio::runtime::Runtime;
 
 use crate::error::Error;
+use crate::indexed::arrangement::Arrangement;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{BlobTraceBatch, TraceBatchMeta};
-use crate::indexed::trace::Trace;
 use crate::pfuture::PFuture;
 use crate::storage::Blob;
 
@@ -149,7 +149,7 @@ impl<B: Blob> Maintainer<B> {
             updates,
         };
 
-        let merged_key = Trace::new_blob_key();
+        let merged_key = Arrangement::new_blob_key();
         let size_bytes = blob.set_trace_batch(merged_key.clone(), new_batch)?;
 
         // Only upgrade the compaction level if we know this new batch represents
