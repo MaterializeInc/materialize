@@ -23,7 +23,7 @@ itertools = "0.10.1"
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
-mz-aws-util = { path = "../aws-util" }
+mz-aws-util = { path = "../aws-util", features = [ "sts" ] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
