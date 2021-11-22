@@ -11,6 +11,7 @@
 //! Diff)` updates.
 
 // NB: These really don't need to be public, but the public doc lint is nice.
+pub mod arrangement;
 pub mod background;
 pub mod cache;
 pub mod encoding;
