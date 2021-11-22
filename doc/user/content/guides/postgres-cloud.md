@@ -1,16 +1,13 @@
 ---
-title: "Postgres in the Cloud"
-description: "How to configure Postgres CDC hosted on Cloud services"
+title: "Postgres CDC in the Cloud"
+description: "How to configure Postgres CDC for instances hosted on cloud services"
 weight:
-menu:
-  main:
-    parent: guides
 aliases:
 ---
 
 **Required:** PostgreSQL 10+
 
-It is possible to use a PostgreSQL database running on Amazon RDS, AWS Aurora, or Cloud SQL for [Change Data Capture](../cdc-postgres/) with Materialize, but it requires enabling logical replication in your PostgreSQL instances.
+To use a PostgreSQL instance running on Amazon RDS, AWS Aurora, or Cloud SQL for [Change Data Capture](../cdc-postgres/), you need to ensure that the database is configured to support logical replication.
 
 Note that enabling logical replication may affect performance.
 
@@ -49,6 +46,10 @@ As an account with the `rds_superuser` role, make these changes to the upstream 
 For more information, see the [Amazon RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication) documentation.
 
 ## AWS Aurora
+
+{{< note >}}
+Aurora Serverless (v1) [does **not** support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations) logical replication, so it's not possible to use this configuration for Postgres CDC.
+{{</ note >}}
 
 As a superuser, make these changes to the upstream database:
 
