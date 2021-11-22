@@ -34,7 +34,7 @@ ore = { path = "../ore", default-features = false, features = ["metrics"] }
 persist-types = { path = "../persist-types" }
 serde = { version = "1.0.130", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.13.0", default-features = false, features = ["macros", "sync", "rt"] }
+tokio = { version = "1.13.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [dev-dependencies]
