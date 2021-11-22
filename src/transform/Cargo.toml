@@ -17,7 +17,6 @@ repr = { path = "../repr" }
 anyhow = "1.0.47"
 datadriven = "0.6.0"
 expr_test_util = {path = "../expr-test-util"}
-lazy_static = "1.4.0"
 lowertest = {path = "../lowertest"}
 ore = { path = "../ore"}
 proc-macro2 = "1.0.30"

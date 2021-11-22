@@ -101,7 +101,7 @@ impl Error for TransformError {}
 /// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
 pub struct Fixpoint {
-    transforms: Vec<Box<dyn crate::Transform + Send + Sync>>,
+    transforms: Vec<Box<dyn crate::Transform>>,
     limit: usize,
 }
 
@@ -162,7 +162,7 @@ impl Transform for Fixpoint {
 /// A sequence of transformations that simplify the `MirRelationExpr`
 #[derive(Debug)]
 pub struct FuseAndCollapse {
-    transforms: Vec<Box<dyn crate::Transform + Send + Sync>>,
+    transforms: Vec<Box<dyn crate::Transform>>,
 }
 
 impl Default for FuseAndCollapse {
@@ -240,13 +240,13 @@ impl Transform for FuseAndCollapse {
 #[derive(Debug)]
 pub struct Optimizer {
     /// The list of transforms to apply to an input relation.
-    pub transforms: Vec<Box<dyn crate::Transform + Send + Sync>>,
+    pub transforms: Vec<Box<dyn crate::Transform>>,
 }
 
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
-        let transforms: Vec<Box<dyn crate::Transform + Send + Sync>> = vec![
+        let transforms: Vec<Box<dyn crate::Transform>> = vec![
             // 1. Structure-agnostic cleanup
             Box::new(crate::topk_elision::TopKElision),
             Box::new(crate::nonnull_requirements::NonNullRequirements),
@@ -309,7 +309,7 @@ impl Optimizer {
     /// rendering.
     pub fn physical_optimizer() -> Self {
         // Implementation transformations
-        let transforms: Vec<Box<dyn crate::Transform + Send + Sync>> = vec![
+        let transforms: Vec<Box<dyn crate::Transform>> = vec![
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
@@ -335,7 +335,7 @@ impl Optimizer {
     /// Contains the logical optimizations that should run after cross-view
     /// transformations run.
     pub fn logical_cleanup_pass() -> Self {
-        let transforms: Vec<Box<dyn crate::Transform + Send + Sync>> = vec![
+        let transforms: Vec<Box<dyn crate::Transform>> = vec![
             // Delete unnecessary maps.
             Box::new(crate::fusion::map::Map),
             Box::new(crate::Fixpoint {

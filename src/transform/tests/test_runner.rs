@@ -24,7 +24,6 @@ mod tests {
     use expr_test_util::{
         build_rel, json_to_spec, MirRelationExprDeserializeContext, TestCatalog, RTI,
     };
-    use lazy_static::lazy_static;
     use lowertest::{deserialize, tokenize};
     use ore::str::separated;
     use proc_macro2::TokenTree;
@@ -38,17 +37,17 @@ mod tests {
     const JSON: &str = "json";
     const TEST: &str = "test";
 
-    lazy_static! {
-        static ref FULL_TRANSFORM_LIST: Vec<Box<dyn Transform + Send + Sync>> =
+    thread_local! {
+        static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> =
             Optimizer::logical_optimizer()
                 .transforms
                 .into_iter()
                 .chain(std::iter::once(
                     Box::new(transform::projection_pushdown::ProjectionPushdown)
-                        as Box<dyn Transform + Send + Sync>,
+                        as Box<dyn Transform>,
                 ))
                 .chain(std::iter::once(
-                    Box::new(transform::update_let::UpdateLet) as Box<dyn Transform + Send + Sync>
+                    Box::new(transform::update_let::UpdateLet) as Box<dyn Transform>
                 ))
                 .chain(Optimizer::logical_cleanup_pass().transforms.into_iter())
                 .chain(Optimizer::physical_optimizer().transforms.into_iter())
@@ -137,8 +136,8 @@ mod tests {
         let format_type = get_format_type(args);
 
         let out = match test_type {
-            TestType::Opt => {
-                for transform in FULL_TRANSFORM_LIST.iter() {
+            TestType::Opt => FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
+                for transform in transforms.iter() {
                     transform.transform(
                         &mut rel,
                         TransformArgs {
@@ -147,8 +146,8 @@ mod tests {
                         },
                     )?;
                 }
-                convert_rel_to_string(&rel, &cat, &format_type)
-            }
+                Ok(convert_rel_to_string(&rel, &cat, &format_type))
+            })?,
             TestType::Build => convert_rel_to_string(&rel, &cat, &format_type),
             TestType::Steps => {
                 // TODO(justin): this thing does not currently peek into fixpoints, so it's not
@@ -160,35 +159,38 @@ mod tests {
                 writeln!(out, "{}", convert_rel_to_string(&rel, &cat, &format_type))?;
                 writeln!(out, "====")?;
 
-                for transform in FULL_TRANSFORM_LIST.iter() {
-                    let prev = rel.clone();
-                    transform.transform(
-                        &mut rel,
-                        TransformArgs {
-                            id_gen: &mut id_gen,
-                            indexes: &indexes,
-                        },
-                    )?;
+                FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
+                    for transform in transforms {
+                        let prev = rel.clone();
+                        transform.transform(
+                            &mut rel,
+                            TransformArgs {
+                                id_gen: &mut id_gen,
+                                indexes: &indexes,
+                            },
+                        )?;
 
-                    if rel != prev {
-                        if no_change.len() > 0 {
-                            write!(out, "No change:")?;
-                            let mut sep = " ";
-                            for t in no_change {
-                                write!(out, "{}{}", sep, t)?;
-                                sep = ", ";
+                        if rel != prev {
+                            if no_change.len() > 0 {
+                                write!(out, "No change:")?;
+                                let mut sep = " ";
+                                for t in no_change.iter() {
+                                    write!(out, "{}{}", sep, t)?;
+                                    sep = ", ";
+                                }
+                                writeln!(out, "\n====")?;
                             }
-                            writeln!(out, "\n====")?;
-                        }
-                        no_change = vec![];
+                            no_change = vec![];
 
-                        write!(out, "Applied {:?}:", transform)?;
-                        writeln!(out, "\n{}", convert_rel_to_string(&rel, &cat, &format_type))?;
-                        writeln!(out, "====")?;
-                    } else {
-                        no_change.push(format!("{:?}", transform));
+                            write!(out, "Applied {:?}:", transform)?;
+                            writeln!(out, "\n{}", convert_rel_to_string(&rel, &cat, &format_type))?;
+                            writeln!(out, "====")?;
+                        } else {
+                            no_change.push(format!("{:?}", transform));
+                        }
                     }
-                }
+                    Ok(())
+                })?;
 
                 if no_change.len() > 0 {
                     write!(out, "No change:")?;
