@@ -109,7 +109,7 @@ pub fn rewrite_for_upsert(
 }
 
 pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, Option<Vec<u8>>>>,
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
     schema: &str,
     registry: Option<ccsr::ClientConfig>,
     confluent_wire_format: bool,
@@ -120,7 +120,7 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
     stream.sink(
-        SourceOutput::<Vec<u8>, Option<Vec<u8>>>::position_value_contract(),
+        SourceOutput::<Option<Vec<u8>>, Option<Vec<u8>>>::position_value_contract(),
         "CDCv2-Decode",
         {
             let channel = channel.clone();
@@ -404,6 +404,25 @@ fn get_decoder(
     }
 }
 
+fn try_decode(
+    decoder: &mut DataDecoder,
+    value: Option<&Vec<u8>>,
+    upstream_time: Option<i64>,
+) -> Option<Result<Row, DecodeError>> {
+    let value_buf = &mut value?.as_slice();
+    let value = decoder.next(value_buf, upstream_time);
+    if value.is_ok() && !value_buf.is_empty() {
+        let err = format!(
+            "Unexpected bytes remaining for decoded value: {:?}",
+            value_buf
+        );
+        return Some(Err(DecodeError::Text(err)));
+    }
+    value
+        .transpose()
+        .or_else(|| decoder.eof(&mut &[][..]).transpose())
+}
+
 /// Decode already delimited records of data.
 ///
 /// Precondition: each record in the stream has at most one key and at most one value.
@@ -417,7 +436,7 @@ fn get_decoder(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, Option<Vec<u8>>>>,
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
@@ -467,7 +486,7 @@ where
     // fall back to arbitrarily hashing by value if the upstream didn't give us a position.
     let use_key_contract = matches!(envelope, SourceEnvelope::Debezium(..));
     let results = stream.unary_frontier(
-        Exchange::new(move |x: &SourceOutput<Vec<u8>, Option<Vec<u8>>>| {
+        Exchange::new(move |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>| {
             if use_key_contract {
                 x.key.hashed()
             } else if let Some(position) = x.position {
@@ -487,47 +506,14 @@ where
                         key,
                         value,
                         position,
-                        upstream_time_millis,
+                        upstream_time_millis: upstream_time,
                     } in data.iter()
                     {
-                        let key_cursor = &mut key.as_slice();
-                        let key = if let (Some(key_decoder), false) =
-                            (key_decoder.as_mut(), key.is_empty())
-                        {
-                            let mut key = key_decoder
-                                .next(key_cursor, *upstream_time_millis)
-                                .transpose();
-                            if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
-                                key = Some(Err(DecodeError::Text(format!(
-                                    "Unexpected bytes remaining for decoded key: {:?}",
-                                    key_cursor
-                                ))
-                                .into()));
-                            }
-                            key.or_else(|| key_decoder.eof(&mut &[][..]).transpose())
-                        } else {
-                            None
-                        };
+                        let key = key_decoder
+                            .as_mut()
+                            .and_then(|decoder| try_decode(decoder, key.as_ref(), *upstream_time));
 
-                        let value = match &value {
-                            Some(value) => {
-                                let value_bytes_remaining = &mut value.as_slice();
-                                let mut value = value_decoder
-                                    .next(value_bytes_remaining, *upstream_time_millis)
-                                    .transpose();
-                                if let (Some(Ok(_)), false) =
-                                    (&value, value_bytes_remaining.is_empty())
-                                {
-                                    value = Some(Err(DecodeError::Text(format!(
-                                        "Unexpected bytes remaining for decoded value: {:?}",
-                                        value_bytes_remaining
-                                    ))
-                                    .into()));
-                                }
-                                value.or_else(|| value_decoder.eof(&mut &[][..]).transpose())
-                            }
-                            None => None,
-                        };
+                        let value = try_decode(&mut value_decoder, value.as_ref(), *upstream_time);
 
                         if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
                             n_errors += 1;
@@ -570,8 +556,7 @@ where
 /// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
 /// the possibility of infinite loops.
 pub fn render_decode<G>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
-    key_encoding: Option<DataEncoding>,
+    stream: &Stream<G, SourceOutput<(), MessagePayload>>,
     value_encoding: DataEncoding,
     debug_name: &str,
     envelope: &SourceEnvelope,
@@ -585,25 +570,7 @@ pub fn render_decode<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let op_name = format!(
-        "{}{}Decode",
-        key_encoding
-            .as_ref()
-            .map(|key_encoding| key_encoding.op_name())
-            .unwrap_or(""),
-        value_encoding.op_name()
-    );
-    let mut key_decoder = key_encoding.map(|key_encoding| {
-        get_decoder(
-            key_encoding,
-            debug_name,
-            &SourceEnvelope::None(KeyEnvelope::None),
-            operators,
-            false,
-            false,
-            metrics.clone(),
-        )
-    });
+    let op_name = format!("{}Decode", value_encoding.op_name());
 
     let mut value_decoder = get_decoder(
         value_encoding,
@@ -628,56 +595,35 @@ where
             input.for_each(|cap, data| {
                 let mut session = output.session(&cap);
                 for SourceOutput {
-                    key,
+                    key: _,
                     value,
                     position: _,
                     upstream_time_millis,
                 } in data.iter()
                 {
-                    let key_cursor = &mut key.as_slice();
-                    let key = if let (Some(key_decoder), false) =
-                        (key_decoder.as_mut(), key.is_empty())
-                    {
-                        let mut key = key_decoder
-                            .next(key_cursor, *upstream_time_millis)
-                            .transpose();
-                        if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
-                            // Perhaps someday we'll assign semantics to multiple keys in one message, but for now it doesn't make sense.
-                            key = Some(Err(DecodeError::Text(format!(
-                                "Unexpected bytes remaining for decoded key: {:?}",
-                                key_cursor
-                            ))
-                            .into()));
-                        }
-                        key
-                    } else {
-                        None
-                    };
-
                     let value = match value {
                         MessagePayload::Data(data) => data,
                         MessagePayload::EOF => {
                             let data = &mut &value_buf[..];
-                            let mut result = value_decoder.eof(data).transpose();
-                            if !data.is_empty() && !matches!(&result, Some(Err(_))) {
-                                result = Some(Err(DecodeError::Text(format!(
+                            let mut result = value_decoder.eof(data);
+                            if result.is_ok() && !data.is_empty() {
+                                result = Err(DecodeError::Text(format!(
                                     "Saw unexpected EOF with bytes remaining in buffer: {:?}",
                                     data
-                                ))
-                                .into()));
+                                )));
                             }
                             value_buf.clear();
 
-                            match result {
+                            match result.transpose() {
                                 None => continue,
                                 Some(value) => {
-                                    if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
+                                    if value.is_err() {
                                         n_errors += 1;
                                     } else if matches!(&value, Ok(_)) {
                                         n_successes += 1;
                                     }
                                     session.give(DecodeResult {
-                                        key,
+                                        key: None,
                                         value: Some(value),
                                         position: n_seen.next(),
                                     });
@@ -698,7 +644,7 @@ where
 
                     if value.is_empty() {
                         session.give(DecodeResult {
-                            key,
+                            key: None,
                             value: None,
                             position: None,
                         });
@@ -728,14 +674,14 @@ where
                             assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
 
                             let is_err = value.is_err();
-                            if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
+                            if is_err {
                                 n_errors += 1;
                             } else if matches!(&value, Ok(_)) {
                                 n_successes += 1;
                             }
                             if value_bytes_remaining.is_empty() {
                                 session.give(DecodeResult {
-                                    key,
+                                    key: None,
                                     value: Some(value),
                                     position: n_seen.next(),
                                 });
@@ -743,7 +689,7 @@ where
                                 break;
                             } else {
                                 session.give(DecodeResult {
-                                    key: key.clone(),
+                                    key: None,
                                     value: Some(value),
                                     position: n_seen.next(),
                                 });

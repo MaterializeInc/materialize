@@ -853,7 +853,8 @@ where
 }
 
 impl SourceReader for S3SourceReader {
-    type Payload = MessagePayload;
+    type Key = ();
+    type Value = MessagePayload;
 
     fn new(
         source_name: String,
@@ -941,7 +942,7 @@ impl SourceReader for S3SourceReader {
         ))
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Payload>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
         match self.receiver_stream.recv().now_or_never() {
             Some(Some(Ok(InternalMessage { record }))) => {
                 self.offset += 1;
@@ -949,8 +950,8 @@ impl SourceReader for S3SourceReader {
                     partition: PartitionId::None,
                     offset: self.offset.into(),
                     upstream_time_millis: None,
-                    key: None,
-                    payload: record,
+                    key: (),
+                    value: record,
                 }))
             }
             Some(Some(Err(e))) => {

@@ -62,7 +62,8 @@ impl From<FileOffset> for MzOffset {
 }
 
 impl SourceReader for FileSourceReader {
-    type Payload = MessagePayload;
+    type Key = ();
+    type Value = MessagePayload;
 
     fn new(
         _name: String,
@@ -165,7 +166,7 @@ impl SourceReader for FileSourceReader {
         ))
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Payload>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(record)) => {
                 self.current_file_offset.offset += 1;
@@ -173,8 +174,8 @@ impl SourceReader for FileSourceReader {
                     partition: PartitionId::None,
                     offset: self.current_file_offset.into(),
                     upstream_time_millis: None,
-                    key: None,
-                    payload: record,
+                    key: (),
+                    value: record,
                 };
                 Ok(NextMessage::Ready(message))
             }
