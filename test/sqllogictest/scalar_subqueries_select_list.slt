@@ -945,9 +945,10 @@ FROM t2, t3
 
 %11 =
 | Get %9 (l3)
-| Project (#0, #1)
-| Distinct group=(#0, #1)
+| Project (#0)
+| Distinct group=(#0)
 | Negate
+| Project (#0, #0)
 
 %12 =
 | Union %11 %3

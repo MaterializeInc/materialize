@@ -175,7 +175,7 @@ impl PredicateKnowledge {
                     if remap[column] != index {
                         input_knowledge.push(
                             MirScalarExpr::Column(remap[column])
-                                .call_binary(MirScalarExpr::Column(*column), expr::BinaryFunc::Eq),
+                                .call_binary(MirScalarExpr::Column(index), expr::BinaryFunc::Eq),
                         );
                     }
                 }
