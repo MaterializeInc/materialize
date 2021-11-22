@@ -8,7 +8,6 @@ publish = false
 [dependencies]
 anyhow = "1.0.45"
 aws-arn = "0.2.0"
-aws-util = { path = "../aws-util" }
 build-info = { path = "../build-info" }
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
@@ -24,6 +23,7 @@ itertools = "0.10.1"
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
+mz-aws-util = { path = "../aws-util" }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
@@ -35,7 +35,6 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 regex = "1.5.4"
 repr = { path = "../repr" }
 reqwest = "0.11.6"
-rusoto_core = "0.47.0"
 serde = { version = "1.0.130", features = ["derive"] }
 serde_json = "1.0.70"
 sql-parser = { path = "../sql-parser" }

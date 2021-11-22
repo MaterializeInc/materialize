@@ -27,7 +27,7 @@ here is a second test string
   WITH (access_key_id = 'fake_access_key_id',
         secret_access_key = 'fake_secret_access_key')
   FORMAT BYTES;
-If providing a custom region, an `endpoint` option must also be provided
+dns error: failed to lookup address information: Name or service not known
 
 > CREATE SOURCE f
   FROM KINESIS ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'

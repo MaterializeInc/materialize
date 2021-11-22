@@ -824,8 +824,8 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of updates to builtin tables that
     /// describe the initial state of the catalog.
-    pub fn open(
-        config: &Config,
+    pub async fn open(
+        config: &Config<'_>,
     ) -> Result<(Catalog, Vec<BuiltinTableUpdate>, Option<PersistClient>), Error> {
         let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
 
@@ -833,7 +833,10 @@ impl Catalog {
         // reentrance id should be per-node not per-cluster. This is also an odd
         // place to be booting the persistence system. But both of these are
         // fine for now.
-        let persist = config.persist.init(cluster_id, &config.metrics_registry)?;
+        let persist = config
+            .persist
+            .init(cluster_id, &config.metrics_registry)
+            .await?;
         let persister = persist.persister.clone();
 
         let mut catalog = Catalog {
@@ -1207,7 +1210,7 @@ impl Catalog {
     /// This function should not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
-    pub fn open_debug(path: &Path, now: NowFn) -> Result<Catalog, anyhow::Error> {
+    pub async fn open_debug(path: &Path, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let (catalog, _, _) = Self::open(&Config {
             path,
             enable_logging: true,
@@ -1221,7 +1224,8 @@ impl Catalog {
             skip_migrations: true,
             metrics_registry: &MetricsRegistry::new(),
             disable_user_indexes: false,
-        })?;
+        })
+        .await?;
         Ok(catalog)
     }
 
@@ -2884,8 +2888,8 @@ mod tests {
     /// Dummy (and ostensibly client) sessions contain system schemas in their
     /// search paths, so do not require schema qualification on system objects such
     /// as types.
-    #[test]
-    fn test_minimal_qualification() -> Result<(), anyhow::Error> {
+    #[tokio::test]
+    async fn test_minimal_qualification() -> Result<(), anyhow::Error> {
         struct TestCase {
             input: FullName,
             system_output: PartialName,
@@ -2930,7 +2934,7 @@ mod tests {
         ];
 
         let catalog_file = NamedTempFile::new()?;
-        let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone())?;
+        let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).await?;
         for tc in test_cases {
             assert_eq!(
                 catalog
@@ -2948,10 +2952,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_catalog_revision() {
-        let catalog_file = NamedTempFile::new().unwrap();
-        let mut catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).unwrap();
+    #[tokio::test]
+    async fn test_catalog_revision() -> Result<(), anyhow::Error> {
+        let catalog_file = NamedTempFile::new()?;
+        let mut catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
@@ -2965,7 +2969,9 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 2);
         drop(catalog);
 
-        let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).unwrap();
+        let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
+
+        Ok(())
     }
 }

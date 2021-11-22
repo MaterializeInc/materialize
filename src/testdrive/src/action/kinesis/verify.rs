@@ -12,10 +12,10 @@ use std::str;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use aws_sdk_kinesis::Client as KinesisClient;
 use itertools::Itertools;
-use rusoto_kinesis::{GetRecordsInput, Kinesis, KinesisClient};
 
-use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
+use mz_aws_util::kinesis;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -53,15 +53,14 @@ impl Action for VerifyAction {
             if let Some(iterator) = &iterator {
                 let output = state
                     .kinesis_client
-                    .get_records(GetRecordsInput {
-                        limit: None,
-                        shard_iterator: iterator.clone(),
-                    })
+                    .get_records()
+                    .shard_iterator(iterator)
+                    .send()
                     .await
                     .map_err(|e| format!("getting Kinesis records: {}", e))?;
-                for record in output.records {
+                for record in output.records.unwrap() {
                     records.insert(
-                        String::from_utf8(record.data.to_vec()).map_err(|e| {
+                        String::from_utf8(record.data.unwrap().into_inner()).map_err(|e| {
                             format!("converting Kinesis record bytes to utf8: {}", e)
                         })?,
                     );
@@ -106,12 +105,12 @@ async fn get_shard_iterators(
     stream_name: &str,
 ) -> Result<VecDeque<Option<String>>, String> {
     let mut iterators: VecDeque<Option<String>> = VecDeque::new();
-    for shard_id in get_shard_ids(kinesis_client, stream_name)
+    for shard_id in kinesis::get_shard_ids(kinesis_client, stream_name)
         .await
         .map_err(|e| format!("listing Kinesis shards: {:#?}", e))?
     {
         iterators.push_back(
-            get_shard_iterator(kinesis_client, stream_name, &shard_id)
+            kinesis::get_shard_iterator(kinesis_client, stream_name, &shard_id)
                 .await
                 .map_err(|e| format!("unable to get Kinesis shard iterator: {:#?}", e))?,
         );

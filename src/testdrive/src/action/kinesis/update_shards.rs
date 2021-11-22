@@ -11,7 +11,7 @@ use std::cmp;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use rusoto_kinesis::{DescribeStreamInput, Kinesis, UpdateShardCountInput};
+use aws_sdk_kinesis::model::{ScalingType, StreamStatus};
 
 use ore::retry::Retry;
 
@@ -20,7 +20,7 @@ use crate::parser::BuiltinCommand;
 
 pub struct UpdateShardCountAction {
     stream_name: String,
-    target_shard_count: i64,
+    target_shard_count: i32,
 }
 
 pub fn build_update_shards(mut cmd: BuiltinCommand) -> Result<UpdateShardCountAction, String> {
@@ -49,11 +49,11 @@ impl Action for UpdateShardCountAction {
 
         state
             .kinesis_client
-            .update_shard_count(UpdateShardCountInput {
-                scaling_type: "UNIFORM_SCALING".to_owned(),
-                stream_name: stream_name.clone(),
-                target_shard_count: self.target_shard_count,
-            })
+            .update_shard_count()
+            .scaling_type(ScalingType::UniformScaling)
+            .stream_name(&stream_name)
+            .target_shard_count(self.target_shard_count)
+            .send()
             .await
             .map_err(|e| format!("adding shards to stream {}: {}", &stream_name, e))?;
 
@@ -64,31 +64,36 @@ impl Action for UpdateShardCountAction {
                 // Wait for shards to stop updating.
                 let description = state
                     .kinesis_client
-                    .describe_stream(DescribeStreamInput {
-                        exclusive_start_shard_id: None,
-                        limit: None,
-                        stream_name: stream_name.clone(),
-                    })
+                    .describe_stream()
+                    .stream_name(&stream_name)
+                    .send()
                     .await
                     .map_err(|e| format!("getting current shard count: {}", e))?
-                    .stream_description;
-                if description.stream_status != "ACTIVE" {
+                    .stream_description
+                    .unwrap();
+                if description.stream_status != Some(StreamStatus::Active) {
                     return Err(format!(
-                        "stream {} is not active, is {}",
+                        "stream {} is not active, is {:?}",
                         stream_name, description.stream_status
                     ));
                 }
 
-                let active_shards_len = i64::try_from(
+                let active_shards_len = i32::try_from(
                     description
                         .shards
+                        .unwrap()
                         .iter()
                         .filter(|shard| {
-                            shard.sequence_number_range.ending_sequence_number.is_none()
+                            shard
+                                .sequence_number_range
+                                .as_ref()
+                                .unwrap()
+                                .ending_sequence_number
+                                .is_none()
                         })
                         .count(),
                 )
-                .map_err(|e| format!("converting shard length to i64: {}", e))?;
+                .map_err(|e| format!("converting shard length to i32: {}", e))?;
                 if active_shards_len != self.target_shard_count {
                     return Err(format!(
                         "Expected {} shards, found {}",

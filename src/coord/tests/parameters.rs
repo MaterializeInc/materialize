@@ -17,8 +17,8 @@ use ore::now::NOW_ZERO;
 use pgrepr::Type;
 use sql::plan::PlanContext;
 
-#[test]
-fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
+#[tokio::test]
+async fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
     let test_cases = vec![
         (
             "SELECT $1, $2, $3",
@@ -93,7 +93,7 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
     ];
 
     let catalog_file = NamedTempFile::new()?;
-    let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone())?;
+    let catalog = Catalog::open_debug(catalog_file.path(), NOW_ZERO.clone()).await?;
     let catalog = catalog.for_system_session();
     for (sql, types) in test_cases {
         let stmt = sql::parse::parse(sql)?.into_element();

@@ -529,11 +529,9 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-            let aws_info = normalize::aws_connect_info(&mut with_options, Some(region.into()))?;
-            let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
-                stream_name,
-                aws_info,
-            });
+            let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
+            let connector =
+                ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
             let encoding = get_encoding(format, envelope, with_options_original)?;
             (connector, encoding)
         }
@@ -564,7 +562,7 @@ pub fn plan_create_source(
             pattern,
             compression,
         } => {
-            let aws_info = normalize::aws_connect_info(&mut with_options, None)?;
+            let aws = normalize::aws_config(&mut with_options, None)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {
@@ -592,7 +590,7 @@ pub fn plan_create_source(
                             .build()
                     })
                     .transpose()?,
-                aws_info,
+                aws,
                 compression: match compression {
                     Compression::Gzip => dataflow_types::Compression::Gzip,
                     Compression::None => dataflow_types::Compression::None,

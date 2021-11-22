@@ -8,15 +8,20 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
+use std::error::Error;
 use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
 
-use aws_util::aws;
+use aws_smithy_http::endpoint::Endpoint;
+use aws_types::region::Region;
+use aws_types::Credentials;
+use http::Uri;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-use rusoto_credential::{AwsCredentials, ChainProvider, ProvideAwsCredentials};
 use structopt::StructOpt;
 use url::Url;
+
+use mz_aws_util::config::AwsConfig;
 
 use testdrive::Config;
 
@@ -50,11 +55,16 @@ struct Args {
 
     // === AWS options. ===
     /// Named AWS region to target for AWS API requests.
-    #[structopt(long, default_value = "localstack")]
-    aws_region: String,
-    /// Custom AWS endpoint. Default: "http://localhost:4566".
-    #[structopt(long)]
-    aws_endpoint: Option<String>,
+    ///
+    /// Cannot be specified is --aws-endpoint is specified.
+    #[structopt(long, conflicts_with = "aws-endpoint")]
+    aws_region: Option<String>,
+    /// Custom AWS endpoint.
+    ///
+    /// Defaults to http://localhost:4566 unless --aws-region is specified.
+    /// Cannot be specified if --aws-region is specified.
+    #[structopt(long, conflicts_with = "aws-region")]
+    aws_endpoint: Option<Uri>,
 
     // === Materialize options. ===
     /// materialized connection string.
@@ -107,49 +117,58 @@ async fn main() {
     let mut files = args.files;
     let default_timeout = Duration::from_secs_f64(args.default_timeout);
 
-    let (aws_region, aws_account, aws_credentials) = match (
-        args.aws_region.parse::<rusoto_core::Region>(),
-        args.aws_endpoint,
-    ) {
-        (Ok(region), None) => {
+    let (aws_config, aws_account) = match args.aws_region {
+        Some(region) => {
             // Standard AWS region without a custom endpoint. Try to find actual
             // AWS credentials.
-            let mut provider = ChainProvider::new();
-            provider.set_timeout(default_timeout);
-            let credentials = provider
-                .credentials()
-                .await
-                .expect("retrieving AWS credentials");
-            let account = aws::account(provider, region.clone(), default_timeout)
-                .await
-                .expect("getting AWS account details");
-            (region, account, credentials)
-        }
-        (_, aws_endpoint) => {
-            // The user specified a non-standard AWS region, a custom endpoint,
-            // or both. We instruct Rusoto to use these values by constructing
-            // an appropriate `Region::Custom`. We additionally assume we're
-            // targeting a stubbed-out AWS implementation that does not check
-            // authentication credentials, so we use dummy credentials.
-            let region = rusoto_core::Region::Custom {
-                name: args.aws_region,
-                endpoint: aws_endpoint.unwrap_or_else(|| "http://localhost:4566".into()),
+            let mut config = AwsConfig::load_from_env().await;
+            config.set_region(Region::new(region));
+            let account = async {
+                let sts_client = mz_aws_util::sts::client(&config)?;
+                Ok::<_, Box<dyn Error>>(
+                    sts_client
+                        .get_caller_identity()
+                        .send()
+                        .await?
+                        .account
+                        .ok_or("account ID is missing")?,
+                )
             };
-            let account = "000000000000";
-            let credentials =
-                AwsCredentials::new("dummy-access-key-id", "dummy-secret-access-key", None, None);
-            (region, account.into(), credentials)
+            let account = match account.await {
+                Ok(account) => account,
+                Err(e) => {
+                    eprintln!("testdrive: failed fetching AWS account ID: {}", e);
+                    process::exit(1);
+                }
+            };
+            (config, account)
+        }
+        None => {
+            // The user specified a a custom endpoint. We assume we're targeting
+            // a stubbed-out AWS implementation that does not use regions or
+            // check authentication credentials, so we use dummy credentials and
+            // a dummy region.
+            let endpoint = args
+                .aws_endpoint
+                .unwrap_or_else(|| "http://localhost:4566".parse().unwrap());
+            let mut config = AwsConfig::with_credentials_provider(Credentials::from_keys(
+                "dummy-access-key-id",
+                "dummy-secret-access-key",
+                None,
+            ));
+            config.set_endpoint(Endpoint::immutable(endpoint));
+            config.set_region(Region::new("us-east-1"));
+            let account = "000000000000".into();
+            (config, account)
         }
     };
 
     println!(
         "Configuration parameters:
-    AWS region: {:?}
-    Kafka Address: {}
+    Kafka address: {}
     Schema registry URL: {}
     materialized host: {:?}
     error limit: {}",
-        aws_region,
         args.kafka_addr,
         args.schema_registry_url,
         args.materialized_url.get_hosts()[0],
@@ -162,9 +181,8 @@ async fn main() {
         schema_registry_url: args.schema_registry_url,
         cert_path: args.cert,
         cert_pass: args.cert_password,
-        aws_region,
+        aws_config,
         aws_account,
-        aws_credentials,
         materialized_pgconfig: args.materialized_url,
         materialized_catalog_path: args.validate_catalog,
         reset: !args.no_reset,

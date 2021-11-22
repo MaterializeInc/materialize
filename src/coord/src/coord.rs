@@ -4434,7 +4434,8 @@ where
         skip_migrations: false,
         metrics_registry: &metrics_registry,
         disable_user_indexes,
-    })?;
+    })
+    .await?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;

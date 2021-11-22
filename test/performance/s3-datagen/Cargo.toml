@@ -6,15 +6,13 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.45"
-aws-util = { path = "../../../src/aws-util" }
+anyhow = "1.0.44"
+aws-sdk-s3 = { version = "0.0.25-alpha", default-features = false }
 bytefmt = "0.1.7"
 futures = "0.3.17"
 indicatif = "0.16.2"
+mz-aws-util = { path = "../../../src/aws-util", features = ["s3"] }
 ore = { path = "../../../src/ore" }
-rusoto_core = "0.47.0"
-rusoto_credential = "0.47.0"
-rusoto_s3 = "0.47.0"
 structopt = "0.3.25"
 tokio = { version = "1.13.0", features = ["macros", "net", "rt", "time"] }
 tracing = "0.1.29"

@@ -8,8 +8,12 @@ publish = false
 [dependencies]
 async-compression = { version = "0.3.8", features = ["tokio", "gzip"] }
 async-trait = "0.1.51"
+aws-sdk-kinesis = { version = "0.0.25-alpha", default-features = false }
+aws-sdk-s3 = { version = "0.0.25-alpha", default-features = false }
+aws-sdk-sqs = { version = "0.0.25-alpha", default-features = false }
+aws-smithy-http = "0.28.0-alpha"
+aws-types = "0.0.25-alpha"
 atty = "0.2.0"
-aws-util = { path = "../aws-util" }
 byteorder = "1.4.3"
 bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
@@ -17,6 +21,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
 flate2 = "1.0.22"
 futures = "0.3.17"
+http = "0.2.5"
 interchange = { path = "../interchange" }
 itertools = "0.10.1"
 kafka-util = { path = "../kafka-util" }
@@ -25,6 +30,7 @@ lazy_static = "1.4.0"
 maplit = "1.0.2"
 md-5 = "0.9.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
+mz-aws-util = { path = "../aws-util", features = ["s3", "sqs", "sts"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
@@ -34,12 +40,6 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 regex = "1.5.4"
 repr = { path = "../repr" }
 reqwest = { version = "0.11.6", features = ["native-tls-vendored"] }
-rusoto_core = "0.47.0"
-rusoto_credential = "0.47.0"
-rusoto_kinesis = "0.47.0"
-rusoto_s3 = "0.47.0"
-rusoto_sqs = "0.47.0"
-rusoto_sts = "0.47.0"
 serde = "1.0.130"
 serde-protobuf = "0.8.2"
 serde_json = "1.0.70"

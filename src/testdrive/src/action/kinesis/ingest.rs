@@ -8,11 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use aws_sdk_kinesis::{Blob, SdkError};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-use rusoto_core::RusotoError;
-use rusoto_kinesis::{Kinesis, PutRecordError, PutRecordInput};
 
 use ore::retry::Retry;
 
@@ -56,27 +54,28 @@ impl Action for IngestAction {
                 .take(30)
                 .map(char::from)
                 .collect();
-            let put_input = PutRecordInput {
-                data: Bytes::from(row.clone()),
-                explicit_hash_key: None,
-                partition_key: random_partition_key,
-                sequence_number_for_ordering: None,
-                stream_name: stream_name.clone(),
-            };
 
             // The Kinesis stream might not be immediately available,
             // be prepared to back off.
             Retry::default()
                 .max_duration(state.default_timeout)
                 .retry(|_| async {
-                    match state.kinesis_client.put_record(put_input.clone()).await {
+                    match state
+                        .kinesis_client
+                        .put_record()
+                        .data(Blob::new(row.as_bytes()))
+                        .partition_key(&random_partition_key)
+                        .stream_name(&stream_name)
+                        .send()
+                        .await
+                    {
                         Ok(_output) => Ok(()),
-                        Err(RusotoError::Service(PutRecordError::ResourceNotFound(err))) => {
+                        Err(SdkError::ServiceError { err, .. })
+                            if err.is_resource_not_found_exception() =>
+                        {
                             Err(format!("resource not found: {}", err))
                         }
-                        Err(err) => {
-                            Err(format!("unable to put Kinesis record: {}", err.to_string()))
-                        }
+                        Err(err) => Err(format!("unable to put Kinesis record: {}", err)),
                     }
                 })
                 .await

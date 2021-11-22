@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use globset::Glob;
+use http::Uri;
 use log::warn;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -28,7 +29,6 @@ use timely::progress::frontier::Antichain;
 use url::Url;
 use uuid::Uuid;
 
-use aws_util::aws;
 use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, PartitionId};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf;
@@ -969,10 +969,71 @@ pub enum KeyEnvelope {
     Named(String),
 }
 
+/// AWS configuration overrides for a source or sink.
+///
+/// This is a distinct type from any of the configuration types built into the
+/// AWS SDK so that we can implement `Serialize` and `Deserialize`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AwsConfig {
+    /// The optional static credentials to use.
+    ///
+    /// If unset, credentials should instead be obtained from the environment.
+    pub credentials: Option<AwsCredentials>,
+    /// The AWS region to use.
+    pub region: String,
+    /// The custom AWS endpoint to use, if any.
+    pub endpoint: Option<String>,
+}
+
+/// Static AWS credentials for a source or sink.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AwsCredentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+}
+
+impl AwsConfig {
+    /// Loads the AWS SDK configuration object from the environment, then
+    /// applies the overrides from this object.
+    pub async fn load(&self) -> Result<mz_aws_util::config::AwsConfig, anyhow::Error> {
+        let mut config = mz_aws_util::config::AwsConfig::load_from_env().await;
+        self.apply(&mut config)?;
+        Ok(config)
+    }
+
+    /// Applies the AWS configuration overrides in this object to an existing
+    /// SDK configuration object.
+    pub fn apply(&self, config: &mut mz_aws_util::config::AwsConfig) -> Result<(), anyhow::Error> {
+        use aws_smithy_http::endpoint::Endpoint;
+        use aws_types::credentials::SharedCredentialsProvider;
+        use aws_types::region::Region;
+
+        config.set_region(Region::new(self.region.clone()));
+
+        if let Some(credentials) = &self.credentials {
+            config.set_credentials_provider(SharedCredentialsProvider::new(
+                aws_types::Credentials::from_keys(
+                    &credentials.access_key_id,
+                    &credentials.secret_access_key,
+                    credentials.session_token.clone(),
+                ),
+            ));
+        }
+
+        if let Some(endpoint) = &self.endpoint {
+            let endpoint: Uri = endpoint.parse().context("parsing AWS endpoint")?;
+            config.set_endpoint(Endpoint::immutable(endpoint));
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnector {
     pub stream_name: String,
-    pub aws_info: aws::ConnectInfo,
+    pub aws: AwsConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -999,7 +1060,7 @@ pub struct PubNubSourceConnector {
 pub struct S3SourceConnector {
     pub key_sources: Vec<S3KeySource>,
     pub pattern: Option<Glob>,
-    pub aws_info: aws::ConnectInfo,
+    pub aws: AwsConfig,
     pub compression: Compression,
 }
 

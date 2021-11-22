@@ -201,9 +201,9 @@ services:
       --set "redpanda.auto_create_topics_enabled=false"
       --advertise-kafka-addr redpanda:9092
   localstack:
-    image: localstack/localstack:0.12.5
+    # https://github.com/localstack/localstack/pull/4979
+    image: benesch/localstack:0.13.0-p1
     environment:
-    - SERVICES=sqs,sts,iam,kinesis,s3
     - HOSTNAME_EXTERNAL=localstack
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

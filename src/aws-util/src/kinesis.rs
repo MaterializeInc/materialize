@@ -7,10 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Utility mod for Kinesis.
+//! AWS Kinesis client and utilities.
 
 use anyhow::Context;
-use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput, Shard};
+
+use aws_sdk_kinesis::model::{Shard, ShardIteratorType};
+use aws_sdk_kinesis::Client;
+
+use crate::config::AwsConfig;
+use crate::util;
+
+/// Constructs a new AWS Kinesis client that respects the
+/// [system proxy configuration](mz_http_proxy#system-proxy-configuration).
+pub fn client(config: &AwsConfig) -> Result<Client, anyhow::Error> {
+    let mut builder = aws_sdk_kinesis::config::Config::builder().region(config.region().cloned());
+    builder.set_credentials_provider(Some(config.credentials_provider().clone()));
+    if let Some(endpoint) = config.endpoint() {
+        builder = builder.endpoint_resolver(endpoint.clone());
+    }
+    let conn = util::connector()?;
+    Ok(Client::from_conf_conn(builder.build(), conn))
+}
 
 /// Wrapper around AWS Kinesis ListShards API.
 ///
@@ -19,22 +36,15 @@ use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsIn
 ///
 /// Does not currently handle any ListShards errors, will return all errors
 /// directly to the caller.
-pub async fn list_shards(
-    client: &KinesisClient,
-    stream_name: &str,
-) -> Result<Vec<Shard>, anyhow::Error> {
+pub async fn list_shards(client: &Client, stream_name: &str) -> Result<Vec<Shard>, anyhow::Error> {
     let mut next_token = None;
     let mut all_shards = Vec::new();
     loop {
         let output = client
-            .list_shards(ListShardsInput {
-                exclusive_start_shard_id: None,
-                max_results: None, // this defaults to 100
-                next_token,
-                stream_creation_timestamp: None,
-                stream_name: Some(stream_name.to_owned()),
-                shard_filter: None,
-            })
+            .list_shards()
+            .set_next_token(next_token)
+            .stream_name(stream_name)
+            .send()
             .await
             .context("fetching shard list")?;
 
@@ -62,11 +72,13 @@ pub async fn list_shards(
 
 /// Instead of returning Shard objects, only return their ids.
 pub async fn get_shard_ids(
-    client: &KinesisClient,
+    client: &Client,
     stream_name: &str,
 ) -> Result<impl Iterator<Item = String>, anyhow::Error> {
     let shards = list_shards(client, stream_name).await?;
-    Ok(shards.into_iter().map(|s| s.shard_id))
+    Ok(shards
+        .into_iter()
+        .map(|s| s.shard_id.unwrap_or_else(|| "".into())))
 }
 
 /// Wrapper around AWS Kinesis GetShardIterator API (and Rusoto).
@@ -78,18 +90,16 @@ pub async fn get_shard_ids(
 /// Does not currently handle any GetShardIterator errors, will return all errors
 /// directly to the caller.
 pub async fn get_shard_iterator(
-    client: &KinesisClient,
+    client: &Client,
     stream_name: &str,
     shard_id: &str,
 ) -> Result<Option<String>, anyhow::Error> {
     Ok(client
-        .get_shard_iterator(GetShardIteratorInput {
-            shard_id: String::from(shard_id),
-            shard_iterator_type: String::from("TRIM_HORIZON"),
-            starting_sequence_number: None,
-            stream_name: String::from(stream_name),
-            timestamp: None,
-        })
+        .get_shard_iterator()
+        .stream_name(stream_name)
+        .shard_id(shard_id)
+        .shard_iterator_type(ShardIteratorType::TrimHorizon)
+        .send()
         .await
         .context("fetching shard iterator")?
         .shard_iterator)

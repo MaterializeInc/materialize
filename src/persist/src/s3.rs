@@ -12,14 +12,12 @@
 use std::fmt;
 
 use async_trait::async_trait;
-use aws_util::aws::ConnectInfo;
+use aws_sdk_s3::ByteStream;
+use aws_sdk_s3::Client as S3Client;
+use aws_sdk_s3::SdkError;
 use futures_executor::block_on;
-use rusoto_core::{ByteStream, Region, RusotoError};
-use rusoto_s3::{
-    DeleteObjectRequest, GetObjectError, GetObjectRequest, ListObjectsV2Request, PutObjectRequest,
-    S3Client, S3,
-};
-use tokio::io::AsyncReadExt;
+
+use mz_aws_util::config::AwsConfig;
 
 use crate::error::Error;
 use crate::storage::{Atomicity, Blob, LockInfo};
@@ -51,11 +49,9 @@ impl Config {
     /// Stores objects in the given bucket prepended with the (possibly empty)
     /// prefix. S3 credentials and region must be available in the process or
     /// environment.
-    pub fn new(bucket: String, prefix: String) -> Result<Self, Error> {
-        let region = Region::default();
-        let connect_info = ConnectInfo::new(region, None, None, None)
-            .map_err(|err| format!("invalid s3 connection info: {}", err))?;
-        let client = aws_util::client::s3(connect_info)
+    pub async fn new(bucket: String, prefix: String) -> Result<Self, Error> {
+        let config = AwsConfig::load_from_env().await;
+        let client = mz_aws_util::s3::client(&config)
             .map_err(|err| format!("connecting client: {}", err))?;
         Ok(Config {
             client,
@@ -68,25 +64,21 @@ impl Config {
     ///
     /// By default, persist tests that use external storage (like s3) are
     /// no-ops, so that `cargo test` does the right thing without any
-    /// configuration. On CI, an environment variable is set which opts in to
-    /// the external storage tests (and specifies which bucket to use). If set,
-    /// the following authentication environment variables are also requires to
-    /// be set and the test will fail if they are not:
-    ///
-    /// - AWS_DEFAULT_REGION
-    /// - AWS_ACCESS_KEY_ID
-    /// - AWS_SECRET_ACCESS_KEY
-    /// - AWS_SESSION_TOKEN
+    /// configuration. To activate teh tests, set the
+    /// `MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET` environment variable and
+    /// ensure you have valid AWS credentials available in a location where the
+    /// AWS Rust SDK can discovery them.
     ///
     /// This intentionally uses the `MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET`
-    /// env as the switch for test no-op-ness instead of the standard aws auth
-    /// envs because a developers might have these set and this isn't an
-    /// explicit enough signal from a developer running `cargo test` that it's
-    /// okay to use these credentials. It also intentionally does not use the
-    /// local drop-in s3 replacement to keep persist unit tests light.
+    /// env as the switch for test no-op-ness instead of the presence of a valid
+    /// AWS authentication configuration envs because a developers might have
+    /// valid credentials present and this isn't an explicit enough signal from
+    /// a developer running `cargo test` that it's okay to use these
+    /// credentials. It also intentionally does not use the local drop-in s3
+    /// replacement to keep persist unit tests light.
     ///
-    /// These are set in CI by adding the scratch-aws-access plugin to the
-    /// `cargo-test` step in `ci/test/pipeline.template.yml` and setting
+    /// On CI, these tests are enabled by adding the scratch-aws-access plugin
+    /// to the `cargo-test` step in `ci/test/pipeline.template.yml` and setting
     /// `MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET` in
     /// `ci/test/cargo-test/mzcompose.yml`.
     ///
@@ -109,49 +101,29 @@ impl Config {
     ///
     /// Non-Materialize developers will have to set up their own auto-deleting
     /// bucket.
+    // TODO(benesch): when the AWS Rust SDK supports reading SSO credentials,
+    // we should instruct Materialize developers to set
+    // `AWS_PROFILE=mz-scratch-admin` rather than copy/pasting credentials from
+    // the web interface.
     #[cfg(test)]
-    pub fn new_for_test() -> Result<Option<Self>, Error> {
+    pub async fn new_for_test() -> Result<Option<Self>, Error> {
         use uuid::Uuid;
 
         let bucket = match std::env::var(Self::EXTERNAL_TESTS_S3_BUCKET) {
             Ok(bucket) => bucket,
             Err(_) => {
-                //
-                if ore::env::is_var_truthy("BUILDKITE") {
+                if ore::env::is_var_truthy("CI") {
                     panic!("CI is supposed to run this test but something has gone wrong!");
                 }
                 return Ok(None);
             }
         };
-        let default_region = std::env::var("AWS_DEFAULT_REGION")
-            .map_err(|err| format!("unavailable AWS_DEFAULT_REGION: {}", err))?;
-        let access_key_id = std::env::var("AWS_ACCESS_KEY_ID")
-            .map_err(|err| format!("unavailable AWS_ACCESS_KEY_ID: {}", err))?;
-        let secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY")
-            .map_err(|err| format!("unavailable AWS_SECRET_ACCESS_KEY: {}", err))?;
-        let session_token = std::env::var("AWS_SESSION_TOKEN")
-            .map_err(|err| format!("unavailable AWS_SESSION_TOKEN: {}", err))?;
-        let region = default_region
-            .parse()
-            .map_err(|err| format!("invalid AWS_DEFAULT_REGION {}: {}", default_region, err))?;
-        let connect_info = ConnectInfo::new(
-            region,
-            Some(access_key_id),
-            Some(secret_access_key),
-            Some(session_token),
-        )
-        .map_err(|err| format!("invalid s3 connection info: {}", err))?;
-        let client = aws_util::client::s3(connect_info)
-            .map_err(|err| format!("connecting client: {}", err))?;
+
         // Give each test a unique prefix so they don't confict. We don't have
         // to worry about deleting any data that we create because the bucket is
         // set to auto-delete after 1 day.
         let prefix = Uuid::new_v4().to_string();
-        let config = Config {
-            client,
-            bucket,
-            prefix,
-        };
+        let config = Config::new(bucket, prefix).await?;
         Ok(Some(config))
     }
 }
@@ -167,7 +139,7 @@ pub struct S3Blob {
     // Maximum number of keys we get information about per list-objects request.
     //
     // Defaults to 1000 which is the current AWS max.
-    max_keys: i64,
+    max_keys: i32,
 }
 
 impl fmt::Debug for S3Blob {
@@ -209,7 +181,7 @@ impl S3Blob {
     }
 
     #[cfg(test)]
-    fn set_max_keys(&mut self, max_keys: i64) {
+    fn set_max_keys(&mut self, max_keys: i32) {
         self.max_keys = max_keys;
     }
 
@@ -238,25 +210,27 @@ impl Blob for S3Blob {
         let client = self.ensure_open()?;
         let path = self.get_path(key);
         let object = client
-            .get_object(GetObjectRequest {
-                bucket: self.bucket.clone(),
-                key: path,
-                ..Default::default()
-            })
+            .get_object()
+            .bucket(&self.bucket)
+            .key(path)
+            .send()
             .await;
         let object = match object {
             Ok(object) => object,
-            Err(RusotoError::Service(GetObjectError::NoSuchKey(_))) => return Ok(None),
+            Err(SdkError::ServiceError { err, .. }) if err.is_no_such_key() => return Ok(None),
             Err(err) => return Err(Error::from(err.to_string())),
         };
 
-        let mut val = Vec::new();
-        object
+        let val = object
             .body
-            .ok_or_else(|| format!("missing body for key: {}", key))?
-            .into_async_read()
-            .read_to_end(&mut val)
-            .await?;
+            .collect()
+            .await
+            .map_err(|e| format!("collecting byte buffer: {}", e))?
+            // TODO: `into_bytes().to_vec()` results in one extra copy than
+            // necessary. Changing `Blob::get` to return `Bytes` directly would
+            // be more efficient, or adding a `into_vec()` method upstream.
+            .into_bytes()
+            .to_vec();
         Ok(Some(val))
     }
 
@@ -267,12 +241,11 @@ impl Blob for S3Blob {
 
         let body = ByteStream::from(value);
         client
-            .put_object(PutObjectRequest {
-                bucket: self.bucket.clone(),
-                key: path,
-                body: Some(body),
-                ..Default::default()
-            })
+            .put_object()
+            .bucket(&self.bucket)
+            .key(path)
+            .body(body)
+            .send()
             .await
             .map_err(|err| Error::from(err.to_string()))?;
         Ok(())
@@ -281,17 +254,17 @@ impl Blob for S3Blob {
     async fn list_keys(&self) -> Result<Vec<String>, Error> {
         let mut ret = vec![];
         let client = self.ensure_open()?;
-        let mut list_objects_req = ListObjectsV2Request {
-            bucket: self.bucket.clone(),
-            prefix: Some(self.prefix.clone()),
-            max_keys: Some(self.max_keys),
-            ..Default::default()
-        };
+        let mut continuation_token = None;
         let prefix = self.get_path("");
 
         loop {
             let resp = client
-                .list_objects_v2(list_objects_req.clone())
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(&self.prefix)
+                .max_keys(self.max_keys)
+                .set_continuation_token(continuation_token)
+                .send()
                 .await
                 .map_err(|err| Error::from(err.to_string()))?;
             if let Some(contents) = resp.contents {
@@ -315,7 +288,7 @@ impl Blob for S3Blob {
             }
 
             if resp.next_continuation_token.is_some() {
-                list_objects_req.continuation_token = resp.next_continuation_token;
+                continuation_token = resp.next_continuation_token;
             } else {
                 break;
             }
@@ -328,11 +301,10 @@ impl Blob for S3Blob {
         let client = self.ensure_open()?;
         let path = self.get_path(key);
         client
-            .delete_object(DeleteObjectRequest {
-                bucket: self.bucket.clone(),
-                key: path,
-                ..Default::default()
-            })
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(path)
+            .send()
             .await
             .map_err(|err| Error::from(err.to_string()))?;
         Ok(())
@@ -353,7 +325,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn s3_blob() -> Result<(), Error> {
         ore::test::init_logging();
-        let config = match Config::new_for_test()? {
+        let config = match Config::new_for_test().await? {
             Some(client) => client,
             None => {
                 log::info!(

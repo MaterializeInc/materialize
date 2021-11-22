@@ -16,20 +16,21 @@ use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use ::http::Uri;
 use async_trait::async_trait;
+use aws_sdk_kinesis::Client as KinesisClient;
+use aws_sdk_s3::Client as S3Client;
+use aws_sdk_sqs::Client as SqsClient;
+use aws_types::credentials::ProvideCredentials;
 use futures::future::FutureExt;
 use lazy_static::lazy_static;
 use ore::result::ResultExt as _;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
-use rusoto_credential::AwsCredentials;
-use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient};
-use rusoto_s3::{DeleteBucketRequest, DeleteObjectRequest, ListObjectsV2Request, S3Client, S3};
-use rusoto_sqs::{DeleteQueueRequest, Sqs, SqsClient};
 use url::Url;
 
-use aws_util::aws;
+use mz_aws_util::config::AwsConfig;
 use ore::retry::Retry;
 use repr::strconv;
 
@@ -66,12 +67,10 @@ pub struct Config {
     pub cert_path: Option<String>,
     /// An optional password for the TLS certificate.
     pub cert_pass: Option<String>,
-    /// The region for testdrive to use when connecting to AWS.
-    pub aws_region: rusoto_core::Region,
     /// The account for testdrive to use when connecting to AWS.
     pub aws_account: String,
-    /// The credentials for testdrive to use when connecting to AWS.
-    pub aws_credentials: AwsCredentials,
+    /// The configuration for testdrive to use when connecting to AWS.
+    pub aws_config: AwsConfig,
     /// The connection parameters for the materialized instance that testdrive
     /// will connect to.
     pub materialized_pgconfig: tokio_postgres::Config,
@@ -108,9 +107,8 @@ pub struct State {
     kafka_config: ClientConfig,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
     kafka_topics: HashMap<String, usize>,
-    aws_region: rusoto_core::Region,
     aws_account: String,
-    aws_credentials: AwsCredentials,
+    aws_config: AwsConfig,
     kinesis_client: KinesisClient,
     kinesis_stream_names: Vec<String>,
     s3_client: S3Client,
@@ -131,6 +129,21 @@ pub struct Context {
 }
 
 impl State {
+    pub fn aws_endpoint(&self) -> String {
+        match self.aws_config.endpoint() {
+            None => String::new(),
+            Some(endpoint) => {
+                let mut uri = Uri::builder().build().unwrap();
+                endpoint.set_endpoint(&mut uri, None);
+                uri.to_string()
+            }
+        }
+    }
+
+    pub fn aws_region(&self) -> &str {
+        self.aws_config.region().map(|r| r.as_ref()).unwrap_or("")
+    }
+
     pub async fn reset_materialized(&mut self) -> Result<(), Error> {
         for row in self
             .pgclient
@@ -183,10 +196,10 @@ impl State {
         );
         for stream_name in &self.kinesis_stream_names {
             self.kinesis_client
-                .delete_stream(DeleteStreamInput {
-                    enforce_consumer_deletion: Some(true),
-                    stream_name: stream_name.clone(),
-                })
+                .delete_stream()
+                .enforce_consumer_deletion(true)
+                .stream_name(stream_name)
+                .send()
                 .await
                 .err_ctx(format!("deleting Kinesis stream: {}", stream_name))?;
         }
@@ -201,13 +214,7 @@ impl State {
                 errors.push(e.into());
             }
 
-            let res = self
-                .s3_client
-                .delete_bucket(DeleteBucketRequest {
-                    bucket: bucket.into(),
-                    expected_bucket_owner: None,
-                })
-                .await;
+            let res = self.s3_client.delete_bucket().bucket(bucket).send().await;
 
             if let Err(e) = res {
                 errors.push(e.into());
@@ -234,22 +241,20 @@ impl State {
                 loop {
                     let response = self
                         .s3_client
-                        .list_objects_v2(ListObjectsV2Request {
-                            bucket: bucket.clone(),
-                            continuation_token: continuation_token.take(),
-                            ..Default::default()
-                        })
+                        .list_objects_v2()
+                        .bucket(&bucket)
+                        .set_continuation_token(continuation_token)
+                        .send()
                         .await
                         .with_err_ctx(|| format!("listing objects for bucket {}", bucket))?;
 
                     if let Some(objects) = response.contents {
                         for obj in objects {
                             self.s3_client
-                                .delete_object(DeleteObjectRequest {
-                                    bucket: bucket.clone(),
-                                    key: obj.key.clone().unwrap(),
-                                    ..Default::default()
-                                })
+                                .delete_object()
+                                .bucket(&bucket)
+                                .key(obj.key.as_ref().unwrap())
+                                .send()
                                 .await
                                 .with_err_ctx(|| {
                                     format!("deleting object {}/{}", bucket, obj.key.unwrap())
@@ -272,11 +277,11 @@ impl State {
             .retry(|_| async {
                 for queue_url in &self.sqs_queues_created {
                     self.sqs_client
-                        .delete_queue(DeleteQueueRequest {
-                            queue_url: queue_url.clone(),
-                        })
+                        .delete_queue()
+                        .queue_url(queue_url)
+                        .send()
                         .await
-                        .with_err_ctx(|| format!("Deleting sqs queue: {}", queue_url))?
+                        .with_err_ctx(|| format!("Deleting sqs queue: {}", queue_url))?;
                 }
 
                 Ok(())
@@ -315,7 +320,7 @@ where
     }
 }
 
-pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Error> {
+pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Error> {
     let mut out = Vec::new();
     let mut vars = HashMap::new();
 
@@ -358,34 +363,32 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
             path.display().to_string()
         });
     }
-    vars.insert(
-        "testdrive.aws-region".into(),
-        state.aws_region.name().to_owned(),
-    );
+    vars.insert("testdrive.aws-region".into(), state.aws_region().into());
+    vars.insert("testdrive.aws-endpoint".into(), state.aws_endpoint().into());
     vars.insert("testdrive.aws-account".into(), state.aws_account.clone());
-    vars.insert(
-        "testdrive.aws-access-key-id".into(),
-        state.aws_credentials.aws_access_key_id().to_owned(),
-    );
-    vars.insert(
-        "testdrive.aws-secret-access-key".into(),
-        state.aws_credentials.aws_secret_access_key().to_owned(),
-    );
-    vars.insert(
-        "testdrive.aws-token".into(),
-        state
-            .aws_credentials
-            .token()
-            .clone()
-            .unwrap_or_else(String::new),
-    );
-    vars.insert(
-        "testdrive.aws-endpoint".into(),
-        match &state.aws_region {
-            rusoto_core::Region::Custom { endpoint, .. } => endpoint.clone(),
-            _ => "".into(),
-        },
-    );
+    {
+        let aws_credentials = state
+            .aws_config
+            .credentials_provider()
+            .provide_credentials()
+            .await
+            .err_ctx("fetching AWS credentials")?;
+        vars.insert(
+            "testdrive.aws-access-key-id".into(),
+            aws_credentials.access_key_id().to_owned(),
+        );
+        vars.insert(
+            "testdrive.aws-secret-access-key".into(),
+            aws_credentials.secret_access_key().to_owned(),
+        );
+        vars.insert(
+            "testdrive.aws-token".into(),
+            aws_credentials
+                .session_token()
+                .map(|token| token.to_owned())
+                .unwrap_or_else(String::new),
+        );
+    }
     vars.insert(
         "testdrive.materialized-addr".into(),
         state.materialized_addr.clone(),
@@ -722,28 +725,10 @@ pub async fn create_state(
         )
     };
 
-    let aws_info = aws::ConnectInfo::new(
-        config.aws_region.clone(),
-        Some(config.aws_credentials.aws_access_key_id().to_owned()),
-        Some(config.aws_credentials.aws_secret_access_key().to_owned()),
-        config.aws_credentials.token().clone(),
-    )
-    .expect("both parts of AWS Credentials are present");
-
-    let kinesis_client = aws_util::client::kinesis(aws_info.clone()).err_hint(
-        "creating Kinesis client",
-        &[format!("region: {}", aws_info.region.name())],
-    )?;
-
-    let s3_client = aws_util::client::s3(aws_info.clone()).err_hint(
-        "creating S3 client",
-        &[format!("region: {}", aws_info.region.name(),)],
-    )?;
-
-    let sqs_client = aws_util::client::sqs(aws_info.clone()).err_hint(
-        "creating SQS client",
-        &[format!("region: {}", aws_info.region.name(),)],
-    )?;
+    let kinesis_client =
+        mz_aws_util::kinesis::client(&config.aws_config).err_ctx("creating Kinesis client")?;
+    let s3_client = mz_aws_util::s3::client(&config.aws_config).err_ctx("creating S3 client")?;
+    let sqs_client = mz_aws_util::sqs::client(&config.aws_config).err_ctx("creating SQS client")?;
 
     let state = State {
         seed,
@@ -761,12 +746,8 @@ pub async fn create_state(
         kafka_config,
         kafka_producer,
         kafka_topics,
-        aws_region: aws_info.region,
         aws_account: config.aws_account.clone(),
-        aws_credentials: aws_info
-            .credentials
-            .expect("provided credentials at construction")
-            .into(),
+        aws_config: config.aws_config.clone(),
         kinesis_client,
         kinesis_stream_names: Vec::new(),
         s3_client,

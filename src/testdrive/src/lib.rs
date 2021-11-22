@@ -90,7 +90,7 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
         if config.reset {
             state.reset_materialized().await?;
         }
-        let actions = action::build(cmds_exec, &state)?;
+        let actions = action::build(cmds_exec, &state).await?;
         for a in actions.iter().rev() {
             let undo = a.action.undo(&mut state);
             undo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;

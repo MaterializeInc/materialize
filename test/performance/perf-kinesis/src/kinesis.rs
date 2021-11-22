@@ -12,33 +12,28 @@ use std::collections::VecDeque;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::Context;
-use bytes::Bytes;
-use rusoto_core::RusotoError;
-use rusoto_kinesis::{
-    CreateStreamInput, DeleteStreamInput, DescribeStreamInput, Kinesis, KinesisClient,
-    PutRecordsError, PutRecordsInput, PutRecordsRequestEntry,
-};
+use anyhow::{anyhow, Context};
+use aws_sdk_kinesis::model::{PutRecordsRequestEntry, StreamStatus};
+use aws_sdk_kinesis::{Blob, SdkError};
 
 use ore::retry::Retry;
 use test_util::generator;
 
 const DUMMY_PARTITION_KEY: &str = "dummy";
-const ACTIVE: &str = "ACTIVE";
 
 /// Creates a Kinesis stream with the given name and shard count.
 /// Will fail if the stream is not created and in ACTIVE mode after
 /// some amount of retrying.
 pub async fn create_stream(
-    kinesis_client: &KinesisClient,
+    kinesis_client: &aws_sdk_kinesis::Client,
     stream_name: &str,
-    shard_count: i64,
+    shard_count: i32,
 ) -> Result<String, anyhow::Error> {
     kinesis_client
-        .create_stream(CreateStreamInput {
-            shard_count,
-            stream_name: stream_name.to_string(),
-        })
+        .create_stream()
+        .stream_name(stream_name)
+        .shard_count(shard_count)
+        .send()
         .await
         .context("creating Kinesis stream")?;
 
@@ -46,18 +41,17 @@ pub async fn create_stream(
         .max_duration(Duration::from_secs(120))
         .retry(|_| async {
             let description = &kinesis_client
-                .describe_stream(DescribeStreamInput {
-                    exclusive_start_shard_id: None,
-                    limit: None,
-                    stream_name: stream_name.to_string(),
-                })
+                .describe_stream()
+                .stream_name(stream_name)
+                .send()
                 .await
                 .context("describing Kinesis stream")?
-                .stream_description;
+                .stream_description
+                .expect("stream description unexpectedly missing");
             match description.stream_status.as_ref() {
-                ACTIVE => Ok(description.stream_arn.clone()),
+                Some(StreamStatus::Active) => Ok(description.stream_arn.clone()),
                 other_status => Err(anyhow::Error::msg(format!(
-                    "Stream {} is not yet ACTIVE, is {}",
+                    "Stream {} is not yet ACTIVE, is {:?}",
                     stream_name.to_string(),
                     other_status
                 ))),
@@ -66,7 +60,7 @@ pub async fn create_stream(
         .await
         .context("Kinesis stream never became ACTIVE")?;
 
-    Ok(stream_arn)
+    stream_arn.ok_or_else(|| anyhow!("stream ARN unexpectedly missing"))
 }
 
 /// Generate total_records number of records (random strings converted to bytes).
@@ -75,19 +69,24 @@ pub async fn create_stream(
 /// This function will log if it's falling behind the expected put rate and once
 /// at the end to indicate total amount of time spent generating and putting records.
 pub async fn generate_and_put_records(
-    kinesis_client: &KinesisClient,
+    kinesis_client: &aws_sdk_kinesis::Client,
     stream_name: &str,
     total_records: u64,
     records_per_second: u64,
 ) -> Result<(), anyhow::Error> {
     let timer = std::time::Instant::now();
     // For each string, round robin puts across all of the shards.
-    let mut shard_starting_hash_keys: VecDeque<String> =
-        aws_util::kinesis::list_shards(&kinesis_client, &stream_name)
+    let mut shard_starting_hash_keys =
+        mz_aws_util::kinesis::list_shards(&kinesis_client, &stream_name)
             .await?
-            .iter()
-            .map(|shard| shard.hash_key_range.starting_hash_key.clone())
-            .collect();
+            .into_iter()
+            .map(|shard| {
+                shard
+                    .hash_key_range
+                    .and_then(|hkr| hkr.starting_hash_key)
+                    .ok_or_else(|| anyhow!("starting hash key missing"))
+            })
+            .collect::<Result<VecDeque<_>, _>>()?;
 
     let mut put_record_count = 0;
     while put_record_count < total_records {
@@ -128,7 +127,7 @@ pub async fn generate_and_put_records(
 /// Use a round-robin strategy to put records: rotate through all of the target
 ///     stream's shards, putting a second's worth of records to each.
 pub async fn put_records_one_second(
-    kinesis_client: &KinesisClient,
+    kinesis_client: &aws_sdk_kinesis::Client,
     stream_name: &str,
     shard_starting_hash_key: &str,
     records_per_second: u64,
@@ -137,11 +136,13 @@ pub async fn put_records_one_second(
     let mut records: Vec<PutRecordsRequestEntry> = Vec::new();
     for _ in 0..records_per_second {
         // todo: make the records more realistic json blobs
-        records.push(PutRecordsRequestEntry {
-            data: Bytes::from(generator::bytes::generate_bytes(30)),
-            explicit_hash_key: Some(shard_starting_hash_key.to_owned()), // explicitly push to the current shard
-            partition_key: DUMMY_PARTITION_KEY.to_owned(), // will be overridden by "explicit_hash_key"
-        });
+        records.push(
+            PutRecordsRequestEntry::builder()
+                .data(Blob::new(generator::bytes::generate_bytes(30)))
+                .explicit_hash_key(shard_starting_hash_key.to_owned()) // explicitly push to the current shard
+                .partition_key(DUMMY_PARTITION_KEY.to_owned()) // will be overridden by "explicit_hash_key"
+                .build(),
+        );
     }
 
     // Put records.
@@ -149,29 +150,39 @@ pub async fn put_records_one_second(
     let mut put_record_count = 0;
     while put_record_count < records_per_second {
         match kinesis_client
-            .put_records(PutRecordsInput {
-                records: records[index..cmp::min(index + 500, records.len())].to_vec(), // Can put 500 records at a time.
-                stream_name: stream_name.to_owned(),
-            })
+            .put_records()
+            .set_records(Some(
+                records[index..cmp::min(index + 500, records.len())].to_vec(),
+            )) // Can put 500 records at a time.
+            .stream_name(stream_name.to_owned())
+            .send()
             .await
         {
             Ok(output) => {
                 // todo: do something with failed counts
-                let put_records = output.records.len();
+                let records = output
+                    .records
+                    .ok_or_else(|| anyhow!("records unexpectedly missing"))?;
+                let put_records = records.len();
                 index += put_records;
-                put_record_count += output.records.len() as u64;
+                put_record_count += records.len() as u64;
             }
-            Err(RusotoError::Service(PutRecordsError::KMSThrottling(e)))
-            | Err(RusotoError::Service(PutRecordsError::ProvisionedThroughputExceeded(e))) => {
-                // todo: do something here to avoid looping forever
-                log::info!("Hit non-fatal error, continuing: {}", e);
+            Err(SdkError::ServiceError { err, .. })
+                if err.is_kms_throttling_exception()
+                    || err.is_provisioned_throughput_exceeded_exception() =>
+            {
+                log::info!("Hit non-fatal error, continuing: {}", err);
             }
-            Err(RusotoError::Credentials(e)) => {
-                if e.message
-                    .contains("The security token included in the request is expired")
-                {
-                    log::info!("{}. Getting a new KinesisClient.", e.message);
-                }
+            Err(SdkError::ServiceError { err, .. })
+                if err
+                    .message()
+                    .unwrap_or("")
+                    .contains("The security token included in the request is expired") =>
+            {
+                log::info!(
+                    "{:?}. Getting a new aws_sdk_kinesis::Client.",
+                    err.message()
+                );
             }
             Err(e) => {
                 return Err(anyhow::Error::msg(format!(
@@ -186,14 +197,14 @@ pub async fn put_records_one_second(
 
 /// Only delete the Kinesis stream generated from this test run.
 pub async fn delete_stream(
-    kinesis_client: &KinesisClient,
+    kinesis_client: &aws_sdk_kinesis::Client,
     stream_name: &str,
 ) -> Result<(), anyhow::Error> {
     kinesis_client
-        .delete_stream(DeleteStreamInput {
-            enforce_consumer_deletion: Some(true),
-            stream_name: stream_name.to_owned(),
-        })
+        .delete_stream()
+        .enforce_consumer_deletion(true)
+        .stream_name(stream_name.to_owned())
+        .send()
         .await
         .context("deleting Kinesis stream")?;
     log::info!("Deleted Kinesis stream: {}", &stream_name);
