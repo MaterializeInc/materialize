@@ -165,6 +165,10 @@ pub async fn validate_sink(
                 .await?
                 .get(0);
 
+            if count_input_view == 0 {
+                bail!("source is still loading");
+            }
+
             if count_check_sink != count_input_view {
                 bail!(
                     "Expected check_sink view to have {} rows, found {}",
