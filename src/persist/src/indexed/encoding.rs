@@ -88,14 +88,10 @@ pub struct BlobMeta {
     pub id_mapping: Vec<StreamRegistration>,
     /// Set of deleted streams, indexed by external stream name.
     pub graveyard: Vec<StreamRegistration>,
-    /// Unsealeds indexed by stream id.
+    /// Arrangements indexed by stream id.
     ///
     /// Invariant: Each stream id is in here at most once.
-    pub unsealeds: Vec<UnsealedMeta>,
-    /// Traces indexed by stream id.
-    ///
-    /// Invariant: Each stream id is in here at most once.
-    pub traces: Vec<TraceMeta>,
+    pub arrangements: Vec<ArrangementMeta>,
 }
 
 /// Registration information for a single stream.
@@ -111,20 +107,39 @@ pub struct StreamRegistration {
     pub val_codec_name: String,
 }
 
-/// The metadata necessary to reconstruct an Unsealed.
+/// The metadata necessary to reconstruct an Arrangement.
 ///
 /// Invariants:
-/// - The batch SeqNo ranges are sorted and non-overlapping.
+/// - The unsealed_batch SeqNo ranges are sorted and non-overlapping.
+/// - The trace_batch Descriptions are sorted, non-overlapping, and contiguous.
+/// - The since frontier is either 0 or < the trace's sealed frontier.
+/// - Every batch's since frontier is <= the overall trace's since frontier.
+/// - The compaction level of trace_batches is weakly decreasing when iterating
+///   from oldest to most recent time intervals.
+/// - Every trace_batch's upper is <= the overall trace's seal frontier.
+/// - TODO: key uniqueness invariants?
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct UnsealedMeta {
+pub struct ArrangementMeta {
     /// The stream this unsealed belongs to.
     pub id: Id,
     /// A lower bound of data contained by this Unsealed. Data before this may
     /// be present in the batches, but has been logically moved into the trace
     /// and should be ignored.
-    pub ts_lower: Antichain<u64>,
+    //
+    // TODO: This is redundant, remove it.
+    pub unsealed_ts_lower: Antichain<u64>,
+    /// Frontier this trace has been sealed up to.
+    pub seal: Antichain<u64>,
+    /// Compaction frontier for the batches contained in this trace.
+    /// There may still be batches containing updates at times < since, but the
+    /// the trace only contains correct answers for times at or in advance of this
+    /// of this frontier. Readers are expected to advance any updates < since to
+    /// since.
+    pub since: Antichain<u64>,
     /// The batches that make up the Unsealed.
-    pub batches: Vec<UnsealedBatchMeta>,
+    pub unsealed_batches: Vec<UnsealedBatchMeta>,
+    /// The batches that make up the Trace.
+    pub trace_batches: Vec<TraceBatchMeta>,
 }
 
 /// The metadata necessary to reconstruct a [BlobUnsealedBatch].
@@ -144,32 +159,6 @@ pub struct UnsealedBatchMeta {
     pub ts_lower: u64,
     /// Size of the encoded batch.
     pub size_bytes: u64,
-}
-
-/// The metadata necessary to reconstruct a Trace.
-///
-/// Invariants:
-/// - The batch Descriptions are sorted, non-overlapping, and contiguous.
-/// - The since frontier is either 0 or < the trace's sealed frontier.
-/// - Every batch's since frontier is <= the overall trace's since frontier.
-/// - The compaction level of batches is weakly decreasing when iterating from oldest
-///   to most recent time intervals.
-/// - Every batch's upper is <= the overall trace's seal frontier.
-/// - TODO: key uniqueness invariants?
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TraceMeta {
-    /// The stream this trace belongs to.
-    pub id: Id,
-    /// The batches that make up the Trace.
-    pub batches: Vec<TraceBatchMeta>,
-    /// Compaction frontier for the batches contained in this trace.
-    /// There may still be batches containing updates at times < since, but the
-    /// the trace only contains correct answers for times at or in advance of this
-    /// of this frontier. Readers are expected to advance any updates < since to
-    /// since.
-    pub since: Antichain<u64>,
-    /// Frontier this trace has been sealed up to.
-    pub seal: Antichain<u64>,
 }
 
 /// The metadata necessary to reconstruct a [BlobTraceBatch].
@@ -259,8 +248,7 @@ impl Default for BlobMeta {
             seqno: SeqNo(0),
             id_mapping: Vec::new(),
             graveyard: Vec::new(),
-            unsealeds: Vec::new(),
-            traces: Vec::new(),
+            arrangements: Vec::new(),
         }
     }
 }
@@ -403,60 +391,46 @@ impl BlobMeta {
             .into());
         }
 
-        let mut unsealeds = HashMap::new();
-        for f in self.unsealeds.iter() {
+        let mut arrangements = HashMap::new();
+        for f in self.arrangements.iter() {
             if !ids.contains(&f.id) {
-                return Err(format!("unsealeds id {:?} not present in id_mapping", f.id).into());
+                return Err(format!("arrangements id {:?} not present in id_mapping", f.id).into());
             }
 
-            if unsealeds.contains_key(&f.id) {
-                return Err(format!("duplicate unsealed: {:?}", f.id).into());
+            if arrangements.contains_key(&f.id) {
+                return Err(format!("duplicate arrangement: {:?}", f.id).into());
             }
-            unsealeds.insert(f.id, f);
+            arrangements.insert(f.id, f);
 
             f.validate()?;
         }
 
-        let mut traces = HashMap::new();
-        for t in self.traces.iter() {
-            if !ids.contains(&t.id) {
-                return Err(format!("traces id {:?} not present in id_mapping", t.id).into());
-            }
-
-            if traces.contains_key(&t.id) {
-                return Err(format!("duplicate trace: {:?}", t.id).into());
-            }
-            traces.insert(t.id, t);
-
-            t.validate()?;
-        }
-
         for id in ids.iter() {
-            let unsealed = unsealeds.get(id).ok_or_else(|| {
-                Error::from(format!("id_mapping id {:?} not present in unsealeds", id))
+            let arrangement = arrangements.get(id).ok_or_else(|| {
+                Error::from(format!(
+                    "id_mapping id {:?} not present in arrangements",
+                    id
+                ))
             })?;
-            let trace = traces.get(id).ok_or_else(|| {
-                Error::from(format!("id_mapping id {:?} not present in traces", id))
-            })?;
-            let unsealed_seqno_upper = unsealed.seqno_upper();
+            let unsealed_seqno_upper = arrangement.unsealed_seqno_upper();
             if !unsealed_seqno_upper.less_equal(&self.seqno) {
                 return Err(Error::from(format!(
                     "id {:?} unsealed seqno_upper {:?} is not less or equal to the blob's seqno {:?}",
                     id, unsealed_seqno_upper, self.seqno,
                 )));
             }
-            let trace_ts_upper = trace.ts_upper();
-            if !PartialOrder::less_equal(&unsealed.ts_lower, &trace_ts_upper) {
+            let trace_ts_upper = arrangement.trace_ts_upper();
+            if !PartialOrder::less_equal(&arrangement.unsealed_ts_lower, &trace_ts_upper) {
                 return Err(Error::from(format!(
                     "id {:?} trace ts_upper {:?} is not at or in advance of unsealed ts_lower {:?}",
-                    id, trace_ts_upper, unsealed.ts_lower,
+                    id, trace_ts_upper, arrangement.unsealed_ts_lower,
                 )));
             }
         }
 
         let mut batch_keys = HashSet::new();
-        for u in self.unsealeds.iter() {
-            for batch in u.batches.iter() {
+        for a in self.arrangements.iter() {
+            for batch in a.unsealed_batches.iter() {
                 if batch_keys.contains(&batch.key) {
                     return Err(
                         format!("duplicate batch key found in unsealed: {}", batch.key).into(),
@@ -464,10 +438,7 @@ impl BlobMeta {
                 }
                 batch_keys.insert(batch.key.clone());
             }
-        }
-
-        for t in self.traces.iter() {
-            for batch in t.batches.iter() {
+            for batch in a.trace_batches.iter() {
                 if batch_keys.contains(&batch.key) {
                     return Err(format!("duplicate batch key found in trace: {}", batch.key).into());
                 }
@@ -506,22 +477,35 @@ impl BlobMeta {
     }
 }
 
-impl UnsealedMeta {
-    /// Create a new [UnsealedMeta] belonging to `id`.
-    pub fn new(id: Id) -> Self {
-        UnsealedMeta {
-            id,
-            ts_lower: Antichain::from_elem(Timestamp::minimum()),
-            batches: Vec::new(),
+impl Default for ArrangementMeta {
+    fn default() -> Self {
+        ArrangementMeta {
+            id: Id(0),
+            unsealed_ts_lower: Antichain::from_elem(Timestamp::minimum()),
+            since: Antichain::from_elem(Timestamp::minimum()),
+            seal: Antichain::from_elem(Timestamp::minimum()),
+            unsealed_batches: Vec::new(),
+            trace_batches: Vec::new(),
         }
     }
+}
+
+impl ArrangementMeta {
+    /// Create a new [ArrangementMeta] belonging to `id`.
+    pub fn new(id: Id) -> Self {
+        ArrangementMeta {
+            id,
+            ..Default::default()
+        }
+    }
+
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
-        let mut prev: Option<&UnsealedBatchMeta> = None;
-        for meta in self.batches.iter() {
+        let mut unsealed_prev: Option<&UnsealedBatchMeta> = None;
+        for meta in self.unsealed_batches.iter() {
             meta.validate()?;
-            if let Some(prev) = prev {
+            if let Some(prev) = unsealed_prev {
                 if prev.desc.end > meta.desc.start {
                     return Err(format!(
                         "invalid batch sequence: {:?} followed by {:?}",
@@ -530,69 +514,22 @@ impl UnsealedMeta {
                     .into());
                 }
             }
-            prev = Some(&meta)
-        }
-        Ok(())
-    }
-
-    /// Returns an open upper bound on the seqnos contained in this unsealed.
-    pub fn seqno_upper(&self) -> SeqNo {
-        self.batches
-            .last()
-            .map_or_else(|| SeqNo(0), |meta| meta.desc.end)
-    }
-}
-
-impl UnsealedBatchMeta {
-    /// Asserts Self's documented invariants, returning an error if any are
-    /// violated.
-    pub fn validate(&self) -> Result<(), Error> {
-        // TODO: It's unclear if the equal case (an empty desc) is
-        // useful/harmful. Feel free to make this a less_than if empty descs end
-        // up making sense.
-        if self.desc.end <= self.desc.start {
-            return Err(format!("invalid desc: {:?}", &self.desc).into());
+            unsealed_prev = Some(&meta)
         }
 
-        Ok(())
-    }
-}
-
-impl TraceMeta {
-    /// Create a new [TraceMeta] belonging to `id`.
-    pub fn new(id: Id) -> Self {
-        TraceMeta {
-            id,
-            batches: Vec::new(),
-            since: Antichain::from_elem(Timestamp::minimum()),
-            seal: Antichain::from_elem(Timestamp::minimum()),
-        }
-    }
-    /// Returns an open upper bound on the timestamps of data contained in this
-    /// trace.
-    pub fn ts_upper(&self) -> Antichain<u64> {
-        self.batches.last().map_or_else(
-            || Antichain::from_elem(Timestamp::minimum()),
-            |meta| meta.desc.upper().clone(),
-        )
-    }
-
-    /// Asserts Self's documented invariants, returning an error if any are
-    /// violated.
-    pub fn validate(&self) -> Result<(), Error> {
-        let upper = self.ts_upper();
+        let trace_upper = self.trace_ts_upper();
         let min = Antichain::from_elem(Timestamp::minimum());
 
         if self.since != min && !PartialOrder::less_than(&self.since, &self.seal) {
             return Err(format!(
                 "invalid trace since {:?} at or in advance of trace seal {:?}",
-                self.since, upper
+                self.since, trace_upper
             )
             .into());
         }
 
-        let mut prev: Option<&TraceBatchMeta> = None;
-        for meta in self.batches.iter() {
+        let mut trace_prev: Option<&TraceBatchMeta> = None;
+        for meta in self.trace_batches.iter() {
             if !PartialOrder::less_equal(meta.desc.since(), &self.since) {
                 return Err(format!(
                     "invalid batch since: {:?} in advance of trace since {:?}",
@@ -611,7 +548,7 @@ impl TraceMeta {
 
             meta.validate()?;
 
-            if let Some(prev) = prev {
+            if let Some(prev) = trace_prev {
                 if prev.desc.upper() != meta.desc.lower() {
                     return Err(format!(
                         "invalid batch sequence: {:?} followed by {:?}",
@@ -628,8 +565,40 @@ impl TraceMeta {
                     .into());
                 }
             }
-            prev = Some(&meta)
+            trace_prev = Some(&meta)
         }
+
+        Ok(())
+    }
+
+    /// Returns an open upper bound on the seqnos contained in this unsealed.
+    pub fn unsealed_seqno_upper(&self) -> SeqNo {
+        self.unsealed_batches
+            .last()
+            .map_or_else(|| SeqNo(0), |meta| meta.desc.end)
+    }
+
+    /// Returns an open upper bound on the timestamps of data contained in this
+    /// trace.
+    pub fn trace_ts_upper(&self) -> Antichain<u64> {
+        self.trace_batches.last().map_or_else(
+            || Antichain::from_elem(Timestamp::minimum()),
+            |meta| meta.desc.upper().clone(),
+        )
+    }
+}
+
+impl UnsealedBatchMeta {
+    /// Asserts Self's documented invariants, returning an error if any are
+    /// violated.
+    pub fn validate(&self) -> Result<(), Error> {
+        // TODO: It's unclear if the equal case (an empty desc) is
+        // useful/harmful. Feel free to make this a less_than if empty descs end
+        // up making sense.
+        if self.desc.end <= self.desc.start {
+            return Err(format!("invalid desc: {:?}", &self.desc).into());
+        }
+
         Ok(())
     }
 }
@@ -1005,105 +974,116 @@ mod tests {
     #[test]
     fn trace_meta_validate() {
         // Empty
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![],
+            trace_batches: vec![],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(0),
+            ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Normal case
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![batch_meta(0, 1), batch_meta(1, 2)],
+            trace_batches: vec![batch_meta(0, 1), batch_meta(1, 2)],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(2),
+            ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Gap
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![batch_meta(0, 1), batch_meta(2, 3)],
+            trace_batches: vec![batch_meta(0, 1), batch_meta(2, 3)],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(3),
+            ..Default::default()
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch sequence: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [1] }, since: Antichain { elements: [0] } } followed by Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
 
         // Overlapping
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![batch_meta(0, 2), batch_meta(1, 3)],
+            trace_batches: vec![batch_meta(0, 2), batch_meta(1, 3)],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(3),
+            ..Default::default()
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch sequence: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } } followed by Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
 
         // Normal case: trace since before nonzero trace upper
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![batch_meta(0, 1), batch_meta(1, 2)],
+            trace_batches: vec![batch_meta(0, 1), batch_meta(1, 2)],
             since: Antichain::from_elem(1),
             seal: Antichain::from_elem(2),
+            ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Trace since at nonzero trace seal
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![batch_meta(0, 2), batch_meta(2, 3)],
+            trace_batches: vec![batch_meta(0, 2), batch_meta(2, 3)],
             since: Antichain::from_elem(3),
             seal: Antichain::from_elem(3),
+            ..Default::default()
         };
         assert_eq!(b.validate(), Err(Error::from("invalid trace since Antichain { elements: [3] } at or in advance of trace seal Antichain { elements: [3] }")));
 
         // Trace since in advance of nonzero trace seal
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![batch_meta(0, 2), batch_meta(2, 3)],
+            trace_batches: vec![batch_meta(0, 2), batch_meta(2, 3)],
             since: Antichain::from_elem(4),
             seal: Antichain::from_elem(3),
+            ..Default::default()
         };
         assert_eq!(b.validate(), Err(Error::from("invalid trace since Antichain { elements: [4] } at or in advance of trace seal Antichain { elements: [3] }")));
 
         // Normal case: batch since at or before trace since
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![batch_meta(0, 1), batch_meta_full(1, 2, 1, 1)],
+            trace_batches: vec![batch_meta(0, 1), batch_meta_full(1, 2, 1, 1)],
             since: Antichain::from_elem(1),
             seal: Antichain::from_elem(2),
+            ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Batch since in advance of trace since
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![batch_meta(0, 1), batch_meta_full(1, 2, 2, 1)],
+            trace_batches: vec![batch_meta(0, 1), batch_meta_full(1, 2, 2, 1)],
             since: Antichain::from_elem(1),
             seal: Antichain::from_elem(2),
+            ..Default::default()
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch since: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [2] } } in advance of trace since Antichain { elements: [1] }")));
 
         // Normal case: decreasing or constant compaction levels
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![
+            trace_batches: vec![
                 batch_meta_full(0, 1, 0, 2),
                 batch_meta_full(1, 2, 0, 2),
                 batch_meta_full(2, 3, 0, 1),
             ],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(3),
+            ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Increasing compaction level.
-        let b = TraceMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            batches: vec![batch_meta_full(0, 1, 0, 1), batch_meta_full(1, 2, 0, 2)],
+            trace_batches: vec![batch_meta_full(0, 1, 0, 1), batch_meta_full(1, 2, 0, 2)],
             since: Antichain::from_elem(0),
             seal: Antichain::from_elem(2),
+            ..Default::default()
         };
         assert_eq!(
             b.validate(),
@@ -1137,34 +1117,38 @@ mod tests {
     #[test]
     fn unsealed_meta_validate() {
         // Empty
-        let b = UnsealedMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            ts_lower: Antichain::from_elem(0),
-            batches: vec![],
+            unsealed_ts_lower: Antichain::from_elem(0),
+            unsealed_batches: vec![],
+            ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Normal case
-        let b = UnsealedMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            ts_lower: Antichain::from_elem(0),
-            batches: vec![unsealed_batch_meta(0, 1), unsealed_batch_meta(1, 2)],
+            unsealed_ts_lower: Antichain::from_elem(0),
+            unsealed_batches: vec![unsealed_batch_meta(0, 1), unsealed_batch_meta(1, 2)],
+            ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Normal case: gap between sequence number ranges.
-        let b = UnsealedMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            ts_lower: Antichain::from_elem(0),
-            batches: vec![unsealed_batch_meta(0, 1), unsealed_batch_meta(2, 3)],
+            unsealed_ts_lower: Antichain::from_elem(0),
+            unsealed_batches: vec![unsealed_batch_meta(0, 1), unsealed_batch_meta(2, 3)],
+            ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()),);
 
         // Overlapping
-        let b = UnsealedMeta {
+        let b = ArrangementMeta {
             id: Id(0),
-            ts_lower: Antichain::from_elem(0),
-            batches: vec![unsealed_batch_meta(0, 2), unsealed_batch_meta(1, 3)],
+            unsealed_ts_lower: Antichain::from_elem(0),
+            unsealed_batches: vec![unsealed_batch_meta(0, 2), unsealed_batch_meta(1, 3)],
+            ..Default::default()
         };
         assert_eq!(
             b.validate(),
@@ -1183,8 +1167,7 @@ mod tests {
         // Normal case
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into(), ("1", Id(1)).into()],
-            unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(1))],
-            traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(1))],
+            arrangements: vec![ArrangementMeta::new(Id(0)), ArrangementMeta::new(Id(1))],
             ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()));
@@ -1192,8 +1175,7 @@ mod tests {
         // Duplicate external stream id
         let b = BlobMeta {
             id_mapping: vec![("1", Id(0)).into(), ("1", Id(1)).into()],
-            unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(1))],
-            traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(1))],
+            arrangements: vec![ArrangementMeta::new(Id(0)), ArrangementMeta::new(Id(1))],
             ..Default::default()
         };
         assert_eq!(
@@ -1204,8 +1186,7 @@ mod tests {
         // Duplicate internal stream id
         let b = BlobMeta {
             id_mapping: vec![("0", Id(1)).into(), ("1", Id(1)).into()],
-            unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(1))],
-            traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(1))],
+            arrangements: vec![ArrangementMeta::new(Id(0)), ArrangementMeta::new(Id(1))],
             ..Default::default()
         };
         assert_eq!(
@@ -1213,83 +1194,51 @@ mod tests {
             Err(Error::from("duplicate internal stream id: Id(1)"))
         );
 
-        // Missing unsealed
+        // Missing arrangement
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into()],
-            unsealeds: vec![],
-            traces: vec![TraceMeta::new(Id(0))],
+            arrangements: vec![],
             ..Default::default()
         };
         assert_eq!(
             b.validate(),
-            Err(Error::from("id_mapping id Id(0) not present in unsealeds"))
+            Err(Error::from(
+                "id_mapping id Id(0) not present in arrangements"
+            ))
         );
 
-        // Missing trace
-        let b = BlobMeta {
-            id_mapping: vec![("0", Id(0)).into()],
-            unsealeds: vec![UnsealedMeta::new(Id(0))],
-            traces: vec![],
-            ..Default::default()
-        };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from("id_mapping id Id(0) not present in traces"))
-        );
-
-        // Extra unsealed
+        // Extra arrangement
         let b = BlobMeta {
             id_mapping: vec![],
-            unsealeds: vec![UnsealedMeta::new(Id(0))],
-            traces: vec![],
+            arrangements: vec![ArrangementMeta::new(Id(0))],
             ..Default::default()
         };
         assert_eq!(
             b.validate(),
-            Err(Error::from("unsealeds id Id(0) not present in id_mapping"))
+            Err(Error::from(
+                "arrangements id Id(0) not present in id_mapping"
+            ))
         );
 
-        // Extra trace
+        // Duplicate in arrangements
         let b = BlobMeta {
-            id_mapping: vec![],
-            unsealeds: vec![],
-            traces: vec![TraceMeta::new(Id(0))],
+            id_mapping: vec![("0", Id(0)).into()],
+            arrangements: vec![ArrangementMeta::new(Id(0)), ArrangementMeta::new(Id(0))],
             ..Default::default()
         };
         assert_eq!(
             b.validate(),
-            Err(Error::from("traces id Id(0) not present in id_mapping"))
+            Err(Error::from("duplicate arrangement: Id(0)"))
         );
-
-        // Duplicate in unsealeds
-        let b = BlobMeta {
-            id_mapping: vec![("0", Id(0)).into()],
-            unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(0))],
-            traces: vec![TraceMeta::new(Id(0))],
-            ..Default::default()
-        };
-        assert_eq!(b.validate(), Err(Error::from("duplicate unsealed: Id(0)")));
-
-        // Duplicate in traces
-        let b = BlobMeta {
-            id_mapping: vec![("0", Id(0)).into()],
-            unsealeds: vec![UnsealedMeta::new(Id(0))],
-            traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(0))],
-            ..Default::default()
-        };
-        assert_eq!(b.validate(), Err(Error::from("duplicate trace: Id(0)")));
 
         // Normal case: unsealed ts_lower < ts_upper
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into()],
-            unsealeds: vec![UnsealedMeta {
+            arrangements: vec![ArrangementMeta {
                 id: Id(0),
-                ts_lower: vec![0].into(),
-                batches: vec![],
-            }],
-            traces: vec![TraceMeta {
-                id: Id(0),
-                batches: vec![batch_meta(0, 1)],
+                unsealed_ts_lower: vec![0].into(),
+                unsealed_batches: vec![],
+                trace_batches: vec![batch_meta(0, 1)],
                 since: Antichain::from_elem(0),
                 seal: Antichain::from_elem(1),
             }],
@@ -1300,14 +1249,11 @@ mod tests {
         // Normal case: unsealed ts_lower at ts_upper
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into()],
-            unsealeds: vec![UnsealedMeta {
+            arrangements: vec![ArrangementMeta {
                 id: Id(0),
-                ts_lower: vec![1].into(),
-                batches: vec![],
-            }],
-            traces: vec![TraceMeta {
-                id: Id(0),
-                batches: vec![batch_meta(0, 1)],
+                unsealed_ts_lower: vec![1].into(),
+                unsealed_batches: vec![],
+                trace_batches: vec![batch_meta(0, 1)],
                 since: Antichain::from_elem(0),
                 seal: Antichain::from_elem(1),
             }],
@@ -1318,14 +1264,11 @@ mod tests {
         // Unsealed ts_lower in advance of ts_upper
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into()],
-            unsealeds: vec![UnsealedMeta {
+            arrangements: vec![ArrangementMeta {
                 id: Id(0),
-                ts_lower: vec![2].into(),
-                batches: vec![],
-            }],
-            traces: vec![TraceMeta {
-                id: Id(0),
-                batches: vec![batch_meta(0, 1)],
+                unsealed_ts_lower: vec![2].into(),
+                unsealed_batches: vec![],
+                trace_batches: vec![batch_meta(0, 1)],
                 since: Antichain::from_elem(0),
                 seal: Antichain::from_elem(1),
             }],
@@ -1342,12 +1285,12 @@ mod tests {
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into()],
             seqno: SeqNo(2),
-            unsealeds: vec![UnsealedMeta {
+            arrangements: vec![ArrangementMeta {
                 id: Id(0),
-                batches: vec![unsealed_batch_meta(0, 3)],
-                ts_lower: vec![0].into(),
+                unsealed_batches: vec![unsealed_batch_meta(0, 3)],
+                unsealed_ts_lower: vec![0].into(),
+                ..Default::default()
             }],
-            traces: vec![TraceMeta::new(Id(0))],
             ..Default::default()
         };
         assert_eq!(
@@ -1425,19 +1368,20 @@ mod tests {
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into(), ("1", Id(1)).into()],
             seqno: SeqNo(2),
-            unsealeds: vec![
-                UnsealedMeta {
+            arrangements: vec![
+                ArrangementMeta {
                     id: Id(0),
-                    ts_lower: vec![0].into(),
-                    batches: vec![unsealed_batch_meta(0, 1)],
+                    unsealed_ts_lower: vec![0].into(),
+                    unsealed_batches: vec![unsealed_batch_meta(0, 1)],
+                    ..Default::default()
                 },
-                UnsealedMeta {
+                ArrangementMeta {
                     id: Id(1),
-                    ts_lower: vec![0].into(),
-                    batches: vec![unsealed_batch_meta(0, 1)],
+                    unsealed_ts_lower: vec![0].into(),
+                    unsealed_batches: vec![unsealed_batch_meta(0, 1)],
+                    ..Default::default()
                 },
             ],
-            traces: vec![TraceMeta::new(Id(0)), TraceMeta::new(Id(1))],
             ..Default::default()
         };
 
@@ -1448,19 +1392,20 @@ mod tests {
 
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into(), ("1", Id(1)).into()],
-            unsealeds: vec![UnsealedMeta::new(Id(0)), UnsealedMeta::new(Id(1))],
-            traces: vec![
-                TraceMeta {
+            arrangements: vec![
+                ArrangementMeta {
                     id: Id(0),
-                    batches: vec![batch_meta(0, 1)],
+                    trace_batches: vec![batch_meta(0, 1)],
                     since: Antichain::from_elem(0),
                     seal: Antichain::from_elem(1),
+                    ..Default::default()
                 },
-                TraceMeta {
+                ArrangementMeta {
                     id: Id(1),
-                    batches: vec![batch_meta(0, 1)],
+                    trace_batches: vec![batch_meta(0, 1)],
                     since: Antichain::from_elem(0),
                     seal: Antichain::from_elem(1),
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -1482,8 +1427,7 @@ mod tests {
             // bother too much with the test data.
             id_mapping: vec![],
             graveyard: vec![],
-            unsealeds: vec![],
-            traces: vec![],
+            arrangements: vec![],
         };
         let mut encoded = Vec::new();
         original.encode(&mut encoded);

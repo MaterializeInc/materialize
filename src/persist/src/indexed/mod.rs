@@ -36,8 +36,8 @@ use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
-    BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration, TraceBatchMeta, TraceMeta,
-    UnsealedBatchMeta, UnsealedMeta,
+    ArrangementMeta, BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration,
+    TraceBatchMeta, UnsealedBatchMeta,
 };
 use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFutureHandle;
@@ -203,35 +203,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
 impl AppliedState {
     fn new(meta: BlobMeta) -> Self {
-        let mut ids = HashSet::new();
-        let mut unsealed_metas = meta
-            .unsealeds
+        let arrangements = meta
+            .arrangements
             .into_iter()
-            .map(|x| {
-                ids.insert(x.id);
-                (x.id, x)
-            })
-            .collect::<HashMap<_, _>>();
-        let mut trace_metas = meta
-            .traces
-            .into_iter()
-            .map(|x| {
-                ids.insert(x.id);
-                (x.id, x)
-            })
-            .collect::<HashMap<_, _>>();
-        let mut arrangements = BTreeMap::new();
-        for id in ids {
-            // This defaulting is odd, but it goes away once we can change the
-            // metadata storage format.
-            let unsealed = unsealed_metas
-                .remove(&id)
-                .unwrap_or_else(|| UnsealedMeta::new(id));
-            let trace = trace_metas
-                .remove(&id)
-                .unwrap_or_else(|| TraceMeta::new(id));
-            arrangements.insert(id, Arrangement::new(unsealed, trace));
-        }
+            .map(|x| (x.id, Arrangement::new(x)))
+            .collect();
         AppliedState {
             saved_seqno: meta.seqno,
             highest_assigned_seqno: meta.seqno,
@@ -288,24 +264,32 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         self.metrics
             .stream_count
             .set(u64::cast_from(new_meta.id_mapping.len()));
-        let unsealed_blob_count: usize = new_meta.unsealeds.iter().map(|x| x.batches.len()).sum();
+        let unsealed_blob_count: usize = new_meta
+            .arrangements
+            .iter()
+            .map(|x| x.unsealed_batches.len())
+            .sum();
         self.metrics
             .unsealed_blob_count
             .set(u64::cast_from(unsealed_blob_count));
         let unsealed_blob_bytes: u64 = new_meta
-            .unsealeds
+            .arrangements
             .iter()
-            .flat_map(|x| x.batches.iter().map(|x| x.size_bytes))
+            .flat_map(|x| x.unsealed_batches.iter().map(|x| x.size_bytes))
             .sum();
         self.metrics.unsealed_blob_bytes.set(unsealed_blob_bytes);
-        let trace_blob_count: usize = new_meta.traces.iter().map(|x| x.batches.len()).sum();
+        let trace_blob_count: usize = new_meta
+            .arrangements
+            .iter()
+            .map(|x| x.trace_batches.len())
+            .sum();
         self.metrics
             .trace_blob_count
             .set(u64::cast_from(trace_blob_count));
         let trace_blob_bytes: u64 = new_meta
-            .traces
+            .arrangements
             .iter()
-            .flat_map(|x| x.batches.iter().map(|x| x.size_bytes))
+            .flat_map(|x| x.trace_batches.iter().map(|x| x.size_bytes))
             .sum();
         self.metrics.trace_blob_bytes.set(trace_blob_bytes);
 
@@ -437,7 +421,7 @@ impl AppliedState {
                     key_codec_name: key_codec_name.to_owned(),
                     val_codec_name: val_codec_name.to_owned(),
                 });
-                let arrangement = Arrangement::new(UnsealedMeta::new(id), TraceMeta::new(id));
+                let arrangement = Arrangement::new(ArrangementMeta::new(id));
                 if let Some(prev) = self.arrangements.insert(id, arrangement) {
                     return Err(format!(
                         "internal error: unexpected previous arrangement: {:?}",
@@ -542,16 +526,13 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 keys.extend(list);
                 let meta = self.state.serialize_meta();
 
-                for unsealed in meta.unsealeds.iter() {
-                    for batch in unsealed.batches.iter() {
+                for arrangement in meta.arrangements.iter() {
+                    for batch in arrangement.unsealed_batches.iter() {
                         if !keys.contains(&batch.key) {
                             return Err(Error::from("key missing in unsealed batch"));
                         }
                     }
-                }
-
-                for trace in meta.traces.iter() {
-                    for batch in trace.batches.iter() {
+                    for batch in arrangement.trace_batches.iter() {
                         if !keys.contains(&batch.key) {
                             return Err(Error::from("key missing in trace batch"));
                         }
@@ -1062,19 +1043,11 @@ impl AppliedState {
     }
 
     fn serialize_meta(&self) -> BlobMeta {
-        let mut unsealeds = Vec::with_capacity(self.arrangements.len());
-        let mut traces = Vec::with_capacity(self.arrangements.len());
-        for arrangement in self.arrangements.values() {
-            let (unsealed, trace) = arrangement.meta();
-            unsealeds.push(unsealed);
-            traces.push(trace);
-        }
         BlobMeta {
             seqno: self.highest_assigned_seqno,
             id_mapping: self.id_mapping.clone(),
             graveyard: self.graveyard.clone(),
-            unsealeds,
-            traces,
+            arrangements: self.arrangements.values().map(|x| x.meta()).collect(),
         }
     }
 }
