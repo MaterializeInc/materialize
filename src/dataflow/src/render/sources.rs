@@ -16,7 +16,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
 use persist_types::Codec;
-use timely::dataflow::operators::{Concat, Inspect, OkErr, ToStream};
+use timely::dataflow::operators::{Concat, OkErr, ToStream};
 use timely::dataflow::operators::{Map, UnorderedInput};
 use timely::dataflow::Scope;
 
@@ -507,8 +507,9 @@ where
                                     // When persistence is enabled we need to seal up both the
                                     // timestamp bindings and the upsert state. Otherwise, just
                                     // pass through.
-                                    let upsert_ok = if let Some(source_persist_config) =
-                                        source_persist_config
+                                    let (upsert_ok, upsert_err) = if let Some(
+                                        source_persist_config,
+                                    ) = source_persist_config
                                     {
                                         let (sealed_upsert_ok, upsert_seal_err) = upsert_ok
                                             .conditional_seal(
@@ -528,11 +529,21 @@ where
                                         let sealed_upsert_ok =
                                             sealed_upsert_ok.await_frontier(&source_name);
 
-                                        upsert_seal_err.inspect(|e| log::error!("{:?}", e));
+                                        let upsert_seal_err =
+                                            upsert_seal_err.map(move |(err, ts, diff)| {
+                                                let wrapped_error =
+                                                    DataflowError::from(SourceError::new(
+                                                        source_name.clone(),
+                                                        SourceErrorDetails::Persistence(err),
+                                                    ));
+                                                (wrapped_error, ts, diff)
+                                            });
 
-                                        sealed_upsert_ok
+                                        let combined_err = upsert_err.concat(&upsert_seal_err);
+
+                                        (sealed_upsert_ok, combined_err)
                                     } else {
-                                        upsert_ok
+                                        (upsert_ok, upsert_err)
                                     };
 
                                     (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
