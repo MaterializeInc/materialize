@@ -183,13 +183,19 @@ impl PredicateKnowledge {
             }
             MirRelationExpr::Map { input, scalars } => {
                 let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
+                let input_arity = input.arity();
                 let structured = PredicateStructure::new(&input_knowledge);
+                let mut output_knowledge = input_knowledge.clone();
                 // Scalars could be simplified based on known predicates.
-                for scalar in scalars.iter_mut() {
+                for (index, scalar) in scalars.iter_mut().enumerate() {
                     optimize(scalar, &structured);
+                    output_knowledge.push(
+                        MirScalarExpr::Column(input_arity + index)
+                            .call_binary(scalar.clone(), expr::BinaryFunc::Eq),
+                    );
                 }
                 // TODO: present literal columns (and non-null?) as predicates.
-                input_knowledge
+                output_knowledge
             }
             MirRelationExpr::FlatMap {
                 input,
