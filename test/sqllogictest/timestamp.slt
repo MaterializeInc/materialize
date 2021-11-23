@@ -188,3 +188,11 @@ true
 true
 1 hour 30 minutes
 true
+
+query T
+SELECT '99999-01-01'::TIMESTAMP + '162144 y';
+----
+262143-01-01 00:00:00
+
+query error timestamp out of range
+SELECT '99999-01-01'::TIMESTAMP + '162145 y';

@@ -105,6 +105,8 @@ List new features before bug fixes.
 
 - Support `generate_series` for [`timestamp`] data.
 
+- Prevent overflow on operations combining [`timestamp`] and [`interval`].
+
 {{% version-header v0.10.0 %}}
 
 - Allow ingesting avro schemas whose top node is not a record type.

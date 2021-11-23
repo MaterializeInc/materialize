@@ -10,10 +10,8 @@
 #![allow(missing_docs)]
 
 use std::fmt;
-use std::fmt::Debug;
 use std::iter;
 
-use chrono::Timelike;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use num::{CheckedAdd, Integer, Signed};
@@ -937,8 +935,18 @@ impl Iterator for TimestampRangeStepInclusive {
             && ((self.rev && self.state >= self.stop) || (!self.rev && self.state <= self.stop))
         {
             let result = self.state.clone();
-            self.state = add_timestamp_months(self.state, self.step.months);
-            self.state += self.step.duration_as_chrono();
+            match add_timestamp_months(self.state, self.step.months) {
+                Ok(state) => match state.checked_add_signed(self.step.duration_as_chrono()) {
+                    Some(v) => {
+                        self.state = v;
+                    }
+                    None => self.done = true,
+                },
+                Err(..) => {
+                    self.done = true;
+                }
+            }
+
             Some(result)
         } else {
             None
