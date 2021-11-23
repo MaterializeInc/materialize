@@ -10,7 +10,7 @@
 //! Lifts information about predicates towards the expression root.
 //!
 //! This transform produces a collection of predicates that could be harmlessly
-//! applied to the argument expression, in the sense that the would neither
+//! applied to the argument expression, in the sense that they would neither
 //! discard any records nor produce errors.
 //!
 //! This transform does not move the predicates, which remain in force
@@ -430,7 +430,7 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
         });
         class.dedup();
         // If we have a second literal, not equal to the first, we have a contradiction and can
-        // just replaces everything with false.
+        // just replace everything with false.
         if let Some(second) = class.get(1) {
             if second.is_literal_ok() {
                 predicates.push(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
