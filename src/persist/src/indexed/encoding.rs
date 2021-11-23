@@ -26,6 +26,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
+use crate::indexed::ColumnarRecords;
 use crate::storage::SeqNo;
 
 /// An internally unique id for a persisted stream. External users identify
@@ -183,7 +184,12 @@ pub struct BlobUnsealedBatch {
     /// Which updates are included in this batch.
     pub desc: Range<SeqNo>,
     /// The updates themselves.
-    pub updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    ///
+    /// TODO: ideally, these would be a single ColumnarRecords instead of multiple.
+    /// We are keeping it this way for now because it is a optimization on the latency
+    /// sensitive fast path to avoid allocating one large ColumnarRecords and copying
+    /// everything into it.
+    pub updates: Vec<ColumnarRecords>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -324,7 +330,7 @@ impl Codec for BlobMeta {
 
 impl BlobMeta {
     const MAGIC: &'static [u8] = b"mz";
-    const CURRENT_VERSION: u8 = 5;
+    const CURRENT_VERSION: u8 = 6;
 
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
@@ -763,6 +769,10 @@ mod tests {
         }
     }
 
+    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> Vec<ColumnarRecords> {
+        vec![updates.iter().collect::<ColumnarRecords>()]
+    }
+
     impl From<(&'_ str, Id)> for StreamRegistration {
         fn from(x: (&'_ str, Id)) -> Self {
             let (name, id) = x;
@@ -793,7 +803,7 @@ mod tests {
         // Normal case
         let b = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(2),
-            updates: vec![update_with_ts(0), update_with_ts(1)],
+            updates: columnar_records(vec![update_with_ts(0), update_with_ts(1)]),
         };
         assert_eq!(b.validate(), Ok(()));
 

@@ -76,6 +76,7 @@ impl ColumnarRecords {
     }
 }
 
+// TODO: deduplicate this with the other FromIterator implementation.
 impl<'a> FromIterator<&'a ((Vec<u8>, Vec<u8>), u64, isize)> for ColumnarRecords {
     fn from_iter<T: IntoIterator<Item = &'a ((Vec<u8>, Vec<u8>), u64, isize)>>(iter: T) -> Self {
         let iter = iter.into_iter();
@@ -93,6 +94,28 @@ impl<'a> FromIterator<&'a ((Vec<u8>, Vec<u8>), u64, isize)> for ColumnarRecords 
                 builder.reserve(additional, key.len(), val.len());
             }
             builder.push(((key, val), *ts, *diff));
+        }
+        builder.finish()
+    }
+}
+
+impl<'a> FromIterator<((&'a [u8], &'a [u8]), u64, isize)> for ColumnarRecords {
+    fn from_iter<T: IntoIterator<Item = ((&'a [u8], &'a [u8]), u64, isize)>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let size_hint = iter.size_hint();
+
+        let mut builder = ColumnarRecordsBuilder::default();
+        for record in iter.into_iter() {
+            let ((key, val), ts, diff) = record;
+            if builder.records.len() == 0 {
+                // Use the first record to attempt to pre-size the builder
+                // allocations. This uses the iter's size_hint's lower+1 to
+                // match the logic in Vec.
+                let (lower, _) = size_hint;
+                let additional = usize::saturating_add(lower, 1);
+                builder.reserve(additional, key.len(), val.len());
+            }
+            builder.push(((key, val), ts, diff));
         }
         builder.finish()
     }

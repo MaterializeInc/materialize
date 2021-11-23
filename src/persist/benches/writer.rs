@@ -28,6 +28,7 @@ use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
+use persist::indexed::columnar::ColumnarRecords;
 use persist::indexed::encoding::{BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
 use persist::indexed::runtime::WriteReqBuilder;
@@ -311,6 +312,7 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
 
     let updates = generate_updates();
     let size = get_encoded_len(updates.clone());
+    let updates = vec![updates.iter().collect::<ColumnarRecords>()];
     group.throughput(Throughput::Bytes(size));
     let batch = BlobUnsealedBatch {
         desc: SeqNo(0)..SeqNo(1),
