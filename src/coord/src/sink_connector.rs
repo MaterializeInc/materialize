@@ -126,7 +126,7 @@ fn get_latest_ts(
             )
         })?;
 
-    // Empty topic
+    // Empty topic.  Return early to avoid unnecesasry call to kafka below.
     if hi == 0 {
         return Ok(None);
     }
@@ -144,9 +144,10 @@ fn get_latest_ts(
         }
     }
 
-    // Topic not empty but we couldn't read any messages
+    // Topic not empty but we couldn't read any messages.  We don't expect this to happen but we
+    // have no reason to rely on kafka not inserting any internal messages at the beginning.
     if latest_offset.is_none() {
-        bail!(
+        log::debug!(
             "unable to read any messages from non-empty topic {}:{}, lo/hi: {}/{}",
             consistency_topic,
             partition,
