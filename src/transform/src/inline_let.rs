@@ -16,6 +16,7 @@
 
 use crate::TransformArgs;
 use expr::{Id, LocalId, MirRelationExpr};
+use ore::stack::RecursionLimitError;
 
 /// Install replace certain `Get` operators with their `Let` value.
 #[derive(Debug)]
@@ -39,7 +40,7 @@ impl crate::Transform for InlineLet {
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut lets = vec![];
-        self.action(relation, &mut lets);
+        self.action(relation, &mut lets)?;
         for (id, value) in lets.into_iter().rev() {
             *relation = MirRelationExpr::Let {
                 id,
@@ -63,17 +64,18 @@ impl InlineLet {
         &self,
         relation: &mut MirRelationExpr,
         lets: &mut Vec<(LocalId, MirRelationExpr)>,
-    ) {
+    ) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::Let { id, value, body } = relation {
-            self.action(value, lets);
+            self.action(value, lets)?;
 
             let mut num_gets = 0;
-            body.visit_mut_pre(&mut |relation| match relation {
+            body.try_visit_mut_pre::<_, crate::TransformError>(&mut |relation| match relation {
                 MirRelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
                     num_gets += 1;
+                    Ok(())
                 }
-                _ => (),
-            });
+                _ => Ok(()),
+            })?;
 
             let stripped_value = if self.inline_mfp {
                 expr::MapFilterProject::extract_non_errors_from_expr(&**value).1
@@ -87,12 +89,15 @@ impl InlineLet {
 
             if inlinable {
                 // if only used once, just inline it
-                body.visit_mut_pre(&mut |relation| match relation {
-                    MirRelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
-                        *relation = (**value).clone();
-                    }
-                    _ => (),
-                });
+                body.try_visit_mut_pre::<_, crate::TransformError>(
+                    &mut |relation| match relation {
+                        MirRelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
+                            *relation = (**value).clone();
+                            Ok(())
+                        }
+                        _ => Ok(()),
+                    },
+                )?;
             } else {
                 // otherwise lift it to the top so it's out of the way
                 lets.push((*id, value.take_dangerous()));
@@ -100,9 +105,9 @@ impl InlineLet {
 
             *relation = body.take_dangerous();
             // might be another Let in the body so have to recur here
-            self.action(relation, lets);
+            self.action(relation, lets)
         } else {
-            relation.visit_mut_children(|child| self.action(child, lets));
+            relation.try_visit_mut_children(|child| self.action(child, lets))
         }
     }
 }
