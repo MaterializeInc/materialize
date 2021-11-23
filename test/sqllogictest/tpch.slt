@@ -366,7 +366,7 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
-| Filter (#20 < #21), (datetots(#4) < 1993-10-01 00:00:00), (#4 >= 1993-07-01)
+| Filter (#20 < #21), (1993-10-01 00:00:00 > datetots(#4)), (#4 >= 1993-07-01)
 | Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
@@ -376,7 +376,7 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %2.(#0)
 | |   delta %2 %0.(#0)
-| Filter (datetots(#4) < 1993-10-01 00:00:00), (#4 >= 1993-07-01)
+| Filter (1993-10-01 00:00:00 > datetots(#4)), (#4 >= 1993-07-01)
 | Project (#5)
 | Reduce group=(#0)
 | | agg count(true)
@@ -465,7 +465,7 @@ WHERE
 ----
 %0 = Let l0 =
 | Get materialize.public.lineitem (u21)
-| Filter (#4 < 24), (datetots(#10) < 1995-01-01 00:00:00), (#6 <= 0.07), (#6 >= 0.05), (#10 >= 1994-01-01)
+| Filter (#4 < 24), (#6 <= 0.07), (1995-01-01 00:00:00 > datetots(#10)), (#6 >= 0.05), (#10 >= 1994-01-01)
 | Project (#5, #6)
 | Reduce group=()
 | | agg sum((#0 * #1))
@@ -801,7 +801,7 @@ ORDER BY
 | |   delta %1 %0.(#0) %3.(#0) %2.(#0)
 | |   delta %2 %1.(#0) %0.(#0) %3.(#0)
 | |   delta %3 %0.(#3) %1.(#1) %2.(#0)
-| Filter (#25 = "R"), (#12 < 1994-01-01), (datetots(#12) < 1994-01-01 00:00:00), (#12 >= 1993-10-01)
+| Filter (#25 = "R"), (#12 < 1994-01-01), (1994-01-01 00:00:00 > datetots(#12)), (#12 >= 1993-10-01)
 | Project (#0..#2, #4, #5, #7, #22, #23, #34)
 | Reduce group=(#0, #1, #4, #3, #8, #2, #5)
 | | agg sum((#6 * (1 - #7)))
@@ -930,7 +930,7 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
-| Filter ((#23 = "MAIL") || (#23 = "SHIP")), (#19 < #20), (#20 < #21), (datetots(#21) < 1995-01-01 00:00:00), (#21 >= 1994-01-01)
+| Filter ((#23 = "MAIL") || (#23 = "SHIP")), (#19 < #20), (#20 < #21), (1995-01-01 00:00:00 > datetots(#21)), (#21 >= 1994-01-01)
 | Project (#5, #23)
 | Reduce group=(#1)
 | | agg sum(if ((#0 = "2-HIGH") || (#0 = "1-URGENT")) then {1} else {0})
@@ -1041,7 +1041,7 @@ WHERE
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#1)
-| Filter (datetots(#10) < 1995-10-01 00:00:00), (#10 >= 1995-09-01)
+| Filter (1995-10-01 00:00:00 > datetots(#10)), (#10 >= 1995-09-01)
 | Project (#5, #6, #20)
 | Reduce group=()
 | | agg sum(if "^PROMO.*$" ~(varchartostr(#2)) then {(#0 * (1 - #1))} else {0})
@@ -1104,7 +1104,7 @@ ORDER BY
 ----
 %0 = Let l0 =
 | Get materialize.public.lineitem (u21)
-| Filter (datetots(#10) < 1996-04-01 00:00:00), (#10 >= 1996-01-01)
+| Filter (1996-04-01 00:00:00 > datetots(#10)), (#10 >= 1996-01-01)
 | Project (#2, #5, #6)
 | Reduce group=(#0)
 | | agg sum((#1 * (1 - #2)))
@@ -1561,7 +1561,7 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %8 %9.(#1, #2)
 | |   delta %9 %8.(#0, #1)
-| Filter (datetots(#12) < 1996-01-01 00:00:00), (#12 >= 1995-01-01)
+| Filter (1996-01-01 00:00:00 > datetots(#12)), (#12 >= 1995-01-01)
 | Project (#0, #1, #6)
 | Reduce group=(#0, #1)
 | | agg sum(#2)
@@ -1650,7 +1650,7 @@ ORDER BY
 | |   delta %1 %0.(#0) %2.(#0) %3.(#0)
 | |   delta %2 %1.(#0) %0.(#0) %3.(#0)
 | |   delta %3 %0.(#3) %1.(#2) %2.(#0)
-| Filter (#25 = "F"), (#33 = "SAUDI ARABIA"), (#19 > #18)
+| Filter (#25 = "F"), (#33 = "SAUDI ARABIA"), (#18 < #19)
 | Project (#0, #1, #7)
 
 %5 = Let l1 =
@@ -1687,7 +1687,7 @@ ORDER BY
 %11 =
 | Join %9 %5 (= #0 #2)
 | | implementation = Differential %9 %5.(#0)
-| Filter (#1 != #4), (#14 > #13)
+| Filter (#1 != #4), (#13 < #14)
 | Project (#0, #1)
 | Distinct group=(#0, #1)
 | Negate

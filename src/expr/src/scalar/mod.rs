@@ -713,8 +713,9 @@ impl MirScalarExpr {
                         }
                         operands.sort();
                         *e = build_nary_expr(operands);
-                    } else if func.is_commutative() {
+                    } else if let Some(permuted_func) = func.on_operand_permutation() {
                         if expr2 < expr1 {
+                            *func = permuted_func;
                             ::std::mem::swap(expr1, expr2);
                         }
                     }

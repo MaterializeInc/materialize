@@ -216,7 +216,7 @@ reduce
 )
 [(int32 false) (int32 false) (int32 false)]
 ----
-((#1 <= #0) || (#1 >= #2))
+((#0 >= #1) || (#1 >= #2))
 
 reduce
 (
@@ -660,3 +660,133 @@ reduce
 [int64 int64]
 ----
 ((#0 + #1) + #1)
+
+# Normalization of comparison operations
+
+reduce
+(
+    call_binary lt #0 #1
+)
+[int64 int64]
+----
+(#0 < #1)
+
+reduce
+(
+    call_binary lt #1 #0
+)
+[int64 int64]
+----
+(#0 > #1)
+
+reduce
+(
+    call_binary lt #0 1
+)
+[int64 int64]
+----
+(#0 < 1)
+
+reduce
+(
+    call_binary lt 1 #0
+)
+[int64 int64]
+----
+(#0 > 1)
+
+reduce
+(
+    call_binary lte #0 #1
+)
+[int64 int64]
+----
+(#0 <= #1)
+
+reduce
+(
+    call_binary lte #1 #0
+)
+[int64 int64]
+----
+(#0 >= #1)
+
+reduce
+(
+    call_binary lte #0 1
+)
+[int64 int64]
+----
+(#0 <= 1)
+
+reduce
+(
+    call_binary lte 1 #0
+)
+[int64 int64]
+----
+(#0 >= 1)
+
+reduce
+(
+    call_binary gt #0 #1
+)
+[int64 int64]
+----
+(#0 > #1)
+
+reduce
+(
+    call_binary gt #1 #0
+)
+[int64 int64]
+----
+(#0 < #1)
+
+reduce
+(
+    call_binary gt #0 1
+)
+[int64 int64]
+----
+(#0 > 1)
+
+reduce
+(
+    call_binary gt 1 #0
+)
+[int64 int64]
+----
+(#0 < 1)
+
+reduce
+(
+    call_binary gte #0 #1
+)
+[int64 int64]
+----
+(#0 >= #1)
+
+reduce
+(
+    call_binary gte #1 #0
+)
+[int64 int64]
+----
+(#0 <= #1)
+
+reduce
+(
+    call_binary gte #0 1
+)
+[int64 int64]
+----
+(#0 >= 1)
+
+reduce
+(
+    call_binary gte 1 #0
+)
+[int64 int64]
+----
+(#0 <= 1)

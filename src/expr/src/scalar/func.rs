@@ -3372,6 +3372,24 @@ impl BinaryFunc {
         }
     }
 
+    /// Returns the operation that leads to the same result with permuted
+    /// operands.
+    pub fn on_operand_permutation(&self) -> Option<Self> {
+        match self {
+            BinaryFunc::Lt => Some(BinaryFunc::Gt),
+            BinaryFunc::Gte => Some(BinaryFunc::Lte),
+            BinaryFunc::Gt => Some(BinaryFunc::Lt),
+            BinaryFunc::Lte => Some(BinaryFunc::Gte),
+            _ => {
+                if self.is_commutative() {
+                    Some(self.clone())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     /// Whether the function is commutative.
     pub fn is_commutative(&self) -> bool {
         use BinaryFunc::*;
