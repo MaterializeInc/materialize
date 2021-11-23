@@ -11,6 +11,5 @@ fn main() {
     mz_protoc::Protoc::new()
         .include("testdata")
         .input("testdata/benchmark.proto")
-        .input("testdata/fuzz.proto")
         .build_script_exec();
 }

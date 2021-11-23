@@ -237,35 +237,56 @@ id_name id animal
 one     1  horse
 two     2  bee
 
-$ kafka-create-topic topic=proto
+$ file-append path=test.proto
+syntax = "proto3";
 
-$ kafka-ingest topic=proto key-format=protobuf key-message=simpleid format=protobuf message=measurement timestamp=1
-{"id": "a"} {"resource": "CPU", "measured_value": 10}
+message Key {
+    string id = 1;
+}
+
+message KeyComplex {
+    int32 id1 = 1;
+    int32 id2 = 2;
+}
+
+message Value {
+    int32 measurement = 1;
+}
+
+$ protobuf-compile-descriptors inputs=test.proto output=test.proto
+
+$ kafka-create-topic topic=proto partitions=1
+
+$ kafka-ingest topic=proto
+  key-format=protobuf key-descriptor-file=test.proto key-message=.Key
+  format=protobuf descriptor-file=test.proto message=.Value
+{"id": "a"} {"measurement": 10}
 
 > CREATE MATERIALIZED SOURCE input_proto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-proto-${testdrive.seed}'
-  KEY FORMAT PROTOBUF MESSAGE '.SimpleId' USING SCHEMA  '${testdrive.protobuf-descriptors}'
-  VALUE FORMAT PROTOBUF MESSAGE '.Measurement' USING SCHEMA '${testdrive.protobuf-descriptors}'
+  KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
+  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
   INCLUDE KEY
 
 > SELECT * FROM input_proto
-id resource measured_value mz_offset
-------------------------------------
-a  CPU      10             1
+id  measurement  mz_offset
+--------------------------
+a   10           1
 
+$ kafka-create-topic topic=proto-structured partitions=1
 
-$ kafka-create-topic topic=proto-structured
-
-$ kafka-ingest topic=proto-structured key-format=protobuf key-message=measurement format=protobuf message=simpleid timestamp=1
-{"resource": "CPU", "measured_value": 10} {"id": "a"}
+$ kafka-ingest topic=proto-structured
+  key-format=protobuf key-descriptor-file=test.proto key-message=.KeyComplex
+  format=protobuf descriptor-file=test.proto message=.Value
+{"id1": 1, "id2": 2} {"measurement": 10}
 
 > CREATE MATERIALIZED SOURCE input_proto_structured
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-proto-structured-${testdrive.seed}'
-  KEY FORMAT PROTOBUF MESSAGE '.Measurement' USING SCHEMA '${testdrive.protobuf-descriptors}'
-  VALUE FORMAT PROTOBUF MESSAGE '.SimpleId' USING SCHEMA  '${testdrive.protobuf-descriptors}'
-  INCLUDE KEY AS measurement
+  KEY FORMAT PROTOBUF MESSAGE '.KeyComplex' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
+  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
+  INCLUDE KEY AS key
 
-> SELECT (measurement).resource as r, (measurement).measured_value as v, id FROM input_proto_structured
-r    v   id
------------
-CPU  10  a
+> SELECT key::text, (key).id1, (key).id2, measurement, mz_offset FROM input_proto_structured
+key    id1  id2  measurement  mz_offset
+---------------------------------------
+(1,2)  1    2    10           1

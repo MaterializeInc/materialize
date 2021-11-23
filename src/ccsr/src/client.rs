@@ -208,7 +208,7 @@ where
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum SchemaType {
     Avro,

@@ -27,26 +27,30 @@ first second mz_offset
 1     2      1
 2     3      2
 
+$ file-append path=input.proto
+syntax = "proto3";
+
+message Input {
+    string field = 1;
+}
+
+$ protobuf-compile-descriptors inputs=input.proto output=input.pb
+
 $ kafka-create-topic topic=input_proto
 
 > CREATE MATERIALIZED SOURCE input_proto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_proto-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Batch' USING SCHEMA '${testdrive.protobuf-descriptors}'
+  FORMAT PROTOBUF MESSAGE '.Input' USING SCHEMA FILE '${testdrive.temp-dir}/input.pb'
 
-$ kafka-ingest format=protobuf topic=input_proto message=batch timestamp=1
-{"id": "1", "interval_start": "2020-01-01_00:00:00", "interval_end": "2020-01-01_00:00:09", "records": []}
-{"id": "2", "interval_start": "2020-01-01_00:00:10", "interval_end": "2020-01-01_00:00:19", "records": []}
+$ kafka-ingest format=protobuf topic=input_proto message=.Input descriptor-file=input.pb timestamp=1
+{"field": "a"}
+{"field": "b"}
 
-> SELECT id, interval_start, interval_end, mz_offset from input_proto
-id interval_start        interval_end      mz_offset
-------------------------------------------------------------
-1  2020-01-01_00:00:00 2020-01-01_00:00:09      1
-2  2020-01-01_00:00:10 2020-01-01_00:00:19      2
-
-> SELECT (rs) FROM input_proto, unnest(records) as rs
-rs
----------
-
+> SELECT * from input_proto
+field  mz_offset
+----------------
+a      1
+b      2
 
 $ set schema={
     "type": "record",

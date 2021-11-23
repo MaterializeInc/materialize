@@ -17,7 +17,7 @@ hex = "0.4.3"
 log = "0.4.13"
 ore = { path = "../../src/ore" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-protobuf = "3.0.0-alpha.2"
+protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 rand = "0.8.4"
 rand_distr = "0.4.2"
 structopt = "0.3.25"

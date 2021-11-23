@@ -6,11 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-$ set schema
-syntax = "proto3";
-message SimpleId {
-  string id = 1;
-}
 
 > SELECT * FROM kafka_proto_source;
 id mz_offset
@@ -18,7 +13,7 @@ id mz_offset
 c  1
 h  2
 
-$ kafka-ingest topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION} format=protobuf schema=${schema} message=simpleid publish=true
+$ kafka-ingest topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION} format=protobuf descriptor-file=message.pb message=.Message
 {"id": "a"}
 {"id": "e"}
 

@@ -34,7 +34,7 @@ pgrepr = { path = "../pgrepr" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-protobuf = "3.0.0-alpha.2"
+protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"

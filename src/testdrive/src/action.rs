@@ -32,7 +32,6 @@ use url::Url;
 
 use mz_aws_util::config::AwsConfig;
 use ore::retry::Retry;
-use repr::strconv;
 
 use crate::error::{DynError, Error, InputError, ResultExt};
 use crate::parser::{Command, PosCommand, SqlOutput};
@@ -44,6 +43,7 @@ mod http;
 mod kafka;
 mod kinesis;
 mod postgres;
+mod protobuf;
 mod s3;
 mod schema_registry;
 mod sleep;
@@ -350,19 +350,6 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
         "testdrive.temp-dir".into(),
         state.temp_path.display().to_string(),
     );
-    {
-        let protobuf_descriptors = crate::format::protobuf::gen::FILE_DESCRIPTOR_SET_DATA;
-        vars.insert("testdrive.protobuf-descriptors".into(), {
-            let mut out = String::new();
-            strconv::format_bytes(&mut out, &protobuf_descriptors);
-            out
-        });
-        vars.insert("testdrive.protobuf-descriptors-file".into(), {
-            let path = state.temp_path.join("protobuf-descriptors");
-            fs::write(&path, &protobuf_descriptors).err_ctx("writing protobuf descriptors file")?;
-            path.display().to_string()
-        });
-    }
     vars.insert("testdrive.aws-region".into(), state.aws_region().into());
     vars.insert("testdrive.aws-endpoint".into(), state.aws_endpoint().into());
     vars.insert("testdrive.aws-account".into(), state.aws_account.clone());
@@ -430,9 +417,6 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
                     "avro-ocf-verify" => Box::new(
                         avro_ocf::build_verify(builtin, context.clone()).map_err(wrap_err)?,
                     ),
-                    "schema-registry-wait-schema" => Box::new(
-                        schema_registry::build_wait(builtin, context.clone()).map_err(wrap_err)?,
-                    ),
                     "file-append" => Box::new(file::build_append(builtin).map_err(wrap_err)?),
                     "file-delete" => Box::new(file::build_delete(builtin).map_err(wrap_err)?),
                     "http-request" => Box::new(http::build_request(builtin).map_err(wrap_err)?),
@@ -463,6 +447,15 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
                     "postgres-verify-slot" => {
                         Box::new(postgres::build_verify_slot(builtin).map_err(wrap_err)?)
                     }
+                    "protobuf-compile-descriptors" => {
+                        Box::new(protobuf::build_compile_descriptors(builtin).map_err(wrap_err)?)
+                    }
+                    "schema-registry-publish" => {
+                        Box::new(schema_registry::build_publish(builtin).map_err(wrap_err)?)
+                    }
+                    "schema-registry-wait-schema" => Box::new(
+                        schema_registry::build_wait(builtin, context.clone()).map_err(wrap_err)?,
+                    ),
                     "sql-server-connect" => {
                         Box::new(sql_server::build_connect(builtin).map_err(wrap_err)?)
                     }

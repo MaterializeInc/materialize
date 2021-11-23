@@ -28,7 +28,7 @@ mz-avro = { path = "../avro", features = ["snappy"] }
 num-traits = "0.2.14"
 ordered-float = { version = "2.8.0", features = ["serde"] }
 ore = { path = "../ore" }
-protobuf = "3.0.0-alpha.2"
+protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 repr = { path = "../repr" }
 serde = { version = "1.0.130", features = ["derive"] }
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git" }

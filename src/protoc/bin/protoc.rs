@@ -23,9 +23,6 @@ struct Args {
     /// Generate Rust source code into OUT_DIR.
     #[structopt(long, required = true, value_name = "OUT_DIR")]
     rust_out: PathBuf,
-    /// Derive serde traits for generated messages.
-    #[structopt(long)]
-    serde: bool,
     /// Input protobuf schemas.
     #[structopt(required = true, value_name = "PROTO_FILES")]
     proto_files: Vec<String>,
@@ -40,6 +37,5 @@ fn main() -> anyhow::Result<()> {
     for path in &args.proto_files {
         protoc.input(path);
     }
-    protoc.serde(args.serde);
     protoc.compile_into(&args.rust_out)
 }
