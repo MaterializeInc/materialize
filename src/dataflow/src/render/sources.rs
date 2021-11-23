@@ -397,7 +397,6 @@ where
                                 ),
                                 SourceType::ByteStream(source) => render_decode(
                                     &source,
-                                    key_encoding,
                                     value_encoding,
                                     &self.debug_name,
                                     &envelope,

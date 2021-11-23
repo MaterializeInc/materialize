@@ -529,6 +529,9 @@ pub fn plan_create_source(
                 tail,
             });
             let encoding = get_encoding(format, envelope, with_options_original)?;
+            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
+                bail!("File sources do not support key decoding");
+            }
             (connector, encoding)
         }
         CreateSourceConnector::S3 {
@@ -571,6 +574,9 @@ pub fn plan_create_source(
                 },
             });
             let encoding = get_encoding(format, envelope, with_options_original)?;
+            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
+                bail!("S3 sources do not support key decoding");
+            }
             (connector, encoding)
         }
         CreateSourceConnector::Postgres {

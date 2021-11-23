@@ -63,7 +63,8 @@ pub struct KafkaSourceReader {
 }
 
 impl SourceReader for KafkaSourceReader {
-    type Payload = Option<Vec<u8>>;
+    type Key = Option<Vec<u8>>;
+    type Value = Option<Vec<u8>>;
 
     /// Create a new instance of a Kafka reader.
     fn new(
@@ -150,7 +151,7 @@ impl SourceReader for KafkaSourceReader {
     ///
     /// If a message has an offset that is smaller than the next expected offset for this consumer (and this partition)
     /// we skip this message, and seek to the appropriate offset
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Payload>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error> {
         // Poll the consumer once. Since we split the consumer's partitions out into separate queues and poll those individually,
         // we expect this poll to always return None - but it's necessary to drive logic that consumes from rdkafka's internal
         // event queue, such as statistics callbacks.
@@ -501,17 +502,17 @@ fn create_kafka_config(
     kafka_config
 }
 
-impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<Option<Vec<u8>>> {
+impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
     fn from(msg: &BorrowedMessage<'a>) -> Self {
         let kafka_offset = KafkaOffset {
             offset: msg.offset(),
         };
         Self {
-            payload: msg.payload().map(|p| p.to_vec()),
             partition: PartitionId::Kafka(msg.partition()),
             offset: kafka_offset.into(),
             upstream_time_millis: msg.timestamp().to_millis(),
             key: msg.key().map(|k| k.to_vec()),
+            value: msg.payload().map(|p| p.to_vec()),
         }
     }
 }
@@ -534,7 +535,9 @@ impl PartitionConsumer {
     }
 
     /// Returns the next message to process for this partition (if any).
-    fn get_next_message(&mut self) -> Result<Option<SourceMessage<Option<Vec<u8>>>>, KafkaError> {
+    fn get_next_message(
+        &mut self,
+    ) -> Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>>, KafkaError> {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
                 let result = SourceMessage::from(&msg);

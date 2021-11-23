@@ -264,6 +264,16 @@ pub trait MaybeLength {
     fn is_empty(&self) -> bool;
 }
 
+impl MaybeLength for () {
+    fn len(&self) -> Option<usize> {
+        None
+    }
+
+    fn is_empty(&self) -> bool {
+        true
+    }
+}
+
 impl MaybeLength for Vec<u8> {
     fn len(&self) -> Option<usize> {
         Some(self.len())
@@ -315,7 +325,8 @@ impl<T: MaybeLength> MaybeLength for Option<T> {
 /// a "partition" is baked into this trait and introduces some cognitive overhead as
 /// we are forced to treat things like file sources as "single-partition"
 pub(crate) trait SourceReader {
-    type Payload: timely::Data + MaybeLength;
+    type Key: timely::Data + MaybeLength;
+    type Value: timely::Data + MaybeLength;
 
     /// Create a new source reader.
     ///
@@ -351,12 +362,11 @@ pub(crate) trait SourceReader {
     ///
     /// Note that implementers are required to present messages in strictly ascending\
     /// offset order within each partition.
-    fn get_next_message(&mut self) -> Result<NextMessage<Self::Payload>, anyhow::Error>;
+    fn get_next_message(&mut self) -> Result<NextMessage<Self::Key, Self::Value>, anyhow::Error>;
 }
 
-#[derive(Debug)]
-pub(crate) enum NextMessage<Payload> {
-    Ready(SourceMessage<Payload>),
+pub(crate) enum NextMessage<Key, Value> {
+    Ready(SourceMessage<Key, Value>),
     Pending,
     TransientDelay,
     Finished,
@@ -364,7 +374,7 @@ pub(crate) enum NextMessage<Payload> {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-pub struct SourceMessage<Payload> {
+pub struct SourceMessage<Key, Value> {
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
@@ -373,19 +383,30 @@ pub struct SourceMessage<Payload> {
     ///
     /// Milliseconds since the unix epoch
     pub upstream_time_millis: Option<i64>,
-    /// Optional key
-    pub key: Option<Vec<u8>>,
-    /// The payload
-    pub payload: Payload,
+    /// The message key
+    pub key: Key,
+    /// The message value
+    pub value: Value,
 }
 
-impl<Payload> fmt::Debug for SourceMessage<Payload> {
+impl fmt::Debug for SourceMessage<(), MessagePayload> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SourceMessage")
+            .field("partition", &self.partition)
+            .field("offset", &self.offset)
+            .field("upstream_time_millis", &self.upstream_time_millis)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SourceMessage")
             .field("partition", &self.partition)
             .field("offset", &self.offset)
             .field("upstream_time_millis", &self.upstream_time_millis)
             .field("key[present]", &self.key.is_some())
+            .field("value[present]", &self.value.is_some())
             .finish()
     }
 }
@@ -1216,7 +1237,7 @@ pub(crate) fn create_source<G, S: 'static>(
     persist_config: Option<PersistentTimestampBindingsConfig<SourceTimestamp, AssignedTimestamp>>,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, S::Payload>>,
+        timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value>>,
         timely::dataflow::Stream<G, ((SourceTimestamp, AssignedTimestamp), Timestamp, Diff)>,
         timely::dataflow::Stream<G, SourceError>,
     ),
@@ -1802,18 +1823,18 @@ impl<K: Codec, V: Codec> PersistentTimestampBindingsConfig<K, V> {
 /// TODO: This function is a bit of a mess rn but hopefully this function makes the
 /// existing mess more obvious and points towards ways to improve it.
 fn handle_message<S: SourceReader>(
-    message: SourceMessage<S::Payload>,
+    message: SourceMessage<S::Key, S::Value>,
     consistency_info: &mut ConsistencyInfo,
     bytes_read: &mut usize,
     cap: &Capability<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        Result<SourceOutput<Vec<u8>, S::Payload>, String>,
-        Tee<Timestamp, Result<SourceOutput<Vec<u8>, S::Payload>, String>>,
+        Result<SourceOutput<S::Key, S::Value>, String>,
+        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value>, String>>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp)>,
     timer: &std::time::Instant,
-    buffer: &mut Option<SourceMessage<S::Payload>>,
+    buffer: &mut Option<SourceMessage<S::Key, S::Value>>,
     timestamp_bindings: &TimestampBindingRc,
 ) -> (SourceStatus, MessageProcessing) {
     let partition = message.partition.clone();
@@ -1842,12 +1863,14 @@ fn handle_message<S: SourceReader>(
         Some(ts) => {
             // Note: empty and null payload/keys are currently
             // treated as the same thing.
-            let key = message.key.unwrap_or_default();
-            let out = message.payload;
+            let key = message.key;
+            let out = message.value;
             // Entry for partition_metadata is guaranteed to exist as messages
             // are only processed after we have updated the partition_metadata for a
             // partition and created a partition queue for it.
-            *bytes_read += key.len();
+            if let Some(len) = key.len() {
+                *bytes_read += len;
+            }
             if let Some(len) = out.len() {
                 *bytes_read += len;
             }
