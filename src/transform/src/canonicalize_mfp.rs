@@ -47,15 +47,14 @@ impl crate::Transform for CanonicalizeMfp {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation);
-        Ok(())
+        self.action(relation)
     }
 }
 
 impl CanonicalizeMfp {
-    fn action(&self, relation: &mut MirRelationExpr) {
+    fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         let mut mfp = expr::MapFilterProject::extract_non_errors_from_expr_mut(relation);
-        relation.visit_mut_children(|e| self.action(e));
+        relation.try_visit_mut_children(|e| self.action(e))?;
         mfp.optimize();
         if !mfp.is_identity() {
             let (map, mut filter, project) = mfp.as_map_filter_project();
@@ -94,5 +93,6 @@ impl CanonicalizeMfp {
                 }
             }
         }
+        Ok(())
     }
 }

@@ -28,16 +28,13 @@ impl crate::Transform for NonNullable {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
+        relation.try_visit_mut_pre(&mut |e| self.action(e))
     }
 }
 
 impl NonNullable {
     /// Harvests information about non-nullability of columns from sources.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         match relation {
             MirRelationExpr::Map { input, scalars } => {
                 if scalars.iter().any(|s| scalar_contains_isnull(s)) {
@@ -76,6 +73,7 @@ impl NonNullable {
             }
             _ => {}
         }
+        Ok(())
     }
 }
 
