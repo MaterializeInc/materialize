@@ -395,19 +395,7 @@ where
         // An activator that allows futures to re-schedule this operator when ready.
         let activator = Arc::new(scope.sync_activator_for(&seal_op.operator_info().address[..]));
 
-        // Keep two Vecs around, so that we don't have to keep re-allocating new ones.
-        //
-        // Newly created futures are added to `pending_futures`, which is the place where futures
-        // that are not yet ready will be kept until they are done.
-        //
-        // We use `new_pending` when iterating (and polling) through the list of pending futures to
-        // keep track of the futures that are still pending at the end of one operator invocation.
-        //
-        // We have two invariants that hold at the start and end of an operator invocation:
-        //  - `pending_futures` contains any futures that are not ready.
-        //  - `new_pending` is empty
-        let mut pending_futures = Vec::new();
-        let mut new_pending = Vec::new();
+        let mut pending_futures = VecDeque::new();
 
         seal_op.build(move |mut capabilities| {
             let mut cap_set = if active_seal_operator {
@@ -465,7 +453,7 @@ where
 
                         let future = condition_write.seal(*frontier_element);
 
-                        pending_futures.push(PendingSealFuture::ConditionSeal(SealFuture {
+                        pending_futures.push_back(PendingSealFuture::ConditionSeal(SealFuture {
                             cap: cap_set.delayed(frontier_element),
                             future,
                         }));
@@ -478,7 +466,7 @@ where
                 let waker = futures_util::task::waker_ref(&activator);
                 let mut context = Context::from_waker(&waker);
 
-                while let Some(pending_future) = pending_futures.pop() {
+                while let Some(pending_future) = pending_futures.pop_front() {
                     match pending_future {
                         PendingSealFuture::ConditionSeal(mut pending_future) => {
                             match Pin::new(&mut pending_future.future).poll(&mut context) {
@@ -497,10 +485,7 @@ where
 
                                     let future = primary_write.seal(*pending_future.cap.time());
 
-                                    // It's very important to add this to `pending_futures` and not
-                                    // `new_pending` to ensure that we poll from it at least once,
-                                    // so that it has a reference to the waker/activator.
-                                    pending_futures.push(PendingSealFuture::PrimarySeal(
+                                    pending_futures.push_back(PendingSealFuture::PrimarySeal(
                                         SealFuture {
                                             cap: pending_future.cap,
                                             future,
@@ -521,8 +506,17 @@ where
                                     session.give(Err((error, *pending_future.cap.time(), 1)));
                                 }
                                 std::task::Poll::Pending => {
-                                    new_pending
-                                        .push(PendingSealFuture::ConditionSeal(pending_future));
+                                    // We assume that seal requests are worked off in order and stop
+                                    // trying for the first seal that is not done.
+                                    // Push the future back to the front of the queue. We have to
+                                    // do this dance of popping and pushing because we're modifying
+                                    // the queue while we work on a future. This prevents us from
+                                    // just getting a reference to the front of the queue and then
+                                    // popping once we know that a future is done.
+                                    pending_futures.push_front(PendingSealFuture::ConditionSeal(
+                                        pending_future,
+                                    ));
+                                    break;
                                 }
                             }
                         }
@@ -549,14 +543,21 @@ where
                                     session.give(Err((error, *pending_future.cap.time(), 1)));
                                 }
                                 std::task::Poll::Pending => {
-                                    new_pending
-                                        .push(PendingSealFuture::PrimarySeal(pending_future));
+                                    // We assume that seal requests are worked off in order and stop
+                                    // trying for the first seal that is not done.
+                                    // Push the future back to the front of the queue. We have to
+                                    // do this dance of popping and pushing because we're modifying
+                                    // the queue while we work on a future. This prevents us from
+                                    // just getting a reference to the front of the queue and then
+                                    // popping once we know that a future is done.
+                                    pending_futures
+                                        .push_front(PendingSealFuture::PrimarySeal(pending_future));
+                                    break;
                                 }
                             }
                         }
                     }
                 }
-                pending_futures.append(&mut new_pending);
 
                 input_frontier.clone_from(&mut new_input_frontier);
                 cap_set.downgrade(input_frontier.iter());
