@@ -279,7 +279,7 @@ impl Optimizer {
                     // redundancy between the two transforms.
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     // Lifts the information `col1 = col2`
-                    Box::new(crate::demand::Demand),
+                    Box::new(crate::demand::Demand::default()),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
@@ -323,7 +323,7 @@ impl Optimizer {
                     Box::new(crate::join_implementation::JoinImplementation),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
-                    Box::new(crate::demand::Demand),
+                    Box::new(crate::demand::Demand::default()),
                     Box::new(crate::map_lifting::LiteralLifting),
                 ],
             }),

@@ -11,7 +11,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use expr::{AggregateExpr, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use expr::{
+    AggregateExpr, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr,
+    RECURSION_LIMIT,
+};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use repr::{Datum, Row};
 
 use crate::TransformArgs;
@@ -29,7 +33,23 @@ use crate::TransformArgs;
 /// columns that are no longer required in the join pipeline, which are
 /// those columns not required by the output nor any further equalities.
 #[derive(Debug)]
-pub struct Demand;
+pub struct Demand {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for Demand {
+    fn default() -> Demand {
+        Demand {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for Demand {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for Demand {
     fn transform(
@@ -41,8 +61,7 @@ impl crate::Transform for Demand {
             relation,
             (0..relation.arity()).collect(),
             &mut HashMap::new(),
-        );
-        Ok(())
+        )
     }
 }
 
@@ -53,7 +72,7 @@ impl Demand {
         relation: &mut MirRelationExpr,
         mut columns: HashSet<usize>,
         gets: &mut HashMap<Id, HashSet<usize>>,
-    ) {
+    ) -> Result<(), crate::TransformError> {
         // A valid relation type is only needed for Maps, but we can't borrow
         // the relation in the corresponding branch of the match statement, since
         // it is already borrowed mutably.
@@ -65,30 +84,30 @@ impl Demand {
         match relation {
             MirRelationExpr::Constant { .. } => {
                 // Nothing clever to do with constants, that I can think of.
+                Ok(())
             }
             MirRelationExpr::Get { id, .. } => {
                 gets.entry(*id).or_insert_with(HashSet::new).extend(columns);
+                Ok(())
             }
             MirRelationExpr::Let { id, value, body } => {
                 // Let harvests any requirements of get from its body,
                 // and pushes the union of the requirements at its value.
                 let id = Id::Local(*id);
                 let prior = gets.insert(id, HashSet::new());
-                self.action(body, columns, gets);
+                self.action(body, columns, gets)?;
                 let needs = gets.remove(&id).unwrap();
                 if let Some(prior) = prior {
                     gets.insert(id, prior);
                 }
 
-                self.action(value, needs, gets);
+                self.action(value, needs, gets)
             }
-            MirRelationExpr::Project { input, outputs } => {
-                self.action(
-                    input,
-                    columns.into_iter().map(|c| outputs[c]).collect(),
-                    gets,
-                );
-            }
+            MirRelationExpr::Project { input, outputs } => self.action(
+                input,
+                columns.into_iter().map(|c| outputs[c]).collect(),
+                gets,
+            ),
             MirRelationExpr::Map { input, scalars } => {
                 let relation_type = relation_type.as_ref().unwrap();
                 let arity = input.arity();
@@ -120,7 +139,7 @@ impl Demand {
                 }
 
                 columns.retain(|c| *c < arity);
-                self.action(input, columns, gets);
+                self.action(input, columns, gets)
             }
             MirRelationExpr::FlatMap {
                 input,
@@ -133,7 +152,7 @@ impl Demand {
                     columns.extend(expr.support());
                 }
                 columns.retain(|c| *c < input.arity());
-                self.action(input, columns, gets);
+                self.action(input, columns, gets)
             }
             MirRelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {
@@ -141,7 +160,7 @@ impl Demand {
                         columns.insert(column);
                     }
                 }
-                self.action(input, columns, gets);
+                self.action(input, columns, gets)
             }
             MirRelationExpr::Join {
                 inputs,
@@ -183,7 +202,7 @@ impl Demand {
 
                 // Recursively indicate the requirements.
                 for (input, columns) in inputs.iter_mut().zip(new_columns) {
-                    self.action(input, columns, gets);
+                    self.action(input, columns, gets)?;
                 }
 
                 // Install a permutation if any demanded column is not the
@@ -191,6 +210,8 @@ impl Demand {
                 if should_permute {
                     *relation = relation.take_dangerous().project(permutation);
                 }
+
+                Ok(())
             }
             MirRelationExpr::Reduce {
                 input,
@@ -225,7 +246,7 @@ impl Demand {
                     }
                 }
 
-                self.action(input, new_columns, gets);
+                self.action(input, new_columns, gets)
             }
             MirRelationExpr::TopK {
                 input,
@@ -237,28 +258,27 @@ impl Demand {
                 // which rows are retained.
                 columns.extend(group_key.iter().cloned());
                 columns.extend(order_key.iter().map(|o| o.column));
-                self.action(input, columns, gets);
+                self.action(input, columns, gets)
             }
-            MirRelationExpr::Negate { input } => {
-                self.action(input, columns, gets);
-            }
+            MirRelationExpr::Negate { input } => self.action(input, columns, gets),
             MirRelationExpr::DeclareKeys { input, keys: _ } => {
                 // TODO[btv] - If and when we add a "debug mode" that asserts whether this is truly a key,
                 // we will probably need to add the key to the set of demanded columns.
-                self.action(input, columns, gets);
+                self.action(input, columns, gets)
             }
             MirRelationExpr::Threshold { input } => {
                 // Threshold requires all columns, as collapsing any distinct values
                 // has the potential to change how it thresholds counts. This could
                 // be improved with reasoning about distinctness or non-negativity.
                 let arity = input.arity();
-                self.action(input, (0..arity).collect(), gets);
+                self.action(input, (0..arity).collect(), gets)
             }
             MirRelationExpr::Union { base, inputs } => {
-                self.action(base, columns.clone(), gets);
+                self.action(base, columns.clone(), gets)?;
                 for input in inputs {
-                    self.action(input, columns.clone(), gets);
+                    self.action(input, columns.clone(), gets)?;
                 }
+                Ok(())
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 for key_set in keys {
@@ -266,7 +286,7 @@ impl Demand {
                         columns.extend(key.support());
                     }
                 }
-                self.action(input, columns, gets);
+                self.action(input, columns, gets)
             }
         }
     }
