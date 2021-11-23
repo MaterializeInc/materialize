@@ -44,10 +44,7 @@ use futures_executor::block_on;
 enum Cmd {
     Register(String, (&'static str, &'static str), PFutureHandle<Id>),
     Destroy(String, PFutureHandle<bool>),
-    Write(
-        Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-        PFutureHandle<SeqNo>,
-    ),
+    Write(Vec<(Id, ColumnarRecords)>, PFutureHandle<SeqNo>),
     Seal(Vec<Id>, u64, PFutureHandle<SeqNo>),
     AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
     Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
@@ -305,11 +302,7 @@ impl RuntimeClient {
     /// streams with the given ids.
     ///
     /// The ids must have previously been registered.
-    fn write(
-        &self,
-        updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-        res: PFutureHandle<SeqNo>,
-    ) {
+    pub(crate) fn write(&self, updates: Vec<(Id, ColumnarRecords)>, res: PFutureHandle<SeqNo>) {
         self.core.send(Cmd::Write(updates, res))
     }
 
@@ -373,24 +366,6 @@ impl RuntimeClient {
     }
 }
 
-fn encode_updates<'a, K, V, I>(updates: I) -> Vec<((Vec<u8>, Vec<u8>), u64, isize)>
-where
-    K: Codec,
-    V: Codec,
-    I: IntoIterator<Item = &'a ((K, V), u64, isize)>,
-{
-    updates
-        .into_iter()
-        .map(|((k, v), ts, diff)| {
-            let mut key_encoded = Vec::with_capacity(k.size_hint());
-            let mut val_encoded = Vec::with_capacity(v.size_hint());
-            k.encode(&mut key_encoded);
-            v.encode(&mut val_encoded);
-            ((key_encoded, val_encoded), *ts, *diff)
-        })
-        .collect()
-}
-
 /// A handle that allows writes of ((Key, Value), Time, Diff) updates into an
 /// [crate::indexed::Indexed] via a [RuntimeClient].
 #[derive(PartialEq, Eq)]
@@ -448,9 +423,9 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     where
         I: IntoIterator<Item = &'a ((K, V), u64, isize)>,
     {
-        let updates = encode_updates(updates);
+        let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
         let (tx, rx) = PFuture::new();
-        self.runtime.write(vec![(self.id, updates)], tx);
+        self.runtime.write(vec![(self.id, updates.finish())], tx);
         rx
     }
 
@@ -595,8 +570,8 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
         let updates = updates
             .iter()
             .map(|(id, updates)| {
-                let updates = encode_updates(updates);
-                (*id, updates)
+                let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
+                (*id, updates.finish())
             })
             .collect();
         self.runtime.write(updates, tx);
