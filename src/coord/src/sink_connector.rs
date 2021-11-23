@@ -466,7 +466,7 @@ async fn build_kafka(
 
             // get latest committed timestamp from consistency topic
             let gate_ts = if builder.reuse_topic {
-                get_latest_ts(&consistency_topic, config.clone(), Duration::from_secs(5))
+                get_latest_ts(&consistency_topic, config.clone(), Duration::from_secs(10))
                     .context("error restarting from existing kafka consistency topic for sink")?
             } else {
                 None
