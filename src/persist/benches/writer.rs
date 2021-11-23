@@ -32,6 +32,7 @@ use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
 use persist::indexed::encoding::{BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
+use persist::indexed::runtime::WriteReqBuilder;
 use persist::indexed::Indexed;
 use persist::mem::MemRegistry;
 use persist::pfuture::{PFuture, PFutureHandle};
@@ -186,7 +187,11 @@ fn bench_write<L: Log, B: Blob>(
         for updates in data {
             // We intentionally never call seal, so that the data only gets written
             // once to Unsealed, and not to Trace.
-            block_on_drain(index, |i, handle| i.write(vec![(id, updates)], handle)).unwrap();
+            let mut updates = WriteReqBuilder::from_iter(updates.iter());
+            block_on_drain(index, |i, handle| {
+                i.write(vec![(id, updates.finish())], handle)
+            })
+            .unwrap();
         }
         start.elapsed()
     })
@@ -309,7 +314,7 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
     let updates = generate_updates();
     let size = get_encoded_len(updates.clone());
     group.throughput(Throughput::Bytes(size));
-    let mut batch = BlobUnsealedBatch {
+    let batch = BlobUnsealedBatch {
         desc: Description::new(
             Antichain::from_elem(SeqNo(0)),
             Antichain::from_elem(SeqNo(1)),
@@ -333,18 +338,6 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
             bench_set_unsealed_batch(&mut mem_blob_cache, batch.clone(), b);
         },
     );
-
-    batch.updates.sort();
-    let size = get_encoded_len(batch.updates.clone());
-    group.throughput(Throughput::Bytes(size));
-
-    group.bench_with_input(BenchmarkId::new("file_sorted", size), &batch, |b, batch| {
-        bench_set_unsealed_batch(&mut file_blob_cache, batch.clone(), b);
-    });
-
-    group.bench_with_input(BenchmarkId::new("mem_sorted", size), &batch, |b, batch| {
-        bench_set_unsealed_batch(&mut mem_blob_cache, batch.clone(), b);
-    });
 }
 criterion_group!(
     benches,
