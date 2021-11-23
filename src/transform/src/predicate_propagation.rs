@@ -157,7 +157,7 @@ impl PredicateKnowledge {
                 let mut remap = HashMap::new();
                 for (index, column) in outputs.iter().enumerate() {
                     if !remap.contains_key(column) {
-                        remap.insert(column, index);
+                        remap.insert(*column, index);
                     }
                 }
 
@@ -167,11 +167,7 @@ impl PredicateKnowledge {
 
                 // 2. rewrite constraints using new column identifiers,
                 for predicate in input_knowledge.iter_mut() {
-                    predicate.visit_mut(&mut |e| {
-                        if let MirScalarExpr::Column(c) = e {
-                            *c = remap[c];
-                        }
-                    })
+                    predicate.permute_map(&remap);
                 }
 
                 // 3. add equivalence constraints for repeated columns.
