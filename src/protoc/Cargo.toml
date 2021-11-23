@@ -1,5 +1,5 @@
 [package]
-name = "protoc"
+name = "mz-protoc"
 description = "A pure Rust protobuf compiler."
 version = "0.0.0"
 edition = "2021"
@@ -12,8 +12,9 @@ path = "bin/protoc.rs"
 [dependencies]
 anyhow = "1.0.47"
 ore = { path = "../ore" }
-protobuf = "2.23.0"
-protobuf-codegen = "2.23.0"
-protobuf-codegen-pure = "2.23.0"
+protobuf = "3.0.0-alpha.2"
+protobuf-codegen = "3.0.0-alpha.2"
+protobuf-codegen-pure = "3.0.0-alpha.2"
+protobuf-parse = "3.0.0-alpha.2"
 structopt = "0.3.25"
 tempfile = "3.2.0"

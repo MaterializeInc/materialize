@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 
-use protoc::Protoc;
+use mz_protoc::Protoc;
 
 const SIMPLE_PROTO: &str = "message Simple {
     required int32 i = 1;
@@ -38,7 +38,7 @@ where
     }
 }
 
-fn build_workspace(proto_contents: &str) -> anyhow::Result<(TempDir, PathBuf)> {
+fn build_workspace(proto_contents: &str) -> Result<(TempDir, PathBuf), anyhow::Error> {
     let temp_dir = tempfile::tempdir()?;
     let proto_path = temp_dir.path().join("input.proto");
     fs::write(&proto_path, proto_contents)?;
@@ -46,7 +46,7 @@ fn build_workspace(proto_contents: &str) -> anyhow::Result<(TempDir, PathBuf)> {
 }
 
 #[test]
-fn bad_out_dir() -> anyhow::Result<()> {
+fn bad_out_dir() -> Result<(), anyhow::Error> {
     let (temp_dir, proto_path) = build_workspace(SIMPLE_PROTO)?;
     let res = Protoc::new()
         .include(temp_dir.path())
@@ -57,7 +57,7 @@ fn bad_out_dir() -> anyhow::Result<()> {
 }
 
 #[test]
-fn missing_input_file() -> anyhow::Result<()> {
+fn missing_input_file() -> Result<(), anyhow::Error> {
     let (temp_dir, _proto_path) = build_workspace(SIMPLE_PROTO)?;
     let res = Protoc::new()
         .include(temp_dir.path())
@@ -68,19 +68,19 @@ fn missing_input_file() -> anyhow::Result<()> {
 }
 
 #[test]
-fn bad_input_file() -> anyhow::Result<()> {
+fn bad_input_file() -> Result<(), anyhow::Error> {
     let (temp_dir, proto_path) = build_workspace("bad syntax")?;
     let res = Protoc::new()
         .include(temp_dir.path())
         .input(proto_path)
         .compile_into(&temp_dir.path());
     assert_error(&res, "input.proto");
-    assert_error(&res, "ParserError");
+    assert_error(&res, "incorrect input");
     Ok(())
 }
 
 #[test]
-fn simple_success() -> anyhow::Result<()> {
+fn simple_success() -> Result<(), anyhow::Error> {
     let (temp_dir, proto_path) = build_workspace(SIMPLE_PROTO)?;
     Protoc::new()
         .include(temp_dir.path())
@@ -90,7 +90,7 @@ fn simple_success() -> anyhow::Result<()> {
 }
 
 #[test]
-fn well_known_types() -> anyhow::Result<()> {
+fn well_known_types() -> Result<(), anyhow::Error> {
     let (temp_dir, proto_path) = build_workspace(
         r#"import "google/protobuf/timestamp.proto";
 

@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use protoc::Protoc;
+use mz_protoc::Protoc;
 use structopt::StructOpt;
 
 /// Compile protocol buffers.

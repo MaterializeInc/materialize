@@ -13,7 +13,7 @@ use std::str::FromStr;
 
 pub mod gen;
 
-pub use protobuf::{well_known_types, Message};
+pub use protobuf::{well_known_types, Message, MessageDyn};
 
 #[derive(Debug, Copy, Clone)]
 pub enum MessageType {

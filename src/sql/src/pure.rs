@@ -23,7 +23,6 @@ use csv::ReaderBuilder;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use protobuf::Message;
-use protoc::Protoc;
 use regex::Regex;
 use reqwest::Url;
 use sql_parser::ast::CsrSeedCompiledOrLegacy;
@@ -34,6 +33,7 @@ use uuid::Uuid;
 
 use dataflow_types::AwsConfig;
 use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
+use mz_protoc::Protoc;
 use repr::strconv;
 use sql_parser::parser::parse_columns;
 
@@ -824,10 +824,10 @@ async fn compile_proto(
     {
         Ok(fds) => {
             let message_name = fds
-                .get_file()
+                .file
                 .iter()
                 .find(|f| f.get_name() == primary_proto_name)
-                .map(|file| file.get_message_type().iter().next())
+                .map(|file| file.message_type.first())
                 .flatten()
                 .map(|message| format!(".{}", message.get_name()))
                 .ok_or_else(|| anyhow!("unable to compile temporary schema"))?;

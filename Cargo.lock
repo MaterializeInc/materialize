@@ -665,10 +665,10 @@ dependencies = [
  "futures-channel",
  "hex",
  "log",
+ "mz-protoc",
  "ore",
  "postgres-types",
  "protobuf",
- "protoc",
  "rand",
  "rand_distr",
  "structopt",
@@ -969,6 +969,7 @@ dependencies = [
  "log",
  "mz-avro",
  "mz-aws-util",
+ "mz-protoc",
  "ore",
  "persist",
  "pgrepr",
@@ -976,7 +977,6 @@ dependencies = [
  "postgres-util",
  "prometheus",
  "protobuf",
- "protoc",
  "rand",
  "rdkafka",
  "regex",
@@ -2428,11 +2428,11 @@ dependencies = [
  "lazy_static",
  "log",
  "mz-avro",
+ "mz-protoc",
  "num-traits",
  "ordered-float",
  "ore",
  "protobuf",
- "protoc",
  "repr",
  "serde",
  "serde-protobuf",
@@ -2943,6 +2943,20 @@ dependencies = [
  "ore",
  "procfs",
  "prometheus",
+]
+
+[[package]]
+name = "mz-protoc"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "ore",
+ "protobuf",
+ "protobuf-codegen",
+ "protobuf-codegen-pure",
+ "protobuf-parse",
+ "structopt",
+ "tempfile",
 ]
 
 [[package]]
@@ -3858,9 +3872,9 @@ dependencies = [
 
 [[package]]
 name = "protobuf"
-version = "2.23.0"
+version = "3.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45604fc7a88158e7d514d8e22e14ac746081e7a70d7690074dd0029ee37458d6"
+checksum = "9d5ef59c35c7472ce5e1b6c5924b87585143d1fc2cf39eae0009bba6c4df62f1"
 dependencies = [
  "serde",
  "serde_derive",
@@ -3868,34 +3882,52 @@ dependencies = [
 
 [[package]]
 name = "protobuf-codegen"
-version = "2.23.0"
+version = "3.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb87f342b585958c1c086313dbc468dcac3edf5e90362111c26d7a58127ac095"
+checksum = "89100ee819f69b77a4cab389fec9dd155a305af4c615e6413ec1ef9341f333ef"
 dependencies = [
+ "anyhow",
  "protobuf",
+ "protobuf-parse",
+ "thiserror",
 ]
 
 [[package]]
 name = "protobuf-codegen-pure"
-version = "2.23.0"
+version = "3.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ca6e0e2f898f7856a6328650abc9b2df71b7c1a5f39be0800d19051ad0214b2"
+checksum = "79453e74d08190551e821533ee42c447f9e21ca26f83520e120e6e8af27f6879"
 dependencies = [
+ "anyhow",
  "protobuf",
  "protobuf-codegen",
+ "protobuf-parse",
+ "thiserror",
+]
+
+[[package]]
+name = "protobuf-parse"
+version = "3.0.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c265ffc69976efc3056955b881641add3186ad0be893ef10622482d80d1d2b68"
+dependencies = [
+ "anyhow",
+ "protobuf",
+ "protoc",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]
 name = "protoc"
-version = "0.0.0"
+version = "3.0.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f1f8b318a54d18fbe542513331e058f4f8ce6502e542e057c50c7e5e803fdab"
 dependencies = [
  "anyhow",
- "ore",
- "protobuf",
- "protobuf-codegen",
- "protobuf-codegen-pure",
- "structopt",
- "tempfile",
+ "log",
+ "thiserror",
+ "which",
 ]
 
 [[package]]
@@ -4501,9 +4533,8 @@ dependencies = [
 
 [[package]]
 name = "serde-protobuf"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "386e6493f9a732832e6b595ac2757a3c8c9285f4ab0c27313b7696b1712c32e4"
+version = "0.8.3-alpha.0"
+source = "git+https://github.com/MaterializeInc/serde-protobuf.git#8154bb9129aaa722abe7ce33a0aa263d22ed1e4f"
 dependencies = [
  "linked-hash-map",
  "log",
@@ -4709,13 +4740,13 @@ dependencies = [
  "log",
  "mz-avro",
  "mz-aws-util",
+ "mz-protoc",
  "ore",
  "pgrepr",
  "postgres-protocol",
  "postgres-types",
  "postgres-util",
  "protobuf",
- "protoc",
  "rdkafka",
  "regex",
  "repr",
@@ -5077,12 +5108,12 @@ dependencies = [
  "md-5",
  "mz-avro",
  "mz-aws-util",
+ "mz-protoc",
  "ore",
  "pgrepr",
  "postgres_array",
  "predicates",
  "protobuf",
- "protoc",
  "rand",
  "rdkafka",
  "regex",
@@ -5116,18 +5147,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.26"
+version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93119e4feac1cbe6c798c34d3a53ea0026b0b1de6a120deef895137c0529bfe2"
+checksum = "854babe52e4df1653706b98fcfc05843010039b406875930a70e4d9644e5c417"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.26"
+version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "060d69a0afe7796bf42e9e2ff91f5ee691fb15c53d38b4b62a9a53eb23164745"
+checksum = "aa32fd3f627f367fe16f893e2597ae3c05020f8bba2666a4e6ea73d377e5714b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5768,6 +5799,17 @@ checksum = "b8e38c0608262c46d4a56202ebabdeb094cef7e560ca7a226c6bf055188aa4ea"
 dependencies = [
  "ring",
  "untrusted",
+]
+
+[[package]]
+name = "which"
+version = "4.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea187a8ef279bc014ec368c27a920da2024d2a711109bfbe3440585d5cf27ad9"
+dependencies = [
+ "either",
+ "lazy_static",
+ "libc",
 ]
 
 [[package]]
