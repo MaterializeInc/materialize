@@ -27,6 +27,7 @@ use dataflow_types::{
 use expr::GlobalId;
 use ore::collections::CollectionExt;
 use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::error::KafkaError;
 use repr::Timestamp;
 use sql::kafka_util;
 
@@ -46,18 +47,15 @@ pub async fn build(
 fn get_next_message(
     consumer: &mut BaseConsumer,
     timeout: Duration,
-) -> Result<Option<Vec<u8>>, anyhow::Error> {
+) -> Result<Option<(Vec<u8>, i64)>, anyhow::Error> {
     if let Some(result) = consumer.poll(timeout) {
         match result {
             Ok(message) => match message.payload() {
-                Some(p) => Ok(Some(p.to_vec())),
-                None => {
-                    bail!("unexpected null payload")
-                }
+                Some(p) => Ok(Some((p.to_vec(), message.offset()))),
+                None => bail!("unexpected null payload"),
             },
-            Err(err) => {
-                bail!("Failed to process message {}", err)
-            }
+            Err(KafkaError::PartitionEOF(_)) => Ok(None),
+            Err(err) => bail!("Failed to process message {}", err),
         }
     } else {
         Ok(None)
@@ -67,9 +65,21 @@ fn get_next_message(
 // Retrieves the latest committed timestamp from the consistency topic
 fn get_latest_ts(
     consistency_topic: &str,
-    consumer: &mut BaseConsumer,
+    mut consumer_config: ClientConfig,
     timeout: Duration,
 ) -> Result<Option<Timestamp>, anyhow::Error> {
+    let mut consumer = consumer_config
+        .set(
+            "group.id",
+            format!("materialize-bootstrap-{}", consistency_topic),
+        )
+        .set("isolation.level", "read_committed")
+        .set("enable.auto.commit", "false")
+        .set("auto.offset.reset", "earliest")
+        .set("enable.partition.eof", "true")
+        .create::<BaseConsumer>()
+        .context("creating consumer client failed")?;
+
     // ensure the consistency topic has exactly one partition
     let partitions = kafka_util::get_partitions(&consumer, consistency_topic, timeout)
         .with_context(|| {
@@ -107,62 +117,66 @@ fn get_latest_ts(
         )
     })?;
 
-    let mut latest_message = None;
-    while let Some(message) = get_next_message(consumer, timeout)? {
-        latest_message = Some(message);
+    let (lo, hi) = consumer
+        .fetch_watermarks(consistency_topic, 0, timeout)
+        .map_err(|e| {
+            anyhow!(
+                "Failed to fetch metadata while reading from consistency topic: {}",
+                e
+            )
+        })?;
+
+    // Empty topic.  Return early to avoid unnecesasry call to kafka below.
+    if hi == 0 {
+        return Ok(None);
     }
 
-    if latest_message.is_none() {
-        // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
-        match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
-            Ok((lo, hi)) => {
-                if hi == 0 {
-                    return Ok(None);
-                } else {
-                    bail!(
-                        "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
-                        consistency_topic,
-                        partition,
-                        lo,
-                        hi
-                    );
-                }
-            }
-            Err(e) => {
-                bail!(
-                    "Failed to fetch metadata while reading from consistency topic: {}",
-                    e
-                );
+    let mut latest_ts = None;
+    let mut latest_offset = None;
+    while let Some((message, offset)) = get_next_message(&mut consumer, timeout)? {
+        debug_assert!(offset >= latest_offset.unwrap_or(0));
+        latest_offset = Some(offset);
+
+        if let Some(ts) = maybe_decode_consistency_end_record(&message, consistency_topic)? {
+            if ts >= latest_ts.unwrap_or(0) {
+                latest_ts = Some(ts);
             }
         }
     }
 
-    let latest_message = latest_message.expect("known to exist");
-
-    // the latest valid message should be an END message. If not, things have
-    // gone wrong!
-    let timestamp = decode_consistency_end_record(&latest_message, consistency_topic)?;
-
-    Ok(Some(timestamp))
+    // Topic not empty but we couldn't read any messages.  We don't expect this to happen but we
+    // have no reason to rely on kafka not inserting any internal messages at the beginning.
+    if latest_offset.is_none() {
+        log::debug!(
+            "unable to read any messages from non-empty topic {}:{}, lo/hi: {}/{}",
+            consistency_topic,
+            partition,
+            lo,
+            hi
+        );
+    }
+    Ok(latest_ts)
 }
 
-fn decode_consistency_end_record(
+// There may be arbitrary messages in this topic that we cannot decode.  We only
+// return an error when we know we've found an END message but cannot decode it.
+fn maybe_decode_consistency_end_record(
     bytes: &[u8],
     consistency_topic: &str,
-) -> Result<Timestamp, anyhow::Error> {
+) -> Result<Option<Timestamp>, anyhow::Error> {
     // The first 5 bytes are reserved for the schema id/schema registry information
     let mut bytes = &bytes[5..];
     let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
         .context("Failed to decode consistency topic message")?;
 
-    if let Value::Record(r) = record {
-        let m: HashMap<String, Value> = r.into_iter().collect();
+    if let Value::Record(ref r) = record {
+        let m: HashMap<String, Value> = r.clone().into_iter().collect();
         let status = m.get("status");
         let id = m.get("id");
         match (status, id) {
             (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
                 if let Ok(ts) = id.parse::<u64>() {
-                    Ok(Timestamp::from(ts))
+                    Ok(Some(Timestamp::from(ts)))
                 } else {
                     bail!(
                         "Malformed consistency record, failed to parse timestamp {} in topic {}",
@@ -171,14 +185,10 @@ fn decode_consistency_end_record(
                     );
                 }
             }
-            _ => {
-                bail!(
-                    "Malformed consistency record in topic {}, expected END with a timestamp but record was {:?}, tried matching {:?} {:?}",
-                    consistency_topic, m, status, id);
-            }
+            _ => Ok(None),
         }
     } else {
-        bail!("Failed to decode consistency topic message, was not a parseable record");
+        Ok(None)
     }
 }
 
@@ -457,21 +467,7 @@ async fn build_kafka(
 
             // get latest committed timestamp from consistency topic
             let gate_ts = if builder.reuse_topic {
-                let mut consumer_config = config.clone();
-                consumer_config
-                    .set(
-                        "group.id",
-                        format!("materialize-bootstrap-{}", consistency_topic),
-                    )
-                    .set("isolation.level", "read_committed")
-                    .set("enable.auto.commit", "false")
-                    .set("auto.offset.reset", "earliest");
-
-                let mut consumer = consumer_config
-                    .create::<BaseConsumer>()
-                    .context("creating consumer client failed")?;
-
-                get_latest_ts(&consistency_topic, &mut consumer, Duration::from_secs(5))
+                get_latest_ts(&consistency_topic, config.clone(), Duration::from_secs(10))
                     .context("error restarting from existing kafka consistency topic for sink")?
             } else {
                 None
