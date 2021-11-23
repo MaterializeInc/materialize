@@ -513,7 +513,6 @@ where
                                     ));
                                 }
                                 std::task::Poll::Ready(Err(e)) => {
-                                    let mut session = data_output.session(&pending_future.cap);
                                     let error = format!(
                                         "Error sealing {} (condition) up to {}: {}",
                                         &operator_name,
@@ -521,9 +520,6 @@ where
                                         e
                                     );
                                     log::trace!("{}", error);
-
-                                    // TODO: make error retractable? Probably not...
-                                    session.give(Err((error, *pending_future.cap.time(), 1)));
 
                                     log::trace!(
                                         "Adding seal (condition) to queue again: {}",
@@ -584,7 +580,6 @@ where
                                     });
                                 }
                                 std::task::Poll::Ready(Err(e)) => {
-                                    let mut session = data_output.session(&pending_future.cap);
                                     let error = format!(
                                         "Error sealing {} (primary) up to {}: {}",
                                         &operator_name,
@@ -592,9 +587,6 @@ where
                                         e
                                     );
                                     log::trace!("{}", error);
-
-                                    // TODO: make error retractable? Probably not...
-                                    session.give(Err((error, *pending_future.cap.time(), 1)));
 
                                     log::trace!(
                                         "Adding seal (primary) to queue again: {}",
@@ -1103,62 +1095,6 @@ mod tests {
 
         let timely_result: Result<Vec<_>, _> = guards.join().into_iter().collect();
         timely_result.expect("timely workers failed");
-
-        Ok(())
-    }
-
-    #[test]
-    fn conditional_seal_error_stream() -> Result<(), Error> {
-        let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
-        let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
-        p.stop()?;
-
-        let recv = timely::execute_directly(move |worker| {
-            let (mut primary_input, mut condition_input, probe, err_stream) =
-                worker.dataflow(|scope| {
-                    let mut primary_input = Handle::new();
-                    let mut condition_input = Handle::new();
-                    let primary_stream = primary_input.to_stream(scope);
-                    let condition_stream = condition_input.to_stream(scope);
-
-                    let (_, err_stream) = primary_stream.conditional_seal(
-                        "test",
-                        &condition_stream,
-                        primary_write,
-                        condition_write,
-                    );
-
-                    let probe = err_stream.probe();
-                    (primary_input, condition_input, probe, err_stream.capture())
-                });
-
-            primary_input.send((((), ()), 0, 1));
-            condition_input.send((((), ()), 0, 1));
-
-            primary_input.advance_to(1);
-            condition_input.advance_to(1);
-
-            while probe.less_than(&1) {
-                worker.step();
-            }
-
-            err_stream
-        });
-
-        let actual = recv
-            .extract()
-            .into_iter()
-            .flat_map(|(_, xs)| xs.into_iter())
-            .collect::<Vec<_>>();
-
-        let expected = vec![(
-            "Error sealing conditional_seal(test) (condition) up to 1: runtime shutdown"
-                .to_string(),
-            1,
-            1,
-        )];
-        assert_eq!(actual, expected);
 
         Ok(())
     }
