@@ -534,6 +534,26 @@ impl MirScalarExpr {
                             } else if expr1 == expr2 {
                                 *e = expr1.take();
                             }
+                        } else if *func == BinaryFunc::Eq {
+                            if expr1.is_literal_true() {
+                                *e = expr2.take();
+                            } else if expr2.is_literal_true() {
+                                *e = expr1.take();
+                            } else if expr1.is_literal_false() {
+                                *e = expr2.take().call_unary(UnaryFunc::Not(func::Not));
+                            } else if expr2.is_literal_false() {
+                                *e = expr1.take().call_unary(UnaryFunc::Not(func::Not));
+                            }
+                        } else if *func == BinaryFunc::NotEq {
+                            if expr1.is_literal_false() {
+                                *e = expr2.take();
+                            } else if expr2.is_literal_false() {
+                                *e = expr1.take();
+                            } else if expr1.is_literal_true() {
+                                *e = expr2.take().call_unary(UnaryFunc::Not(func::Not));
+                            } else if expr2.is_literal_true() {
+                                *e = expr1.take().call_unary(UnaryFunc::Not(func::Not));
+                            }
                         }
                     }
                     MirScalarExpr::CallVariadic { func, exprs } => {

@@ -790,3 +790,69 @@ reduce
 [int64 int64]
 ----
 (#0 <= 1)
+
+# Normalization of boolean (in)equalities
+
+reduce
+(
+    call_binary eq true (call_binary gte 1 #0)
+)
+[int64 int64]
+----
+(#0 <= 1)
+
+reduce
+(
+    call_binary eq (call_binary gte 1 #0) true
+)
+[int64 int64]
+----
+(#0 <= 1)
+
+reduce
+(
+    call_binary eq false (call_binary gte 1 #0)
+)
+[int64 int64]
+----
+(#0 > 1)
+
+reduce
+(
+    call_binary eq (call_binary gte 1 #0) false
+)
+[int64 int64]
+----
+(#0 > 1)
+
+reduce
+(
+    call_binary not_eq true (call_binary gte 1 #0)
+)
+[int64 int64]
+----
+(#0 > 1)
+
+reduce
+(
+    call_binary not_eq (call_binary gte 1 #0) true
+)
+[int64 int64]
+----
+(#0 > 1)
+
+reduce
+(
+    call_binary not_eq false (call_binary gte 1 #0)
+)
+[int64 int64]
+----
+(#0 <= 1)
+
+reduce
+(
+    call_binary not_eq (call_binary gte 1 #0) false
+)
+[int64 int64]
+----
+(#0 <= 1)
