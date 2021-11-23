@@ -22,12 +22,13 @@ use serde::{Deserialize, Serialize};
 use lowertest::MzEnumReflect;
 use ore::cast::CastFrom;
 use repr::adt::array::ArrayDimension;
+use repr::adt::interval::Interval;
 use repr::adt::numeric;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
 use crate::relation::{compare_columns, ColumnOrder};
-use crate::scalar::func::jsonb_stringify;
+use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
 
 // TODO(jamii) be careful about overflow in sum/avg
@@ -913,6 +914,70 @@ where
         .map(move |i| (Row::pack_slice(&[Datum::from(i)]), 1)))
 }
 
+/// Like
+/// [`num::range_step_inclusive`](https://github.com/rust-num/num-iter/blob/ddb14c1e796d401014c6c7a727de61d8109ad986/src/lib.rs#L279),
+/// but for our timestamp types using [`Interval`] for `step`.xwxw
+#[derive(Clone)]
+pub struct TimestampRangeStepInclusive {
+    state: NaiveDateTime,
+    stop: NaiveDateTime,
+    step: Interval,
+    rev: bool,
+    done: bool,
+}
+
+impl Iterator for TimestampRangeStepInclusive {
+    type Item = NaiveDateTime;
+
+    #[inline]
+    fn next(&mut self) -> Option<NaiveDateTime> {
+        if !self.done
+            && ((self.rev && self.state >= self.stop) || (!self.rev && self.state <= self.stop))
+        {
+            let result = self.state.clone();
+            match add_timestamp_months(self.state, self.step.months) {
+                Ok(state) => match state.checked_add_signed(self.step.duration_as_chrono()) {
+                    Some(v) => {
+                        self.state = v;
+                    }
+                    None => self.done = true,
+                },
+                Err(..) => {
+                    self.done = true;
+                }
+            }
+
+            Some(result)
+        } else {
+            None
+        }
+    }
+}
+
+fn generate_series_ts<'a>(
+    start: NaiveDateTime,
+    stop: NaiveDateTime,
+    step: Interval,
+    conv: fn(NaiveDateTime) -> Datum<'static>,
+) -> Result<impl Iterator<Item = (Row, Diff)>, EvalError> {
+    if step.months == 0 && step.duration == 0 {
+        return Err(EvalError::InvalidParameterValue(
+            "step size cannot equal zero".to_owned(),
+        ));
+    }
+    let rev = step.duration < 0;
+
+    let tsri = TimestampRangeStepInclusive {
+        state: start,
+        stop,
+        step,
+        rev,
+        done: false,
+    };
+
+    Ok(tsri.map(move |i| (Row::pack_slice(&[conv(i)]), 1)))
+}
+
 fn unnest_array<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_array()
         .elements()
@@ -1054,7 +1119,8 @@ pub enum TableFunc {
     CsvExtract(usize),
     GenerateSeriesInt32,
     GenerateSeriesInt64,
-    // TODO(justin): should also possibly have GenerateSeriesTimestamp{,Tz}.
+    GenerateSeriesTimestamp,
+    GenerateSeriesTimestampTz,
     Repeat,
     UnnestArray {
         el_typ: ScalarType,
@@ -1114,6 +1180,30 @@ impl TableFunc {
                 )?;
                 Ok(Box::new(res))
             }
+            TableFunc::GenerateSeriesTimestamp => {
+                fn pass_through<'a>(d: NaiveDateTime) -> Datum<'a> {
+                    Datum::from(d)
+                }
+                let res = generate_series_ts(
+                    datums[0].unwrap_timestamp(),
+                    datums[1].unwrap_timestamp(),
+                    datums[2].unwrap_interval(),
+                    pass_through,
+                )?;
+                Ok(Box::new(res))
+            }
+            TableFunc::GenerateSeriesTimestampTz => {
+                fn gen_ts_tz<'a>(d: NaiveDateTime) -> Datum<'a> {
+                    Datum::from(DateTime::<Utc>::from_utc(d, Utc))
+                }
+                let res = generate_series_ts(
+                    datums[0].unwrap_timestamptz().naive_utc(),
+                    datums[1].unwrap_timestamptz().naive_utc(),
+                    datums[2].unwrap_interval(),
+                    gen_ts_tz,
+                )?;
+                Ok(Box::new(res))
+            }
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
@@ -1151,6 +1241,8 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt64 => {
                 vec![ScalarType::Int64.nullable(false)]
             }
+            TableFunc::GenerateSeriesTimestamp => vec![ScalarType::Timestamp.nullable(false)],
+            TableFunc::GenerateSeriesTimestampTz => vec![ScalarType::TimestampTz.nullable(false)],
             TableFunc::Repeat => vec![],
             TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
@@ -1167,6 +1259,8 @@ impl TableFunc {
             TableFunc::CsvExtract(n_cols) => *n_cols,
             TableFunc::GenerateSeriesInt32 => 1,
             TableFunc::GenerateSeriesInt64 => 1,
+            TableFunc::GenerateSeriesTimestamp => 1,
+            TableFunc::GenerateSeriesTimestampTz => 1,
             TableFunc::Repeat => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
@@ -1181,6 +1275,8 @@ impl TableFunc {
             | TableFunc::JsonbArrayElements { .. }
             | TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
+            | TableFunc::GenerateSeriesTimestamp
+            | TableFunc::GenerateSeriesTimestampTz
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
@@ -1202,6 +1298,8 @@ impl TableFunc {
             TableFunc::CsvExtract(_) => true,
             TableFunc::GenerateSeriesInt32 => true,
             TableFunc::GenerateSeriesInt64 => true,
+            TableFunc::GenerateSeriesTimestamp => true,
+            TableFunc::GenerateSeriesTimestampTz => true,
             TableFunc::Repeat => false,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
@@ -1220,6 +1318,8 @@ impl fmt::Display for TableFunc {
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
+            TableFunc::GenerateSeriesTimestamp => f.write_str("generate_series"),
+            TableFunc::GenerateSeriesTimestampTz => f.write_str("generate_series"),
             TableFunc::Repeat => f.write_str("repeat_row"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),

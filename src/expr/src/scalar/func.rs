@@ -843,29 +843,24 @@ fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let dt = a.unwrap_timestamp();
-    Datum::Timestamp(match b {
-        Datum::Interval(i) => {
-            let dt = add_timestamp_months(dt, i.months);
-            dt + i.duration_as_chrono()
-        }
-        _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
-    })
+    let i = b.unwrap_interval();
+    let dt = add_timestamp_months(dt, i.months)?;
+    Ok(Datum::Timestamp(
+        dt.checked_add_signed(i.duration_as_chrono())
+            .ok_or(EvalError::TimestampOutOfRange)?,
+    ))
 }
 
-fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let dt = a.unwrap_timestamptz().naive_utc();
-
-    let new_ndt = match b {
-        Datum::Interval(i) => {
-            let dt = add_timestamp_months(dt, i.months);
-            dt + i.duration_as_chrono()
-        }
-        _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
-    };
-
-    Datum::TimestampTz(DateTime::<Utc>::from_utc(new_ndt, Utc))
+    let i = b.unwrap_interval();
+    let mut dt = add_timestamp_months(dt, i.months)?;
+    dt = dt
+        .checked_add_signed(i.duration_as_chrono())
+        .ok_or(EvalError::TimestampOutOfRange)?;
+    Ok(Datum::TimestampTz(DateTime::<Utc>::from_utc(dt, Utc)))
 }
 
 fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -882,13 +877,16 @@ fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     )
 }
 
-fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
     let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
-    let dt = add_timestamp_months(dt, interval.months);
-    Datum::Timestamp(dt + interval.duration_as_chrono())
+    let dt = add_timestamp_months(dt, interval.months)?;
+    Ok(Datum::Timestamp(
+        dt.checked_add_signed(interval.duration_as_chrono())
+            .ok_or(EvalError::TimestampOutOfRange)?,
+    ))
 }
 
 fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1080,24 +1078,28 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
     }
 }
 
-fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     add_timestamp_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
 
-fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     add_timestamptz_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
 
-fn add_timestamp_months(dt: NaiveDateTime, months: i32) -> NaiveDateTime {
+pub fn add_timestamp_months(
+    dt: NaiveDateTime,
+    mut months: i32,
+) -> Result<NaiveDateTime, EvalError> {
     if months == 0 {
-        return dt;
+        return Ok(dt);
     }
-
-    let mut months = months;
 
     let (mut year, mut month, mut day) = (dt.year(), dt.month0() as i32, dt.day());
     let years = months / 12;
-    year += years;
+    year = year
+        .checked_add(years)
+        .ok_or(EvalError::TimestampOutOfRange)?;
+
     months %= 12;
     // positive modulus is easier to reason about
     if months < 0 {
@@ -1112,7 +1114,11 @@ fn add_timestamp_months(dt: NaiveDateTime, months: i32) -> NaiveDateTime {
     // handle going from January 31st to February by saturation
     let mut new_d = chrono::NaiveDate::from_ymd_opt(year, month as u32, day);
     while new_d.is_none() {
-        debug_assert!(day > 28, "there are no months with fewer than 28 days");
+        // If we have decremented day past 28 and are still receiving `None`,
+        // then we have generally overflowed `NaiveDate`.
+        if day < 28 {
+            return Err(EvalError::TimestampOutOfRange);
+        }
         day -= 1;
         new_d = chrono::NaiveDate::from_ymd_opt(year, month as u32, day);
     }
@@ -1122,7 +1128,7 @@ fn add_timestamp_months(dt: NaiveDateTime, months: i32) -> NaiveDateTime {
     //
     // Both my testing and https://dba.stackexchange.com/a/105829 support the
     // idea that we should ignore leap seconds
-    new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond())
+    Ok(new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond()))
 }
 
 fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1298,13 +1304,17 @@ fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
         .map(Datum::from)
 }
 
-fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
     let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
-    let dt = add_timestamp_months(dt, -interval.months);
-    Datum::Timestamp(dt - interval.duration_as_chrono())
+    let dt = add_timestamp_months(dt, -interval.months)?;
+
+    Ok(Datum::Timestamp(
+        dt.checked_sub_signed(interval.duration_as_chrono())
+            .ok_or(EvalError::TimestampOutOfRange)?,
+    ))
 }
 
 fn sub_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -2789,10 +2799,10 @@ impl BinaryFunc {
             BinaryFunc::AddInt64 => eager!(add_int64),
             BinaryFunc::AddFloat32 => eager!(add_float32),
             BinaryFunc::AddFloat64 => eager!(add_float64),
-            BinaryFunc::AddTimestampInterval => Ok(eager!(add_timestamp_interval)),
-            BinaryFunc::AddTimestampTzInterval => Ok(eager!(add_timestamptz_interval)),
+            BinaryFunc::AddTimestampInterval => eager!(add_timestamp_interval),
+            BinaryFunc::AddTimestampTzInterval => eager!(add_timestamptz_interval),
             BinaryFunc::AddDateTime => Ok(eager!(add_date_time)),
-            BinaryFunc::AddDateInterval => Ok(eager!(add_date_interval)),
+            BinaryFunc::AddDateInterval => eager!(add_date_interval),
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
             BinaryFunc::AddNumeric => eager!(add_numeric),
             BinaryFunc::AddInterval => eager!(add_interval),
@@ -2818,11 +2828,11 @@ impl BinaryFunc {
             BinaryFunc::SubFloat64 => eager!(sub_float64),
             BinaryFunc::SubTimestamp => Ok(eager!(sub_timestamp)),
             BinaryFunc::SubTimestampTz => Ok(eager!(sub_timestamptz)),
-            BinaryFunc::SubTimestampInterval => Ok(eager!(sub_timestamp_interval)),
-            BinaryFunc::SubTimestampTzInterval => Ok(eager!(sub_timestamptz_interval)),
+            BinaryFunc::SubTimestampInterval => eager!(sub_timestamp_interval),
+            BinaryFunc::SubTimestampTzInterval => eager!(sub_timestamptz_interval),
             BinaryFunc::SubInterval => eager!(sub_interval),
             BinaryFunc::SubDate => Ok(eager!(sub_date)),
-            BinaryFunc::SubDateInterval => Ok(eager!(sub_date_interval)),
+            BinaryFunc::SubDateInterval => eager!(sub_date_interval),
             BinaryFunc::SubTime => Ok(eager!(sub_time)),
             BinaryFunc::SubTimeInterval => Ok(eager!(sub_time_interval)),
             BinaryFunc::SubNumeric => eager!(sub_numeric),
@@ -5913,32 +5923,32 @@ mod test {
     fn add_interval_months() {
         let dt = ym(2000, 1);
 
-        assert_eq!(add_timestamp_months(dt, 0), dt);
-        assert_eq!(add_timestamp_months(dt, 1), ym(2000, 2));
-        assert_eq!(add_timestamp_months(dt, 12), ym(2001, 1));
-        assert_eq!(add_timestamp_months(dt, 13), ym(2001, 2));
-        assert_eq!(add_timestamp_months(dt, 24), ym(2002, 1));
-        assert_eq!(add_timestamp_months(dt, 30), ym(2002, 7));
+        assert_eq!(add_timestamp_months(dt, 0).unwrap(), dt);
+        assert_eq!(add_timestamp_months(dt, 1).unwrap(), ym(2000, 2));
+        assert_eq!(add_timestamp_months(dt, 12).unwrap(), ym(2001, 1));
+        assert_eq!(add_timestamp_months(dt, 13).unwrap(), ym(2001, 2));
+        assert_eq!(add_timestamp_months(dt, 24).unwrap(), ym(2002, 1));
+        assert_eq!(add_timestamp_months(dt, 30).unwrap(), ym(2002, 7));
 
         // and negatives
-        assert_eq!(add_timestamp_months(dt, -1), ym(1999, 12));
-        assert_eq!(add_timestamp_months(dt, -12), ym(1999, 1));
-        assert_eq!(add_timestamp_months(dt, -13), ym(1998, 12));
-        assert_eq!(add_timestamp_months(dt, -24), ym(1998, 1));
-        assert_eq!(add_timestamp_months(dt, -30), ym(1997, 7));
+        assert_eq!(add_timestamp_months(dt, -1).unwrap(), ym(1999, 12));
+        assert_eq!(add_timestamp_months(dt, -12).unwrap(), ym(1999, 1));
+        assert_eq!(add_timestamp_months(dt, -13).unwrap(), ym(1998, 12));
+        assert_eq!(add_timestamp_months(dt, -24).unwrap(), ym(1998, 1));
+        assert_eq!(add_timestamp_months(dt, -30).unwrap(), ym(1997, 7));
 
         // and going over a year boundary by less than a year
         let dt = ym(1999, 12);
-        assert_eq!(add_timestamp_months(dt, 1), ym(2000, 1));
+        assert_eq!(add_timestamp_months(dt, 1).unwrap(), ym(2000, 1));
         let end_of_month_dt = NaiveDate::from_ymd(1999, 12, 31).and_hms(9, 9, 9);
         assert_eq!(
             // leap year
-            add_timestamp_months(end_of_month_dt, 2),
+            add_timestamp_months(end_of_month_dt, 2).unwrap(),
             NaiveDate::from_ymd(2000, 2, 29).and_hms(9, 9, 9),
         );
         assert_eq!(
             // not leap year
-            add_timestamp_months(end_of_month_dt, 14),
+            add_timestamp_months(end_of_month_dt, 14).unwrap(),
             NaiveDate::from_ymd(2001, 2, 28).and_hms(9, 9, 9),
         );
     }
