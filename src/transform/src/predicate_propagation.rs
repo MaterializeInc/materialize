@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
+use expr::{BinaryFunc, JoinInputMapper, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use repr::Datum;
 use repr::ScalarType;
 
@@ -219,20 +219,15 @@ impl PredicateKnowledge {
                 equivalences,
                 ..
             } => {
+                let input_mapper = JoinInputMapper::new(inputs);
+
                 let mut knowledge = Vec::new();
 
                 // Collect input knowledge, but update column references.
-                let mut prior_arity = 0;
-                for input in inputs.iter_mut() {
-                    for mut predicate in PredicateKnowledge::action(input, let_knowledge)? {
-                        predicate.visit_mut(&mut |expr| {
-                            if let MirScalarExpr::Column(c) = expr {
-                                *c += prior_arity;
-                            }
-                        });
-                        knowledge.push(predicate);
+                for (input_idx, input) in inputs.iter_mut().enumerate() {
+                    for predicate in PredicateKnowledge::action(input, let_knowledge)? {
+                        knowledge.push(input_mapper.map_expr_to_global(predicate, input_idx));
                     }
-                    prior_arity += input.arity();
                 }
 
                 let structured = PredicateStructure::new(&knowledge);
