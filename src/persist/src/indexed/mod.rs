@@ -11,13 +11,12 @@
 //! Diff)` updates.
 
 // NB: These really don't need to be public, but the public doc lint is nice.
+pub mod arrangement;
 pub mod background;
 pub mod cache;
 pub mod encoding;
 pub mod metrics;
 pub mod runtime;
-pub mod trace;
-pub mod unsealed;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -25,13 +24,13 @@ use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::time::Instant;
 
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
+use crate::indexed::arrangement::{Arrangement, ArrangementSnapshot};
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{
@@ -39,8 +38,6 @@ use crate::indexed::encoding::{
     UnsealedBatchMeta, UnsealedMeta,
 };
 use crate::indexed::metrics::Metrics;
-use crate::indexed::trace::{Trace, TraceSnapshot, TraceSnapshotIter};
-use crate::indexed::unsealed::{Unsealed, UnsealedSnapshot, UnsealedSnapshotIter};
 use crate::pfuture::PFutureHandle;
 use crate::storage::{Blob, Log, SeqNo};
 
@@ -109,18 +106,9 @@ impl Pending {
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
 /// Diff)` updates.
 ///
-/// The lifecycle of contained entries is as follows:
-/// - Initially: inserted into an [Unsealed].
-/// - Once the update's time has been "seal"ed: transferred from the [Unsealed]
-///   into a [Trace], which indexes them by `(key, value, time)`.
+/// Indexed contains a set of named persistent [Arrangement]s.
 ///
 /// Notes:
-/// - An entry should only logically exist in one of these places at a time,
-///   even though it may physically exist in more than one of them.
-/// - Similarly, `frontier` represents the border between data in [Unsealed] and
-///   [Trace]. Trace is logically append-only, so data is transferred to it once
-///   all the data for some timestamp has arrived. On read, [Indexed] uses this
-///   frontier to ignore any data in Unsealed that exists in in Trace.
 /// - Requests are split into two types: _unbatched_ and _batched_. An unbatched
 ///   command is run entirely by itself (the applied state has just been written
 ///   to durable storage, then the command is run, then the resulting state is
@@ -167,8 +155,7 @@ struct AppliedState {
     // which is less rare.
     id_mapping: Vec<StreamRegistration>,
     graveyard: Vec<StreamRegistration>,
-    unsealeds: BTreeMap<Id, Unsealed>,
-    traces: BTreeMap<Id, Trace>,
+    arrangements: BTreeMap<Id, Arrangement>,
 }
 
 impl<L: Log, B: Blob> Indexed<L, B> {
@@ -215,24 +202,42 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
 impl AppliedState {
     fn new(meta: BlobMeta) -> Self {
-        let unsealeds = meta
+        let mut ids = HashSet::new();
+        let mut unsealed_metas = meta
             .unsealeds
             .into_iter()
-            .map(|meta| (meta.id, Unsealed::new(meta)))
-            .collect();
-        let traces = meta
+            .map(|x| {
+                ids.insert(x.id);
+                (x.id, x)
+            })
+            .collect::<HashMap<_, _>>();
+        let mut trace_metas = meta
             .traces
             .into_iter()
-            .map(|meta| (meta.id, Trace::new(meta)))
-            .collect();
+            .map(|x| {
+                ids.insert(x.id);
+                (x.id, x)
+            })
+            .collect::<HashMap<_, _>>();
+        let mut arrangements = BTreeMap::new();
+        for id in ids {
+            // This defaulting is odd, but it goes away once we can change the
+            // metadata storage format.
+            let unsealed = unsealed_metas
+                .remove(&id)
+                .unwrap_or_else(|| UnsealedMeta::new(id));
+            let trace = trace_metas
+                .remove(&id)
+                .unwrap_or_else(|| TraceMeta::new(id));
+            arrangements.insert(id, Arrangement::new(unsealed, trace));
+        }
         AppliedState {
             next_stream_id: meta.next_stream_id,
             saved_seqno: meta.unsealeds_seqno_upper,
             highest_assigned_seqno: meta.unsealeds_seqno_upper,
             id_mapping: meta.id_mapping,
             graveyard: meta.graveyard,
-            unsealeds,
-            traces,
+            arrangements,
         }
     }
 
@@ -433,15 +438,17 @@ impl AppliedState {
                     val_codec_name: val_codec_name.to_owned(),
                 });
                 self.next_stream_id = Id(id.0 + 1);
+                let arrangement = Arrangement::new(UnsealedMeta::new(id), TraceMeta::new(id));
+                if let Some(prev) = self.arrangements.insert(id, arrangement) {
+                    return Err(format!(
+                        "internal error: unexpected previous arrangement: {:?}",
+                        prev
+                    )
+                    .into());
+                }
                 id
             }
         };
-        self.unsealeds
-            .entry(id)
-            .or_insert_with_key(|id| Unsealed::new(UnsealedMeta::new(*id)));
-        self.traces
-            .entry(id)
-            .or_insert_with_key(|id| Trace::new(TraceMeta::new(*id)));
         Ok(id)
     }
 }
@@ -481,13 +488,11 @@ impl AppliedState {
         self.id_mapping.retain(|r| r.name != id_str);
 
         // TODO: actually physically delete the unsealed and trace batches.
-        let unsealed = self.unsealeds.remove(&mapping.id);
-        let trace = self.traces.remove(&mapping.id);
+        let arrangement = self.arrangements.remove(&mapping.id);
 
-        // Sanity check that we actually removed the unsealed and trace for this
+        // Sanity check that we actually removed the arrangement for this
         // stream.
-        debug_assert!(unsealed.is_some());
-        debug_assert!(trace.is_some());
+        debug_assert!(arrangement.is_some());
 
         self.graveyard.push(mapping);
 
@@ -640,13 +645,10 @@ impl AppliedState {
         let mut total_written_bytes = 0;
         let mut deleted_unsealed_batches = vec![];
         let mut deleted_trace_batches = vec![];
-        for (id, trace) in self.traces.iter_mut() {
-            let unsealed = self
-                .unsealeds
-                .get_mut(&id)
-                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-            deleted_unsealed_batches.extend(unsealed.truncate(trace.ts_upper())?);
-            let (written_bytes, deleted_batches) = trace.step(maintainer)?;
+        for arrangement in self.arrangements.values_mut() {
+            deleted_unsealed_batches
+                .extend(arrangement.unsealed_truncate(arrangement.trace_ts_upper())?);
+            let (written_bytes, deleted_batches) = arrangement.trace_step(maintainer)?;
             total_written_bytes += written_bytes;
             deleted_trace_batches.extend(deleted_batches);
         }
@@ -786,15 +788,15 @@ impl AppliedState {
         // to this write.
         let desc = self.saved_seqno..self.highest_assigned_seqno;
         for (id, writes) in writes_by_id.drain() {
-            let unsealed = self
-                .unsealeds
+            let arrangement = self
+                .arrangements
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
 
             // We maintain the invariant that the sequence number chosen for the
             // write is >= every unsealed's seqno_upper and that there is nothing
             // for that unsealed in [unsealed.seqno_upper, write_seqno).
-            let seqno_upper = unsealed.seqno_upper()[0];
+            let seqno_upper = arrangement.unsealed_seqno_upper()[0];
             debug_assert!(seqno_upper <= desc.start);
 
             // We can artificially start the Unsealed batch at the unsealed's current
@@ -891,19 +893,14 @@ impl AppliedState {
     /// work to remove uneccessary batches.
     fn drain_unsealed<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<(), Error> {
         let mut updates_by_id = vec![];
-        for (id, trace) in self.traces.iter_mut() {
+        for (id, arrangement) in self.arrangements.iter_mut() {
             // If this unsealed is already properly sealed then we don't need
             // to do anything.
-            let seal = trace.get_seal();
-            let trace_upper = trace.ts_upper();
+            let seal = arrangement.get_seal();
+            let trace_upper = arrangement.trace_ts_upper();
             if seal == trace_upper {
                 continue;
             }
-
-            let unsealed = self
-                .unsealeds
-                .get_mut(&id)
-                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
 
             let desc = Description::new(
                 trace_upper,
@@ -916,7 +913,8 @@ impl AppliedState {
 
             // Move a batch of data from unsealed into trace by reading a
             // snapshot from unsealed...
-            let snap = unsealed.snapshot(desc.lower().clone(), desc.upper().clone(), blob)?;
+            let snap =
+                arrangement.unsealed_snapshot(desc.lower().clone(), desc.upper().clone(), blob)?;
             let mut updates = snap
                 .into_iter()
                 .collect::<Result<Vec<_>, Error>>()
@@ -936,7 +934,7 @@ impl AppliedState {
 
             // ...and atomically swapping that snapshot's data into trace.
             let batch = BlobTraceBatch { desc, updates };
-            trace.append(batch, blob)?;
+            arrangement.trace_append(batch, blob)?;
         }
         Ok(())
     }
@@ -949,27 +947,27 @@ impl AppliedState {
     /// error to later seal it at an time less than the sealed frontier. It is
     /// also an error to write new data with a time less than the sealed frontier.
     fn sealed_frontier(&self, id: Id) -> Result<Antichain<u64>, String> {
-        let trace = self
-            .traces
+        let arrangement = self
+            .arrangements
             .get(&id)
             .ok_or_else(|| format!("never registered: {:?}", id))?;
-        Ok(trace.get_seal())
+        Ok(arrangement.get_seal())
     }
 
     /// Apply a seal command to in-memory state if it is valid.
     fn do_seal(&mut self, ids: &[Id], seal_ts: u64) -> Result<(), String> {
         for id in ids.iter() {
-            let trace = self
-                .traces
+            let arrangement = self
+                .arrangements
                 .get(&id)
                 .ok_or_else(|| format!("never registered: {:?}", id))?;
-            trace.validate_seal(seal_ts)?;
+            arrangement.validate_seal(seal_ts)?;
         }
 
         for id in ids.iter() {
-            let trace = self.traces.get_mut(id).expect("trace known to exist");
+            let arrangement = self.arrangements.get_mut(id).expect("trace known to exist");
 
-            trace.update_seal(seal_ts);
+            arrangement.update_seal(seal_ts);
         }
         Ok(())
     }
@@ -997,17 +995,20 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 impl AppliedState {
     fn do_allow_compaction(&mut self, id_sinces: Vec<(Id, Antichain<u64>)>) -> Result<(), String> {
         for (id, since) in id_sinces.iter() {
-            let trace = self
-                .traces
+            let arrangement = self
+                .arrangements
                 .get(&id)
                 .ok_or_else(|| format!("never registered: {:?}", id))?;
-            trace.validate_allow_compaction(since)?;
+            arrangement.validate_allow_compaction(since)?;
         }
 
         for (id, since) in id_sinces {
-            let trace = self.traces.get_mut(&id).expect("trace known to exist");
+            let arrangement = self
+                .arrangements
+                .get_mut(&id)
+                .expect("trace known to exist");
 
-            trace.allow_compaction(since);
+            arrangement.allow_compaction(since);
         }
         Ok(())
     }
@@ -1048,32 +1049,35 @@ impl AppliedState {
         batch: BlobUnsealedBatch,
         blob: &mut BlobCache<B>,
     ) -> Result<(), Error> {
-        let unsealed = self
-            .unsealeds
+        let arrangement = self
+            .arrangements
             .get_mut(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        unsealed.append(batch, blob)
+        arrangement.unsealed_append(batch, blob)
     }
 
     fn serialize_meta(&self) -> BlobMeta {
+        let mut unsealeds = Vec::with_capacity(self.arrangements.len());
+        let mut traces = Vec::with_capacity(self.arrangements.len());
+        for arrangement in self.arrangements.values() {
+            let (unsealed, trace) = arrangement.meta();
+            unsealeds.push(unsealed);
+            traces.push(trace);
+        }
         BlobMeta {
             next_stream_id: self.next_stream_id,
             unsealeds_seqno_upper: self.highest_assigned_seqno,
             id_mapping: self.id_mapping.clone(),
             graveyard: self.graveyard.clone(),
-            unsealeds: self
-                .unsealeds
-                .iter()
-                .map(|(_, unsealed)| unsealed.meta())
-                .collect(),
-            traces: self.traces.iter().map(|(_, trace)| trace.meta()).collect(),
+            unsealeds,
+            traces,
         }
     }
 }
 
 impl<L: Log, B: Blob> Indexed<L, B> {
     /// Returns a [Snapshot] for the given id.
-    pub fn snapshot(&mut self, id: Id, res: PFutureHandle<IndexedSnapshot>) {
+    pub fn snapshot(&mut self, id: Id, res: PFutureHandle<ArrangementSnapshot>) {
         res.fill((|| {
             self.drain_pending()?;
             self.state.do_snapshot(id, &self.blob)
@@ -1082,21 +1086,22 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 }
 
 impl AppliedState {
-    fn do_snapshot<B: Blob>(&self, id: Id, blob: &BlobCache<B>) -> Result<IndexedSnapshot, Error> {
-        let unsealed = self
-            .unsealeds
+    fn do_snapshot<B: Blob>(
+        &self,
+        id: Id,
+        blob: &BlobCache<B>,
+    ) -> Result<ArrangementSnapshot, Error> {
+        let arrangement = self
+            .arrangements
             .get(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        let trace = self
-            .traces
-            .get(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        let seal_frontier = trace.get_seal();
-        let trace = trace.snapshot(blob);
-        let unsealed = unsealed.snapshot(trace.ts_upper.clone(), Antichain::new(), blob)?;
+        let seal_frontier = arrangement.get_seal();
+        let trace = arrangement.trace_snapshot(blob);
+        let unsealed =
+            arrangement.unsealed_snapshot(trace.ts_upper.clone(), Antichain::new(), blob)?;
 
         let seqno = self.highest_assigned_seqno;
-        Ok(IndexedSnapshot(unsealed, trace, seqno, seal_frontier))
+        Ok(ArrangementSnapshot(unsealed, trace, seqno, seal_frontier))
     }
 }
 
@@ -1112,7 +1117,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         &mut self,
         id: Id,
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-        res: PFutureHandle<IndexedSnapshot>,
+        res: PFutureHandle<ArrangementSnapshot>,
     ) {
         res.fill((|| {
             self.drain_pending()?;
@@ -1124,7 +1129,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         &mut self,
         id: Id,
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-    ) -> Result<IndexedSnapshot, Error> {
+    ) -> Result<ArrangementSnapshot, Error> {
         // Verify that id has been registered.
         let _ = self.state.sealed_frontier(id)?;
         let snapshot = self.state.do_snapshot(id, &self.blob)?;
@@ -1194,89 +1199,12 @@ pub trait SnapshotExt<K: Ord, V: Ord>: Snapshot<K, V> + Sized {
 #[cfg(test)]
 impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 
-/// A consistent snapshot of all data currently stored for an id.
-#[derive(Debug)]
-pub struct IndexedSnapshot(UnsealedSnapshot, TraceSnapshot, SeqNo, Antichain<u64>);
-
-impl IndexedSnapshot {
-    /// Returns the SeqNo at which this snapshot was run.
-    ///
-    /// All writes assigned a seqno < this are included.
-    pub fn seqno(&self) -> SeqNo {
-        self.2
-    }
-
-    /// Returns the since frontier of this snapshot.
-    ///
-    /// All updates at times less than this frontier must be forwarded
-    /// to some time in this frontier.
-    pub fn since(&self) -> Antichain<u64> {
-        self.1.since.clone()
-    }
-
-    /// A logical upper bound on the times that had been added to the collection
-    /// when this snapshot was taken
-    fn get_seal(&self) -> Antichain<u64> {
-        self.3.clone()
-    }
-}
-
-impl Snapshot<Vec<u8>, Vec<u8>> for IndexedSnapshot {
-    type Iter = IndexedSnapshotIter;
-
-    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<IndexedSnapshotIter> {
-        let since = self.since();
-        let IndexedSnapshot(unsealed, trace, _, _) = self;
-        let unsealed_iters = unsealed.into_iters(num_iters);
-        let trace_iters = trace.into_iters(num_iters);
-        // I don't love the non-debug asserts, but it doesn't seem worth it to
-        // plumb an error around here.
-        assert_eq!(unsealed_iters.len(), num_iters.get());
-        assert_eq!(trace_iters.len(), num_iters.get());
-        unsealed_iters
-            .into_iter()
-            .zip(trace_iters.into_iter())
-            .map(|(unsealed_iter, trace_iter)| IndexedSnapshotIter {
-                since: since.clone(),
-                iter: trace_iter.chain(unsealed_iter),
-            })
-            .collect()
-    }
-}
-
-/// An [Iterator] representing one part of the data in a [IndexedSnapshot].
-//
-// This intentionally chains trace before unsealed so we get the data in roughly
-// increasing timestamp order, but it's unclear if this is in any way important.
-#[derive(Debug)]
-pub struct IndexedSnapshotIter {
-    since: Antichain<u64>,
-    iter: std::iter::Chain<TraceSnapshotIter, UnsealedSnapshotIter>,
-}
-
-impl Iterator for IndexedSnapshotIter {
-    type Item = Result<((Vec<u8>, Vec<u8>), u64, isize), Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|x| {
-            x.map(|(kv, mut ts, diff)| {
-                // When reading a snapshot, the contract of since is that all
-                // update timestamps will be advanced to it. We do this
-                // physically during compaction, but don't have hard guarantees
-                // about how long that takes, so we have to account for
-                // un-advanced batches on reads.
-                ts.advance_by(self.since.borrow());
-                (kv, ts, diff)
-            })
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
 
     use crate::error::Error;
+    use crate::indexed::SnapshotExt;
     use crate::mem::MemRegistry;
     use crate::pfuture::PFuture;
     use crate::unreliable::UnreliableHandle;
@@ -1310,7 +1238,7 @@ mod tests {
         let id = block_on(|res| i.register("0", "()", "()", res))?;
 
         // Empty things are empty.
-        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+        let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
             block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, vec![]);
@@ -1336,7 +1264,7 @@ mod tests {
             i.write(vec![(id, updates.clone())], handle)
         })?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
-        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+        let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
             block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end()?, updates);
         assert_eq!(trace.read_to_end()?, vec![]);
@@ -1347,7 +1275,7 @@ mod tests {
         // yet.
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
-        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+        let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
             block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end()?, updates);
         assert_eq!(trace.read_to_end()?, vec![]);
@@ -1360,7 +1288,7 @@ mod tests {
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 2, handle))?;
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
-        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+        let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
             block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end()?, updates[1..]);
         assert_eq!(trace.read_to_end()?, updates[..1]);
@@ -1371,7 +1299,7 @@ mod tests {
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 3, handle))?;
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
-        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+        let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
             block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, updates);
@@ -1421,7 +1349,7 @@ mod tests {
         i.step()?;
 
         // Sanity check that all the data made it into trace as expected.
-        let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
+        let ArrangementSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, updates);
         Ok(())
@@ -1449,7 +1377,7 @@ mod tests {
         })?;
 
         // Sanity check that the data is all in unsealed and none of it is in trace.
-        let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
+        let ArrangementSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
         assert_eq!(
             unsealed.read_to_end()?,
             vec![
@@ -1468,7 +1396,7 @@ mod tests {
         i.step()?;
 
         // Sanity check that all the data made it into trace as expected.
-        let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
+        let ArrangementSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, vec![(("1".into(), "".into()), 1, 4)]);
 
