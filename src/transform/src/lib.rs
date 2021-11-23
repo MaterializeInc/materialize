@@ -277,7 +277,7 @@ impl Optimizer {
                     // TODO (#6613): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate
                     // redundancy between the two transforms.
-                    Box::new(crate::column_knowledge::ColumnKnowledge),
+                    Box::new(crate::column_knowledge::ColumnKnowledge::default()),
                     // Lifts the information `col1 = col2`
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::FuseAndCollapse::default()),
@@ -321,7 +321,7 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::join_implementation::JoinImplementation),
-                    Box::new(crate::column_knowledge::ColumnKnowledge),
+                    Box::new(crate::column_knowledge::ColumnKnowledge::default()),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::map_lifting::LiteralLifting),

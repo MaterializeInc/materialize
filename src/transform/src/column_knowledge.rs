@@ -13,7 +13,8 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc};
+use expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use repr::{ColumnType, RelationType, ScalarType};
 use repr::{Datum, Row};
 
@@ -21,7 +22,23 @@ use crate::TransformArgs;
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
-pub struct ColumnKnowledge;
+pub struct ColumnKnowledge {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for ColumnKnowledge {
+    fn default() -> ColumnKnowledge {
+        ColumnKnowledge {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for ColumnKnowledge {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for ColumnKnowledge {
     /// Transforms an expression through accumulated knowledge.
