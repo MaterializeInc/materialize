@@ -339,7 +339,10 @@ fn sql_impl_func(expr: &'static str) -> Operation<HirScalarExpr> {
 // As this is a full SQL statement, it returns a set of rows, similar to a
 // table function. The SELECT's projection's names are used and should be
 // aliased if needed.
-fn sql_impl_table_func(sql: &'static str) -> Operation<(HirRelationExpr, Scope)> {
+fn sql_impl_table_func_inner(
+    sql: &'static str,
+    experimental: Option<&'static str>,
+) -> Operation<(HirRelationExpr, Scope)> {
     let query = match sql_parser::parser::parse_statements(sql)
         .expect("static function definition failed to parse")
         .expect_element("static function definition must have exactly one statement")
@@ -371,11 +374,25 @@ fn sql_impl_table_func(sql: &'static str) -> Operation<(HirRelationExpr, Scope)>
     };
 
     Operation::variadic(move |ecx, args| {
+        if let Some(feature_name) = experimental {
+            ecx.require_experimental_mode(feature_name)?;
+        }
         let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
         let (mut out, scope) = invoke(&ecx.qcx, types)?;
         out.splice_parameters(&args, 0);
         Ok((out, scope))
     })
+}
+
+fn sql_impl_table_func(sql: &'static str) -> Operation<(HirRelationExpr, Scope)> {
+    sql_impl_table_func_inner(sql, None)
+}
+
+fn experimental_sql_impl_table_func(
+    feature: &'static str,
+    sql: &'static str,
+) -> Operation<(HirRelationExpr, Scope)> {
+    sql_impl_table_func_inner(sql, Some(feature))
 }
 
 /// Describes a single function's implementation.
@@ -2075,6 +2092,39 @@ lazy_static! {
                         column_names: vec![Some("jsonb_object_keys".into())],
                     })
                 }), 3931;
+            },
+            // Note that these implementations' input to `generate_series` is
+            // contrived to match Flink's expected values. There are other,
+            // equally valid windows we could generate.
+            "date_bin_hopping" => Set {
+                // (hop, width, timestamp)
+                params!(Interval, Interval, Timestamp) => experimental_sql_impl_table_func("date_bin_hopping", "
+                    SELECT *
+                    FROM pg_catalog.generate_series(
+                        pg_catalog.date_bin($1, $3 + $1, '1970-01-01') - $2, $3, $1
+                    ) AS dbh(date_bin_hopping)
+                "), oid::FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TS_OID;
+                // (hop, width, timestamp)
+                params!(Interval, Interval, TimestampTz) => experimental_sql_impl_table_func("date_bin_hopping", "
+                    SELECT *
+                    FROM pg_catalog.generate_series(
+                        pg_catalog.date_bin($1, $3 + $1, '1970-01-01') - $2, $3, $1
+                    ) AS dbh(date_bin_hopping)
+                "), oid::FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TSTZ_OID;
+                // (hop, width, timestamp, origin)
+                params!(Interval, Interval, Timestamp, Timestamp) => experimental_sql_impl_table_func("date_bin_hopping", "
+                    SELECT *
+                    FROM pg_catalog.generate_series(
+                        pg_catalog.date_bin($1, $3 + $1, $4) - $2, $3, $1
+                    ) AS dbh(date_bin_hopping)
+                "), oid::FUNC_MZ_DATE_BIN_HOPPING_TS_OID;
+                // (hop, width, timestamp, origin)
+                params!(Interval, Interval, TimestampTz, TimestampTz) => experimental_sql_impl_table_func("date_bin_hopping", "
+                    SELECT *
+                    FROM pg_catalog.generate_series(
+                        pg_catalog.date_bin($1, $3 + $1, $4) - $2, $3, $1
+                    ) AS dbh(date_bin_hopping)
+                "), oid::FUNC_MZ_DATE_BIN_HOPPING_TSTZ_OID;
             },
             "encode" => Scalar {
                 params!(Bytes, String) => BinaryFunc::Encode, 1946;
