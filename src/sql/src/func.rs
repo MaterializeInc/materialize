@@ -2057,6 +2057,24 @@ lazy_static! {
                     })
                 }), 3931;
             },
+            "window_hopping" => Table {
+                params!(Timestamp, Interval, Interval) => Operation::variadic(move |ecx, exprs| {
+                    ecx.require_experimental_mode("window_hopping")?;
+                    Ok(TableFuncPlan {
+                        func: TableFunc::WindowHoppingTs,
+                        exprs,
+                        column_names: vec![Some("source_ts".into()), Some("window".into())],
+                    })
+                }), oid::FUNC_MZ_WINDOW_HOPPING_TS_OID;
+                params!(TimestampTz, Interval, Interval) => Operation::variadic(move |ecx, exprs| {
+                    ecx.require_experimental_mode("window_hopping")?;
+                    Ok(TableFuncPlan {
+                        func: TableFunc::WindowHoppingTsTz,
+                        exprs,
+                        column_names: vec![Some("source_ts".into()), Some("window".into())],
+                    })
+                }), oid::FUNC_MZ_WINDOW_HOPPING_TSTZ_OID;
+            },
             "encode" => Scalar {
                 params!(Bytes, String) => BinaryFunc::Encode, 1946;
             },

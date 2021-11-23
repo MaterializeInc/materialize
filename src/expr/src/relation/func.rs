@@ -28,7 +28,10 @@ use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
 use crate::relation::{compare_columns, ColumnOrder};
-use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
+use crate::scalar::func::{
+    add_timestamp_interval, add_timestamp_months, date_bin, jsonb_stringify,
+    sub_timestamp_interval, TimestampLike,
+};
 use crate::EvalError;
 
 // TODO(jamii) be careful about overflow in sum/avg
@@ -991,6 +994,51 @@ fn unnest_list<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
         .map(move |e| (Row::pack_slice(&[e]), 1))
 }
 
+fn window_hopping<'a>(
+    ts: NaiveDateTime,
+    width: Interval,
+    hop: Interval,
+    is_ts_tz: bool,
+    temp_storage: &'a RowArena,
+) -> Result<impl Iterator<Item = (Row, Diff)> + 'a, EvalError> {
+    let ts_plus_hop = add_timestamp_interval(Datum::Timestamp(ts.clone()), Datum::Interval(hop))?;
+    let next_greatest_window = date_bin(
+        hop,
+        ts_plus_hop.unwrap_timestamp(),
+        NaiveDateTime::from_timestamp(0, 0),
+    )?;
+    let oldest_window = sub_timestamp_interval(next_greatest_window, Datum::Interval(width))?;
+
+    let tsri = TimestampRangeStepInclusive {
+        state: oldest_window.unwrap_timestamp(),
+        stop: ts.clone(),
+        step: hop,
+        rev: false,
+        done: false,
+    };
+
+    let ts = if is_ts_tz {
+        Datum::TimestampTz(DateTime::<Utc>::from_utc(ts, Utc))
+    } else {
+        Datum::Timestamp(ts)
+    };
+
+    let get_ts = move || ts.clone();
+
+    Ok(tsri.map(move |i| {
+        // Create window record
+        let window_start = Datum::Timestamp(i);
+        let mut ws = window_start.clone();
+        let mut we = add_timestamp_interval(window_start, Datum::Interval(width)).unwrap();
+        if is_ts_tz {
+            ws = Datum::TimestampTz(DateTime::<Utc>::from_utc(ws.unwrap_timestamp(), Utc));
+            we = Datum::TimestampTz(DateTime::<Utc>::from_utc(we.unwrap_timestamp(), Utc));
+        }
+        let window_record = temp_storage.make_datum(|packer| packer.push_list(&[ws, we]));
+        (Row::pack_slice(&[get_ts().into(), window_record]), 1)
+    }))
+}
+
 impl fmt::Display for AggregateFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -1137,6 +1185,8 @@ pub enum TableFunc {
         types: Vec<ColumnType>,
         width: usize,
     },
+    WindowHoppingTs,
+    WindowHoppingTsTz,
 }
 
 impl TableFunc {
@@ -1208,6 +1258,20 @@ impl TableFunc {
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
             TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(&datums, *width))),
+            TableFunc::WindowHoppingTs => Ok(Box::new(window_hopping(
+                datums[0].unwrap_timestamp(),
+                datums[1].unwrap_interval(),
+                datums[2].unwrap_interval(),
+                false,
+                temp_storage,
+            )?)),
+            TableFunc::WindowHoppingTsTz => Ok(Box::new(window_hopping(
+                datums[0].unwrap_timestamptz().naive_utc(),
+                datums[1].unwrap_interval(),
+                datums[2].unwrap_interval(),
+                true,
+                temp_storage,
+            )?)),
         }
     }
 
@@ -1247,6 +1311,33 @@ impl TableFunc {
             TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::Wrap { types, .. } => types.clone(),
+            TableFunc::WindowHoppingTs => vec![
+                ScalarType::Timestamp.nullable(false),
+                ScalarType::Record {
+                    custom_name: None,
+                    custom_oid: None,
+                    fields: vec![
+                        ("window_start".into(), ScalarType::Timestamp.nullable(false)),
+                        ("window_end".into(), ScalarType::Timestamp.nullable(false)),
+                    ],
+                }
+                .nullable(false),
+            ],
+            TableFunc::WindowHoppingTsTz => vec![
+                ScalarType::TimestampTz.nullable(false),
+                ScalarType::Record {
+                    custom_name: None,
+                    custom_oid: None,
+                    fields: vec![
+                        (
+                            "window_start".into(),
+                            ScalarType::TimestampTz.nullable(false),
+                        ),
+                        ("window_end".into(), ScalarType::TimestampTz.nullable(false)),
+                    ],
+                }
+                .nullable(false),
+            ],
         })
     }
 
@@ -1265,6 +1356,8 @@ impl TableFunc {
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
             TableFunc::Wrap { width, .. } => *width,
+            TableFunc::WindowHoppingTs => 2,
+            TableFunc::WindowHoppingTsTz => 2,
         }
     }
 
@@ -1281,7 +1374,9 @@ impl TableFunc {
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
             | TableFunc::UnnestArray { .. }
-            | TableFunc::UnnestList { .. } => true,
+            | TableFunc::UnnestList { .. }
+            | TableFunc::WindowHoppingTs
+            | TableFunc::WindowHoppingTsTz => true,
             TableFunc::Wrap { .. } => false,
         }
     }
@@ -1304,6 +1399,8 @@ impl TableFunc {
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
             TableFunc::Wrap { .. } => true,
+            TableFunc::WindowHoppingTs => true,
+            TableFunc::WindowHoppingTsTz => true,
         }
     }
 }
@@ -1324,6 +1421,8 @@ impl fmt::Display for TableFunc {
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
+            TableFunc::WindowHoppingTs => f.write_str("window_hopping"),
+            TableFunc::WindowHoppingTsTz => f.write_str("window_hopping"),
         }
     }
 }

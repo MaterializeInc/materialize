@@ -786,7 +786,7 @@ fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+pub fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let dt = a.unwrap_timestamp();
     let i = b.unwrap_interval();
     let dt = add_timestamp_months(dt, i.months)?;
@@ -985,7 +985,7 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
     }
 }
 
-fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+pub fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     add_timestamp_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
 
