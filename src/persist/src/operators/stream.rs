@@ -477,6 +477,26 @@ where
                                         pending_future.cap.time(),
                                     );
 
+                                    // Drop any previous seal futures that are superseded by this
+                                    // successful seal. This will clean out seals that might have
+                                    // errored but are still holding back the frontier by holding
+                                    // on to a capability.
+                                    let seal_ts = pending_future.cap.time();
+                                    pending_futures.retain(|seal_future| match seal_future {
+                                        PendingSealFuture::ConditionSeal(seal_future) => {
+
+                                            if seal_future.cap.time() <= seal_ts {
+                                                log::trace!("Dropping seal (condition) {} because it is superseded by {}.", seal_future.cap.time(), seal_ts);
+                                                false
+                                            } else {
+                                                log::trace!("Retaining seal (condition) {} because it is NOT superseded by {}.", seal_future.cap.time(), seal_ts);
+                                                true
+                                            }
+                                        }
+                                        // Conditional seals don't supersede primary seals.
+                                        PendingSealFuture::PrimarySeal(_) => true,
+                                    });
+
                                     log::trace!(
                                         "In {}, sealing primary collection up to {}...",
                                         &operator_name,
@@ -500,10 +520,24 @@ where
                                         pending_future.cap.time(),
                                         e
                                     );
-                                    log::error!("{}", error);
+                                    log::trace!("{}", error);
 
                                     // TODO: make error retractable? Probably not...
                                     session.give(Err((error, *pending_future.cap.time(), 1)));
+
+                                    log::trace!(
+                                        "Adding seal (condition) to queue again: {}",
+                                        pending_future.cap.time()
+                                    );
+
+                                    // We push to the back, because we assume that this future will
+                                    // be superseded by a later (successful) seal, and thus be
+                                    // dropped from the queue.
+                                    let future = condition_write.seal(*pending_future.cap.time());
+                                    pending_futures.push_back(PendingSealFuture::ConditionSeal(SealFuture {
+                                        cap: pending_future.cap,
+                                        future,
+                                    }));
                                 }
                                 std::task::Poll::Pending => {
                                     // We assume that seal requests are worked off in order and stop
@@ -528,6 +562,26 @@ where
                                         &operator_name,
                                         pending_future.cap.time(),
                                     );
+
+                                    // Drop any previous seal futures that are superseded by this
+                                    // successful seal. This will clean out seals that might have
+                                    // errored but are still holding back the frontier by holding
+                                    // on to a capability.
+                                    let seal_ts = pending_future.cap.time();
+                                    pending_futures.retain(|seal_future| match seal_future {
+                                        PendingSealFuture::PrimarySeal(seal_future) => {
+
+                                            if seal_future.cap.time() <= seal_ts {
+                                                log::trace!("Dropping seal (primary) {} because it is superseded by {}.", seal_future.cap.time(), seal_ts);
+                                                false
+                                            } else {
+                                                log::trace!("Retaining seal (primary) {} because it is NOT superseded by {}.", seal_future.cap.time(), seal_ts);
+                                                true
+                                            }
+                                        }
+                                        // Primary seals don't supersede condition seals.
+                                        PendingSealFuture::ConditionSeal(_) => true,
+                                    });
                                 }
                                 std::task::Poll::Ready(Err(e)) => {
                                     let mut session = data_output.session(&pending_future.cap);
@@ -537,10 +591,24 @@ where
                                         pending_future.cap.time(),
                                         e
                                     );
-                                    log::error!("{}", error);
+                                    log::trace!("{}", error);
 
                                     // TODO: make error retractable? Probably not...
                                     session.give(Err((error, *pending_future.cap.time(), 1)));
+
+                                    log::trace!(
+                                        "Adding seal (primary) to queue again: {}",
+                                        pending_future.cap.time()
+                                    );
+
+                                    // We push to the back, because we assume that this future will
+                                    // be superseded by a later (successful) seal, and thus be
+                                    // dropped from the queue.
+                                    let future = primary_write.seal(*pending_future.cap.time());
+                                    pending_futures.push_back(PendingSealFuture::PrimarySeal(SealFuture {
+                                        cap: pending_future.cap,
+                                        future,
+                                    }));
                                 }
                                 std::task::Poll::Pending => {
                                     // We assume that seal requests are worked off in order and stop
