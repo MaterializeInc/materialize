@@ -15,9 +15,9 @@
 
 //! Stack management utilities.
 
+use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The red zone is the amount of stack space that must be available on the
 /// current stack in order for [`maybe_grow`] to call the supplied closure
@@ -211,19 +211,10 @@ pub trait CheckedRecursion {
 /// Tracks recursion depth.
 ///
 /// See the [`CheckedRecursion`] trait for usage instructions.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct RecursionGuard {
-    depth: AtomicUsize,
+    depth: RefCell<usize>,
     limit: usize,
-}
-
-impl Clone for RecursionGuard {
-    fn clone(&self) -> Self {
-        Self {
-            depth: AtomicUsize::new(self.depth.load(Ordering::Relaxed)),
-            limit: self.limit.clone(),
-        }
-    }
 }
 
 impl RecursionGuard {
@@ -231,13 +222,15 @@ impl RecursionGuard {
     /// limit.
     pub fn with_limit(limit: usize) -> RecursionGuard {
         RecursionGuard {
-            depth: AtomicUsize::new(0),
+            depth: RefCell::new(0),
             limit,
         }
     }
 
     fn descend(&self) -> Result<(), RecursionLimitError> {
-        if self.depth.fetch_add(1, Ordering::Relaxed) <= self.limit {
+        let mut depth = self.depth.borrow_mut();
+        if *depth < self.limit {
+            *depth += 1;
             Ok(())
         } else {
             Err(RecursionLimitError { limit: self.limit })
@@ -245,7 +238,7 @@ impl RecursionGuard {
     }
 
     fn ascend(&self) {
-        self.depth.fetch_sub(1, Ordering::Relaxed);
+        *self.depth.borrow_mut() -= 1;
     }
 }
 
