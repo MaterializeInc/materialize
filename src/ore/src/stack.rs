@@ -49,20 +49,32 @@ use std::fmt;
 /// In debug builds, the compiler will generate a stack frame that contains
 /// space for 10 separate copies of `SomeBigType`. This can quickly result in
 /// massive stack frames for perfectly reasonable code.
-#[cfg(debug_assertions)]
-pub const STACK_RED_ZONE: usize = 256 << 10; // 256KiB
-#[cfg(not(debug_assertions))]
-pub const STACK_RED_ZONE: usize = 32 << 10; // 32KiB
+pub const STACK_RED_ZONE: usize = {
+    #[cfg(debug_assertions)]
+    {
+        256 << 10 // 256KiB
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        32 << 10 // 32KiB
+    }
+};
 
 /// The size of any freshly allocated stacks. It was chosen to match the default
 /// stack size for threads in Rust.
 ///
 /// The default stack size is larger in debug builds to correspond to the the
 /// larger [`STACK_RED_ZONE`].
-#[cfg(debug_assertions)]
-pub const STACK_SIZE: usize = 16 << 20; // 16MiB
-#[cfg(not(debug_assertions))]
-pub const STACK_SIZE: usize = 2 << 20; // 2MiB
+pub const STACK_SIZE: usize = {
+    #[cfg(debug_assertions)]
+    {
+        16 << 20 // 16MiB
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        2 << 20 // 2 MiB
+    }
+};
 
 /// Grows the stack if necessary before invoking `f`.
 ///
