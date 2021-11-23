@@ -125,6 +125,16 @@ build apply=PredicateKnowledge
 | Project (#0, #0)
 | Map #0, (#0 + 1)
 
+build apply=PredicateKnowledge
+(project (filter (map (project (get x) [#0 #0]) [#1 (call_binary add_int32 #1 1)]) [(call_binary eq #0 #2)]) [2 3])
+----
+%0 =
+| Get x (u0)
+| Project (#0, #0)
+| Map #0, (#0 + 1)
+| Filter (#0 = #0)
+| Project (#2, #3)
+
 # Union
 
 # #0 = #1 lifted from all branches
