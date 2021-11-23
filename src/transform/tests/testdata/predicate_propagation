@@ -263,3 +263,21 @@ build apply=PredicateKnowledge
 ----
 %0 =
 | Constant
+
+#
+# TODO: improve impossible condition detection
+#
+
+build apply=PredicateKnowledge
+(filter (get x) [(call_binary eq #0 #1) (call_binary gt #0 10) (call_binary lt #1 10)])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 = #1), (#0 > 10), (#1 < 10)
+
+build apply=PredicateKnowledge
+(filter (get x) [(call_binary eq #0 #1) (call_binary gt #0 10) (call_binary lt #0 10)])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 = #1), (#0 > 10), (#0 < 10)
