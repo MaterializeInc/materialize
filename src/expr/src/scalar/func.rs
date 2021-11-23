@@ -3371,6 +3371,28 @@ impl BinaryFunc {
             _ => None,
         }
     }
+
+    /// Whether the function is commutative.
+    pub fn is_commutative(&self) -> bool {
+        use BinaryFunc::*;
+        match self {
+            And | Or | AddInt16 | AddInt32 | AddInt64 | AddFloat32 | AddFloat64 | AddNumeric
+            | BitAndInt16 | BitAndInt32 | BitAndInt64 | BitOrInt16 | BitOrInt32 | BitOrInt64
+            | BitXorInt16 | BitXorInt32 | BitXorInt64 | MulInt16 | MulInt32 | MulInt64
+            | MulFloat32 | MulFloat64 | MulNumeric | Eq | NotEq => true,
+            _ => false,
+        }
+    }
+
+    /// Whether the function is an N-ary operation that we happen to
+    /// have modeled as a binary operation.
+    pub fn is_nary(&self) -> bool {
+        use BinaryFunc::*;
+        match self {
+            Eq | NotEq => false,
+            _ => self.is_commutative(),
+        }
+    }
 }
 
 impl fmt::Display for BinaryFunc {

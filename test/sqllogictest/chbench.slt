@@ -887,7 +887,7 @@ ORDER BY ordercount DESC
 %6 =
 | Join %4 %5
 | | implementation = Differential %4 %5.()
-| Filter (i64tonumeric(#1) > (i64tonumeric(#2) * 0.005))
+| Filter (i64tonumeric(#1) > (0.005 * i64tonumeric(#2)))
 | Project (#0, #1)
 
 Finish order_by=(#1 desc) limit=none offset=0 project=(#0, #1)
@@ -1040,7 +1040,7 @@ AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 
 %6 =
 | Union %2 %5
-| Map ((100 * #0) / (1 + #1))
+| Map ((#0 * 100) / (#1 + 1))
 | Project (#2)
 
 EOF
@@ -1343,8 +1343,8 @@ WHERE (
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#4)
 | Filter (#7 <= 10), (#13 <= 400000), (#7 >= 1), (#13 >= 1)
-| Map padchar(#14), (#2 = 1), (#2 = 3), (#16 || (#2 = 2))
-| Filter (("^.*c$" ~(#15) && (#17 || (#16 || (#2 = 5)))) || (("^.*a$" ~(#15) && (#17 || #18)) || ("^.*b$" ~(#15) && (#18 || (#2 = 4)))))
+| Map padchar(#14), (#2 = 1), (#16 || (#2 = 2)), (#2 = 3)
+| Filter ((("^.*a$" ~(#15) && (#17 || #18)) || ("^.*b$" ~(#15) && (#17 || (#2 = 4)))) || ("^.*c$" ~(#15) && ((#16 || #18) || (#2 = 5))))
 | Project (#8)
 | Reduce group=()
 | | agg sum(#0)
@@ -1425,7 +1425,7 @@ ORDER BY su_name
 | Project (#0..#3, #26)
 | Reduce group=(#0, #1, #2, #3)
 | | agg sum(#4)
-| Filter (#0 = ((#1 * #2) % 10000)), (i32toi64((2 * #3)) > #4)
+| Filter (#0 = ((#1 * #2) % 10000)), (i32toi64((#3 * 2)) > #4)
 | Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)

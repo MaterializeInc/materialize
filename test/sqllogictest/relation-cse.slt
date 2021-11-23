@@ -1055,7 +1055,7 @@ SELECT f1 + 1 FROM (SELECT f1 + 2 AS f1 FROM t1)
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
-| Map ((#0 + 2) + 1)
+| Map (#0 + 3)
 | Project (#2)
 
 %1 =

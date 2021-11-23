@@ -1011,7 +1011,7 @@ HAVING SUM(t1.f1 + t2.f1) > 0;
 %8 =
 | Union %2 %7
 | Reduce group=()
-| | agg sum((#1 + #0))
+| | agg sum((#0 + #1))
 | | agg sum((#0 + 0))
 | Filter (#0 > 0)
 

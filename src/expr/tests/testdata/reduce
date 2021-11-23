@@ -105,7 +105,7 @@ reduce
 )
 [int32 int32 int32]
 ----
-(isnull(#1) || (isnull(#0) || isnull(#2)))
+((isnull(#0) || isnull(#1)) || isnull(#2))
 
 # Null-propagating UnaryFunc around BinaryFunc
 reduce
@@ -285,7 +285,7 @@ reduce
     (call_binary or #0 (call_binary or (call_binary lt #2 3) #1)))
 [bool bool int32]
 ----
-(#1 || (#0 || ((#2 < 3) && (#2 > 2))))
+((#0 || #1) || ((#2 < 3) && (#2 > 2)))
 
 ## a | (a & b)
 
@@ -362,7 +362,7 @@ canonicalize-join
 ]]
 [int32]
 ----
-[(#0 && (#0 + #0)) (#0 + #0) (#0 + (#0 + #0))]
+[(#0 && (#0 + #0)) (#0 + #0) ((#0 + #0) + #0)]
 
 canonicalize-join
 [
@@ -378,7 +378,7 @@ canonicalize-join
 [int32 int32 int32 int32]
 ----
 [#0 #3]
-[#1 ((#0 + #0) + #0) ((#2 + #2) + #1)]
+[#1 ((#0 + #0) + #0) ((#1 + #2) + #2)]
 
 canonicalize-join
 [
@@ -395,7 +395,7 @@ canonicalize-join
 [int32 int32 int32 int32 int32 int32]
 ----
 [#0 #3]
-[#1 ((#0 + #0) + #0) ((#2 + #2) + #1)]
+[#1 ((#0 + #0) + #0) ((#1 + #2) + #2)]
 [(#2 + #2) (#4 * #5)]
 
 # replacing expressions with simpler equivalent ones can result in the
@@ -418,7 +418,7 @@ canonicalize-join
 [int32 int32 int32 int32 int32 int32]
 ----
 [#0 #3]
-[#1 (#0 + #0) (#1 + #0) (#1 + #1) ((#2 + #2) + #1) (#1 - #1) (#4 * #5)]
+[#1 (#0 + #0) (#0 + #1) (#1 + #1) ((#1 + #2) + #2) (#1 - #1) (#4 * #5)]
 
 canonicalize-join
 [[#0 #3 #3] [(call_binary add_int32 #0 #0) #1] [(call_binary add_int32 #3 #3)
@@ -501,7 +501,7 @@ canonicalize-join
 ]
 [int64]
 ----
-[0 1234 (0 + #0)]
+[0 1234 (#0 + 0)]
 
 ## consecutive nots cancel each other
 
@@ -548,3 +548,115 @@ canonicalize-join
 ----
 [#0 (isnull(#2) || isnull(#3))]
 [(#2 + #3) coalesce(#0, #1, false)]
+
+# Normalization of commutative operations
+
+reduce
+(
+    call_binary or
+        (call_binary or (call_binary eq #1 2) (call_binary eq 3 #0))
+        (call_binary eq #0 1)
+)
+[int32 int32]
+----
+(((#0 = 1) || (#0 = 3)) || (#1 = 2))
+
+reduce
+(
+    call_binary and
+        (call_binary and (call_binary eq #1 2) (call_binary eq 3 #0))
+        (call_binary eq #0 1)
+)
+[int32 int32]
+----
+(((#0 = 1) && (#0 = 3)) && (#1 = 2))
+
+reduce
+(
+    call_binary add_int64
+        (call_binary add_int64 (call_binary add_int64 #1 2) (call_binary add_int64 3 #0))
+        (call_binary add_int64 #0 1)
+)
+[int64 int64]
+----
+(((#0 + #0) + #1) + 6)
+
+reduce
+(
+    call_binary add_int64 7 (call_binary add_int64 1 #0)
+)
+[int64]
+----
+(#0 + 8)
+
+reduce
+(
+    call_binary add_int64 7 (call_binary add_int64 #0 1)
+)
+[int64]
+----
+(#0 + 8)
+
+reduce
+(
+    call_binary add_int64 #0 (call_binary add_int64 7 1)
+)
+[int64]
+----
+(#0 + 8)
+
+reduce
+(
+    call_binary add_int64 #1 (call_binary add_int64 1 #0)
+)
+[int64 int64]
+----
+((#0 + #1) + 1)
+
+reduce
+(
+    call_binary add_int64 #1 (call_binary add_int64 #0 1)
+)
+[int64 int64]
+----
+((#0 + #1) + 1)
+
+reduce
+(
+    call_binary add_int64 #0 (call_binary add_int64 #1 1)
+)
+[int64 int64]
+----
+((#0 + #1) + 1)
+
+reduce
+(
+    call_binary add_int64 1 (call_binary add_int64 2 3)
+)
+[]
+----
+6
+
+reduce
+(
+    call_binary add_int64 #1 (call_binary add_int64 #1 #0)
+)
+[int64 int64]
+----
+((#0 + #1) + #1)
+
+reduce
+(
+    call_binary add_int64 #1 (call_binary add_int64 #0 #1)
+)
+[int64 int64]
+----
+((#0 + #1) + #1)
+
+reduce
+(
+    call_binary add_int64 #0 (call_binary add_int64 #1 #1)
+)
+[int64 int64]
+----
+((#0 + #1) + #1)

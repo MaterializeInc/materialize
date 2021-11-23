@@ -239,7 +239,7 @@ Query:
 
 %2 =
 | Get %0 (l0)
-| Map i64tonumeric((1 + #2))
+| Map i64tonumeric((#2 + 1))
 | Project (#0, #4)
 
 %3 =
