@@ -36,8 +36,7 @@ impl crate::Transform for JoinImplementation {
             let keys = idxs.iter().map(|(_id, keys)| keys.clone()).collect();
             arranged.insert(Id::Global(*on_id), keys);
         }
-        self.action_recursive(relation, &mut arranged);
-        Ok(())
+        self.action_recursive(relation, &mut arranged)
     }
 }
 
@@ -50,9 +49,9 @@ impl JoinImplementation {
         &self,
         relation: &mut MirRelationExpr,
         arranged: &mut HashMap<Id, Vec<Vec<MirScalarExpr>>>,
-    ) {
+    ) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::Let { id, value, body } = relation {
-            self.action_recursive(value, arranged);
+            self.action_recursive(value, arranged)?;
             match &**value {
                 MirRelationExpr::ArrangeBy { keys, .. } => {
                     arranged.insert(Id::Local(*id), keys.clone());
@@ -65,11 +64,13 @@ impl JoinImplementation {
                 }
                 _ => {}
             }
-            self.action_recursive(body, arranged);
+            self.action_recursive(body, arranged)?;
             arranged.remove(&Id::Local(*id));
+            Ok(())
         } else {
-            relation.visit_mut_children(|e| self.action_recursive(e, arranged));
+            relation.try_visit_mut_children(|e| self.action_recursive(e, arranged))?;
             self.action(relation, arranged);
+            Ok(())
         }
     }
 
