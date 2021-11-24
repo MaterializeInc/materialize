@@ -140,19 +140,19 @@ lazy_static! {
             (Int16, String) => Assignment: CastInt16ToString(func::CastInt16ToString),
 
             //INT32
-            (Int32, Bool) => Explicit: CastInt32ToBool,
+            (Int32, Bool) => Explicit: CastInt32ToBool(func::CastInt32ToBool),
             (Int32, Oid) => Implicit: CastInt32ToOid,
             (Int32, RegProc) => Implicit: CastInt32ToRegProc,
             (Int32, RegType) => Implicit: CastInt32ToRegType,
-            (Int32, Int16) => Assignment: CastInt32ToInt16,
-            (Int32, Int64) => Implicit: CastInt32ToInt64,
-            (Int32, Float32) => Implicit: CastInt32ToFloat32,
-            (Int32, Float64) => Implicit: CastInt32ToFloat64,
+            (Int32, Int16) => Assignment: CastInt32ToInt16(func::CastInt32ToInt16),
+            (Int32, Int64) => Implicit: CastInt32ToInt64(func::CastInt32ToInt64),
+            (Int32, Float32) => Implicit: CastInt32ToFloat32(func::CastInt32ToFloat32),
+            (Int32, Float64) => Implicit: CastInt32ToFloat64(func::CastInt32ToFloat64),
             (Int32, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToNumeric(s)))
             }),
-            (Int32, String) => Assignment: CastInt32ToString,
+            (Int32, String) => Assignment: CastInt32ToString(func::CastInt32ToString),
 
             // INT64
             (Int64, Bool) => Explicit: CastInt64ToBool,
@@ -168,7 +168,7 @@ lazy_static! {
 
             // OID
             (Oid, Int32) => Assignment: CastOidToInt32,
-            (Oid, String) => Explicit: CastInt32ToString,
+            (Oid, String) => Explicit: CastInt32ToString(func::CastInt32ToString),
             (Oid, RegProc) => Assignment: CastOidToRegProc,
             (Oid, RegType) => Assignment: CastOidToRegType,
 

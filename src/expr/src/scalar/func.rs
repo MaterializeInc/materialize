@@ -141,34 +141,6 @@ fn cast_bool_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
         false => Datum::Int32(0),
     }
 }
-fn cast_int32_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32() != 0)
-}
-
-fn cast_int32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_int32(&mut buf, a.unwrap_int32());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_int32_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32() as f32)
-}
-
-fn cast_int32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_int32()))
-}
-
-fn cast_int32_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match i16::try_from(a.unwrap_int32()) {
-        Ok(n) => Ok(Datum::from(n)),
-        Err(_) => Err(EvalError::Int16OutOfRange),
-    }
-}
-
-fn cast_int32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(i64::from(a.unwrap_int32()))
-}
 
 fn cast_int32_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_int32();
@@ -3617,15 +3589,15 @@ pub enum UnaryFunc {
     CastInt16ToInt32(CastInt16ToInt32),
     CastInt16ToInt64(CastInt16ToInt64),
     CastInt16ToString(CastInt16ToString),
-    CastInt32ToBool,
-    CastInt32ToFloat32,
-    CastInt32ToFloat64,
+    CastInt32ToBool(CastInt32ToBool),
+    CastInt32ToFloat32(CastInt32ToFloat32),
+    CastInt32ToFloat64(CastInt32ToFloat64),
     CastInt32ToOid,
     CastInt32ToRegProc,
     CastInt32ToRegType,
-    CastInt32ToInt16,
-    CastInt32ToInt64,
-    CastInt32ToString,
+    CastInt32ToInt16(CastInt32ToInt16),
+    CastInt32ToInt64(CastInt32ToInt64),
+    CastInt32ToString(CastInt32ToString),
     CastOidToInt32,
     CastOidToRegProc,
     CastRegProcToOid,
@@ -3850,6 +3822,12 @@ derive_unary!(
     CastInt16ToInt64,
     CastInt16ToString,
     CastInt16ToNumeric,
+    CastInt32ToBool,
+    CastInt32ToFloat32,
+    CastInt32ToFloat64,
+    CastInt32ToInt16,
+    CastInt32ToInt64,
+    CastInt32ToString,
     PgColumnSize,
     MzRowSize,
     IsNull,
@@ -3940,6 +3918,12 @@ impl UnaryFunc {
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
             | CastInt16ToString(_)
+            | CastInt32ToBool(_)
+            | CastInt32ToFloat32(_)
+            | CastInt32ToFloat64(_)
+            | CastInt32ToInt16(_)
+            | CastInt32ToInt64(_)
+            | CastInt32ToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegNumeric => Ok(neg_numeric(a)),
             NegInterval => Ok(neg_interval(a)),
@@ -3949,16 +3933,10 @@ impl UnaryFunc {
             CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
             CastFloat32ToNumeric(scale) => cast_float32_to_numeric(a, *scale),
             CastFloat64ToNumeric(scale) => cast_float64_to_numeric(a, *scale),
-            CastInt32ToBool => Ok(cast_int32_to_bool(a)),
-            CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
-            CastInt32ToFloat64 => Ok(cast_int32_to_float64(a)),
-            CastInt32ToInt16 => cast_int32_to_int16(a),
-            CastInt32ToInt64 => Ok(cast_int32_to_int64(a)),
             CastInt32ToOid => Ok(a),
             CastInt32ToRegProc => Ok(a),
             CastInt32ToRegType => Ok(a),
             CastInt32ToNumeric(scale) => cast_int32_to_numeric(a, *scale),
-            CastInt32ToString => Ok(cast_int32_to_string(a, temp_storage)),
             CastOidToInt32 => Ok(a),
             CastRegProcToOid => Ok(a),
             CastOidToRegProc => Ok(a),
@@ -4145,12 +4123,18 @@ impl UnaryFunc {
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
             | CastInt16ToString(_)
+            | CastInt32ToBool(_)
+            | CastInt32ToFloat32(_)
+            | CastInt32ToFloat64(_)
+            | CastInt32ToInt16(_)
+            | CastInt32ToInt64(_)
+            | CastInt32ToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(nullable),
 
-            IsRegexpMatch(_) | CastInt32ToBool | CastInt64ToBool | CastStringToBool => {
+            IsRegexpMatch(_) | CastInt64ToBool | CastStringToBool => {
                 ScalarType::Bool.nullable(nullable)
             }
 
@@ -4163,7 +4147,6 @@ impl UnaryFunc {
             | CastBoolToStringNonstandard
             | CastCharToString
             | CastVarCharToString
-            | CastInt32ToString
             | CastInt64ToString
             | CastNumericToString
             | CastDateToString
@@ -4183,13 +4166,15 @@ impl UnaryFunc {
             | Upper
             | Lower => ScalarType::String.nullable(nullable),
 
-            CastStringToFloat32 | CastInt32ToFloat32 | CastInt64ToFloat32
-            | CastNumericToFloat32 => ScalarType::Float32.nullable(nullable),
+            CastStringToFloat32 | CastInt64ToFloat32 | CastNumericToFloat32 => {
+                ScalarType::Float32.nullable(nullable)
+            }
 
-            CastStringToFloat64 | CastInt32ToFloat64 | CastInt64ToFloat64
-            | CastNumericToFloat64 => ScalarType::Float64.nullable(nullable),
+            CastStringToFloat64 | CastInt64ToFloat64 | CastNumericToFloat64 => {
+                ScalarType::Float64.nullable(nullable)
+            }
 
-            CastStringToInt16 | CastInt32ToInt16 | CastInt64ToInt16 | CastNumericToInt16 => {
+            CastStringToInt16 | CastInt64ToInt16 | CastNumericToInt16 => {
                 ScalarType::Int16.nullable(nullable)
             }
 
@@ -4197,9 +4182,7 @@ impl UnaryFunc {
                 ScalarType::Int32.nullable(nullable)
             }
 
-            CastStringToInt64 | CastInt32ToInt64 | CastNumericToInt64 => {
-                ScalarType::Int64.nullable(nullable)
-            }
+            CastStringToInt64 | CastNumericToInt64 => ScalarType::Int64.nullable(nullable),
 
             CastStringToNumeric(scale)
             | CastInt32ToNumeric(scale)
@@ -4370,6 +4353,12 @@ impl UnaryFunc {
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
             | CastInt16ToString(_)
+            | CastInt32ToBool(_)
+            | CastInt32ToFloat32(_)
+            | CastInt32ToFloat64(_)
+            | CastInt32ToInt16(_)
+            | CastInt32ToInt64(_)
+            | CastInt32ToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4384,11 +4373,7 @@ impl UnaryFunc {
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => false,
-            IsRegexpMatch(_)
-            | CastInt32ToBool
-            | CastInt64ToBool
-            | CastStringToBool
-            | CastJsonbOrNullToJsonb => false,
+            IsRegexpMatch(_) | CastInt64ToBool | CastStringToBool | CastJsonbOrNullToJsonb => false,
             CastStringToBytes | CastStringToInterval | CastTimeToInterval | CastStringToJsonb => {
                 false
             }
@@ -4396,7 +4381,6 @@ impl UnaryFunc {
             | CastBoolToStringNonstandard
             | CastCharToString
             | CastVarCharToString
-            | CastInt32ToString
             | CastInt64ToString
             | CastNumericToString
             | CastDateToString
@@ -4415,13 +4399,11 @@ impl UnaryFunc {
             | TrimTrailingWhitespace
             | Upper
             | Lower => false,
-            CastStringToFloat32 | CastInt32ToFloat32 | CastInt64ToFloat32
-            | CastNumericToFloat32 => false,
-            CastStringToFloat64 | CastInt32ToFloat64 | CastInt64ToFloat64
-            | CastNumericToFloat64 => false,
-            CastStringToInt16 | CastInt32ToInt16 | CastInt64ToInt16 | CastNumericToInt16 => false,
+            CastStringToFloat32 | CastInt64ToFloat32 | CastNumericToFloat32 => false,
+            CastStringToFloat64 | CastInt64ToFloat64 | CastNumericToFloat64 => false,
+            CastStringToInt16 | CastInt64ToInt16 | CastNumericToInt16 => false,
             CastBoolToInt32 | CastStringToInt32 | CastInt64ToInt32 | CastNumericToInt32 => false,
-            CastStringToInt64 | CastInt32ToInt64 | CastNumericToInt64 => false,
+            CastStringToInt64 | CastNumericToInt64 => false,
             CastStringToNumeric(_)
             | CastInt32ToNumeric(_)
             | CastInt64ToNumeric(_)
@@ -4515,9 +4497,6 @@ impl UnaryFunc {
             | CastBoolToStringNonstandard
             | CastCharToString
             | CastVarCharToString
-            | CastInt32ToInt16
-            | CastInt32ToInt64
-            | CastInt32ToString
             | CastInt64ToString
             | CastStringToBytes
             | CastDateToTimestamp
@@ -4586,6 +4565,12 @@ impl UnaryFunc {
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
             | CastInt16ToString(_)
+            | CastInt32ToBool(_)
+            | CastInt32ToFloat32(_)
+            | CastInt32ToFloat64(_)
+            | CastInt32ToInt16(_)
+            | CastInt32ToInt64(_)
+            | CastInt32ToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegNumeric => f.write_str("-"),
             NegInterval => f.write_str("-"),
@@ -4593,15 +4578,9 @@ impl UnaryFunc {
             CastBoolToString => f.write_str("booltostr"),
             CastBoolToStringNonstandard => f.write_str("booltostrns"),
             CastBoolToInt32 => f.write_str("booltoi32"),
-            CastInt32ToBool => f.write_str("i32tobool"),
-            CastInt32ToFloat32 => f.write_str("i32tof32"),
-            CastInt32ToFloat64 => f.write_str("i32tof64"),
-            CastInt32ToInt16 => f.write_str("i32toi16"),
-            CastInt32ToInt64 => f.write_str("i32toi64"),
             CastInt32ToOid => f.write_str("i32tooid"),
             CastInt32ToRegProc => f.write_str("i32toregproc"),
             CastInt32ToRegType => f.write_str("i32toregtype"),
-            CastInt32ToString => f.write_str("i32tostr"),
             CastInt32ToNumeric(..) => f.write_str("i32tonumeric"),
             CastOidToInt32 => f.write_str("oidtoi32"),
             CastRegProcToOid => f.write_str("regproctooid"),
