@@ -30,7 +30,7 @@ mzworkflows:
   # Otherwise, this workflow runs against the test files in this directory that
   # use a Kafka action but do *not* use:
   # - `kafka-time-offset.td` (https://github.com/vectorizedio/redpanda/issues/2397)
-  # - `format=protobuf` with `publish=true` (Redpanda does not support schema publication for protobuf/json)
+  # - `schema-registry-publish` with `format=protobuf` (Redpanda does not support schema publication for protobuf/json)
   testdrive-redpanda:
     steps:
       - step: start-services
@@ -53,7 +53,7 @@ mzworkflows:
           --kafka-addr=redpanda:9092
           --schema-registry-url=http://redpanda:8081
           --materialized-url=postgres://materialize@materialized:6875
-          ${TD_TEST:-$(grep -lF '$ kafka' $(grep -L 'kafka_time_offset' $(grep -L '$ kafka-ingest.\+format=protobuf.\+publish=true' *.td)))}
+          ${TD_TEST:-$(grep -lF '$ kafka' $(grep -L 'kafka_time_offset' $(grep -L '$ schema-registry-publish.*schema-type=protobuf' *.td)))}
 
   # Run tests, requires AWS credentials to be present. See guide-testing for
   # details.
