@@ -66,7 +66,7 @@ order by elapsed_ns desc;
 ### Why is Materialize unresponsive for seconds at a time?
 
 Materialize operators get scheduled and try to
-behave themselves by returning control promptly, but 
+behave themselves by returning control promptly, but
 that doesn't always happen. These queries
 reveal how many times each operator was scheduled for each
 power-of-two elapsed time: high durations indicate an event

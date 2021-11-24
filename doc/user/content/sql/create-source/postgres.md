@@ -76,7 +76,7 @@ If you stop or delete Materialize without first dropping the Postgres source, th
 - **Truncation:** Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is re-created.
 - **Resource usage:**
     - During the initial table sync, **disk space** consumption may increase proportionally to the size of the upstream database before returning to a steady state. To profile disk usage, see [Troubleshooting](/ops/troubleshooting/#how-much-disk-space-is-materialize-using).
-    - Since Postgres sources are materialized by default, the replicated Postgres source tables must fit into **available memory**. 
+    - Since Postgres sources are materialized by default, the replicated Postgres source tables must fit into **available memory**.
 
 ### Supported Postgres versions
 
