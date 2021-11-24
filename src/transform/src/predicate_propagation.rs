@@ -52,7 +52,7 @@ impl PredicateKnowledge {
     /// The list of scalar expressions returned is meant to have some structure. Any column
     /// equivalence is expressed by a single `#col1 = #col2` and should inherit the
     /// implications of the first column's role in any predicates.
-    fn action(
+    pub fn action(
         expr: &mut MirRelationExpr,
         let_knowledge: &mut HashMap<expr::Id, Vec<MirScalarExpr>>,
     ) -> Result<Vec<MirScalarExpr>, crate::TransformError> {

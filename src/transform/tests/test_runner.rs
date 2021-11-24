@@ -407,6 +407,26 @@ mod tests {
         result
     }
 
+    /// Applies PredicateKnowledge transform and displaying all the predicates lifted
+    /// all the way up to the root.
+    fn run_predicate_propagation_testcast(
+        s: &str,
+        cat: &TestCatalog,
+        args: &HashMap<String, Vec<String>>,
+    ) -> Result<String, Error> {
+        let mut rel = parse_relation(s, cat, args)?;
+        let predicates = transform::predicate_propagation::PredicateKnowledge::action(
+            &mut rel,
+            &mut Default::default(),
+        )?;
+        let mut out = String::new();
+        for predicate in predicates {
+            write!(out, "{}\n", predicate)?;
+        }
+
+        Ok(out)
+    }
+
     #[test]
     fn run() {
         datadriven::walk("tests/testdata", |f| {
@@ -468,6 +488,12 @@ mod tests {
                             &s.args,
                             TestType::Build,
                         ) {
+                            Ok(msg) => msg,
+                            Err(err) => format!("error: {}\n", err),
+                        }
+                    }
+                    "predicate-propagation" => {
+                        match run_predicate_propagation_testcast(&s.input, &catalog, &s.args) {
                             Ok(msg) => msg,
                             Err(err) => format!("error: {}\n", err),
                         }
