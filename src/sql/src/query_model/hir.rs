@@ -65,12 +65,34 @@ impl FromHir {
                 }))
             }
             HirRelationExpr::Map { input, scalars } => {
-                let box_id = self.generate_select(input);
-                // @todo self-referencing Maps
-                for scalar in scalars.iter() {
-                    let expr = self.generate_expr(scalar, box_id);
-                    let b = self.model.get_box(box_id);
-                    b.borrow_mut().columns.push(Column { expr, alias: None });
+                let mut box_id = self.generate_select(input);
+                let mut start_idx = 0;
+                let mut scalars = scalars.clone();
+                loop {
+                    let old_arity = self.model.get_box(box_id).borrow().columns.len();
+
+                    let end_idx = scalars
+                        .iter_mut()
+                        .position(|s| {
+                            let mut requires_nonexistent_column = false;
+                            s.visit_columns(0, &mut |depth, col| {
+                                if col.level == depth {
+                                    requires_nonexistent_column |= (col.column + 1) > old_arity
+                                }
+                            });
+                            requires_nonexistent_column
+                        })
+                        .unwrap_or(scalars.len());
+                    for scalar in scalars[start_idx..end_idx].iter() {
+                        let expr = self.generate_expr(&scalar, box_id);
+                        let b = self.model.get_box(box_id);
+                        b.borrow_mut().columns.push(Column { expr, alias: None });
+                    }
+                    start_idx = end_idx;
+                    if end_idx == scalars.len() {
+                        break;
+                    }
+                    box_id = self.wrap_within_select(box_id);
                 }
                 box_id
             }

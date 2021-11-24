@@ -138,3 +138,26 @@ coalesce(0, 2, 1) end
 | Project (#0, #1)
 ----
 ----
+
+lower
+select case when x.a > x.b then x.c else lpad(x.d, 4, 'ab') end
+from (select 10 as a, 5 as b, 'world' as c, 'realm' as d) x
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Constant ()
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map 10, 5, "world", "realm"
+| Project (#0..#3)
+| Map #0, #1, #2, #3, if (#0 > #1) then {#2} else {lpad(#3, i32toi64(4), "ab")}
+| Project (#4..#8)
+| Map #4
+| Project (#5)
+----
+----
