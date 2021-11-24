@@ -15,8 +15,8 @@
 //! harming planning.
 
 use crate::TransformArgs;
-use expr::{Id, LocalId, MirRelationExpr};
-use ore::stack::RecursionLimitError;
+use expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
+use ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 
 /// Install replace certain `Get` operators with their `Let` value.
 #[derive(Debug)]
@@ -31,6 +31,25 @@ pub struct InlineLet {
     /// Generally, though, we prefer to be more conservative in our inlining in
     /// order to be able to better detect CSEs.
     pub inline_mfp: bool,
+    /// A [`RecursionGuard`] to be used by the [`CheckedRecursion`] implementation.
+    recursion_guard: RecursionGuard,
+}
+
+impl InlineLet {
+    /// Construct a new [`InlineLet`] instance with the given `inline_mfp`
+    /// where `recursion_guard` is initialized with [`RECURSION_LIMIT`] as limit.
+    pub fn new(inline_mfp: bool) -> InlineLet {
+        InlineLet {
+            inline_mfp,
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for InlineLet {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
 }
 
 impl crate::Transform for InlineLet {

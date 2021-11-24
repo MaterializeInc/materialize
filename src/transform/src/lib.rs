@@ -191,7 +191,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::fusion::top_k::TopK),
-                Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
+                Box::new(crate::inline_let::InlineLet::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),
                 // This goes after union fusion so we can cancel out
@@ -299,7 +299,7 @@ impl Optimizer {
                     // Identifies common relation subexpressions.
                     // Must be followed by let inlining, to keep under control.
                     Box::new(crate::cse::relation_cse::RelationCSE),
-                    Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
+                    Box::new(crate::inline_let::InlineLet::new(false)),
                     Box::new(crate::update_let::UpdateLet),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
@@ -332,7 +332,7 @@ impl Optimizer {
             // Identifies common relation subexpressions.
             // Must be followed by let inlining, to keep under control.
             Box::new(crate::cse::relation_cse::RelationCSE),
-            Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
+            Box::new(crate::inline_let::InlineLet::new(false)),
             Box::new(crate::update_let::UpdateLet),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
@@ -358,7 +358,7 @@ impl Optimizer {
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),
                     Box::new(crate::cse::relation_cse::RelationCSE),
-                    Box::new(crate::inline_let::InlineLet { inline_mfp: true }),
+                    Box::new(crate::inline_let::InlineLet::new(true)),
                 ],
             }),
         ];
