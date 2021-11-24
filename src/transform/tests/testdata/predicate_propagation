@@ -25,6 +25,13 @@ build apply=PredicateKnowledge
 | Project (#0, #0)
 | Filter (#0 = #0)
 
+predicate-propagation
+(filter (project (constant [[null]] [int64]) [#0 #0]) [(call_binary eq #0 #1)])
+----
+isnull(#0)
+(#0 = #0)
+(#0 = #1)
+
 build apply=PredicateKnowledge
 (filter (project (get x) [#0 #0]) [(call_binary eq #0 #1)])
 ----
@@ -200,6 +207,14 @@ build apply=PredicateKnowledge
 ----
 ----
 
+predicate-propagation
+(map (union [(project (get x) [#0 #0]) (get x) (project (get x) [#0 #0])]) [#1 (call_binary add_int32 #1 1)])
+----
+(#1 = #1)
+(#1 = #2)
+(#3 = #3)
+(#3 = (#1 + 1))
+
 # FlatMap
 
 build apply=PredicateKnowledge
@@ -274,6 +289,13 @@ build apply=PredicateKnowledge
 %0 =
 | Constant
 
+predicate-propagation
+(filter (filter (get x) [(call_unary not (call_binary gt #0 #1))]) [(call_binary gt #0 #1)])
+----
+false
+!(isnull(#1))
+!((#0 > #1))
+
 #
 # TODO: improve impossible condition detection
 #
@@ -291,3 +313,53 @@ build apply=PredicateKnowledge
 %0 =
 | Get x (u0)
 | Filter (#0 = #1), (#0 > 10), (#0 < 10)
+
+#
+# Check that normalization doesn't return more predicates when it's fed with its own output.
+#
+
+predicate-propagation
+(filter (get x) [(call_binary eq #0 (call_binary add_int32 #0 #1))])
+----
+!(isnull(#1))
+(#0 = #0)
+(#0 = (#0 + #1))
+
+predicate-propagation
+(project (filter (get x) [(call_binary eq #0 (call_binary add_int32 #0 #1))]) [0 1])
+----
+!(isnull(#1))
+(#0 = #0)
+(#0 = (#0 + #1))
+
+predicate-propagation
+(filter (get x) [(call_binary eq #0 (call_binary add_int32 #0 #1)) (call_binary eq #0 #1)])
+----
+!(isnull(#0))
+(#0 = #0)
+(#0 = #1)
+(#0 = (#0 + #0))
+(#0 = (#0 + #1))
+
+predicate-propagation
+(project (filter (get x) [(call_binary eq #0 (call_binary add_int32 #0 #1)) (call_binary eq #0 #1)]) [0 1])
+----
+!(isnull(#0))
+(#0 = #0)
+(#0 = #1)
+(#0 = (#0 + #0))
+(#0 = (#0 + #1))
+
+predicate-propagation
+(filter (get x) [(call_binary eq (call_binary add_int32 #0 #1) (call_binary mul_int32 10 (call_binary add_int32 #0 #1)))])
+----
+!(isnull(#1))
+((#0 + #1) = (#0 + #1))
+((#0 + #1) = (10 * (#0 + #1)))
+
+predicate-propagation
+(project (filter (get x) [(call_binary eq (call_binary add_int32 #0 #1) (call_binary mul_int32 10 (call_binary add_int32 #0 #1)))]) [0 1])
+----
+!(isnull(#1))
+((#0 + #1) = (#0 + #1))
+((#0 + #1) = (10 * (#0 + #1)))
