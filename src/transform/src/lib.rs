@@ -31,7 +31,6 @@ use expr::MirScalarExpr;
 use ore::id_gen::IdGen;
 
 pub mod canonicalize_mfp;
-pub mod column_knowledge;
 pub mod cse;
 pub mod demand;
 pub mod fusion;
@@ -40,7 +39,6 @@ pub mod join_implementation;
 pub mod map_lifting;
 pub mod monotonic;
 pub mod nonnull_requirements;
-// pub mod nonnullable;
 pub mod predicate_propagation;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
@@ -273,13 +271,6 @@ impl Optimizer {
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
                     Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
-                    // Lifts the information `!isnull(col)`
-                    // Box::new(crate::nonnullable::NonNullable),
-                    // Lifts the information `col = literal`
-                    // TODO (#6613): this also tries to lift `!isnull(col)` but
-                    // less well than the previous transform. Eliminate
-                    // redundancy between the two transforms.
-                    // Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::predicate_propagation::PredicateKnowledge),
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::redundant_join::RedundantJoin::default()),
@@ -327,7 +318,6 @@ impl Optimizer {
                 transforms: vec![
                     Box::new(crate::join_implementation::JoinImplementation::default()),
                     Box::new(crate::predicate_propagation::PredicateKnowledge),
-                    // Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::map_lifting::LiteralLifting::default()),
