@@ -461,6 +461,8 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
     // Feel welcome to remove all equality tests and re-introduce canonical tests.
     for predicate in predicates.iter_mut() {
         optimize(predicate, &structured);
+        // Add the optimized predicate to the knowledge base
+        structured.add_predicate(predicate);
     }
     // Re-introduce equality constraints using the representative.
     for class in classes.iter() {
@@ -549,25 +551,33 @@ impl<'a> PredicateStructure<'a> {
     pub fn new(predicates: &'a [MirScalarExpr]) -> Self {
         let mut structured = Self::default();
         for predicate in predicates.iter() {
-            match predicate {
-                MirScalarExpr::CallBinary {
-                    expr1,
-                    expr2,
-                    func: BinaryFunc::Eq,
-                } => {
-                    structured.replacements.insert(&**expr2, &**expr1);
-                }
-                MirScalarExpr::CallUnary {
-                    expr,
-                    func: UnaryFunc::Not(expr::func::Not),
-                } => {
-                    structured.known_false.insert(expr);
-                }
-                _ => {
-                    structured.known_true.insert(predicate);
-                }
-            }
+            structured.add_predicate(predicate);
         }
         structured
+    }
+
+    /// Adds the knowledge provided by the given predicate to the structure.
+    ///
+    /// The predicate is assumed to be normalized in the sense that it's been optimized
+    /// with the knowledge of the predicates already in this structure.
+    pub fn add_predicate(&mut self, predicate: &'a MirScalarExpr) {
+        match predicate {
+            MirScalarExpr::CallBinary {
+                expr1,
+                expr2,
+                func: BinaryFunc::Eq,
+            } => {
+                self.replacements.insert(&**expr2, &**expr1);
+            }
+            MirScalarExpr::CallUnary {
+                expr,
+                func: UnaryFunc::Not(expr::func::Not),
+            } => {
+                self.known_false.insert(expr);
+            }
+            _ => {
+                self.known_true.insert(predicate);
+            }
+        }
     }
 }
