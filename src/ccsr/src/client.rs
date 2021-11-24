@@ -207,11 +207,15 @@ where
     }
 }
 
+/// The type of a schema stored by a schema registry.
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum SchemaType {
+    /// An Avro schema.
     Avro,
+    /// A Protobuf schema.
     Protobuf,
+    /// A JSON schema.
     Json,
 }
 
