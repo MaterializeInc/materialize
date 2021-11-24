@@ -72,7 +72,7 @@ impl Client {
         self.get_subject(subject).await.map(|s| s.schema)
     }
 
-    /// Gets the latest schema for the specified subject.
+    /// Gets the latest version of the specified subject.
     pub async fn get_subject(&self, subject: &str) -> Result<Subject, GetBySubjectError> {
         let req = self.make_request(Method::GET, &["subjects", subject, "versions", "latest"]);
         let res: GetBySubjectResponse = send_request(req).await?;
@@ -86,11 +86,11 @@ impl Client {
         })
     }
 
-    /// Gets the latest schema for the specified subject as well as all other subjects referenced
-    /// by that subject (recursively).
+    /// Gets the latest version of the specified subject as well as all other
+    /// subjects referenced by that subject (recursively).
     ///
     /// The dependencies are returned in alphabetical order by subject name.
-    pub async fn get_all_subjects(
+    pub async fn get_subject_with_references(
         &self,
         subject: &str,
     ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
