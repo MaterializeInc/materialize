@@ -238,7 +238,7 @@ mod tests {
             "JoinFusion" => Ok(Box::new(transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting::default())),
             "NonNullRequirements" => Ok(Box::new(
-                transform::nonnull_requirements::NonNullRequirements,
+                transform::nonnull_requirements::NonNullRequirements::default(),
             )),
             "PredicatePushdown" => Ok(Box::new(transform::predicate_pushdown::PredicatePushdown)),
             "ProjectionExtraction" => Ok(Box::new(
