@@ -227,7 +227,6 @@ mod tests {
         // transforms?
         match name {
             "CanonicalizeMfp" => Ok(Box::new(transform::canonicalize_mfp::CanonicalizeMfp)),
-            "ColumnKnowledge" => Ok(Box::new(transform::column_knowledge::ColumnKnowledge)),
             "Demand" => Ok(Box::new(transform::demand::Demand)),
             "FilterFusion" => Ok(Box::new(transform::fusion::filter::Filter)),
             "FoldConstants" => Ok(Box::new(transform::reduction::FoldConstants {
