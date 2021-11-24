@@ -107,6 +107,9 @@ List new features before bug fixes.
 
 - Prevent overflow on operations combining [`timestamp`] and [`interval`].
 
+- Support special case `COLLATE pg_catalog.default`.
+  Other types of collations are not yet supported.
+
 {{% version-header v0.10.0 %}}
 
 - Allow ingesting avro schemas whose top node is not a record type.
