@@ -2,6 +2,7 @@ languageCode = "en-us"
 title = "Materialize Documentation"
 pygmentsCodeFences = true
 pygmentsUseClasses = true
+enableGitInfo = true
 
 [params]
 # Keep the releases in reverse order of their release date. The first release
