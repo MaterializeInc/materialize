@@ -38,8 +38,7 @@ impl crate::Transform for NonNullRequirements {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation, HashSet::new(), &mut HashMap::new());
-        Ok(())
+        self.action(relation, HashSet::new(), &mut HashMap::new())
     }
 }
 
@@ -50,7 +49,7 @@ impl NonNullRequirements {
         relation: &mut MirRelationExpr,
         mut columns: HashSet<usize>,
         gets: &mut HashMap<Id, Vec<HashSet<usize>>>,
-    ) {
+    ) -> Result<(), crate::TransformError> {
         match relation {
             MirRelationExpr::Constant { rows, .. } => {
                 if let Ok(rows) = rows {
@@ -60,9 +59,11 @@ impl NonNullRequirements {
                         columns.iter().all(|c| datums[*c] != repr::Datum::Null)
                     })
                 }
+                Ok(())
             }
             MirRelationExpr::Get { id, .. } => {
                 gets.entry(*id).or_insert_with(Vec::new).push(columns);
+                Ok(())
             }
             MirRelationExpr::Let { id, value, body } => {
                 // Let harvests any non-null requirements from its body,
@@ -70,7 +71,7 @@ impl NonNullRequirements {
                 // each corresponding Get, pushing them at its value.
                 let id = Id::Local(*id);
                 let prior = gets.insert(id, Vec::new());
-                self.action(body, columns, gets);
+                self.action(body, columns, gets)?;
                 let mut needs = gets.remove(&id).unwrap();
                 if let Some(prior) = prior {
                     gets.insert(id, prior);
@@ -79,16 +80,15 @@ impl NonNullRequirements {
                     while let Some(x) = needs.pop() {
                         need.retain(|col| x.contains(col))
                     }
-                    self.action(value, need, gets);
+                    self.action(value, need, gets)?;
                 }
+                Ok(())
             }
-            MirRelationExpr::Project { input, outputs } => {
-                self.action(
-                    input,
-                    columns.into_iter().map(|c| outputs[c]).collect(),
-                    gets,
-                );
-            }
+            MirRelationExpr::Project { input, outputs } => self.action(
+                input,
+                columns.into_iter().map(|c| outputs[c]).collect(),
+                gets,
+            ),
             MirRelationExpr::Map { input, scalars } => {
                 let arity = input.arity();
                 if columns
@@ -98,6 +98,7 @@ impl NonNullRequirements {
                     // A null value was introduced in a marked column;
                     // the entire expression can be zeroed out.
                     relation.take_safely();
+                    Ok(())
                 } else {
                     // For each column, if it must be non-null, extract the expression's
                     // non-null requirements and include them too. We go in reverse order
@@ -109,7 +110,7 @@ impl NonNullRequirements {
                         }
                         columns.remove(&column);
                     }
-                    self.action(input, columns, gets);
+                    self.action(input, columns, gets)
                 }
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
@@ -135,14 +136,14 @@ impl NonNullRequirements {
                 // which columns created by the FlatMap cannot be null. However,
                 // we have been too lazy to handle this so far.
 
-                self.action(input, columns, gets);
+                self.action(input, columns, gets)
             }
             MirRelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {
                     predicate.non_null_requirements(&mut columns);
                     // TODO: Not(IsNull) should add a constraint!
                 }
-                self.action(input, columns, gets);
+                self.action(input, columns, gets)
             }
             MirRelationExpr::Join {
                 inputs,
@@ -179,8 +180,9 @@ impl NonNullRequirements {
                 }
 
                 for (input, columns) in inputs.iter_mut().zip(new_columns) {
-                    self.action(input, columns, gets);
+                    self.action(input, columns, gets)?;
                 }
+                Ok(())
             }
             MirRelationExpr::Reduce {
                 input,
@@ -243,7 +245,7 @@ impl NonNullRequirements {
                     }
                 }
 
-                self.action(input, new_columns, gets);
+                self.action(input, new_columns, gets)
             }
             MirRelationExpr::TopK {
                 input, group_key, ..
@@ -255,26 +257,19 @@ impl NonNullRequirements {
                 // TODO(mcsherry): bind NULL ordering and apply the tranformation
                 // to all columns if the correct ASC/DESC ordering is observed
                 // (with some care about orderings on multiple columns).
-                self.action(input, columns, gets);
+                self.action(input, columns, gets)
             }
-            MirRelationExpr::Negate { input } => {
-                self.action(input, columns, gets);
-            }
-            MirRelationExpr::Threshold { input } => {
-                self.action(input, columns, gets);
-            }
-            MirRelationExpr::DeclareKeys { input, .. } => {
-                self.action(input, columns, gets);
-            }
+            MirRelationExpr::Negate { input } => self.action(input, columns, gets),
+            MirRelationExpr::Threshold { input } => self.action(input, columns, gets),
+            MirRelationExpr::DeclareKeys { input, .. } => self.action(input, columns, gets),
             MirRelationExpr::Union { base, inputs } => {
-                self.action(base, columns.clone(), gets);
+                self.action(base, columns.clone(), gets)?;
                 for input in inputs {
-                    self.action(input, columns.clone(), gets);
+                    self.action(input, columns.clone(), gets)?;
                 }
+                Ok(())
             }
-            MirRelationExpr::ArrangeBy { input, .. } => {
-                self.action(input, columns, gets);
-            }
+            MirRelationExpr::ArrangeBy { input, .. } => self.action(input, columns, gets),
         }
     }
 }
