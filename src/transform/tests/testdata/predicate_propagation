@@ -314,6 +314,18 @@ build apply=PredicateKnowledge
 | Get x (u0)
 | Filter (#0 = #1), (#0 > 10), (#0 < 10)
 
+build apply=PredicateKnowledge
+(filter (get x) [(call_unary not (call_binary lt #0 #1)) (call_binary lt #0 #1)])
+----
+%0 =
+| Constant
+
+build apply=PredicateKnowledge
+(filter (filter (get x) [(call_unary not (call_binary lt #0 #1))]) [(call_binary lt #0 #1)])
+----
+%0 =
+| Constant
+
 #
 # Check that normalization doesn't return more predicates when it's fed with its own output.
 #
