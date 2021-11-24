@@ -38,16 +38,20 @@ mod tests {
     const TEST: &str = "test";
 
     thread_local! {
-        static FULL_TRANSFORM_LIST: Vec<&'static dyn Transform> =
-            [
-                Optimizer::LOGICAL_TRANSFORMATIONS,
-                &[
-                    &transform::projection_pushdown::ProjectionPushdown,
-                    &transform::update_let::UpdateLet,
-                ],
-                Optimizer::LOGICAL_CLEANUP_TRANSFORMATIONS,
-                Optimizer::PHYSICAL_TRANSFORMATIONS,
-            ].into_iter().flatten().copied().collect();
+        static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> =
+            Optimizer::logical_optimizer()
+                .transforms
+                .into_iter()
+                .chain(std::iter::once(
+                    Box::new(transform::projection_pushdown::ProjectionPushdown)
+                        as Box<dyn Transform>,
+                ))
+                .chain(std::iter::once(
+                    Box::new(transform::update_let::UpdateLet) as Box<dyn Transform>
+                ))
+                .chain(Optimizer::logical_cleanup_pass().transforms.into_iter())
+                .chain(Optimizer::physical_optimizer().transforms.into_iter())
+                .collect::<Vec<_>>();
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
