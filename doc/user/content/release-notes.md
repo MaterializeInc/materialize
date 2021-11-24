@@ -107,8 +107,8 @@ List new features before bug fixes.
 
 - Prevent overflow on operations combining [`timestamp`] and [`interval`].
 
-- Support special case `COLLATE pg_catalog.default`.
-  Other types of collations are not yet supported.
+- Support explicit reference to the default collation (`<expr> COLLATE pg_catalog.default`).
+  Other collations are not yet supported.
 
 {{% version-header v0.10.0 %}}
 
