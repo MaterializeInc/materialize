@@ -7,19 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use crate::ast::{Expr, Raw};
 use crate::catalog::{
-    CatalogConfig, CatalogDatabase, CatalogError, CatalogItem, CatalogRole, CatalogSchema,
-    SessionCatalog,
+    CatalogConfig, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType, CatalogRole,
+    CatalogSchema, SessionCatalog,
 };
+use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
 use crate::names::{FullName, PartialName};
 use crate::plan::query::QueryLifetime;
 use crate::plan::{StatementContext, StatementDesc};
 use build_info::DUMMY_BUILD_INFO;
 use chrono::MIN_DATETIME;
-use expr::{DummyHumanizer, ExprHumanizer, GlobalId};
+use dataflow_types::SourceConnector;
+use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use lazy_static::lazy_static;
 use ore::now::{EpochMillis, NOW_ZERO};
-use repr::ScalarType;
+use repr::{RelationDesc, ScalarType};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -42,12 +46,92 @@ lazy_static! {
     };
 }
 
+/// A dummy [`CatalogItem`] implementation.
+///
+/// This implementation is suitable for use in tests that plan queries which are
+/// not demanding of the catalog, as many methods are unimplemented.
+#[derive(Debug)]
+pub enum TestCatalogItem {
+    Func(&'static Func),
+}
+
+impl CatalogItem for TestCatalogItem {
+    fn name(&self) -> &FullName {
+        unimplemented!()
+    }
+
+    fn id(&self) -> GlobalId {
+        unimplemented!()
+    }
+
+    fn oid(&self) -> u32 {
+        unimplemented!()
+    }
+
+    fn desc(&self) -> Result<&RelationDesc, CatalogError> {
+        unimplemented!()
+    }
+
+    fn func(&self) -> Result<&'static Func, CatalogError> {
+        match &self {
+            TestCatalogItem::Func(func) => Ok(func),
+            //_ => Err(CatalogError::UnknownFunction(format!("{:?}", self))),
+        }
+    }
+
+    fn source_connector(&self) -> Result<&SourceConnector, CatalogError> {
+        unimplemented!()
+    }
+
+    fn item_type(&self) -> CatalogItemType {
+        unimplemented!()
+    }
+
+    fn create_sql(&self) -> &str {
+        unimplemented!()
+    }
+
+    fn uses(&self) -> &[GlobalId] {
+        unimplemented!()
+    }
+
+    fn used_by(&self) -> &[GlobalId] {
+        unimplemented!()
+    }
+
+    fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)> {
+        unimplemented!()
+    }
+
+    fn table_details(&self) -> Option<&[Expr<Raw>]> {
+        unimplemented!()
+    }
+}
+
 /// A dummy [`SessionCatalog`] implementation.
 ///
 /// This implementation is suitable for use in tests that plan queries which are
 /// not demanding of the catalog, as many methods are unimplemented.
 #[derive(Debug)]
-pub struct TestCatalog;
+pub struct TestCatalog {
+    funcs: HashMap<&'static str, TestCatalogItem>,
+}
+
+impl Default for TestCatalog {
+    fn default() -> Self {
+        let mut funcs = HashMap::new();
+        for (name, func) in MZ_INTERNAL_BUILTINS.iter() {
+            funcs.insert(*name, TestCatalogItem::Func(func));
+        }
+        for (name, func) in MZ_CATALOG_BUILTINS.iter() {
+            funcs.insert(*name, TestCatalogItem::Func(func));
+        }
+        for (name, func) in PG_CATALOG_BUILTINS.iter() {
+            funcs.insert(*name, TestCatalogItem::Func(func));
+        }
+        Self { funcs }
+    }
+}
 
 impl SessionCatalog for TestCatalog {
     fn search_path(&self, _: bool) -> Vec<&str> {
@@ -86,8 +170,14 @@ impl SessionCatalog for TestCatalog {
         unimplemented!();
     }
 
-    fn resolve_function(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
+    fn resolve_function(
+        &self,
+        partial_name: &PartialName,
+    ) -> Result<&dyn CatalogItem, CatalogError> {
+        if let Some(result) = self.funcs.get(&partial_name.item[..]) {
+            return Ok(result);
+        }
+        Err(CatalogError::UnknownFunction(partial_name.item.clone()))
     }
 
     fn get_item_by_id(&self, _: &GlobalId) -> &dyn CatalogItem {
@@ -132,7 +222,7 @@ impl ExprHumanizer for TestCatalog {
 #[test]
 fn test_hir_generator() {
     datadriven::walk("tests/querymodel", |f| {
-        let catalog = TestCatalog {};
+        let catalog = TestCatalog::default();
 
         f.run(move |s| -> String {
             let build_stmt = |stmt, dot_graph, lower| -> String {

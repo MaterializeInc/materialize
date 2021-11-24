@@ -119,3 +119,22 @@ select x.a from (select true as a) x join (select false as b) y on x.a;
 | Project (#2)
 ----
 ----
+
+lower
+select mz_logical_timestamp(), case when true = false then -(1 + 1) else
+coalesce(0, 2, 1) end
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Constant ()
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map mz_logical_timestamp(), if (true = false) then {-((1 + 1))} else {coalesce(0, 2, 1)}
+| Project (#0, #1)
+----
+----

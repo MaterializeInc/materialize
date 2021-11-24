@@ -10,8 +10,10 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use ore::str::separated;
 use repr::*;
 
+use crate::plan::expr::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
 use crate::query_model::{QuantifierId, QuantifierSet};
 
 /// Representation for scalar expressions within a query graph model.
@@ -40,6 +42,25 @@ pub enum BoxScalarExpr {
     /// A literal value.
     /// (A single datum stored as a row, because we can't own a Datum)
     Literal(Row, ColumnType),
+    CallNullary(NullaryFunc),
+    CallUnary {
+        func: UnaryFunc,
+        expr: Box<BoxScalarExpr>,
+    },
+    CallBinary {
+        func: BinaryFunc,
+        expr1: Box<BoxScalarExpr>,
+        expr2: Box<BoxScalarExpr>,
+    },
+    CallVariadic {
+        func: VariadicFunc,
+        exprs: Vec<BoxScalarExpr>,
+    },
+    If {
+        cond: Box<BoxScalarExpr>,
+        then: Box<BoxScalarExpr>,
+        els: Box<BoxScalarExpr>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -66,24 +87,87 @@ impl fmt::Display for BoxScalarExpr {
             BoxScalarExpr::Literal(row, _) => {
                 write!(f, "{}", row.unpack_first())
             }
+            BoxScalarExpr::CallNullary(func) => {
+                write!(f, "{}()", func)
+            }
+            BoxScalarExpr::CallUnary { func, expr } => {
+                write!(f, "{}({})", func, expr)
+            }
+            BoxScalarExpr::CallBinary { func, expr1, expr2 } => {
+                if func.is_infix_op() {
+                    write!(f, "({} {} {})", expr1, func, expr2)
+                } else {
+                    write!(f, "{}({}, {})", func, expr1, expr2)
+                }
+            }
+            BoxScalarExpr::CallVariadic { func, exprs } => {
+                write!(f, "{}({})", func, separated(", ", exprs.clone()))
+            }
+            BoxScalarExpr::If { cond, then, els } => {
+                write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)
+            }
         }
     }
 }
 
 impl BoxScalarExpr {
-    // @todo use a generic visit method
+    pub fn visit1<'a, F>(&'a self, mut f: F)
+    where
+        F: FnMut(&'a Self),
+    {
+        use BoxScalarExpr::*;
+        match self {
+            ColumnReference(..) | BaseColumn(..) | Literal(..) | CallNullary(..) => (),
+            CallUnary { expr, .. } => f(expr),
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+        }
+    }
+
+    /// A generalization of `visit`. The function `pre` runs on a
+    /// `BoxScalarExpr` before it runs on any of the child `BoxScalarExpr`s.
+    /// The function `post` runs on child `BoxScalarExpr`s first before the
+    /// parent. Optionally, `pre` can return which child `BoxScalarExpr`s, if
+    /// any, should be visited (default is to visit all children).
+    pub fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
+    where
+        F1: FnMut(&Self) -> Option<Vec<&Self>>,
+        F2: FnMut(&Self),
+    {
+        let to_visit = pre(self);
+        if let Some(to_visit) = to_visit {
+            for e in to_visit {
+                e.visit_pre_post(pre, post);
+            }
+        } else {
+            self.visit1(|e| e.visit_pre_post(pre, post));
+        }
+        post(self);
+    }
+
     pub fn collect_column_references_from_context(
         &self,
         context: &QuantifierSet,
         column_refs: &mut HashSet<ColumnReference>,
     ) {
-        match &self {
-            BoxScalarExpr::ColumnReference(c) => {
+        self.visit_pre_post(&mut |_| None, &mut |expr| {
+            if let BoxScalarExpr::ColumnReference(c) = expr {
                 if context.contains(&c.quantifier_id) {
                     column_refs.insert(c.clone());
                 }
             }
-            BoxScalarExpr::Literal(..) | BoxScalarExpr::BaseColumn(_) => {}
-        }
+        })
     }
 }

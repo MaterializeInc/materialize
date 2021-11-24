@@ -197,6 +197,28 @@ impl FromHir {
                 };
                 BoxScalarExpr::ColumnReference(self.find_column_within_box(context_box, c.column))
             }
+            HirScalarExpr::CallNullary(func) => BoxScalarExpr::CallNullary(func.clone()),
+            HirScalarExpr::CallUnary { func, expr } => BoxScalarExpr::CallUnary {
+                func: func.clone(),
+                expr: Box::new(self.generate_expr(expr, context_box)),
+            },
+            HirScalarExpr::CallBinary { func, expr1, expr2 } => BoxScalarExpr::CallBinary {
+                func: func.clone(),
+                expr1: Box::new(self.generate_expr(expr1, context_box)),
+                expr2: Box::new(self.generate_expr(expr2, context_box)),
+            },
+            HirScalarExpr::CallVariadic { func, exprs } => BoxScalarExpr::CallVariadic {
+                func: func.clone(),
+                exprs: exprs
+                    .into_iter()
+                    .map(|expr| self.generate_expr(expr, context_box))
+                    .collect::<Vec<_>>(),
+            },
+            HirScalarExpr::If { cond, then, els } => BoxScalarExpr::If {
+                cond: Box::new(self.generate_expr(cond, context_box)),
+                then: Box::new(self.generate_expr(then, context_box)),
+                els: Box::new(self.generate_expr(els, context_box)),
+            },
             _ => panic!("unsupported expression type {:?}", expr),
         }
     }

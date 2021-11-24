@@ -458,3 +458,31 @@ digraph G {
     Q0 -> boxhead1 [ lhead = cluster1 ]
     Q2 -> boxhead3 [ lhead = cluster3 ]
 }
+
+build
+select mz_logical_timestamp(), case when null is null then 1 + 1 else coalesce(0, 2, 1) end
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label="select mz_logical_timestamp(), case when null is null then 1 + 1 else coalesce(0, 2, 1) end"
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label="{ Distinct: Preserve| 0: mz_logical_timestamp()| 1: if isnull(null) then {(1 + 1)} else {coalesce(0, 2, 1)} }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label="Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Values"
+        boxhead0 [ shape = record, label="{ Distinct: Preserve| ROW 0:  }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
