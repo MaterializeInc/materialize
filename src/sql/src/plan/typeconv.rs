@@ -141,9 +141,9 @@ lazy_static! {
 
             //INT32
             (Int32, Bool) => Explicit: CastInt32ToBool(func::CastInt32ToBool),
-            (Int32, Oid) => Implicit: CastInt32ToOid,
-            (Int32, RegProc) => Implicit: CastInt32ToRegProc,
-            (Int32, RegType) => Implicit: CastInt32ToRegType,
+            (Int32, Oid) => Implicit: CastInt32ToOid(func::CastInt32ToOid),
+            (Int32, RegProc) => Implicit: CastInt32ToRegProc(func::CastInt32ToRegProc),
+            (Int32, RegType) => Implicit: CastInt32ToRegType(func::CastInt32ToRegType),
             (Int32, Int16) => Assignment: CastInt32ToInt16(func::CastInt32ToInt16),
             (Int32, Int64) => Implicit: CastInt32ToInt64(func::CastInt32ToInt64),
             (Int32, Float32) => Implicit: CastInt32ToFloat32(func::CastInt32ToFloat32),
