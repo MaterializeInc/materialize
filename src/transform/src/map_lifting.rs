@@ -24,15 +24,31 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
-
+use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use repr::Row;
 
 use crate::TransformArgs;
 
 /// Hoist literal values from maps wherever possible.
 #[derive(Debug)]
-pub struct LiteralLifting;
+pub struct LiteralLifting {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for LiteralLifting {
+    fn default() -> LiteralLifting {
+        LiteralLifting {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for LiteralLifting {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for LiteralLifting {
     fn transform(

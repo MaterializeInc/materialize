@@ -295,7 +295,7 @@ impl Optimizer {
                     // Converts `Cross Join {Constant(Literal) + Input}` to
                     // `Map {Cross Join (Input, Constant()), Literal}`.
                     // Join fusion will clean this up to `Map{Input, Literal}`
-                    Box::new(crate::map_lifting::LiteralLifting),
+                    Box::new(crate::map_lifting::LiteralLifting::default()),
                     // Identifies common relation subexpressions.
                     // Must be followed by let inlining, to keep under control.
                     Box::new(crate::cse::relation_cse::RelationCSE),
@@ -324,7 +324,7 @@ impl Optimizer {
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand::default()),
-                    Box::new(crate::map_lifting::LiteralLifting),
+                    Box::new(crate::map_lifting::LiteralLifting::default()),
                 ],
             }),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
