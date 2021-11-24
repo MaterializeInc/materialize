@@ -65,10 +65,9 @@ order by elapsed_ns desc;
 
 ### Why is Materialize unresponsive for seconds at a time?
 
-What causes Materialize to take control away for seconds
-at a time? Materialize operators get scheduled and try to
-behave themselves by returning control promptly, but for
-various reasons that doesn't always happen. These queries
+Materialize operators get scheduled and try to
+behave themselves by returning control promptly, but
+that doesn't always happen. These queries
 reveal how many times each operator was scheduled for each
 power-of-two elapsed time: high durations indicate an event
 that took roughly that amount of time before it yielded,
@@ -97,7 +96,7 @@ group by mdo.id, mdo.name, msh.duration_ns
 order by msh.duration_ns desc;
 ```
 
-### Why is Materialize is using so much memory?
+### Why is Materialize using so much memory?
 
 The majority of Materialize's memory use is taken up by "arrangements", which
 are differential dataflow structures that maintain indexes for data
@@ -190,7 +189,7 @@ order by ratio desc;
 Look up the operator in `mz_dataflow_operator_addresses`. If an operator has
 value `x` at position `n`, then it is part of the `x` subregion of the region
 defined by positions `0..n-1`. The example SQL query and result below shows an
-operator whose id is 515 that belongs to "subregion 5 of region 1 of dataflow
+operator whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
 ```sql
 select * from mz_dataflow_operator_addresses where id=515 and worker=0;

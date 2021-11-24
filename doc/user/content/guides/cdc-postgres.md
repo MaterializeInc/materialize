@@ -85,7 +85,7 @@ FROM POSTGRES
 ```
 
 {{< note >}}
-Materialize performs an initial sync of the tables included in the publication before it starts ingesting change events, so you should make sure that your source tables **fit into memory**.
+Materialize performs an initial sync of all tables in the publication before it starts ingesting change events. You should ensure that your source tables fit into memory, and also expect increased disk usage. For more information, see [Restrictions on Postgres sources](/sql/create-source/postgres/).
 {{</ note >}}
 
 In practice, the `mz_source` looks like:

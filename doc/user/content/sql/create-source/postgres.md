@@ -48,7 +48,7 @@ Once you create a materialized source from the publication, the source will cont
 
 ### Postgres schemas
 
-`CREATE VIEWS` will attempt to create each upstream table in the same schema as Postgres. For example, if the publication contains tables` "public"."foo"` and `"otherschema"."foo"`, `CREATE VIEWS` is the equivalent of
+`CREATE VIEWS` will attempt to create each upstream table in the same schema as Postgres. For example, if the publication contains tables `"public"."foo"` and `"otherschema"."foo"`, `CREATE VIEWS` is the equivalent of:
 
 ```
 CREATE VIEW "public"."foo";
@@ -71,10 +71,12 @@ If you stop or delete Materialize without first dropping the Postgres source, th
 
 ### Restrictions on Postgres sources
 
-- Materialize does not support changes to schemas for existing publications. You will need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
-- Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize. Attempts to create sources from publications which contain unsupported data types will fail with an error.
-- Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is re-created.
-- Since Postgres sources are materialized by default, Postgres table sources must be smaller than the available memory.
+- **Schema changes:** Materialize does not support changes to schemas for existing publications. You need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
+- **Supported data types:** Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize. Attempts to create sources from publications which contain unsupported data types will fail with an error.
+- **Truncation:** Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is re-created.
+- **Resource usage:**
+    - During the initial table sync, **disk space** consumption may increase proportionally to the size of the upstream database before returning to a steady state. To profile disk usage, see [Troubleshooting](/ops/troubleshooting/#how-much-disk-space-is-materialize-using).
+    - Since Postgres sources are materialized by default, the replicated Postgres source tables must fit into **available memory**.
 
 ### Supported Postgres versions
 
@@ -88,7 +90,7 @@ Before you create a Postgres source in Materialize, you must complete the follow
 
 1. Ensure the database configuration allows logical replication. For most configurations, it should suffice to set `wal_level = logical` in `postgresql.conf`.
 
-    **Note:** If you're using Postgres on a Cloud service like Amazon RDS, AWS Aurora, or Cloud SQL, you'll need to take some additional steps. For more information, see [Postgres in the Cloud](/guides/postgres-cloud/).
+    **Note:** If you're using Postgres on a Cloud service like Amazon RDS, AWS Aurora, or Cloud SQL, you'll need to take some additional steps. For more information, see [Postgres CDC in the Cloud](/guides/postgres-cloud/).
 
 2. Assign the user `REPLICATION` privileges:
     ```sql
