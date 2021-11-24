@@ -256,7 +256,7 @@ impl Optimizer {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             // 1. Structure-agnostic cleanup
             Box::new(crate::topk_elision::TopKElision),
-            Box::new(crate::nonnull_requirements::NonNullRequirements),
+            Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?

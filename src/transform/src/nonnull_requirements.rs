@@ -25,12 +25,29 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use itertools::{Either, Itertools};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
-pub struct NonNullRequirements;
+pub struct NonNullRequirements {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for NonNullRequirements {
+    fn default() -> NonNullRequirements {
+        NonNullRequirements {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for NonNullRequirements {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for NonNullRequirements {
     fn transform(
