@@ -16,7 +16,7 @@
 
 use crate::TransformArgs;
 use expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
-use ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Install replace certain `Get` operators with their `Let` value.
 #[derive(Debug)]
@@ -84,49 +84,55 @@ impl InlineLet {
         relation: &mut MirRelationExpr,
         lets: &mut Vec<(LocalId, MirRelationExpr)>,
     ) -> Result<(), crate::TransformError> {
-        if let MirRelationExpr::Let { id, value, body } = relation {
-            self.action(value, lets)?;
+        self.checked_recur(|_| {
+            if let MirRelationExpr::Let { id, value, body } = relation {
+                self.action(value, lets)?;
 
-            let mut num_gets = 0;
-            body.try_visit_mut_pre::<_, crate::TransformError>(&mut |relation| match relation {
-                MirRelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
-                    num_gets += 1;
-                    Ok(())
-                }
-                _ => Ok(()),
-            })?;
-
-            let stripped_value = if self.inline_mfp {
-                expr::MapFilterProject::extract_non_errors_from_expr(&**value).1
-            } else {
-                &**value
-            };
-            let inlinable = match stripped_value {
-                MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
-                _ => num_gets <= 1,
-            };
-
-            if inlinable {
-                // if only used once, just inline it
+                let mut num_gets = 0;
                 body.try_visit_mut_pre::<_, crate::TransformError>(
                     &mut |relation| match relation {
                         MirRelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
-                            *relation = (**value).clone();
+                            num_gets += 1;
                             Ok(())
                         }
                         _ => Ok(()),
                     },
                 )?;
-            } else {
-                // otherwise lift it to the top so it's out of the way
-                lets.push((*id, value.take_dangerous()));
-            }
 
-            *relation = body.take_dangerous();
-            // might be another Let in the body so have to recur here
-            self.action(relation, lets)
-        } else {
-            relation.try_visit_mut_children(|child| self.action(child, lets))
-        }
+                let stripped_value = if self.inline_mfp {
+                    expr::MapFilterProject::extract_non_errors_from_expr(&**value).1
+                } else {
+                    &**value
+                };
+                let inlinable = match stripped_value {
+                    MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
+                    _ => num_gets <= 1,
+                };
+
+                if inlinable {
+                    // if only used once, just inline it
+                    body.try_visit_mut_pre::<_, crate::TransformError>(&mut |relation| {
+                        match relation {
+                            MirRelationExpr::Get { id: get_id, .. }
+                                if Id::Local(*id) == *get_id =>
+                            {
+                                *relation = (**value).clone();
+                                Ok(())
+                            }
+                            _ => Ok(()),
+                        }
+                    })?;
+                } else {
+                    // otherwise lift it to the top so it's out of the way
+                    lets.push((*id, value.take_dangerous()));
+                }
+
+                *relation = body.take_dangerous();
+                // might be another Let in the body so have to recur here
+                self.action(relation, lets)
+            } else {
+                relation.try_visit_mut_children(|child| self.action(child, lets))
+            }
+        })
     }
 }
