@@ -40,7 +40,7 @@ impl crate::Transform for LiteralLifting {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let literals = self.action(relation, &mut HashMap::new());
+        let literals = self.action(relation, &mut HashMap::new())?;
         if !literals.is_empty() {
             // Literals return up the root should be re-installed.
             *relation = relation.take_dangerous().map(literals);
@@ -108,7 +108,7 @@ impl LiteralLifting {
         relation: &mut MirRelationExpr,
         // Map from names to literals required for appending.
         gets: &mut HashMap<Id, Vec<MirScalarExpr>>,
-    ) -> Vec<MirScalarExpr> {
+    ) -> Result<Vec<MirScalarExpr>, crate::TransformError> {
         match relation {
             MirRelationExpr::Constant { rows, typ } => {
                 // From the back to the front, check if all values are identical.
@@ -198,9 +198,9 @@ impl LiteralLifting {
                         }
                     }
 
-                    literals
+                    Ok(literals)
                 } else {
-                    Vec::new()
+                    Ok(Vec::new())
                 }
             }
             MirRelationExpr::Get { id, typ } => {
@@ -221,12 +221,12 @@ impl LiteralLifting {
                     typ.keys.sort();
                     typ.keys.dedup();
                 }
-                literals
+                Ok(literals)
             }
             MirRelationExpr::Let { id, value, body } => {
                 // Any literals appended to the `value` should be used
                 // at corresponding `Get`s throughout the `body`.
-                let literals = self.action(value, gets);
+                let literals = self.action(value, gets)?;
                 let id = Id::Local(*id);
                 if !literals.is_empty() {
                     let prior = gets.insert(id, literals);
@@ -241,7 +241,7 @@ impl LiteralLifting {
                 // Projections are the highest lifted operator and lifting
                 // literals around projections could cause us to fail to
                 // reach a fixed point under the transformations.
-                let mut literals = self.action(input, gets);
+                let mut literals = self.action(input, gets)?;
                 if !literals.is_empty() {
                     let input_arity = input.arity();
                     // For each input literal contains a vector with the `output` positions
@@ -284,10 +284,10 @@ impl LiteralLifting {
                     }
                 }
                 // Policy: Do not lift literals around projects.
-                Vec::new()
+                Ok(Vec::new())
             }
             MirRelationExpr::Map { input, scalars } => {
-                let mut literals = self.action(input, gets);
+                let mut literals = self.action(input, gets)?;
 
                 // Make the map properly formed again.
                 literals.extend(scalars.iter().cloned());
@@ -338,10 +338,10 @@ impl LiteralLifting {
                     }
                 }
 
-                result
+                Ok(result)
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                let literals = self.action(input, gets);
+                let literals = self.action(input, gets)?;
                 if !literals.is_empty() {
                     let input_arity = input.arity();
                     for expr in exprs.iter_mut() {
@@ -361,10 +361,10 @@ impl LiteralLifting {
 
                     *relation = relation.take_dangerous().map(literals).project(projection);
                 }
-                Vec::new()
+                Ok(Vec::new())
             }
             MirRelationExpr::Filter { input, predicates } => {
-                let literals = self.action(input, gets);
+                let literals = self.action(input, gets)?;
                 if !literals.is_empty() {
                     // We should be able to instantiate all uses of `literals`
                     // in predicates and then lift the `map` around the filter.
@@ -379,7 +379,7 @@ impl LiteralLifting {
                         });
                     }
                 }
-                literals
+                Ok(literals)
             }
             MirRelationExpr::Join {
                 inputs,
@@ -392,7 +392,7 @@ impl LiteralLifting {
                 // lift literals from each input
                 let mut input_literals = Vec::new();
                 for mut input in inputs.iter_mut() {
-                    let literals = self.action(input, gets);
+                    let literals = self.action(input, gets)?;
 
                     // Do not propagate error literals beyond join inputs, since that may result
                     // in them being propagated to other inputs of the join and evaluated when
@@ -466,7 +466,7 @@ impl LiteralLifting {
                     let literals = input_literals.into_iter().flatten().collect::<Vec<_>>();
                     *relation = relation.take_dangerous().map(literals).project(projection)
                 }
-                Vec::new()
+                Ok(Vec::new())
             }
             MirRelationExpr::Reduce {
                 input,
@@ -475,7 +475,7 @@ impl LiteralLifting {
                 monotonic: _,
                 expected_group_size: _,
             } => {
-                let literals = self.action(input, gets);
+                let literals = self.action(input, gets)?;
                 if !literals.is_empty() {
                     // Reduce absorbs maps, and we should inline literals.
                     let input_arity = input.arity();
@@ -573,7 +573,7 @@ impl LiteralLifting {
                         .map(projected_literals)
                         .project(projection);
                 }
-                result
+                Ok(result)
             }
             MirRelationExpr::TopK {
                 input,
@@ -583,7 +583,7 @@ impl LiteralLifting {
                 offset: _,
                 monotonic: _,
             } => {
-                let literals = self.action(input, gets);
+                let literals = self.action(input, gets)?;
                 if !literals.is_empty() {
                     // We should be able to lift literals out, as they affect neither
                     // grouping nor ordering. We should discard grouping and ordering
@@ -592,7 +592,7 @@ impl LiteralLifting {
                     group_key.retain(|c| *c < input_arity);
                     order_key.retain(|o| o.column < input_arity);
                 }
-                literals
+                Ok(literals)
             }
             MirRelationExpr::Negate { input } => {
                 // Literals can just be lifted out of negate.
@@ -604,11 +604,12 @@ impl LiteralLifting {
             }
             MirRelationExpr::DeclareKeys { input, .. } => self.action(input, gets),
             MirRelationExpr::Union { base, inputs } => {
-                let mut base_literals = self.action(base, gets);
-                let mut input_literals = inputs
-                    .iter_mut()
-                    .map(|input| self.action(input, gets))
-                    .collect::<Vec<Vec<MirScalarExpr>>>();
+                let mut base_literals = self.action(base, gets)?;
+
+                let mut input_literals = vec![];
+                for input in inputs.iter_mut() {
+                    input_literals.push(self.action(input, gets)?)
+                }
 
                 // We need to find the longest common suffix between all the arms of the union.
                 let mut suffix = Vec::new();
@@ -639,14 +640,14 @@ impl LiteralLifting {
                         *input = input.take_dangerous().map(literals);
                     }
                 }
-                suffix
+                Ok(suffix)
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 // TODO(frank): Not sure if this is the right behavior,
                 // as we disrupt the set of used arrangements. Though,
                 // we are probably most likely to use arranged `Get`
                 // operators rather than those decorated with maps.
-                let literals = self.action(input, gets);
+                let literals = self.action(input, gets)?;
                 if !literals.is_empty() {
                     let input_arity = input.arity();
                     for key in keys.iter_mut() {
@@ -661,7 +662,7 @@ impl LiteralLifting {
                         }
                     }
                 }
-                literals
+                Ok(literals)
             }
         }
     }
