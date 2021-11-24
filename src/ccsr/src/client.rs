@@ -109,13 +109,12 @@ impl Client {
                 name: res.subject.clone(),
             });
             seen.insert(res.subject);
-            if let Some(r) = res.references {
-                subjects_queue.extend(
-                    r.into_iter()
-                        .filter(|r| !seen.contains(&r.subject))
-                        .map(|r| (r.subject, r.version.to_string())),
-                );
-            }
+            subjects_queue.extend(
+                res.references
+                    .into_iter()
+                    .filter(|r| !seen.contains(&r.subject))
+                    .map(|r| (r.subject, r.version.to_string())),
+            );
         }
         assert!(subjects.len() > 0, "Request should error if no subjects");
 
@@ -236,14 +235,14 @@ pub struct Subject {
     pub schema: Schema,
 }
 
-/// Required for publishing schemas that contain references.
-///
-/// For more information, check out:
-/// <https://docs.confluent.io/platform/current/schema-registry/serdes-develop/index.html#referenced-schemas>
+/// A reference from one schema in a schema registry to another.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SchemaReference {
+    /// The name of the reference.
     pub name: String,
+    /// The subject under which the referenced schema is registered.
     pub subject: String,
+    /// The version of the referenced schema.
     pub version: i32,
 }
 
@@ -302,7 +301,8 @@ struct GetBySubjectResponse {
     schema: String,
     version: i32,
     subject: String,
-    references: Option<Vec<SchemaReference>>,
+    #[serde(default)]
+    references: Vec<SchemaReference>,
 }
 
 /// Errors for schema lookups by subject.
