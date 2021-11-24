@@ -2743,8 +2743,7 @@ fn plan_expr_inner<'a>(
         Expr::Exists(query) => plan_exists(ecx, query),
         Expr::Subquery(query) => plan_subquery(ecx, query),
         Expr::ListSubquery(query) => plan_list_subquery(ecx, query),
-
-        Expr::Collate { .. } => bail_unsupported!("COLLATE"),
+        Expr::Collate { expr, collation } => plan_collate(ecx, expr, collation),
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
         Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
         Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
@@ -3102,6 +3101,21 @@ fn plan_list_subquery(
         )),
     }
     .into())
+}
+
+fn plan_collate(
+    ecx: &ExprContext,
+    expr: &Expr<Aug>,
+    collation: &UnresolvedObjectName,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    if collation.0.len() == 2
+        && collation.0[0] == Ident::new("pg_catalog")
+        && collation.0[1] == Ident::new("default")
+    {
+        plan_expr(ecx, expr)
+    } else {
+        bail_unsupported!("COLLATE");
+    }
 }
 
 /// Plans a slice of expressions.
