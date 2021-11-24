@@ -7,22 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-mod datum;
-mod float32;
-mod float64;
-mod int16;
-mod int32;
-mod int64;
-mod not;
-mod oid;
-mod regproc;
+use repr::adt::system::{Oid, RegProc, RegType};
 
-pub use datum::*;
-pub use float32::*;
-pub use float64::*;
-pub use int16::*;
-pub use int32::*;
-pub use int64::*;
-pub use not::Not;
-pub use oid::*;
-pub use regproc::*;
+sqlfunc!(
+    #[sqlname = "regproctooid"]
+    #[preserves_uniqueness = true]
+    fn cast_reg_proc_to_oid(a: RegProc) -> Oid {
+        Oid(a.0)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "regtypetooid"]
+    #[preserves_uniqueness = true]
+    fn cast_reg_type_to_oid(a: RegType) -> Oid {
+        Oid(a.0)
+    }
+);

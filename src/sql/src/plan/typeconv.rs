@@ -167,13 +167,13 @@ lazy_static! {
             (Int64, String) => Assignment: CastInt64ToString,
 
             // OID
-            (Oid, Int32) => Assignment: CastOidToInt32,
+            (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
             (Oid, String) => Explicit: CastInt32ToString(func::CastInt32ToString),
-            (Oid, RegProc) => Assignment: CastOidToRegProc,
-            (Oid, RegType) => Assignment: CastOidToRegType,
+            (Oid, RegProc) => Assignment: CastOidToRegProc(func::CastOidToRegProc),
+            (Oid, RegType) => Assignment: CastOidToRegType(func::CastOidToRegType),
 
             // REGPROC
-            (RegProc, Oid) => Implicit: CastRegProcToOid,
+            (RegProc, Oid) => Implicit: CastRegProcToOid(func::CastRegProcToOid),
             (RegProc, String) => Explicit: sql_impl_cast("(
                 SELECT COALESCE(t.name, v.x::pg_catalog.text)
                 FROM (
@@ -183,7 +183,7 @@ lazy_static! {
             )"),
 
             // REGTYPE
-            (RegType, Oid) => Implicit: CastRegTypeToOid,
+            (RegType, Oid) => Implicit: CastRegTypeToOid(func::CastRegTypeToOid),
             (RegType, String) => Explicit: sql_impl_cast("(
                 SELECT COALESCE(t.name, v.x::pg_catalog.text)
                 FROM (

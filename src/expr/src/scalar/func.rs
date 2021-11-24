@@ -3598,11 +3598,11 @@ pub enum UnaryFunc {
     CastInt32ToInt16(CastInt32ToInt16),
     CastInt32ToInt64(CastInt32ToInt64),
     CastInt32ToString(CastInt32ToString),
-    CastOidToInt32,
-    CastOidToRegProc,
-    CastRegProcToOid,
-    CastOidToRegType,
-    CastRegTypeToOid,
+    CastOidToInt32(CastOidToInt32),
+    CastOidToRegProc(CastOidToRegProc),
+    CastRegProcToOid(CastRegProcToOid),
+    CastOidToRegType(CastOidToRegType),
+    CastRegTypeToOid(CastRegTypeToOid),
     CastInt64ToInt16,
     CastInt64ToInt32,
     CastInt16ToNumeric(CastInt16ToNumeric),
@@ -3831,6 +3831,11 @@ derive_unary!(
     CastInt32ToOid,
     CastInt32ToRegProc,
     CastInt32ToRegType,
+    CastOidToInt32,
+    CastOidToRegProc,
+    CastRegProcToOid,
+    CastOidToRegType,
+    CastRegTypeToOid,
     PgColumnSize,
     MzRowSize,
     IsNull,
@@ -3930,6 +3935,11 @@ impl UnaryFunc {
             | CastInt32ToOid(_)
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
+            | CastOidToInt32(_)
+            | CastOidToRegProc(_)
+            | CastRegProcToOid(_)
+            | CastOidToRegType(_)
+            | CastRegTypeToOid(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegNumeric => Ok(neg_numeric(a)),
             NegInterval => Ok(neg_interval(a)),
@@ -3940,11 +3950,6 @@ impl UnaryFunc {
             CastFloat32ToNumeric(scale) => cast_float32_to_numeric(a, *scale),
             CastFloat64ToNumeric(scale) => cast_float64_to_numeric(a, *scale),
             CastInt32ToNumeric(scale) => cast_int32_to_numeric(a, *scale),
-            CastOidToInt32 => Ok(a),
-            CastRegProcToOid => Ok(a),
-            CastOidToRegProc => Ok(a),
-            CastRegTypeToOid => Ok(a),
-            CastOidToRegType => Ok(a),
             CastInt64ToInt16 => cast_int64_to_int16(a),
             CastInt64ToInt32 => cast_int64_to_int32(a),
             CastInt64ToBool => Ok(cast_int64_to_bool(a)),
@@ -4135,6 +4140,11 @@ impl UnaryFunc {
             | CastInt32ToOid(_)
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
+            | CastOidToInt32(_)
+            | CastOidToRegProc(_)
+            | CastRegProcToOid(_)
+            | CastOidToRegType(_)
+            | CastRegTypeToOid(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -4196,12 +4206,6 @@ impl UnaryFunc {
             | CastFloat32ToNumeric(scale)
             | CastFloat64ToNumeric(scale)
             | CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
-
-            CastOidToInt32 => ScalarType::Int32.nullable(nullable),
-            CastRegProcToOid => ScalarType::Oid.nullable(nullable),
-            CastOidToRegProc => ScalarType::RegProc.nullable(nullable),
-            CastRegTypeToOid => ScalarType::Oid.nullable(nullable),
-            CastOidToRegType => ScalarType::RegType.nullable(nullable),
 
             CastStringToDate | CastTimestampToDate | CastTimestampTzToDate => {
                 ScalarType::Date.nullable(nullable)
@@ -4365,6 +4369,11 @@ impl UnaryFunc {
             | CastInt32ToOid(_)
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
+            | CastOidToInt32(_)
+            | CastOidToRegProc(_)
+            | CastRegProcToOid(_)
+            | CastOidToRegType(_)
+            | CastRegTypeToOid(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4416,8 +4425,6 @@ impl UnaryFunc {
             | CastFloat32ToNumeric(_)
             | CastFloat64ToNumeric(_)
             | CastJsonbToNumeric(_) => false,
-            CastOidToInt32 | CastRegProcToOid | CastOidToRegProc | CastOidToRegType
-            | CastRegTypeToOid => false,
             CastStringToDate | CastTimestampToDate | CastTimestampTzToDate => false,
             CastStringToTime | CastIntervalToTime | TimezoneTime { .. } => false,
             CastStringToTimestamp
@@ -4580,6 +4587,11 @@ impl UnaryFunc {
             | CastInt32ToOid(_)
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
+            | CastOidToInt32(_)
+            | CastOidToRegProc(_)
+            | CastRegProcToOid(_)
+            | CastOidToRegType(_)
+            | CastRegTypeToOid(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegNumeric => f.write_str("-"),
             NegInterval => f.write_str("-"),
@@ -4588,11 +4600,6 @@ impl UnaryFunc {
             CastBoolToStringNonstandard => f.write_str("booltostrns"),
             CastBoolToInt32 => f.write_str("booltoi32"),
             CastInt32ToNumeric(..) => f.write_str("i32tonumeric"),
-            CastOidToInt32 => f.write_str("oidtoi32"),
-            CastRegProcToOid => f.write_str("regproctooid"),
-            CastOidToRegProc => f.write_str("oidtoregproc"),
-            CastRegTypeToOid => f.write_str("regtypetooid"),
-            CastOidToRegType => f.write_str("oidtoregtype"),
             CastInt64ToInt16 => f.write_str("i64toi16"),
             CastInt64ToInt32 => f.write_str("i64toi32"),
             CastInt64ToBool => f.write_str("i64tobool"),
