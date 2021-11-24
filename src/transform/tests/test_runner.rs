@@ -236,7 +236,7 @@ mod tests {
                 limit: None,
             })),
             "JoinFusion" => Ok(Box::new(transform::fusion::join::Join)),
-            "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting)),
+            "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting::default())),
             "NonNullRequirements" => Ok(Box::new(
                 transform::nonnull_requirements::NonNullRequirements,
             )),
