@@ -3550,13 +3550,7 @@ trait EagerUnaryFunc {
     fn call(&self, input: Self::Input) -> Self::Output;
 
     /// The output ColumnType of this function
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        let output = Self::Output::as_column_type();
-        let nullable = output.nullable;
-        // The output is nullable if it is nullable by itself or the input is nullable and this
-        // function propagates nulls
-        output.nullable(nullable || (self.propagates_nulls() && input_type.nullable))
-    }
+    fn output_type(&self, input_type: ColumnType) -> ColumnType;
 
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {

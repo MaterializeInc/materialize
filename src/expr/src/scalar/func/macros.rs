@@ -34,6 +34,16 @@ macro_rules! sqlfunc {
                 fn call(&self, a: Self::Input) -> Self::Output {
                     $fn_name(a)
                 }
+
+                fn output_type(&self, input_type: repr::ColumnType) -> repr::ColumnType {
+                    use repr::DatumType;
+                    let output = <Self::Output as DatumType<crate::EvalError>>::as_column_type();
+                    let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+                    let nullable = output.nullable;
+                    // The output is nullable if it is nullable by itself or the input is nullable
+                    // and this function propagates nulls
+                    output.nullable(nullable || (propagates_nulls && input_type.nullable))
+                }
             }
 
             impl std::fmt::Display for [<$fn_name:camel>] {

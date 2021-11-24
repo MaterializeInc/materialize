@@ -12,6 +12,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use lowertest::MzStructReflect;
+use repr::{ColumnType, ScalarType};
 use repr::adt::numeric::{self, Numeric};
 
 use crate::scalar::func::EagerUnaryFunc;
@@ -55,6 +56,10 @@ impl EagerUnaryFunc for CastInt16ToNumeric {
             }
         }
         Ok(a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { scale: self.0 }.nullable(input.nullable)
     }
 }
 
