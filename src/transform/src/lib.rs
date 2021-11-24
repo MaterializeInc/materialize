@@ -274,7 +274,6 @@ impl Optimizer {
                     Box::new(crate::predicate_propagation::PredicateKnowledge),
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::redundant_join::RedundantJoin::default()),
-                    Box::new(crate::topk_elision::TopKElision),
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
