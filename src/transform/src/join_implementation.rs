@@ -19,11 +19,32 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr};
+use expr::{
+    Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
-pub struct JoinImplementation;
+pub struct JoinImplementation {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for JoinImplementation {
+    /// Construct a new [`JoinImplementation`] where `recursion_guard`
+    /// is initialized with [`RECURSION_LIMIT`] as limit.
+    fn default() -> JoinImplementation {
+        JoinImplementation {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for JoinImplementation {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for JoinImplementation {
     fn transform(
