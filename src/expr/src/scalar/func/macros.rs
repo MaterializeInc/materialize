@@ -18,8 +18,21 @@ macro_rules! sqlfunc {
         );
     };
 
+    // Add the uniqueness attribute if it was omitted
     (
         #[sqlname = $name:expr]
+        fn $fn_name:ident $($tail:tt)*
+    ) => {
+        sqlfunc!(
+            #[sqlname = $name]
+            #[preserves_uniqueness = false]
+            fn $fn_name $($tail)*
+        );
+    };
+
+    (
+        #[sqlname = $name:expr]
+        #[preserves_uniqueness = $preserves_uniqueness:expr]
         fn $fn_name:ident($param_name:ident: $input_ty:ty) -> $output_ty:ty
             $body:block
     ) => {
@@ -43,6 +56,10 @@ macro_rules! sqlfunc {
                     // The output is nullable if it is nullable by itself or the input is nullable
                     // and this function propagates nulls
                     output.nullable(nullable || (propagates_nulls && input_type.nullable))
+                }
+
+                fn preserves_uniqueness(&self) -> bool {
+                    $preserves_uniqueness
                 }
             }
 

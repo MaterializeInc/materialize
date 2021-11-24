@@ -129,15 +129,15 @@ lazy_static! {
             (Bool, String) => Assignment: CastBoolToString,
 
             //INT16
-            (Int16, Int32) => Implicit: CastInt16ToInt32,
-            (Int16, Int64) => Implicit: CastInt16ToInt64,
-            (Int16, Float32) => Implicit: CastInt16ToFloat32,
-            (Int16, Float64) => Implicit: CastInt16ToFloat64,
+            (Int16, Int32) => Implicit: CastInt16ToInt32(func::CastInt16ToInt32),
+            (Int16, Int64) => Implicit: CastInt16ToInt64(func::CastInt16ToInt64),
+            (Int16, Float32) => Implicit: CastInt16ToFloat32(func::CastInt16ToFloat32),
+            (Int16, Float64) => Implicit: CastInt16ToFloat64(func::CastInt16ToFloat64),
             (Int16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(func::CastInt16ToNumeric(s))))
             }),
-            (Int16, String) => Assignment: CastInt16ToString,
+            (Int16, String) => Assignment: CastInt16ToString(func::CastInt16ToString),
 
             //INT32
             (Int32, Bool) => Explicit: CastInt32ToBool,
