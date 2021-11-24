@@ -798,9 +798,8 @@ async fn compile_proto(
                 .unwrap();
     }
 
-    let (primary_subject, dependency_subjects) = ccsr_client
-        .get_subject_with_references(subject_name)
-        .await?;
+    let (primary_subject, dependency_subjects) =
+        ccsr_client.get_subject_and_references(subject_name).await?;
 
     let primary_proto_name = primary_subject.name.clone();
     let include_dir = tempfile::tempdir()?;

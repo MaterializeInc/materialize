@@ -133,7 +133,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
 }
 
 #[tokio::test]
-async fn test_client_subject_with_references() -> Result<(), anyhow::Error> {
+async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
     let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     let existing_subjects = client.list_subjects().await?;
@@ -220,7 +220,7 @@ async fn test_client_subject_with_references() -> Result<(), anyhow::Error> {
     assert!(schema2_id > 0);
 
     let (primary_subject, dependency_subjects) =
-        client.get_subject_with_references(&schema2_subject).await?;
+        client.get_subject_and_references(&schema2_subject).await?;
     assert_eq!(schema2_subject, primary_subject.name);
     assert_eq!(2, dependency_subjects.len());
     assert_eq!(schema0_subject, dependency_subjects[0].name);

@@ -15,7 +15,6 @@ use anyhow::bail;
 use reqwest::{Method, Url};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 use crate::config::Auth;
 
@@ -90,7 +89,7 @@ impl Client {
     /// subjects referenced by that subject (recursively).
     ///
     /// The dependencies are returned in alphabetical order by subject name.
-    pub async fn get_subject_with_references(
+    pub async fn get_subject_and_references(
         &self,
         subject: &str,
     ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
@@ -137,33 +136,13 @@ impl Client {
         references: &[SchemaReference],
     ) -> Result<i32, PublishError> {
         let req = self.make_request(Method::POST, &["subjects", subject, "versions"]);
-        let req = req.json(&self.build_publish_schema_body(schema, schema_type, references));
+        let req = req.json(&PublishRequest {
+            schema,
+            schema_type,
+            references,
+        });
         let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
-    }
-
-    /// Builds the minimal body for a `publish_schema` request to try to support
-    /// older CSR versions.
-    pub fn build_publish_schema_body(
-        &self,
-        schema: &str,
-        schema_type: SchemaType,
-        references: &[SchemaReference],
-    ) -> Value {
-        // Old versions of CSR default to Avro, and don't accept `schemaType` (erroring when they see it).
-        let is_avro = matches!(schema_type, SchemaType::Avro);
-        // `references` param was added in CSR version 5.4.0. Skip adding to body if empty.
-        let has_references = !references.is_empty();
-
-        if is_avro && !has_references {
-            json!({ "schema": schema })
-        } else if is_avro && has_references {
-            json!({ "schema": schema, "references": references })
-        } else if !is_avro && !has_references {
-            json!({ "schema": schema, "schemaType":  &schema_type })
-        } else {
-            json!({ "schema": schema, "schemaType":  &schema_type, "references": references })
-        }
     }
 
     /// Lists the names of all subjects that the schema registry is aware of.
@@ -219,6 +198,12 @@ pub enum SchemaType {
     Json,
 }
 
+impl SchemaType {
+    fn is_default(&self) -> bool {
+        matches!(self, SchemaType::Avro)
+    }
+}
+
 /// A schema stored by a schema registry.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Schema {
@@ -241,6 +226,7 @@ pub struct Subject {
 
 /// A reference from one schema in a schema registry to another.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SchemaReference {
     /// The name of the reference.
     pub name: String,
@@ -300,6 +286,7 @@ impl fmt::Display for GetByIdError {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GetBySubjectResponse {
     id: i32,
     schema: String,
@@ -353,7 +340,21 @@ impl fmt::Display for GetBySubjectError {
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishRequest<'a> {
+    schema: &'a str,
+    // Omitting the following fields when they're set to their defaults provides
+    // compatibility with old versions of the schema registry that don't
+    // understand these fields.
+    #[serde(skip_serializing_if = "SchemaType::is_default")]
+    schema_type: SchemaType,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    references: &'a [SchemaReference],
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PublishResponse {
     id: i32,
 }
