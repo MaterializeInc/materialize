@@ -13,8 +13,11 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, LocalId, MirRelationExpr};
-use ore::id_gen::IdGen;
+use expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
+use ore::{
+    id_gen::IdGen,
+    stack::{CheckedRecursion, RecursionGuard},
+};
 use repr::RelationType;
 
 /// Refreshes identifiers and types for local let bindings.
@@ -24,7 +27,23 @@ use repr::RelationType;
 /// this is one place we could do that. Instead, we'll just come up with
 /// guaranteed unique names for each let binding.
 #[derive(Debug)]
-pub struct UpdateLet;
+pub struct UpdateLet {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for UpdateLet {
+    fn default() -> UpdateLet {
+        UpdateLet {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for UpdateLet {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for UpdateLet {
     fn transform(

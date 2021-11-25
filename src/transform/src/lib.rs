@@ -199,7 +199,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::union_cancel::UnionBranchCancellation),
                 // This should run before redundant join to ensure that key info
                 // is correct.
-                Box::new(crate::update_let::UpdateLet),
+                Box::new(crate::update_let::UpdateLet::default()),
                 // Removes redundant inputs from joins.
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
@@ -300,7 +300,7 @@ impl Optimizer {
                     // Must be followed by let inlining, to keep under control.
                     Box::new(crate::cse::relation_cse::RelationCSE),
                     Box::new(crate::inline_let::InlineLet::new(false)),
-                    Box::new(crate::update_let::UpdateLet),
+                    Box::new(crate::update_let::UpdateLet::default()),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
@@ -333,7 +333,7 @@ impl Optimizer {
             // Must be followed by let inlining, to keep under control.
             Box::new(crate::cse::relation_cse::RelationCSE),
             Box::new(crate::inline_let::InlineLet::new(false)),
-            Box::new(crate::update_let::UpdateLet),
+            Box::new(crate::update_let::UpdateLet::default()),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
         Self { transforms }

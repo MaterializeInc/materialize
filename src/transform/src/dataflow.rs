@@ -107,7 +107,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             // identifiers for the Let's `body` and `value`, as well as a new
             // identifier for the binding itself. Following `UpdateLet`, we
             // go with the binding first, then the value, then the body.
-            let update_let = crate::update_let::UpdateLet;
+            let update_let = crate::update_let::UpdateLet::default();
             let mut id_gen = crate::IdGen::default();
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
@@ -274,7 +274,7 @@ where
         view_refs.push(view);
     }
 
-    let typ_update = crate::update_let::UpdateLet;
+    let typ_update = crate::update_let::UpdateLet::default();
     for view in view_refs {
         // Update column references to views where projections were pushed down.
         projection_pushdown.update_projection_around_get(view, &applied_projection);

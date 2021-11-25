@@ -47,7 +47,7 @@ mod tests {
                         as Box<dyn Transform>,
                 ))
                 .chain(std::iter::once(
-                    Box::new(transform::update_let::UpdateLet) as Box<dyn Transform>
+                    Box::new(transform::update_let::UpdateLet::default()) as Box<dyn Transform>
                 ))
                 .chain(Optimizer::logical_cleanup_pass().transforms.into_iter())
                 .chain(Optimizer::physical_optimizer().transforms.into_iter())
