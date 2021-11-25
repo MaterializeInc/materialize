@@ -594,3 +594,29 @@ pre {
     }
   }
 }
+
+.table-scrollable {
+    box-shadow: inset 0 -4px 3px -3px $medium-grey-v2;
+    margin: 1rem 0;
+    overflow: auto;
+
+    table {
+        width: 100%;
+    }
+
+    thead th {
+        background: #fff;
+        border: 0;
+        position: sticky;
+        top: 0;
+
+        &:after {
+            border-bottom: 2px $purple-v2 solid;
+            content: "";
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            position: absolute;
+        }
+    }
+}
