@@ -1792,10 +1792,9 @@ impl AggregateExpr {
                 .call_unary(UnaryFunc::CastInt32ToInt64(scalar_func::CastInt32ToInt64)),
 
             // SumInt64 takes Int64s as input, but outputs numerics.
-            AggregateFunc::SumInt64 => self
-                .expr
-                .clone()
-                .call_unary(UnaryFunc::CastInt64ToNumeric(Some(0))),
+            AggregateFunc::SumInt64 => self.expr.clone().call_unary(UnaryFunc::CastInt64ToNumeric(
+                scalar_func::CastInt64ToNumeric(Some(0)),
+            )),
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
             AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {

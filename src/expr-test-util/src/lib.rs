@@ -14,7 +14,9 @@ use proc_macro2::TokenTree;
 use serde_json::Value;
 
 use expr::explain::ViewExplanation;
-use expr::func::{CastInt16ToInt32, CastInt32ToInt64, IsNull, NegInt32, Not};
+use expr::func::{
+    CastInt16ToInt32, CastInt32ToInt64, CastInt64ToFloat64, CastInt64ToInt32, IsNull, NegInt32, Not,
+};
 use expr::*;
 use lowertest::*;
 use ore::result::ResultExt;
@@ -41,6 +43,8 @@ gen_reflect_info_func!(
         AggregateExpr,
         CastInt16ToInt32,
         CastInt32ToInt64,
+        CastInt64ToInt32,
+        CastInt64ToFloat64,
         ColumnOrder,
         ColumnType,
         RelationType,
