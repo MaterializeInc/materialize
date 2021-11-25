@@ -51,7 +51,7 @@ steps:
       - "**/*.rs"
     timeout_in_minutes: 30
     agents:
-      queue: mac
+      queue: mac-bigsur
 
   - id: lint-docs
     label: ":briefcase: lint docs"
