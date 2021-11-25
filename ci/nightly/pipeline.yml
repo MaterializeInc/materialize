@@ -34,12 +34,12 @@
         composition: kafka-multi-broker
         run: kafka-multi-broker
 
-- id: testdrive-redpanda
-  label: ":racing_car: testdrive :panda_face:"
+- id: redpanda-testdrive
+  label: ":panda_face: :racing_car: testdrive"
   plugins:
     - ./ci/plugins/mzcompose:
-        composition: testdrive
-        run: testdrive-redpanda
+        composition: redpanda
+        run: redpanda-testdrive
 
 - id: upgrade
   label: "Upgrade testing"

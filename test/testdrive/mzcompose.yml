@@ -24,37 +24,6 @@ mzworkflows:
         service: testdrive-svc
         command: --aws-endpoint=http://localstack:4566 ${TD_TEST:-*.td esoteric/*.td}
 
-  # Runs the tests that interact with Kafka and Schema Registry against Redpanda.
-  #
-  # Specify the `TD_TEST` environment variable to select a specific test to run.
-  # Otherwise, this workflow runs against the test files in this directory that
-  # use a Kafka action but do *not* use:
-  # - `kafka-time-offset.td` (https://github.com/vectorizedio/redpanda/issues/2397)
-  # - `schema-registry-publish` with `format=protobuf` (Redpanda does not support schema publication for protobuf/json)
-  testdrive-redpanda:
-    steps:
-      - step: start-services
-        services: [redpanda, materialized]
-      - step: wait-for-tcp
-        host: redpanda
-        port: 9092
-        timeout_secs: 120
-      - step: wait-for-tcp
-        host: redpanda
-        port: 8081
-      - step: wait-for-mz
-      - step: run
-        service: testdrive-svc
-        entrypoint: /bin/bash
-        command:
-        - -c
-        - >-
-          testdrive
-          --kafka-addr=redpanda:9092
-          --schema-registry-url=http://redpanda:8081
-          --materialized-url=postgres://materialize@materialized:6875
-          ${TD_TEST:-$(grep -lF '$ kafka' $(grep -L 'kafka_time_offset' $(grep -L '$ schema-registry-publish.*schema-type=protobuf' *.td)))}
-
   # Run tests, requires AWS credentials to be present. See guide-testing for
   # details.
   ci:
@@ -155,21 +124,6 @@ services:
     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka, zookeeper]
-  redpanda:
-    image: vectorized/redpanda:v21.9.3
-    # Most of these options are simply required when using Redpanda in Docker.
-    # See: https://vectorized.io/docs/quick-start-docker/#Single-command-for-a-1-node-cluster
-    # The `enable_transactions` and `enable_idempotence` feature flags enable
-    # features Materialize requires that are present by default in Apache Kafka
-    # but not in Redpanda.
-    command: >-
-      redpanda start
-      --overprovisioned --smp=1 --memory=1G --reserve-memory=0M
-      --node-id=0 --check=false
-      --set "redpanda.enable_transactions=true"
-      --set "redpanda.enable_idempotence=true"
-      --set "redpanda.auto_create_topics_enabled=false"
-      --advertise-kafka-addr redpanda:9092
   localstack:
     # https://github.com/localstack/localstack/pull/4979
     image: benesch/localstack:0.13.0-p1

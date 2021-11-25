@@ -657,6 +657,7 @@ class PythonServiceConfig(TypedDict, total=False):
     depends_on: List[str]
     entrypoint: List[str]
     volumes: List[str]
+    networks: Dict[str, Dict[str, List[str]]]
     deploy: Dict[str, Dict[str, Dict[str, str]]]
     propagate_uid_gid: bool
     init: bool
@@ -671,8 +672,8 @@ class PythonService:
         self.name = name
         self.config = config
 
-    def port(self) -> int:
-        return self.config["ports"][0]
+    def ports(self) -> List[int]:
+        return self.config["ports"]
 
 
 class Materialized(PythonService):
@@ -696,6 +697,7 @@ class Materialized(PythonService):
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
+                "MZ_METRICS_SCRAPING_INTERVAL=1s",
             ]
 
         # Make sure MZ_DEV=1 is always present
@@ -708,7 +710,7 @@ class Materialized(PythonService):
         if volumes is None:
             volumes = DEFAULT_MZ_VOLUMES
 
-        command = f"--data-directory={data_directory} {options} --disable-telemetry --experimental --listen-addr 0.0.0.0:{port} --timestamp-frequency 100ms"
+        command = f"--data-directory={data_directory} {options} --disable-telemetry --experimental --listen-addr 0.0.0.0:{port} --timestamp-frequency 100ms --retain-prometheus-metrics 1s"
 
         config: PythonServiceConfig = (
             {"image": image} if image else {"mzbuild": "materialized"}
@@ -877,6 +879,56 @@ class Kafka(PythonService):
         super().__init__(name=name, config=config)
 
 
+class Redpanda(PythonService):
+    def __init__(
+        self,
+        name: str = "redpanda",
+        version: str = "v21.10.2",
+        image: Optional[str] = None,
+        aliases: Optional[List[str]] = None,
+        ports: Optional[List[int]] = None,
+    ) -> None:
+        if image is None:
+            image = f"vectorized/redpanda:{version}"
+
+        if ports is None:
+            ports = [9092, 8081]
+
+        # The Redpanda container provides both a Kafka and a Schema Registry replacement
+        if aliases is None:
+            aliases = ["kafka", "schema-registry"]
+
+        # Most of these options are simply required when using Redpanda in Docker.
+        # See: https://vectorized.io/docs/quick-start-docker/#Single-command-for-a-1-node-cluster
+        # The `enable_transactions` and `enable_idempotence` feature flags enable
+        # features Materialize requires that are present by default in Apache Kafka
+        # but not in Redpanda.
+
+        command_list = [
+            "redpanda",
+            "start",
+            "--overprovisioned",
+            "--smp=1",
+            "--memory=1G",
+            "--reserve-memory=0M",
+            "--node-id=0",
+            "--check=false",
+            '--set "redpanda.enable_transactions=true"',
+            '--set "redpanda.enable_idempotence=true"',
+            '--set "redpanda.auto_create_topics_enabled=false"',
+            f"--advertise-kafka-addr kafka:{ports[0]}",
+        ]
+
+        config: PythonServiceConfig = {
+            "image": image,
+            "ports": ports,
+            "command": " ".join(command_list),
+            "networks": {"default": {"aliases": aliases}},
+        }
+
+        super().__init__(name=name, config=config)
+
+
 class SchemaRegistry(PythonService):
     def __init__(
         self,
@@ -937,7 +989,7 @@ class SqlServer(PythonService):
             name=name,
             config={
                 "image": image,
-                "ports": [1433, 1434, 1431],
+                "ports": [1433],
                 "environment": environment,
             },
         )
@@ -1303,7 +1355,8 @@ class StartAndWaitForTcp(WorkflowStep):
         for service in self._services:
             # Those two methods are loaded dynamically, so silence any mypi warnings about them
             workflow.start_services(services=[service.name])  # type: ignore
-            workflow.wait_for_tcp(host=service.name, port=service.port(), **self._kwargs)  # type: ignore
+            for port in service.ports():
+                workflow.wait_for_tcp(host=service.name, port=port, **self._kwargs)  # type: ignore
 
 
 @Steps.register("kill-services")
