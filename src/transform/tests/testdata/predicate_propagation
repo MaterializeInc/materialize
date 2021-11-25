@@ -375,3 +375,75 @@ predicate-propagation
 !(isnull(#1))
 ((#0 + #1) = (#0 + #1))
 ((#0 + #1) = (10 * (#0 + #1)))
+
+predicate-propagation
+(join [(get x) (get x)] [[#0 #2] [(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)]])
+----
+!(isnull(#1))
+!(isnull(#3))
+(#0 = #0)
+(#0 = #2)
+((#0 + 1) = (#0 + 1))
+((#0 + 1) = (#2 + 1))
+(((#0 + 1) + 1) = ((#0 + 1) + 1))
+(((#0 + 1) + 1) = ((#2 + 1) + 1))
+
+predicate-propagation
+(project (join [(get x) (get x)] [[#0 #2] [(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)]]) [0 1 2 3])
+----
+!(isnull(#1))
+!(isnull(#3))
+(#0 = #0)
+(#0 = #2)
+((#0 + 1) = (#0 + 1))
+((#0 + 1) = (#2 + 1))
+(((#0 + 1) + 1) = ((#0 + 1) + 1))
+(((#0 + 1) + 1) = ((#2 + 1) + 1))
+
+predicate-propagation
+(join [(get x) (get x)] [[(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)] [#0 #2] ])
+----
+!(isnull(#1))
+!(isnull(#3))
+(#0 = #0)
+(#0 = #2)
+((#0 + 1) = (#0 + 1))
+((#0 + 1) = (#2 + 1))
+(((#0 + 1) + 1) = ((#0 + 1) + 1))
+(((#0 + 1) + 1) = ((#2 + 1) + 1))
+
+predicate-propagation
+(project (join [(get x) (get x)] [[(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)] [#0 #2] ]) [0 1 2 3])
+----
+!(isnull(#1))
+!(isnull(#3))
+(#0 = #0)
+(#0 = #2)
+((#0 + 1) = (#0 + 1))
+((#0 + 1) = (#2 + 1))
+(((#0 + 1) + 1) = ((#0 + 1) + 1))
+(((#0 + 1) + 1) = ((#2 + 1) + 1))
+
+predicate-propagation
+(join [(get x) (get x)] [[(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)] [(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [#0 #2] ])
+----
+!(isnull(#1))
+!(isnull(#3))
+(#0 = #0)
+(#0 = #2)
+((#0 + 1) = (#0 + 1))
+((#0 + 1) = (#2 + 1))
+(((#0 + 1) + 1) = ((#0 + 1) + 1))
+(((#0 + 1) + 1) = ((#2 + 1) + 1))
+
+predicate-propagation
+(project (join [(get x) (get x)] [[(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)] [(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [#0 #2] ]) [0 1 2 3])
+----
+!(isnull(#1))
+!(isnull(#3))
+(#0 = #0)
+(#0 = #2)
+((#0 + 1) = (#0 + 1))
+((#0 + 1) = (#2 + 1))
+(((#0 + 1) + 1) = ((#0 + 1) + 1))
+(((#0 + 1) + 1) = ((#2 + 1) + 1))
