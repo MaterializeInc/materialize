@@ -58,6 +58,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "i32toi16"]
+    #[preserves_uniqueness = true]
     fn cast_int32_to_int16(a: i32) -> Result<i16, EvalError> {
         i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
     }
