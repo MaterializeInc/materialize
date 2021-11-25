@@ -534,26 +534,6 @@ impl MirScalarExpr {
                             } else if expr1 == expr2 {
                                 *e = expr1.take();
                             }
-                        } else if *func == BinaryFunc::Eq {
-                            if expr1.is_literal_true() {
-                                *e = expr2.take();
-                            } else if expr2.is_literal_true() {
-                                *e = expr1.take();
-                            } else if expr1.is_literal_false() {
-                                *e = expr2.take().call_unary(UnaryFunc::Not(func::Not));
-                            } else if expr2.is_literal_false() {
-                                *e = expr1.take().call_unary(UnaryFunc::Not(func::Not));
-                            }
-                        } else if *func == BinaryFunc::NotEq {
-                            if expr1.is_literal_false() {
-                                *e = expr2.take();
-                            } else if expr2.is_literal_false() {
-                                *e = expr1.take();
-                            } else if expr1.is_literal_true() {
-                                *e = expr2.take().call_unary(UnaryFunc::Not(func::Not));
-                            } else if expr2.is_literal_true() {
-                                *e = expr1.take().call_unary(UnaryFunc::Not(func::Not));
-                            }
                         }
                     }
                     MirScalarExpr::CallVariadic { func, exprs } => {
@@ -699,43 +679,12 @@ impl MirScalarExpr {
                 // 3) As the second to last step, try to undistribute AND/OR
                 e.undistribute_and_or();
                 if let MirScalarExpr::CallBinary { func, expr1, expr2 } = e {
-                    // 4) Canonically order elements so that deduplication works better.
-                    // This sorts the operand expressions of commutative operations and
-                    // permutable operations. Expressions are sorted using `MirScalarExpr`'s
-                    // `PartialEq` implementation.
-                    if func.is_nary() {
-                        let build_nary_expr = |operands: Vec<MirScalarExpr>| -> MirScalarExpr {
-                            let mut it = operands.into_iter();
-                            let first = it.next().unwrap();
-                            it.fold(first, |mut result, expr| {
-                                result = MirScalarExpr::CallBinary {
-                                    func: func.clone(),
-                                    expr1: Box::new(result),
-                                    expr2: Box::new(expr),
-                                };
-                                result
-                            })
-                        };
-                        // Collect all the operands of the n-ary operation
-                        let mut operands = Vec::new();
-                        expr1.harvest_operands(&mut operands, func);
-                        expr2.harvest_operands(&mut operands, func);
-                        // Fold literals into a single literal
-                        let (literals, mut operands): (Vec<MirScalarExpr>, Vec<MirScalarExpr>) =
-                            operands.into_iter().partition(|e| e.is_literal());
-                        match literals.len() {
-                            0 => {}
-                            1 => operands.extend(literals),
-                            _ => {
-                                let literal_expr = build_nary_expr(literals);
-                                operands.push(eval(&literal_expr));
-                            }
-                        }
-                        operands.sort();
-                        *e = build_nary_expr(operands);
-                    } else if let Some(permuted_func) = func.on_operand_permutation() {
+                    if matches!(
+                        *func,
+                        BinaryFunc::Eq | BinaryFunc::Or | BinaryFunc::And | BinaryFunc::NotEq
+                    ) {
                         if expr2 < expr1 {
-                            *func = permuted_func;
+                            // 4) Canonically order elements so that deduplication works better.
                             ::std::mem::swap(expr1, expr2);
                         }
                     }
@@ -834,17 +783,12 @@ impl MirScalarExpr {
                 // `(a && b) || (a && c)`. Otherwise, we are trying to
                 // undistribute OR`.
                 let undistribute_and = *func == BinaryFunc::Or;
-                let operator = if undistribute_and {
-                    BinaryFunc::And
-                } else {
-                    BinaryFunc::Or
-                };
                 let mut operands1 = Vec::new();
-                expr1.harvest_operands(&mut operands1, &operator);
+                expr1.harvest_operands(&mut operands1, undistribute_and);
                 let operands1_len = operands1.len();
 
                 let mut operands2 = Vec::new();
-                expr2.harvest_operands(&mut operands2, &operator);
+                expr2.harvest_operands(&mut operands2, undistribute_and);
 
                 let mut intersection = operands1
                     .into_iter()
@@ -865,8 +809,8 @@ impl MirScalarExpr {
                 if intersection.len() == operands1_len || intersection.len() == operands2.len() {
                     *self = intersection.pop().unwrap();
                 } else if !intersection.is_empty() {
-                    expr1.suppress_operands(&intersection[..], &operator);
-                    expr2.suppress_operands(&intersection[..], &operator);
+                    expr1.suppress_operands(&intersection[..], undistribute_and);
+                    expr2.suppress_operands(&intersection[..], undistribute_and);
                     if expr2 < expr1 {
                         ::std::mem::swap(expr1, expr2);
                     }
@@ -881,7 +825,11 @@ impl MirScalarExpr {
                     *self = MirScalarExpr::CallBinary {
                         expr1: Box::new(expr1),
                         expr2: Box::new(expr2),
-                        func: operator.clone(),
+                        func: if undistribute_and {
+                            BinaryFunc::And
+                        } else {
+                            BinaryFunc::Or
+                        },
                     };
                 }
             }
@@ -889,12 +837,13 @@ impl MirScalarExpr {
     }
 
     /// Collects undistributable terms from X expressions.
-    /// This assumes that `operator` is a commutative operation.
-    fn harvest_operands(&mut self, operands: &mut Vec<MirScalarExpr>, operator: &BinaryFunc) {
+    /// If `and`, X is AND. If not `and`, X is OR.
+    fn harvest_operands(&mut self, operands: &mut Vec<MirScalarExpr>, and: bool) {
         if let MirScalarExpr::CallBinary { expr1, expr2, func } = self {
-            if func == operator {
-                expr1.harvest_operands(operands, operator);
-                expr2.harvest_operands(operands, operator);
+            let operator = if and { BinaryFunc::And } else { BinaryFunc::Or };
+            if *func == operator {
+                expr1.harvest_operands(operands, and);
+                expr2.harvest_operands(operands, and);
                 return;
             }
         }
@@ -902,12 +851,14 @@ impl MirScalarExpr {
     }
 
     /// Removes undistributed terms from AND expressions.
-    fn suppress_operands(&mut self, operands: &[MirScalarExpr], operator: &BinaryFunc) {
+    /// If `and`, X is AND. If not `and`, X is OR.
+    fn suppress_operands(&mut self, operands: &[MirScalarExpr], and: bool) {
         if let MirScalarExpr::CallBinary { expr1, expr2, func } = self {
-            if func == operator {
+            let operator = if and { BinaryFunc::And } else { BinaryFunc::Or };
+            if *func == operator {
                 // Suppress the ands in children.
-                expr1.suppress_operands(operands, operator);
-                expr2.suppress_operands(operands, operator);
+                expr1.suppress_operands(operands, and);
+                expr2.suppress_operands(operands, and);
 
                 // If either argument is in our list, replace it by `true`.
                 let tru = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);

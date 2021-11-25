@@ -17,7 +17,7 @@ EXPLAIN PLAN FOR SELECT b*b*b, b*b FROM x
 ----
 %0 =
 | Get materialize.public.x (u1)
-| Map (#1 * #1), (#1 * #2)
+| Map (#1 * #1), (#2 * #1)
 | Project (#3, #2)
 
 EOF
@@ -27,7 +27,7 @@ EXPLAIN PLAN FOR SELECT b*b*b, b*b+1 FROM x
 ----
 %0 =
 | Get materialize.public.x (u1)
-| Map (#1 * #1), (#1 * #2), (#2 + 1)
+| Map (#1 * #1), (#2 * #1), (#2 + 1)
 | Project (#3, #4)
 
 EOF

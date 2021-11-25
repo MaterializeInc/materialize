@@ -346,7 +346,7 @@ SELECT age, ascii_num * 2 as result FROM (
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| Map (2 * ascii(substr(replace(#1, "o", "i"), 2, 1)))
+| Map (ascii(substr(replace(#1, "o", "i"), 2, 1)) * 2)
 | Project (#3, #4)
 
 EOF

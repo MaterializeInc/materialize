@@ -123,7 +123,7 @@ EXPLAIN SELECT * FROM lineitem
 %3 =
 | Join %0 %1 %2 (= #0 #8) (= datetots(#11) (#5 - 9 months))
 | | implementation = Differential %2 %0.() %1.(#0, datetots(#3))
-| Filter (#5 != #11), (#10 <= #14)
+| Filter (#5 != #11), (#14 >= #10)
 | Project (#0..#7, #0, #9..#14)
 
 EOF
