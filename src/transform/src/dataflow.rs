@@ -19,7 +19,7 @@ use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use ore::id_gen::IdGen;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::Optimizer;
+use crate::{Optimizer, TransformError};
 
 /// Optimizes the implementation of each dataflow.
 ///
@@ -29,14 +29,14 @@ use crate::Optimizer;
 pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
-) {
+) -> Result<(), TransformError> {
     // Inline views that are used in only one other view.
     inline_views(dataflow);
 
     // Logical optimization pass after view inlining
     optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer());
 
-    optimize_dataflow_filters(dataflow);
+    optimize_dataflow_filters(dataflow)?;
     // TODO: when the linear operator contract ensures that propagated
     // predicates are always applied, projections and filters can be removed
     // from where they come from. Once projections and filters can be removed,
@@ -53,6 +53,8 @@ pub fn optimize_dataflow(
     optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer());
 
     monotonic::optimize_dataflow_monotonic(dataflow);
+
+    Ok(())
 }
 
 /// Inline views used in one other view, and in no exported objects.
@@ -276,7 +278,7 @@ pub fn optimize_dataflow_demand_inner<'a, I>(
 }
 
 /// Pushes predicate to dataflow inputs.
-fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
+fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
     let mut predicates = HashMap::<Id, HashSet<expr::MirScalarExpr>>::new();
@@ -289,7 +291,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
             .rev()
             .map(|build_desc| (Id::Global(build_desc.id), build_desc.view.as_inner_mut())),
         &mut predicates,
-    );
+    )?;
 
     // Push predicate information into the SourceDesc.
     for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
@@ -308,6 +310,8 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
             }
         }
     }
+
+    Ok(())
 }
 
 /// Pushes filters down through views in `view_sequence` in order.
@@ -317,7 +321,8 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
 pub fn optimize_dataflow_filters_inner<'a, I>(
     view_iter: I,
     predicates: &mut HashMap<Id, HashSet<expr::MirScalarExpr>>,
-) where
+) -> Result<(), TransformError>
+where
     I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
 {
     let transform = crate::predicate_pushdown::PredicatePushdown;
@@ -327,8 +332,9 @@ pub fn optimize_dataflow_filters_inner<'a, I>(
                 *view = view.take_dangerous().filter(list.iter().cloned());
             }
         }
-        transform.action(view, predicates);
+        transform.action(view, predicates)?;
     }
+    Ok(())
 }
 
 /// Analysis to identify monotonic collections, especially TopK inputs.
