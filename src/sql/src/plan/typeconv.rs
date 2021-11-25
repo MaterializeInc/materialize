@@ -253,11 +253,11 @@ lazy_static! {
             (Bytes, String) => Assignment: CastBytesToString,
 
             // STRING
-            (String, Bool) => Explicit: CastStringToBool,
-            (String, Int16) => Explicit: CastStringToInt16,
-            (String, Int32) => Explicit: CastStringToInt32,
-            (String, Int64) => Explicit: CastStringToInt64,
-            (String, Oid) => Explicit: CastStringToInt32,
+            (String, Bool) => Explicit: CastStringToBool(func::CastStringToBool),
+            (String, Int16) => Explicit: CastStringToInt16(func::CastStringToInt16),
+            (String, Int32) => Explicit: CastStringToInt32(func::CastStringToInt32),
+            (String, Int64) => Explicit: CastStringToInt64(func::CastStringToInt64),
+            (String, Oid) => Explicit: CastStringToInt32(func::CastStringToInt32),
 
             // STRING to REG*
             // A reg* type represents a specific type of object by oid.
@@ -311,18 +311,18 @@ lazy_static! {
                     END
             )"),
 
-            (String, Float32) => Explicit: CastStringToFloat32,
-            (String, Float64) => Explicit: CastStringToFloat64,
+            (String, Float32) => Explicit: CastStringToFloat32(func::CastStringToFloat32),
+            (String, Float64) => Explicit: CastStringToFloat64(func::CastStringToFloat64),
             (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(s)))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(func::CastStringToNumeric(s))))
             }),
             (String, Date) => Explicit: CastStringToDate,
             (String, Time) => Explicit: CastStringToTime,
             (String, Timestamp) => Explicit: CastStringToTimestamp,
             (String, TimestampTz) => Explicit: CastStringToTimestampTz,
             (String, Interval) => Explicit: CastStringToInterval,
-            (String, Bytes) => Explicit: CastStringToBytes,
+            (String, Bytes) => Explicit: CastStringToBytes(func::CastStringToBytes),
             (String, Jsonb) => Explicit: CastStringToJsonb,
             (String, Uuid) => Explicit: CastStringToUuid,
             (String, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {

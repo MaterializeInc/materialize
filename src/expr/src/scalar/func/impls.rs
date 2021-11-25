@@ -17,6 +17,7 @@ mod int64;
 mod numeric;
 mod oid;
 mod regproc;
+mod string;
 
 pub use boolean::*;
 pub use datum::*;
@@ -28,3 +29,4 @@ pub use int64::*;
 pub use numeric::*;
 pub use oid::*;
 pub use regproc::*;
+pub use string::*;

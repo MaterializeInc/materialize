@@ -16,7 +16,7 @@ use serde_json::Value;
 use expr::explain::ViewExplanation;
 use expr::func::{
     CastInt16ToInt32, CastInt32ToInt64, CastInt64ToFloat64, CastInt64ToInt32, CastNumericToInt64,
-    IsNull, NegInt32, Not,
+    CastStringToBool, IsNull, NegInt32, Not,
 };
 use expr::*;
 use lowertest::*;
@@ -47,6 +47,7 @@ gen_reflect_info_func!(
         CastInt64ToInt32,
         CastInt64ToFloat64,
         CastNumericToInt64,
+        CastStringToBool,
         ColumnOrder,
         ColumnType,
         RelationType,
