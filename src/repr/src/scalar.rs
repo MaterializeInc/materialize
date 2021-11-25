@@ -920,30 +920,30 @@ pub enum ScalarType {
 }
 
 /// A bridge between native Rust types and the SQL runtime types that are wrapped in Datums
-pub trait DatumType<E>: Sized {
+pub trait DatumType<'a, E>: Sized {
     /// The SQL column type of this Rust type
     fn as_column_type() -> ColumnType;
 
     /// Try to convert a Result whose Ok variant is a Datum into this native Rust type (Self). If
     /// it fails the error variant will contain the original result.
-    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>>;
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>>;
 
     /// Convert this Rust type into a Result containing a Datum, or an error
-    fn into_result(self, temp_storage: &RowArena) -> Result<Datum, E>;
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E>;
 }
 
-impl<E, B: DatumType<E>> DatumType<E> for Option<B> {
+impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Option<B> {
     fn as_column_type() -> ColumnType {
         B::as_column_type().nullable(true)
     }
-    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Null) => Ok(None),
             Ok(datum) => B::try_from_result(Ok(datum)).map(Some),
             _ => Err(res),
         }
     }
-    fn into_result(self, temp_storage: &RowArena) -> Result<Datum, E> {
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         match self {
             Some(inner) => inner.into_result(temp_storage),
             None => Ok(Datum::Null),
@@ -951,14 +951,14 @@ impl<E, B: DatumType<E>> DatumType<E> for Option<B> {
     }
 }
 
-impl<E, B: DatumType<E>> DatumType<E> for Result<B, E> {
+impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
     fn as_column_type() -> ColumnType {
         B::as_column_type()
     }
-    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         B::try_from_result(res).map(Ok)
     }
-    fn into_result(self, temp_storage: &RowArena) -> Result<Datum, E> {
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         self.and_then(|inner| inner.into_result(temp_storage))
     }
 }
@@ -967,19 +967,19 @@ impl<E, B: DatumType<E>> DatumType<E> for Result<B, E> {
 macro_rules! impl_datum_type_copy {
     ($(($native:ty, $variant:ident)),+) => {
         $(
-            impl<E> DatumType<E> for $native {
+            impl<'a, E> DatumType<'a, E> for $native {
                 fn as_column_type() -> ColumnType {
                     ScalarType::$variant.nullable(false)
                 }
 
-                fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+                fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
                     match res {
                         Ok(Datum::$variant(f)) => Ok(f.into()),
                         _ => Err(res),
                     }
                 }
 
-                fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+                fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
                     Ok(Datum::$variant(self.into()))
                 }
             }
@@ -996,12 +996,12 @@ impl_datum_type_copy!(
     (DateTime<Utc>, TimestampTz)
 );
 
-impl<E> DatumType<E> for bool {
+impl<'a, E> DatumType<'a, E> for bool {
     fn as_column_type() -> ColumnType {
         ScalarType::Bool.nullable(false)
     }
 
-    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::True) => Ok(true),
             Ok(Datum::False) => Ok(false),
@@ -1009,7 +1009,7 @@ impl<E> DatumType<E> for bool {
         }
     }
 
-    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         if self {
             Ok(Datum::True)
         } else {
@@ -1018,104 +1018,104 @@ impl<E> DatumType<E> for bool {
     }
 }
 
-impl<E> DatumType<E> for String {
+impl<'a, E> DatumType<'a, E> for String {
     fn as_column_type() -> ColumnType {
         ScalarType::String.nullable(false)
     }
 
-    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::String(s)) => Ok(s.to_owned()),
             _ => Err(res),
         }
     }
 
-    fn into_result(self, temp_storage: &RowArena) -> Result<Datum, E> {
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::String(temp_storage.push_string(self)))
     }
 }
 
-impl<E> DatumType<E> for Vec<u8> {
+impl<'a, E> DatumType<'a, E> for Vec<u8> {
     fn as_column_type() -> ColumnType {
         ScalarType::Bytes.nullable(false)
     }
 
-    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Bytes(b)) => Ok(b.to_owned()),
             _ => Err(res),
         }
     }
 
-    fn into_result(self, temp_storage: &RowArena) -> Result<Datum, E> {
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Bytes(temp_storage.push_bytes(self)))
     }
 }
 
-impl<E> DatumType<E> for Numeric {
+impl<'a, E> DatumType<'a, E> for Numeric {
     fn as_column_type() -> ColumnType {
         ScalarType::Numeric { scale: None }.nullable(false)
     }
 
-    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Numeric(n)) => Ok(n.into_inner()),
             _ => Err(res),
         }
     }
 
-    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::from(self))
     }
 }
 
-impl<E> DatumType<E> for Oid {
+impl<'a, E> DatumType<'a, E> for Oid {
     fn as_column_type() -> ColumnType {
         ScalarType::Oid.nullable(false)
     }
 
-    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Int32(a)) => Ok(Oid(a)),
             _ => Err(res),
         }
     }
 
-    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Int32(self.0))
     }
 }
 
-impl<E> DatumType<E> for RegProc {
+impl<'a, E> DatumType<'a, E> for RegProc {
     fn as_column_type() -> ColumnType {
         ScalarType::RegProc.nullable(false)
     }
 
-    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Int32(a)) => Ok(RegProc(a)),
             _ => Err(res),
         }
     }
 
-    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Int32(self.0))
     }
 }
 
-impl<E> DatumType<E> for RegType {
+impl<'a, E> DatumType<'a, E> for RegType {
     fn as_column_type() -> ColumnType {
         ScalarType::RegType.nullable(false)
     }
 
-    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Int32(a)) => Ok(RegType(a)),
             _ => Err(res),
         }
     }
 
-    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Int32(self.0))
     }
 }

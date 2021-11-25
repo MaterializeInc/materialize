@@ -3439,9 +3439,9 @@ trait LazyUnaryFunc {
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
-trait EagerUnaryFunc {
-    type Input: DatumType<EvalError>;
-    type Output: DatumType<EvalError>;
+trait EagerUnaryFunc<'a> {
+    type Input: DatumType<'a, EvalError>;
+    type Output: DatumType<'a, EvalError>;
 
     fn call(&self, input: Self::Input) -> Self::Output;
 
@@ -3466,7 +3466,7 @@ trait EagerUnaryFunc {
     }
 }
 
-impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
+impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],

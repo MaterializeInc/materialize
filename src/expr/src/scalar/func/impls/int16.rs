@@ -86,7 +86,7 @@ sqlfunc!(
 )]
 pub struct CastInt16ToNumeric(pub Option<u8>);
 
-impl EagerUnaryFunc for CastInt16ToNumeric {
+impl<'a> EagerUnaryFunc<'a> for CastInt16ToNumeric {
     type Input = i16;
     type Output = Result<Numeric, EvalError>;
 
