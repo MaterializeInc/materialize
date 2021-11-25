@@ -270,7 +270,7 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
-                    Box::new(crate::predicate_pushdown::PredicatePushdown),
+                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
                     // Lifts the information `!isnull(col)`
                     Box::new(crate::nonnullable::NonNullable),
                     // Lifts the information `col = literal`

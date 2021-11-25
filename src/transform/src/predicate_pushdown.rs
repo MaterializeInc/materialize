@@ -58,7 +58,7 @@
 //!    ]);
 //!
 //! use transform::{Transform, TransformArgs};
-//! PredicatePushdown.transform(&mut expr, TransformArgs {
+//! PredicatePushdown::default().transform(&mut expr, TransformArgs {
 //!   id_gen: &mut Default::default(),
 //!   indexes: &std::collections::HashMap::new(),
 //! });
@@ -78,13 +78,30 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
+use expr::{func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use itertools::Itertools;
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use repr::{Datum, ScalarType};
 
 /// Pushes predicates down through other operators.
 #[derive(Debug)]
-pub struct PredicatePushdown;
+pub struct PredicatePushdown {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for PredicatePushdown {
+    fn default() -> PredicatePushdown {
+        PredicatePushdown {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for PredicatePushdown {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for PredicatePushdown {
     fn transform(

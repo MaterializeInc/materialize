@@ -325,7 +325,7 @@ pub fn optimize_dataflow_filters_inner<'a, I>(
 where
     I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
 {
-    let transform = crate::predicate_pushdown::PredicatePushdown;
+    let transform = crate::predicate_pushdown::PredicatePushdown::default();
     for (id, view) in view_iter {
         if let Some(list) = predicates.get(&id).clone() {
             if !list.is_empty() {

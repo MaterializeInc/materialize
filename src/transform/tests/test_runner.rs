@@ -240,7 +240,9 @@ mod tests {
             "NonNullRequirements" => Ok(Box::new(
                 transform::nonnull_requirements::NonNullRequirements::default(),
             )),
-            "PredicatePushdown" => Ok(Box::new(transform::predicate_pushdown::PredicatePushdown)),
+            "PredicatePushdown" => Ok(Box::new(
+                transform::predicate_pushdown::PredicatePushdown::default(),
+            )),
             "ProjectionExtraction" => Ok(Box::new(
                 transform::projection_extraction::ProjectionExtraction,
             )),
