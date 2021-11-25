@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use lowertest::MzStructReflect;
 use repr::adt::numeric::{self, Numeric};
+use repr::{strconv, ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
@@ -38,6 +39,48 @@ sqlfunc!(
     }
 );
 
+sqlfunc!(
+    #[sqlname = "i16tof32"]
+    #[preserves_uniqueness = true]
+    fn cast_int16_to_float32(a: i16) -> f32 {
+        f32::from(a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "i16tof64"]
+    #[preserves_uniqueness = true]
+    fn cast_int16_to_float64(a: i16) -> f64 {
+        f64::from(a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "i16toi32"]
+    #[preserves_uniqueness = true]
+    fn cast_int16_to_int32(a: i16) -> i32 {
+        i32::from(a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "i16toi64"]
+    #[preserves_uniqueness = true]
+    fn cast_int16_to_int64(a: i16) -> i64 {
+        i64::from(a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "i16tostr"]
+    #[preserves_uniqueness = true]
+    fn cast_int16_to_string(a: i16) -> String {
+        let mut buf = String::new();
+        strconv::format_int16(&mut buf, a);
+        buf
+    }
+);
+
 #[derive(
     Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
 )]
@@ -55,6 +98,10 @@ impl EagerUnaryFunc for CastInt16ToNumeric {
             }
         }
         Ok(a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { scale: self.0 }.nullable(input.nullable)
     }
 }
 

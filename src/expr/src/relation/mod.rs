@@ -1523,10 +1523,16 @@ impl AggregateExpr {
             }
 
             // SumInt16 takes Int16s as input, but outputs Int64s.
-            AggregateFunc::SumInt16 => self.expr.clone().call_unary(UnaryFunc::CastInt16ToInt64),
+            AggregateFunc::SumInt16 => self
+                .expr
+                .clone()
+                .call_unary(UnaryFunc::CastInt16ToInt64(scalar_func::CastInt16ToInt64)),
 
             // SumInt32 takes Int32s as input, but outputs Int64s.
-            AggregateFunc::SumInt32 => self.expr.clone().call_unary(UnaryFunc::CastInt32ToInt64),
+            AggregateFunc::SumInt32 => self
+                .expr
+                .clone()
+                .call_unary(UnaryFunc::CastInt32ToInt64(scalar_func::CastInt32ToInt64)),
 
             // SumInt64 takes Int64s as input, but outputs numerics.
             AggregateFunc::SumInt64 => self
