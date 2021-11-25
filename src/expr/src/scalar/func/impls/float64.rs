@@ -7,9 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::EvalError;
+use std::fmt;
+
 use chrono::{DateTime, NaiveDateTime, Utc};
-use repr::strconv;
+use serde::{Deserialize, Serialize};
+
+use lowertest::MzStructReflect;
+use repr::adt::numeric::{self, Numeric};
+use repr::{strconv, ColumnType, ScalarType};
+
+use crate::scalar::func::EagerUnaryFunc;
+use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "-"]
@@ -118,6 +126,44 @@ sqlfunc!(
         s
     }
 );
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
+)]
+pub struct CastFloat64ToNumeric(pub Option<u8>);
+
+impl<'a> EagerUnaryFunc<'a> for CastFloat64ToNumeric {
+    type Input = f64;
+    type Output = Result<Numeric, EvalError>;
+
+    fn call(&self, a: f64) -> Result<Numeric, EvalError> {
+        if a.is_infinite() {
+            return Err(EvalError::InfinityOutOfDomain(
+                "casting double precision to numeric".to_owned(),
+            ));
+        }
+        let mut a = Numeric::from(a);
+        if let Some(scale) = self.0 {
+            if numeric::rescale(&mut a, scale).is_err() {
+                return Err(EvalError::NumericFieldOverflow);
+            }
+        }
+        match numeric::munge_numeric(&mut a) {
+            Ok(_) => Ok(a),
+            Err(_) => Err(EvalError::NumericFieldOverflow),
+        }
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { scale: self.0 }.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for CastFloat64ToNumeric {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("f64tonumeric")
+    }
+}
 
 sqlfunc!(
     #[sqlname = "sqrtf64"]
