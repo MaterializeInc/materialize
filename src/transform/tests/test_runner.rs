@@ -374,8 +374,10 @@ mod tests {
                 if let Some((id, rel)) = dataflow.last() {
                     demand.insert(Id::Global(*id), (0..rel.arity()).collect());
                 }
-                optimize_dataflow_demand_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut demand);
-                Ok(format!("Pushed-down demand:\n{}", log_pushed_outside_of_dataflow(demand, cat)))
+                match optimize_dataflow_demand_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut demand) {
+                    Ok(()) => Ok(format!("Pushed-down demand:\n{}", log_pushed_outside_of_dataflow(demand, cat))),
+                    Err(e) => Err(format!("{}", e)),
+                }
             }
             _ => return Err(format!(
                 "no cross-view transform named {} (you might have to add it to apply_cross_view_transform)",
