@@ -30,16 +30,30 @@ macro_rules! sqlfunc {
         );
     };
 
+    // Add lifetime parameter if it was omitted
     (
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
-        fn $fn_name:ident(mut $param_name:ident: $input_ty:ty) -> $output_ty:ty
+        fn $fn_name:ident ($($params:tt)*) $($tail:tt)*
+    ) => {
+        sqlfunc!(
+            #[sqlname = $name]
+            #[preserves_uniqueness = $preserves_uniqueness]
+            fn $fn_name<'a>($($params)*) $($tail)*
+        );
+    };
+
+    // Normalize mut arguments to non-mut ones
+    (
+        #[sqlname = $name:expr]
+        #[preserves_uniqueness = $preserves_uniqueness:expr]
+        fn $fn_name:ident<$lt:lifetime>(mut $param_name:ident: $input_ty:ty) -> $output_ty:ty
             $body:block
     ) => {
         sqlfunc!(
             #[sqlname = $name]
             #[preserves_uniqueness = $preserves_uniqueness]
-            fn $fn_name($param_name: $input_ty) -> $output_ty {
+            fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
                 let mut $param_name = $param_name;
                 $body
             }
@@ -49,14 +63,14 @@ macro_rules! sqlfunc {
     (
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
-        fn $fn_name:ident($param_name:ident: $input_ty:ty) -> $output_ty:ty
+        fn $fn_name:ident<$lt:lifetime>($param_name:ident: $input_ty:ty) -> $output_ty:ty
             $body:block
     ) => {
         paste::paste! {
             #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, lowertest::MzStructReflect)]
             pub struct [<$fn_name:camel>];
 
-            impl crate::func::EagerUnaryFunc for [<$fn_name:camel>] {
+            impl<'a> crate::func::EagerUnaryFunc<'a> for [<$fn_name:camel>] {
                 type Input = $input_ty;
                 type Output = $output_ty;
 
@@ -65,8 +79,8 @@ macro_rules! sqlfunc {
                 }
 
                 fn output_type(&self, input_type: repr::ColumnType) -> repr::ColumnType {
-                    use repr::DatumType;
-                    let output = <Self::Output as DatumType<crate::EvalError>>::as_column_type();
+                    use repr::AsColumnType;
+                    let output = Self::Output::as_column_type();
                     let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
                     let nullable = output.nullable;
                     // The output is nullable if it is nullable by itself or the input is nullable
@@ -85,7 +99,7 @@ macro_rules! sqlfunc {
                 }
             }
 
-            pub fn $fn_name($param_name: $input_ty) -> $output_ty {
+            pub fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
                 $body
             }
         }

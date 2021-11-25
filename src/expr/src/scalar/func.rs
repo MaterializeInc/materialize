@@ -3399,9 +3399,9 @@ trait LazyUnaryFunc {
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
-trait EagerUnaryFunc {
-    type Input: DatumType<EvalError>;
-    type Output: DatumType<EvalError>;
+trait EagerUnaryFunc<'a> {
+    type Input: DatumType<'a, EvalError>;
+    type Output: DatumType<'a, EvalError>;
 
     fn call(&self, input: Self::Input) -> Self::Output;
 
@@ -3411,13 +3411,13 @@ trait EagerUnaryFunc {
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {
         // If the input is not nullable then nulls are propagated
-        !Self::Input::as_column_type().nullable
+        !Self::Input::nullable()
     }
 
     /// Whether this function will produce NULL on non-NULL input
     fn introduces_nulls(&self) -> bool {
         // If the output is nullable then nulls can be introduced
-        Self::Output::as_column_type().nullable
+        Self::Output::nullable()
     }
 
     /// Whether this function preserves uniqueness
@@ -3426,7 +3426,7 @@ trait EagerUnaryFunc {
     }
 }
 
-impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
+impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
