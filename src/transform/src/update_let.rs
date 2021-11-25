@@ -64,30 +64,32 @@ impl UpdateLet {
         remap: &mut HashMap<LocalId, (LocalId, RelationType)>,
         id_gen: &mut IdGen,
     ) -> Result<(), crate::TransformError> {
-        match relation {
-            MirRelationExpr::Let { id, value, body } => {
-                self.action(value, remap, id_gen)?;
-                // If a local id, assign a new identifier and refresh the type.
-                let new_id = LocalId::new(id_gen.allocate_id());
-                let prev = remap.insert(id.clone(), (new_id, value.typ()));
-                self.action(body, remap, id_gen)?;
-                remap.remove(id);
-                if let Some(prev_stuff) = prev {
-                    remap.insert(id.clone(), prev_stuff);
-                }
-                *id = new_id;
-                Ok(())
-            }
-            MirRelationExpr::Get { id, typ } => {
-                if let Id::Local(local_id) = id {
-                    if let Some((new_id, new_type)) = remap.get(local_id) {
-                        *local_id = new_id.clone();
-                        *typ = new_type.clone()
+        self.checked_recur(|_| {
+            match relation {
+                MirRelationExpr::Let { id, value, body } => {
+                    self.action(value, remap, id_gen)?;
+                    // If a local id, assign a new identifier and refresh the type.
+                    let new_id = LocalId::new(id_gen.allocate_id());
+                    let prev = remap.insert(id.clone(), (new_id, value.typ()));
+                    self.action(body, remap, id_gen)?;
+                    remap.remove(id);
+                    if let Some(prev_stuff) = prev {
+                        remap.insert(id.clone(), prev_stuff);
                     }
+                    *id = new_id;
+                    Ok(())
                 }
-                Ok(())
+                MirRelationExpr::Get { id, typ } => {
+                    if let Id::Local(local_id) = id {
+                        if let Some((new_id, new_type)) = remap.get(local_id) {
+                            *local_id = new_id.clone();
+                            *typ = new_type.clone()
+                        }
+                    }
+                    Ok(())
+                }
+                _ => relation.try_visit_mut_children(&mut |e| self.action(e, remap, id_gen)),
             }
-            _ => relation.try_visit_mut_children(&mut |e| self.action(e, remap, id_gen)),
-        }
+        })
     }
 }
