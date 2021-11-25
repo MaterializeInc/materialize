@@ -410,7 +410,7 @@ impl PredicatePushdown {
                         self.action(relation, get_predicates);
                     }
                     x => {
-                        x.visit1_mut(|e| self.action(e, get_predicates));
+                        x.visit_mut_children(|e| self.action(e, get_predicates));
                     }
                 }
 
@@ -439,7 +439,7 @@ impl PredicatePushdown {
                 if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
                     if !list.is_empty() {
                         // Remove the predicates in `list` from the body.
-                        body.visit_mut(&mut |e| {
+                        body.visit_mut_post(&mut |e| {
                             if let MirRelationExpr::Filter { input, predicates } = e {
                                 if let MirRelationExpr::Get { id: get_id, .. } = **input {
                                     if get_id == Id::Local(*id) {
@@ -694,7 +694,7 @@ impl PredicatePushdown {
             }
             x => {
                 // Recursively descend.
-                x.visit1_mut(|e| self.action(e, get_predicates));
+                x.visit_mut_children(|e| self.action(e, get_predicates));
             }
         }
     }

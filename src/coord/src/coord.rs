@@ -4080,7 +4080,7 @@ where
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
         if let ExprPrepStyle::Static = &style {
             let mut opt_expr = self.view_optimizer.optimize(expr)?;
-            opt_expr.0.try_visit_mut(&mut |e| {
+            opt_expr.0.try_visit_mut_post(&mut |e| {
                 // Carefully test filter expressions, which may represent temporal filters.
                 if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
                     let mfp = expr::MapFilterProject::new(input.arity())

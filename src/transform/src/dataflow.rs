@@ -124,7 +124,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             dataflow.objects_to_build[other]
                 .view
                 .as_inner_mut()
-                .visit_mut(&mut |expr| {
+                .visit_mut_post(&mut |expr| {
                     if let MirRelationExpr::Get { id, .. } = expr {
                         if id == &Id::Global(global_id) {
                             *id = Id::Local(new_local);
@@ -421,7 +421,7 @@ pub mod monotonic {
             // The default behavior.
             // TODO: check that this is the behavior we want.
             MirRelationExpr::Negate { .. } | MirRelationExpr::Constant { rows: Err(_), .. } => {
-                expr.visit1_mut(|e| {
+                expr.visit_mut_children(|e| {
                     is_monotonic(e, sources, locals);
                 });
                 false

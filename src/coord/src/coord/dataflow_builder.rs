@@ -140,7 +140,7 @@ impl<'a> DataflowBuilder<'a> {
                             *id,
                         );
                         let mut transformation = source.optimized_expr.clone();
-                        transformation.0.visit_mut(&mut |node| {
+                        transformation.0.visit_mut_post(&mut |node| {
                             match node {
                                 MirRelationExpr::Get { id, .. } if *id == Id::LocalBareSource => {
                                     *id = Id::Global(bare_source_id);

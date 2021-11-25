@@ -360,6 +360,7 @@ impl ErrorResponse {
             CoordError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+            CoordError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
             CoordError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             CoordError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,

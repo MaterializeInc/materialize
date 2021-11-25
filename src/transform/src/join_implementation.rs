@@ -68,7 +68,7 @@ impl JoinImplementation {
             self.action_recursive(body, arranged);
             arranged.remove(&Id::Local(*id));
         } else {
-            relation.visit1_mut(|e| self.action_recursive(e, arranged));
+            relation.visit_mut_children(|e| self.action_recursive(e, arranged));
             self.action(relation, arranged);
         }
     }

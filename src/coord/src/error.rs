@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fmt;
 
 use expr::EvalError;
+use ore::stack::RecursionLimitError;
 use ore::str::StrExt;
 use repr::NotNullViolation;
 use transform::TransformError;
@@ -65,6 +66,8 @@ pub enum CoordError {
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
     ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
+    /// The recursion limit of some operation was exceeded.
+    RecursionLimit(RecursionLimitError),
     /// A query in a transaction referenced a relation outside the first query's
     /// time domain.
     RelationOutsideTimeDomain {
@@ -280,6 +283,7 @@ impl fmt::Display for CoordError {
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
             }
+            CoordError::RecursionLimit(e) => e.fmt(f),
             CoordError::RelationOutsideTimeDomain { .. } => {
                 write!(
                     f,
@@ -347,6 +351,12 @@ impl From<TransformError> for CoordError {
 impl From<NotNullViolation> for CoordError {
     fn from(e: NotNullViolation) -> CoordError {
         CoordError::ConstraintViolation(e)
+    }
+}
+
+impl From<RecursionLimitError> for CoordError {
+    fn from(e: RecursionLimitError) -> CoordError {
+        CoordError::RecursionLimit(e)
     }
 }
 

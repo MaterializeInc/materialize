@@ -37,7 +37,7 @@ impl crate::Transform for FoldConstants {
         _: TransformArgs,
     ) -> Result<(), TransformError> {
         let mut type_stack = Vec::new();
-        relation.try_visit_mut(&mut |e| -> Result<(), TransformError> {
+        relation.try_visit_mut_post(&mut |e| -> Result<(), TransformError> {
             let num_inputs = e.num_inputs();
             let input_types = &type_stack[type_stack.len() - num_inputs..];
             let mut relation_type = e.typ_with_input_types(input_types);

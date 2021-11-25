@@ -88,7 +88,7 @@ impl Bindings {
 
             _ => {
                 // All other expressions just need to apply the logic recursively.
-                relation.visit1_mut(&mut |expr| {
+                relation.visit_mut_children(&mut |expr| {
                     self.intern_expression(expr);
                 })
             }

@@ -23,7 +23,7 @@ impl crate::Transform for UnionBranchCancellation {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
-        relation.try_visit_mut(&mut |e| self.action(e))
+        relation.try_visit_mut_post(&mut |e| self.action(e))
     }
 }
 

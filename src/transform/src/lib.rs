@@ -54,6 +54,7 @@ pub mod update_let;
 
 pub mod dataflow;
 pub use dataflow::optimize_dataflow;
+use ore::stack::RecursionLimitError;
 
 /// Arguments that get threaded through all transforms.
 #[derive(Debug)]
@@ -98,6 +99,12 @@ impl fmt::Display for TransformError {
 
 impl Error for TransformError {}
 
+impl From<RecursionLimitError> for TransformError {
+    fn from(error: RecursionLimitError) -> Self {
+        TransformError::Internal(error.to_string())
+    }
+}
+
 /// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
 pub struct Fixpoint {
@@ -120,7 +127,7 @@ impl Transform for Fixpoint {
         // stable shape.
         loop {
             let mut original_count = 0;
-            relation.visit(&mut |_| original_count += 1);
+            relation.visit_post(&mut |_| original_count += 1);
             for _ in 0..self.limit {
                 let original = relation.clone();
                 for transform in self.transforms.iter() {
@@ -137,7 +144,7 @@ impl Transform for Fixpoint {
                 }
             }
             let mut final_count = 0;
-            relation.visit(&mut |_| final_count += 1);
+            relation.visit_post(&mut |_| final_count += 1);
             if final_count >= original_count {
                 break;
             }

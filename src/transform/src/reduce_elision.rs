@@ -27,7 +27,7 @@ impl crate::Transform for ReduceElision {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| self.action(e));
+        relation.visit_mut_post(&mut |e| self.action(e));
         Ok(())
     }
 }
