@@ -441,12 +441,12 @@ lazy_static! {
                     Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(scale)),
                 })
             }),
-            (Numeric, Float32) => Implicit: CastNumericToFloat32,
-            (Numeric, Float64) => Implicit: CastNumericToFloat64,
-            (Numeric, Int16) => Assignment: CastNumericToInt16,
-            (Numeric, Int32) => Assignment: CastNumericToInt32,
-            (Numeric, Int64) => Assignment: CastNumericToInt64,
-            (Numeric, String) => Assignment: CastNumericToString
+            (Numeric, Float32) => Implicit: CastNumericToFloat32(func::CastNumericToFloat32),
+            (Numeric, Float64) => Implicit: CastNumericToFloat64(func::CastNumericToFloat64),
+            (Numeric, Int16) => Assignment: CastNumericToInt16(func::CastNumericToInt16),
+            (Numeric, Int32) => Assignment: CastNumericToInt32(func::CastNumericToInt32),
+            (Numeric, Int64) => Assignment: CastNumericToInt64(func::CastNumericToInt64),
+            (Numeric, String) => Assignment: CastNumericToString(func::CastNumericToString)
         }
     };
 }
