@@ -43,7 +43,7 @@ pub fn optimize_dataflow(
     // TODO: it would be useful for demand to be optimized after filters
     // that way demand only includes the columns that are still necessary after
     // the filters are applied.
-    optimize_dataflow_demand(dataflow);
+    optimize_dataflow_demand(dataflow)?;
 
     // A smaller logical optimization pass after projections and filters are
     // pushed down across views.
@@ -111,17 +111,21 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             let mut id_gen = crate::IdGen::default();
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
-            update_let.action(
-                dataflow.objects_to_build[index].view.as_inner_mut(),
-                &mut HashMap::new(),
-                &mut id_gen,
-            );
+            update_let
+                .action(
+                    dataflow.objects_to_build[index].view.as_inner_mut(),
+                    &mut HashMap::new(),
+                    &mut id_gen,
+                )
+                .expect("Expecting `update_let` to be infallible");
             // Assign new identifiers to the other relation.
-            update_let.action(
-                dataflow.objects_to_build[other].view.as_inner_mut(),
-                &mut HashMap::new(),
-                &mut id_gen,
-            );
+            update_let
+                .action(
+                    dataflow.objects_to_build[other].view.as_inner_mut(),
+                    &mut HashMap::new(),
+                    &mut id_gen,
+                )
+                .expect("Expecting `update_let` to be infallible");
             // Install the `new_local` name wherever `global_id` was used.
             dataflow.objects_to_build[other]
                 .view
@@ -182,7 +186,7 @@ fn optimize_dataflow_relations(
 /// Dataflows that exist for the sake of generating plan explanations do not
 /// have published outputs. In this case, we push demand information from views
 /// not depended on by other views to dataflow inputs.
-fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
+fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // Maps id -> union of known columns demanded from the source/view with the
     // corresponding id.
     let mut demand = HashMap::new();
@@ -212,7 +216,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
             .rev()
             .map(|build_desc| (Id::Global(build_desc.id), build_desc.view.as_inner_mut())),
         &mut demand,
-    );
+    )?;
 
     // Push demand information into the SourceDesc.
     for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
@@ -230,6 +234,8 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
             }
         }
     }
+
+    Ok(())
 }
 
 /// Pushes demand through views in `view_sequence` in order, removing
@@ -240,7 +246,8 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
 pub fn optimize_dataflow_demand_inner<'a, I>(
     view_sequence: I,
     demand: &mut HashMap<Id, BTreeSet<usize>>,
-) where
+) -> Result<(), TransformError>
+where
     I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
 {
     // Maps id -> The projection that was pushed down on the view with the
@@ -273,8 +280,10 @@ pub fn optimize_dataflow_demand_inner<'a, I>(
         projection_pushdown.update_projection_around_get(view, &applied_projection);
         // Types need to be updated after ProjectionPushdown
         // because the width of each view may have changed.
-        typ_update.action(view, &mut HashMap::new(), &mut IdGen::default());
+        typ_update.action(view, &mut HashMap::new(), &mut IdGen::default())?;
     }
+
+    Ok(())
 }
 
 /// Pushes predicate to dataflow inputs.
