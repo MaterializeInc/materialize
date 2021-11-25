@@ -67,7 +67,7 @@ impl CanonicalizeMfp {
                 }
                 canonicalize_predicates(&mut filter, &relation_type);
                 let all_errors = filter.iter().all(|p| p.is_literal_err());
-                let (retained, pushdown) = crate::predicate_pushdown::PredicatePushdown
+                let (retained, pushdown) = crate::predicate_pushdown::PredicatePushdown::default()
                     .push_filters_through_map(&map, &mut filter, mfp.input_arity, all_errors);
                 if !pushdown.is_empty() {
                     *relation = relation.take_dangerous().filter(pushdown);
