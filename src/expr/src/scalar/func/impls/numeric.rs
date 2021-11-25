@@ -15,8 +15,7 @@ use crate::EvalError;
 sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = true]
-    fn neg_numeric(a: Numeric) -> Numeric {
-        let mut a = a;
+    fn neg_numeric(mut a: Numeric) -> Numeric {
         numeric::cx_datum().neg(&mut a);
         numeric::munge_numeric(&mut a).unwrap();
         a
@@ -25,8 +24,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "abs"]
-    fn abs_numeric(a: Numeric) -> Numeric {
-        let mut a = a;
+    fn abs_numeric(mut a: Numeric) -> Numeric {
         numeric::cx_datum().abs(&mut a);
         a
     }
@@ -34,8 +32,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "ceilnumeric"]
-    fn ceil_numeric(a: Numeric) -> Numeric {
-        let mut a = a;
+    fn ceil_numeric(mut a: Numeric) -> Numeric {
         // ceil will be nop if has no fractional digits.
         if a.exponent() >= 0 {
             return a;
@@ -50,8 +47,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "expnumeric"]
-    fn exp_numeric(a: Numeric) -> Result<Numeric, EvalError> {
-        let mut a = a;
+    fn exp_numeric(mut a: Numeric) -> Result<Numeric, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.exp(&mut a);
         let cx_status = cx.status();
@@ -68,8 +64,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "floornumeric"]
-    fn floor_numeric(a: Numeric) -> Numeric {
-        let mut a = a;
+    fn floor_numeric(mut a: Numeric) -> Numeric {
         // floor will be nop if has no fractional digits.
         if a.exponent() >= 0 {
             return a;
@@ -124,8 +119,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "roundnumeric"]
-    fn round_numeric(a: Numeric) -> Numeric {
-        let mut a = a;
+    fn round_numeric(mut a: Numeric) -> Numeric {
         // round will be nop if has no fractional digits.
         if a.exponent() >= 0 {
             return a;
@@ -137,8 +131,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "sqrtnumeric"]
-    fn sqrt_numeric(a: Numeric) -> Result<Numeric, EvalError> {
-        let mut a = a;
+    fn sqrt_numeric(mut a: Numeric) -> Result<Numeric, EvalError> {
         if a.is_negative() {
             return Err(EvalError::NegSqrt);
         }

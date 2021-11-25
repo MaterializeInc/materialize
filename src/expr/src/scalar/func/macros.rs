@@ -33,6 +33,22 @@ macro_rules! sqlfunc {
     (
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
+        fn $fn_name:ident(mut $param_name:ident: $input_ty:ty) -> $output_ty:ty
+            $body:block
+    ) => {
+        sqlfunc!(
+            #[sqlname = $name]
+            #[preserves_uniqueness = $preserves_uniqueness]
+            fn $fn_name($param_name: $input_ty) -> $output_ty {
+                let mut $param_name = $param_name;
+                $body
+            }
+        );
+    };
+
+    (
+        #[sqlname = $name:expr]
+        #[preserves_uniqueness = $preserves_uniqueness:expr]
         fn $fn_name:ident($param_name:ident: $input_ty:ty) -> $output_ty:ty
             $body:block
     ) => {
