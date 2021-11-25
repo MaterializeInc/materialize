@@ -137,7 +137,7 @@ opt
 ----
 %0 =
 | Get x (u0)
-| Filter (#1 < #0)
+| Filter (#0 > #1)
 | Map -(#1)
 | Project (#0, #1, #3)
 
