@@ -125,8 +125,8 @@ lazy_static! {
 
         casts! {
             // BOOL
-            (Bool, Int32) => Explicit: CastBoolToInt32,
-            (Bool, String) => Assignment: CastBoolToString,
+            (Bool, Int32) => Explicit: CastBoolToInt32(func::CastBoolToInt32),
+            (Bool, String) => Assignment: CastBoolToString(func::CastBoolToString),
 
             //INT16
             (Int16, Int32) => Implicit: CastInt16ToInt32(func::CastInt16ToInt32),

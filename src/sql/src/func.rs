@@ -1391,7 +1391,7 @@ lazy_static! {
                         exprs.push(match ecx.scalar_type(&expr) {
                             // concat uses nonstandard bool -> string casts
                             // to match historical baggage in PostgreSQL.
-                            ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard),
+                            ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
                             // TODO(#7572): remove call to PadChar
                             ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar { length }),
                             _ => typeconv::to_string(ecx, expr)
