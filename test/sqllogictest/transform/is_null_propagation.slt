@@ -71,7 +71,7 @@ EXPLAIN SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) ag
 %5 = Let l2 =
 | Join %2 %3 %4 %0
 | | implementation = Differential %0 %2.() %3.() %4.()
-| Filter (#0 < #2)
+| Filter (#2 > #0)
 | Project (#1)
 | Reduce group=(#0)
 | | agg count(true)

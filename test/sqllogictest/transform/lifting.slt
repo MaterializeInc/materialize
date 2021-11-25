@@ -213,7 +213,7 @@ select c1, c1 + a from (select 1 as c1, x as c2, 3 as c3 from generate_series(1,
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| Map (#0 + 1), 1
+| Map (1 + #0), 1
 | Project (#2, #1)
 
 EOF
@@ -498,7 +498,7 @@ explain select distinct a1.a+2 from (select distinct a+1 as a, 123 as literal fr
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
-| Distinct group=((#0 + 3))
+| Distinct group=(((#0 + 1) + 2))
 
 EOF
 
@@ -519,7 +519,7 @@ explain select distinct a1.a+2, a1.literal from (select distinct a+1 as a, 123 a
 %0 =
 | Get materialize.public.t (u1)
 | Project (#0)
-| Distinct group=((#0 + 3))
+| Distinct group=(((#0 + 1) + 2))
 | Map 123
 
 EOF
