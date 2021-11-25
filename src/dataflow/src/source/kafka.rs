@@ -304,32 +304,62 @@ impl KafkaSourceReader {
         }
     }
 
-    /// This function polls from the next consumer for which a message is available. This function polls the set
-    /// round-robin: when a consumer is polled, it is placed at the back of the queue.
+    /// This function polls from the next consumer for which a message is available. This function
+    /// polls the set round-robin: when a consumer is polled, it is placed at the back of the
+    /// queue.
     ///
-    /// If a message has an offset that is smaller than the next expected offset for this consumer (and this partition)
-    /// we skip this message, and seek to the appropriate offset
+    /// If a message has an offset that is smaller than the next expected offset for this consumer
+    /// (and this partition) we skip this message, and seek to the appropriate offset
     fn get_next_kafka_message(
         &mut self,
     ) -> Result<NextMessage<Option<Vec<u8>>, Option<Vec<u8>>>, anyhow::Error> {
-        // Poll the consumer once. Since we split the consumer's partitions out into separate queues and poll those individually,
-        // we expect this poll to always return None - but it's necessary to drive logic that consumes from rdkafka's internal
-        // event queue, such as statistics callbacks.
+        let mut next_message = NextMessage::Pending;
+
+        // Poll the consumer once. We split the consumer's partitions out into separate queues and
+        // poll those individually, but it's still necessary to drive logic that consumes from
+        // rdkafka's internal event queue, such as statistics callbacks.
+        //
+        // Additionally, assigning topics and splitting them off into separate queues is not
+        // atomic, so we expect to see at least some messages to show up when polling the consumer
+        // directly.
         if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
             match result {
                 Err(e) => error!(
                     "kafka error when polling consumer for source: {} topic: {} : {}",
                     self.source_name, self.topic_name, e
                 ),
-                Ok(m) => error!(
-                    "unexpected receipt of kafka message from non-partitioned queue for source: {} topic: {} partition: {} offset: {}",
-                    self.source_name, self.topic_name, m.partition(), m.offset()
-                ),
+                Ok(message) => {
+                    let source_message = SourceMessage::from(&message);
+                    next_message = self.handle_message(source_message);
+                }
             }
         }
 
-        // Read any statistics JSON blobs generated via the rdkafka statistics
-        // callback.
+        self.update_stats();
+
+        let consumer_count = self.get_partition_consumers_count();
+        let mut attempts = 0;
+        while attempts < consumer_count {
+            // First, see if we have a message aleady, either from polling the consumer, above, or
+            // from polling the partition queues below.
+            if let NextMessage::Ready(_) = next_message {
+                // Found a message, exit the loop and return message
+                break;
+            }
+
+            let message = self.poll_from_next_queue();
+            attempts += 1;
+
+            if let Some(message) = message {
+                next_message = self.handle_message(message);
+            }
+        }
+
+        Ok(next_message)
+    }
+
+    /// Read any statistics JSON blobs generated via the rdkafka statistics callback.
+    fn update_stats(&mut self) {
         while let Ok(stats) = self.stats_rx.try_recv() {
             if let Some(logger) = self.logger.as_mut() {
                 logger.log(MaterializedEvent::KafkaSourceStatistics {
@@ -340,21 +370,25 @@ impl KafkaSourceReader {
                 self.last_stats = Some(stats);
             }
         }
+    }
 
-        let mut next_message = NextMessage::Pending;
-        let consumer_count = self.get_partition_consumers_count();
-        let mut attempts = 0;
-        while attempts < consumer_count {
-            let mut partition_queue = self.partition_consumers.pop_front().unwrap();
-            let message = match partition_queue.get_next_message() {
-                Err(e) => {
-                    let pid = partition_queue.pid();
-                    let last_offset = self
-                        .last_offsets
-                        .get(&pid)
-                        .expect("partition known to be installed");
+    /// Polls from the next partition queue and returns the message, if any.
+    ///
+    /// We maintain the list of partition queues in a queue, and add queues that we polled from to
+    /// the end of the queue. We thus swing through all available partition queues in a somewhat
+    /// fair manner.
+    fn poll_from_next_queue(&mut self) -> Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>> {
+        let mut partition_queue = self.partition_consumers.pop_front().unwrap();
 
-                    error!(
+        let message = match partition_queue.get_next_message() {
+            Err(e) => {
+                let pid = partition_queue.pid();
+                let last_offset = self
+                    .last_offsets
+                    .get(&pid)
+                    .expect("partition known to be installed");
+
+                error!(
                         "kafka error consuming from source: {} topic: {}: partition: {} last processed offset: {} : {}",
                         self.source_name,
                         self.topic_name,
@@ -362,70 +396,69 @@ impl KafkaSourceReader {
                         last_offset,
                         e
                     );
-                    None
-                }
-                Ok(m) => m,
-            };
+                None
+            }
+            Ok(m) => m,
+        };
 
-            if let Some(message) = message {
-                let partition = match message.partition {
-                    PartitionId::Kafka(pid) => pid,
-                    _ => unreachable!(),
-                };
+        self.partition_consumers.push_back(partition_queue);
 
-                // Convert the received offset back from a 1-indexed MzOffset to the correct offset.
-                let offset = message.offset.offset - 1;
-                // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
-                // a network issue or a new partition added, at which point the consumer may
-                // start processing the topic from the beginning, or we may see duplicate offsets
-                // At all times, the guarantee : if we see offset x, we have seen all offsets [0,x-1]
-                // that we are ever going to see holds.
-                // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
-                // is enabled, there may be gaps in the sequence.
-                // If we see an "old" offset, we ast-forward the consumer and skip that message
+        message
+    }
 
-                // Given the explicit consumer to partition assignment, we should never receive a message
-                // for a partition for which we have no metadata
-                assert!(self.last_offsets.contains_key(&partition));
+    /// Checks if the given message is viable for emission. This checks if the message offset is
+    /// past the expected offset and seeks the consumer if it is not.
+    fn handle_message(
+        &mut self,
+        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
+        let partition = match message.partition {
+            PartitionId::Kafka(pid) => pid,
+            _ => unreachable!(),
+        };
 
-                let last_offset_ref = self
-                    .last_offsets
-                    .get_mut(&partition)
-                    .expect("partition known to be installed");
+        // Convert the received offset back from a 1-indexed MzOffset to the correct offset.
+        let offset = message.offset.offset - 1;
+        // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
+        // a network issue or a new partition added, at which point the consumer may
+        // start processing the topic from the beginning, or we may see duplicate offsets
+        // At all times, the guarantee : if we see offset x, we have seen all offsets [0,x-1]
+        // that we are ever going to see holds.
+        // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
+        // is enabled, there may be gaps in the sequence.
+        // If we see an "old" offset, we ast-forward the consumer and skip that message
 
-                let last_offset = *last_offset_ref;
-                if offset <= last_offset {
-                    info!(
-                        "Kafka message before expected offset, skipping: \
+        // Given the explicit consumer to partition assignment, we should never receive a message
+        // for a partition for which we have no metadata
+        assert!(self.last_offsets.contains_key(&partition));
+
+        let last_offset_ref = self
+            .last_offsets
+            .get_mut(&partition)
+            .expect("partition known to be installed");
+
+        let last_offset = *last_offset_ref;
+        if offset <= last_offset {
+            info!(
+                "Kafka message before expected offset, skipping: \
                              source {} (reading topic {}, partition {}) \
                              received offset {} expected offset {:?}",
-                        self.source_name,
-                        self.topic_name,
-                        partition,
-                        offset,
-                        last_offset + 1,
-                    );
-                    // Seek to the *next* offset (aka last_offset + 1) that we have not yet processed
-                    self.fast_forward_consumer(partition, last_offset + 1);
-                    // We explicitly should not consume the message as we have already processed it
-                    // However, we make sure to activate the source to make sure that we get a chance
-                    // to read from this consumer again (even if no new data arrives)
-                    next_message = NextMessage::TransientDelay;
-                } else {
-                    next_message = NextMessage::Ready(message);
-                    *last_offset_ref = offset;
-                }
-            }
-            self.partition_consumers.push_back(partition_queue);
-            if let NextMessage::Ready(_) = next_message {
-                // Found a message, exit the loop and return message
-                break;
-            } else {
-                attempts += 1;
-            }
+                self.source_name,
+                self.topic_name,
+                partition,
+                offset,
+                last_offset + 1,
+            );
+            // Seek to the *next* offset (aka last_offset + 1) that we have not yet processed
+            self.fast_forward_consumer(partition, last_offset + 1);
+            // We explicitly should not consume the message as we have already processed it
+            // However, we make sure to activate the source to make sure that we get a chance
+            // to read from this consumer again (even if no new data arrives)
+            NextMessage::TransientDelay
+        } else {
+            *last_offset_ref = offset;
+            NextMessage::Ready(message)
         }
-
-        Ok(next_message)
     }
 }
 
