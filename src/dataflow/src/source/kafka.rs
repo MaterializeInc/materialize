@@ -592,3 +592,96 @@ impl GlueConsumerContext {
 }
 
 impl ConsumerContext for GlueConsumerContext {}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use rdkafka::consumer::{BaseConsumer, Consumer};
+    use rdkafka::{ClientConfig, Message, Offset, TopicPartitionList};
+    use uuid::Uuid;
+
+    // Splitting off a partition queue with an `Offset` that is not `Offset::Beginning` seems to
+    // lead to a race condition where sometimes we receive messages from polling the main consumer
+    // instead of on the partition queue. This can be surfaced by running the test in a loop (in
+    // the dataflow directory) using:
+    //
+    // cargo stress --lib --release source::kafka::tests::reproduce_kafka_queue_issue
+    //
+    // cargo-stress can be installed via `cargo install cargo-stress`
+    //
+    // You need to set up a topic "queue-test" with 1000 "hello" messages in it. Obviously, running
+    // this test requires a running Kafka instance at localhost:9092.
+    #[test]
+    #[ignore]
+    fn demonstrate_kafka_queue_race_condition() -> Result<(), anyhow::Error> {
+        let topic_name = "queue-test";
+        let pid = 0;
+
+        let mut kafka_config = ClientConfig::new();
+        kafka_config.set("bootstrap.servers", "localhost:9092".to_string());
+        kafka_config.set("enable.auto.commit", "false");
+        kafka_config.set("group.id", Uuid::new_v4().to_string());
+        kafka_config.set("fetch.message.max.bytes", "100");
+        let consumer: BaseConsumer<_> = kafka_config.create()?;
+
+        let consumer = Arc::new(consumer);
+
+        let mut partition_list = TopicPartitionList::new();
+        // Using Offset:Beginning here will work fine, only Offset:Offset(0) leads to the race
+        // condition.
+        partition_list.add_partition_offset(topic_name, pid, Offset::Offset(0))?;
+
+        consumer.assign(&partition_list)?;
+
+        let partition_queue = consumer
+            .split_partition_queue(topic_name, pid)
+            .expect("missing partition queue");
+
+        let expected_messages = 1_000;
+
+        let mut common_queue_count = 0;
+        let mut partition_queue_count = 0;
+
+        loop {
+            if let Some(msg) = consumer.poll(Duration::from_millis(0)) {
+                match msg {
+                    Ok(msg) => {
+                        let _payload =
+                            std::str::from_utf8(msg.payload().expect("missing payload"))?;
+                        if partition_queue_count > 0 {
+                            anyhow::bail!("Got message from common queue after we internally switched to partition queue.");
+                        }
+
+                        common_queue_count += 1;
+                    }
+                    Err(err) => anyhow::bail!("{}", err),
+                }
+            }
+
+            match partition_queue.poll(Duration::from_millis(0)) {
+                Some(Ok(msg)) => {
+                    let _payload = std::str::from_utf8(msg.payload().expect("missing payload"))?;
+                    partition_queue_count += 1;
+                }
+                Some(Err(err)) => anyhow::bail!("{}", err),
+                _ => (),
+            }
+
+            if (common_queue_count + partition_queue_count) == expected_messages {
+                break;
+            }
+        }
+
+        assert!(
+            common_queue_count == 0,
+            "Got {} out of {} messages from common queue. Partition queue: {}",
+            common_queue_count,
+            expected_messages,
+            partition_queue_count
+        );
+
+        Ok(())
+    }
+}
