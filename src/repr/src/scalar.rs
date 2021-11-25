@@ -919,10 +919,16 @@ pub enum ScalarType {
     RegType,
 }
 
-/// A bridge between native Rust types and the SQL runtime types that are wrapped in Datums
-pub trait DatumType<'a, E>: Sized {
+/// Types that implement this trait can be stored in an SQL column with the specified ColumnType
+pub trait AsColumnType {
     /// The SQL column type of this Rust type
     fn as_column_type() -> ColumnType;
+}
+
+/// A bridge between native Rust types and SQL runtime types represented in Datums
+pub trait DatumType<'a, E>: Sized {
+    /// Whether this Rust type can represent NULL values
+    fn nullable() -> bool;
 
     /// Try to convert a Result whose Ok variant is a Datum into this native Rust type (Self). If
     /// it fails the error variant will contain the original result.
@@ -932,9 +938,15 @@ pub trait DatumType<'a, E>: Sized {
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E>;
 }
 
-impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Option<B> {
+impl<B: AsColumnType> AsColumnType for Option<B> {
     fn as_column_type() -> ColumnType {
         B::as_column_type().nullable(true)
+    }
+}
+
+impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Option<B> {
+    fn nullable() -> bool {
+        true
     }
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
@@ -951,9 +963,15 @@ impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Option<B> {
     }
 }
 
-impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
+impl<E, B: AsColumnType> AsColumnType for Result<B, E> {
     fn as_column_type() -> ColumnType {
         B::as_column_type()
+    }
+}
+
+impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
+    fn nullable() -> bool {
+        B::nullable()
     }
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         B::try_from_result(res).map(Ok)
@@ -966,9 +984,15 @@ impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
 /// Macro to derive DatumType for all Datum variants that are simple Copy types
 macro_rules! impl_datum_type_copy {
     ($lt:lifetime, $native:ty, $variant:ident) => {
-        impl<$lt, E> DatumType<$lt, E> for $native {
+        impl<$lt> AsColumnType for $native {
             fn as_column_type() -> ColumnType {
                 ScalarType::$variant.nullable(false)
+            }
+        }
+
+        impl<$lt, E> DatumType<$lt, E> for $native {
+            fn nullable() -> bool {
+                false
             }
 
             fn try_from_result(res: Result<Datum<$lt>, E>) -> Result<Self, Result<Datum<$lt>, E>> {
@@ -997,9 +1021,66 @@ impl_datum_type_copy!(DateTime<Utc>, TimestampTz);
 impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
 
-impl<'a, E> DatumType<'a, E> for bool {
+impl<'a, E> DatumType<'a, E> for Datum<'a> {
+    fn nullable() -> bool {
+        true
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(datum) => Ok(datum),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(self)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for DatumList<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::List(list)) => Ok(list),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::List(self))
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for DatumMap<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Map(map)) => Ok(map),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::Map(self))
+    }
+}
+
+impl AsColumnType for bool {
     fn as_column_type() -> ColumnType {
         ScalarType::Bool.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for bool {
+    fn nullable() -> bool {
+        false
     }
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
@@ -1019,9 +1100,15 @@ impl<'a, E> DatumType<'a, E> for bool {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for String {
+impl AsColumnType for String {
     fn as_column_type() -> ColumnType {
         ScalarType::String.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for String {
+    fn nullable() -> bool {
+        false
     }
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
@@ -1036,9 +1123,15 @@ impl<'a, E> DatumType<'a, E> for String {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Vec<u8> {
+impl AsColumnType for Vec<u8> {
     fn as_column_type() -> ColumnType {
         ScalarType::Bytes.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for Vec<u8> {
+    fn nullable() -> bool {
+        false
     }
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
@@ -1053,9 +1146,15 @@ impl<'a, E> DatumType<'a, E> for Vec<u8> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Numeric {
+impl AsColumnType for Numeric {
     fn as_column_type() -> ColumnType {
         ScalarType::Numeric { scale: None }.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for Numeric {
+    fn nullable() -> bool {
+        false
     }
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
@@ -1070,9 +1169,15 @@ impl<'a, E> DatumType<'a, E> for Numeric {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Oid {
+impl AsColumnType for Oid {
     fn as_column_type() -> ColumnType {
         ScalarType::Oid.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for Oid {
+    fn nullable() -> bool {
+        false
     }
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
@@ -1087,9 +1192,15 @@ impl<'a, E> DatumType<'a, E> for Oid {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for RegProc {
+impl AsColumnType for RegProc {
     fn as_column_type() -> ColumnType {
         ScalarType::RegProc.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for RegProc {
+    fn nullable() -> bool {
+        false
     }
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
@@ -1104,9 +1215,15 @@ impl<'a, E> DatumType<'a, E> for RegProc {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for RegType {
+impl AsColumnType for RegType {
     fn as_column_type() -> ColumnType {
         ScalarType::RegType.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for RegType {
+    fn nullable() -> bool {
+        false
     }
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {

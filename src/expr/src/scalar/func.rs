@@ -3451,13 +3451,13 @@ trait EagerUnaryFunc<'a> {
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {
         // If the input is not nullable then nulls are propagated
-        !Self::Input::as_column_type().nullable
+        !Self::Input::nullable()
     }
 
     /// Whether this function will produce NULL on non-NULL input
     fn introduces_nulls(&self) -> bool {
         // If the output is nullable then nulls can be introduced
-        Self::Output::as_column_type().nullable
+        Self::Output::nullable()
     }
 
     /// Whether this function preserves uniqueness
