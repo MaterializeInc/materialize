@@ -74,19 +74,19 @@ real backtrace.
 
 ## macOS agent
 
-We run one macOS agent on Buildkite, via [MacStadium], to produce our macOS
-binaries. This agent is manually configured. Ask Nikhil for access if you need
+We run two macOS agents on Buildkite, via [MacStadium], to produce our macOS
+binaries. These agents are manually configured. Ask Nikhil for access if you need
 it.
 
 The basic configuration is as follows:
 
 ```
-% brew tap buildkite/buildkite
-% brew install --token='<redacted>' buildkite-agent
-% brew services start buildkite-agent
+% brew install buildkite/buildkite/buildkite-agent
 % vim /usr/local/etc/buildkite-agent/buildkite-agent.cfg
-tags="queue=mac"
+tags="queue=mac,queue=mac-VERSION"
+name="mac-X"
 <otherwise edit to match config above>
+% brew services start buildkite-agent
 % brew install cmake [other materialize dependencies...]
 % curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 % cat /usr/local/etc/buildkite-agent/hooks/environment
@@ -95,8 +95,22 @@ export AWS_SECRET_ACCESS_KEY=<redacted>
 export PATH=$HOME/.cargo/bin:$PATH
 ```
 
-Be sure to install an SSH key with the appropriate GitHub access in
-`~/.ssh/id_rsa`, too.
+Our goal is to build binaries that will run on the last three macOS versions on
+both Intel and ARM machines. This matches what Homebrew does. That means
+building the binaries on a machine running the oldest version of macOS that we
+intend to support. (macOS is backwards compatible but not forwards compatible:
+binaries built on a newer version of macOS will not run on any older versions of
+macOS.)
+
+Normally we'd run one such build agent on an x86_64 machine and instruct it to
+build both x86_64 binaries and cross-compile aarch64 binaries. But the situation
+is a bit complicated right now, since the ARM architecture has only been
+supported for the last *two* releases, not three. So currently we run two
+build agents, both x86_64 machines, one with Mojave installed and one with
+Big Sur installed. We use the Mojave agent to build x86_64 binaries, and the
+Big Sur agent to build aarch64 binaries. When the next version of macOS drops
+in 2022, we can decommission the Mojave agent and use the Big Sur agent to build
+both x86_64 and aarch64 binaries.
 
 The agent runs as the default MacStadium `administrator` user, since there isn't
 an easy way to isolate builds on macOS.
