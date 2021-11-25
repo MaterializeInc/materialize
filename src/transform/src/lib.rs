@@ -184,7 +184,7 @@ impl Default for FuseAndCollapse {
             // transforms.
             transforms: vec![
                 Box::new(crate::projection_extraction::ProjectionExtraction),
-                Box::new(crate::projection_lifting::ProjectionLifting),
+                Box::new(crate::projection_lifting::ProjectionLifting::default()),
                 Box::new(crate::fusion::map::Map),
                 Box::new(crate::fusion::negate::Negate),
                 Box::new(crate::fusion::filter::Filter),

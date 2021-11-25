@@ -246,7 +246,9 @@ mod tests {
             "ProjectionExtraction" => Ok(Box::new(
                 transform::projection_extraction::ProjectionExtraction,
             )),
-            "ProjectionLifting" => Ok(Box::new(transform::projection_lifting::ProjectionLifting)),
+            "ProjectionLifting" => Ok(Box::new(
+                transform::projection_lifting::ProjectionLifting::default(),
+            )),
             "ProjectionPushdown" => {
                 Ok(Box::new(transform::projection_pushdown::ProjectionPushdown))
             }

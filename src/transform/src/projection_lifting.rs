@@ -15,11 +15,28 @@ use std::collections::HashMap;
 use std::mem;
 
 use crate::TransformArgs;
-use expr::{Id, MirRelationExpr};
+use expr::{Id, MirRelationExpr, RECURSION_LIMIT};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Hoist projections through operators.
 #[derive(Debug)]
-pub struct ProjectionLifting;
+pub struct ProjectionLifting {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for ProjectionLifting {
+    fn default() -> ProjectionLifting {
+        ProjectionLifting {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for ProjectionLifting {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for ProjectionLifting {
     fn transform(
