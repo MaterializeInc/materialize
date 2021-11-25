@@ -965,36 +965,37 @@ impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
 
 /// Macro to derive DatumType for all Datum variants that are simple Copy types
 macro_rules! impl_datum_type_copy {
-    ($(($native:ty, $variant:ident)),+) => {
-        $(
-            impl<'a, E> DatumType<'a, E> for $native {
-                fn as_column_type() -> ColumnType {
-                    ScalarType::$variant.nullable(false)
-                }
+    ($lt:lifetime, $native:ty, $variant:ident) => {
+        impl<$lt, E> DatumType<$lt, E> for $native {
+            fn as_column_type() -> ColumnType {
+                ScalarType::$variant.nullable(false)
+            }
 
-                fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
-                    match res {
-                        Ok(Datum::$variant(f)) => Ok(f.into()),
-                        _ => Err(res),
-                    }
-                }
-
-                fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-                    Ok(Datum::$variant(self.into()))
+            fn try_from_result(res: Result<Datum<$lt>, E>) -> Result<Self, Result<Datum<$lt>, E>> {
+                match res {
+                    Ok(Datum::$variant(f)) => Ok(f.into()),
+                    _ => Err(res),
                 }
             }
-        )+
-    }
+
+            fn into_result(self, _temp_storage: &$lt RowArena) -> Result<Datum<$lt>, E> {
+                Ok(Datum::$variant(self.into()))
+            }
+        }
+    };
+    ($native:ty, $variant:ident) => {
+        impl_datum_type_copy!('a, $native, $variant);
+    };
 }
 
-impl_datum_type_copy!(
-    (f32, Float32),
-    (f64, Float64),
-    (i16, Int16),
-    (i32, Int32),
-    (i64, Int64),
-    (DateTime<Utc>, TimestampTz)
-);
+impl_datum_type_copy!(f32, Float32);
+impl_datum_type_copy!(f64, Float64);
+impl_datum_type_copy!(i16, Int16);
+impl_datum_type_copy!(i32, Int32);
+impl_datum_type_copy!(i64, Int64);
+impl_datum_type_copy!(DateTime<Utc>, TimestampTz);
+impl_datum_type_copy!('a, &'a str, String);
+impl_datum_type_copy!('a, &'a [u8], Bytes);
 
 impl<'a, E> DatumType<'a, E> for bool {
     fn as_column_type() -> ColumnType {
