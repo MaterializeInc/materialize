@@ -24,13 +24,30 @@
 
 use std::collections::HashMap;
 
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformArgs;
 
 /// Remove redundant collections of distinct elements from joins.
 #[derive(Debug)]
-pub struct RedundantJoin;
+pub struct RedundantJoin {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for RedundantJoin {
+    fn default() -> RedundantJoin {
+        RedundantJoin {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for RedundantJoin {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for RedundantJoin {
     fn transform(

@@ -208,7 +208,7 @@ impl Default for FuseAndCollapse {
                 // redundant joins from being removed. When predicate pushdown
                 // no longer works against redundant join, check if it is still
                 // necessary to run RedundantJoin here.
-                Box::new(crate::redundant_join::RedundantJoin),
+                Box::new(crate::redundant_join::RedundantJoin::default()),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
@@ -350,7 +350,7 @@ impl Optimizer {
                 transforms: vec![
                     // Projection pushdown may unblock fusing joins and unions.
                     Box::new(crate::fusion::join::Join),
-                    Box::new(crate::redundant_join::RedundantJoin),
+                    Box::new(crate::redundant_join::RedundantJoin::default()),
                     // Redundant join produces projects that need to be fused.
                     Box::new(crate::fusion::project::Project),
                     Box::new(crate::fusion::union::Union),
