@@ -98,28 +98,6 @@ steps:
           composition: cluster
           run: cluster-smoke
 
-  - id: testdrive-proxy
-    label: ":squid: testdrive proxy"
-    depends_on: build
-    timeout_in_minutes: 30
-    inputs: [test/testdrive]
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: testdrive
-          run: ci-proxy
-
-  - id: testdrive-proxy-failure
-    label: ":squid::boom: testdrive proxy failure"
-    depends_on: build
-    timeout_in_minutes: 30
-    inputs: [test/testdrive/proxy]
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: testdrive
-          run: ci-proxy
-
   - id: kafka-ssl
     label: ":lock: Kafka SSL smoke test"
     depends_on: build

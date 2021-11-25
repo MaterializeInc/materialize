@@ -25,4 +25,4 @@ error trying to connect: tcp connect error: Cannot assign requested address (os 
     token = '${testdrive.aws-token}'
   )
   FORMAT TEXT;
-Using statically provided credentials: retrieving AWS account ID: Error during dispatch: error trying to connect: tcp connect error: Cannot assign requested address (os error 99)
+Cannot assign requested address (os error 99)

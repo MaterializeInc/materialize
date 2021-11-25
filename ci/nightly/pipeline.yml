@@ -63,3 +63,11 @@
         composition: cluster
         run: cluster-testdrive
   timeout_in_minutes: 30
+
+- id: proxy
+  label: ":squid: proxy"
+  plugins:
+    - ./ci/plugins/scratch-aws-access: ~
+    - ./ci/plugins/mzcompose:
+        composition: proxy
+        run: proxy-ci

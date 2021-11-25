@@ -685,20 +685,28 @@ class Materialized(PythonService):
         memory: Optional[str] = None,
         data_directory: str = "/share/mzdata",
         options: str = "",
-        environment: List[str] = [
-            "MZ_LOG_FILTER",
-            "MZ_SOFT_ASSERTIONS=1",
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN",
-            "ALL_PROXY",
-            "NO_PROXY",
-        ],
-        volumes: List[str] = DEFAULT_MZ_VOLUMES,
+        environment: Optional[List[str]] = None,
+        environment_extra: Optional[List[str]] = None,
+        volumes: Optional[List[str]] = None,
     ) -> None:
+        if environment is None:
+            environment = [
+                "MZ_LOG_FILTER",
+                "MZ_SOFT_ASSERTIONS=1",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+            ]
+
         # Make sure MZ_DEV=1 is always present
         if "MZ_DEV=1" not in environment:
             environment.append("MZ_DEV=1")
+
+        if environment_extra:
+            environment.extend(environment_extra)
+
+        if volumes is None:
+            volumes = DEFAULT_MZ_VOLUMES
 
         command = f"--data-directory={data_directory} {options} --disable-telemetry --experimental --listen-addr 0.0.0.0:{port} --timestamp-frequency 100ms"
 
@@ -736,14 +744,19 @@ class Coordd(PythonService):
         memory: Optional[str] = None,
         data_directory: str = "/share/mzdata",
         options: str = "",
-        environment: List[str] = [],
-        volumes: List[str] = DEFAULT_MZ_VOLUMES,
+        environment: Optional[List[str]] = None,
+        volumes: Optional[List[str]] = None,
         mzbuild: str = "coordd",
-        depends_on: List[str] = [],
     ) -> None:
+        if environment is None:
+            environment = []
+
         # Make sure MZ_DEV=1 is always present
         if "MZ_DEV=1" not in environment:
             environment.append("MZ_DEV=1")
+
+        if volumes is None:
+            volumes = DEFAULT_MZ_VOLUMES
 
         command = (
             f"--data-directory={data_directory} {options} --listen-addr 0.0.0.0:{port}"
@@ -767,7 +780,6 @@ class Coordd(PythonService):
                 "ports": [port],
                 "environment": environment,
                 "volumes": volumes,
-                "depends_on": depends_on,
             }
         )
 
@@ -783,16 +795,21 @@ class Dataflowd(PythonService):
         ports: List[int] = [6876],
         memory: Optional[str] = None,
         options: str = "",
-        environment: List[str] = [
-            "MZ_LOG_FILTER",
-            "MZ_SOFT_ASSERTIONS=1",
-        ],
-        # We currently give dataflowd access to /tmp so that it can load CSV files
-        # but this requirement is expected to go away in the future.
-        volumes: List[str] = DEFAULT_MZ_VOLUMES,
-        depends_on: List[str] = [],
+        environment: Optional[List[str]] = None,
+        volumes: Optional[List[str]] = None,
     ) -> None:
         command = f"{options}"
+
+        if environment is None:
+            environment = [
+                "MZ_LOG_FILTER",
+                "MZ_SOFT_ASSERTIONS=1",
+            ]
+
+        if volumes is None:
+            # We currently give dataflowd access to /tmp so that it can load CSV files
+            # but this requirement is expected to go away in the future.
+            volumes = DEFAULT_MZ_VOLUMES
 
         config: PythonServiceConfig = (
             {"image": image} if image else {"mzbuild": "dataflowd"}
@@ -974,6 +991,25 @@ class Toxiproxy(PythonService):
         )
 
 
+class Squid(PythonService):
+    """
+    An HTTP forward proxy, used in some workflows to test whether Materialize can correctly route
+    traffic via the proxy.
+    """
+
+    def __init__(
+        self,
+        name: str = "squid",
+        image: str = "sameersbn/squid:3.5.27-2",
+        port: int = 3128,
+        volumes: List[str] = ["./squid.conf:/etc/squid/squid.conf"],
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={"image": image, "ports": [port], "volumes": volumes},
+        )
+
+
 class Localstack(PythonService):
     def __init__(
         self,
@@ -1005,19 +1041,26 @@ class Testdrive(PythonService):
         validate_catalog: bool = True,
         entrypoint: Optional[List[str]] = None,
         shell_eval: Optional[bool] = False,
-        environment: List[str] = [
-            "TD_TEST",
-            "TMPDIR=/share/tmp",
-            "MZ_LOG_FILTER",
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN",
-            "SA_PASSWORD",
-            "TOXIPROXY_BYTES_ALLOWED",
-            "UPGRADE_FROM_VERSION",
-        ],
-        volumes: List[str] = [*DEFAULT_MZ_VOLUMES, ".:/workdir"],
+        environment: Optional[List[str]] = None,
+        volumes: Optional[List[str]] = None,
+        volumes_extra: Optional[List[str]] = None,
     ) -> None:
+        if environment is None:
+            environment = [
+                "TD_TEST",
+                "TMPDIR=/share/tmp",
+                "MZ_LOG_FILTER",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+                "SA_PASSWORD",
+                "TOXIPROXY_BYTES_ALLOWED",
+                "UPGRADE_FROM_VERSION",
+            ]
+
+        if volumes is None:
+            volumes = [*DEFAULT_MZ_VOLUMES, ".:/workdir"]
+
         if entrypoint is None:
             entrypoint = [
                 "testdrive",
@@ -1041,6 +1084,9 @@ class Testdrive(PythonService):
 
         if default_timeout:
             entrypoint.append(f"--default-timeout {default_timeout}")
+
+        if volumes_extra:
+            volumes.extend(volumes_extra)
 
         super().__init__(
             name=name,

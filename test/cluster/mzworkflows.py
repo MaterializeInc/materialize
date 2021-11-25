@@ -24,20 +24,17 @@ mz_daemons = [
         name="dataflowd_1",
         options="--workers 2 --processes 2 --process 0 --hosts dataflowd_1:2101 dataflowd_2:2101",
         hostname="dataflowd_1",
-        depends_on=["dataflowd_2"],
         ports=[6876, 2101],
     ),
     Dataflowd(
         name="dataflowd_2",
         options="--workers 2 --processes 2 --process 1 --hosts dataflowd_1:2101 dataflowd_2:2101",
         hostname="dataflowd_2",
-        depends_on=["dataflowd_1"],
         ports=[6876, 2101],
     ),
     Coordd(
         name="materialized",
         options="--workers 4 --dataflowd-addr dataflowd_1:6876 dataflowd_2:6876",
-        depends_on=["dataflowd_1", "dataflowd_2"],
     ),
 ]
 
@@ -69,6 +66,7 @@ def workflow_cluster_testdrive(w: Workflow):
 
 
 def test_cluster(w: Workflow, glob: str):
-    w.start_and_wait_for_tcp(services=mz_daemons)
+    w.start_services(services=["dataflowd_1", "dataflowd_2"])
+    w.start_services(services=["materialized"])
     w.wait_for_mz()
     w.run_service(service="testdrive-svc", command=glob)
