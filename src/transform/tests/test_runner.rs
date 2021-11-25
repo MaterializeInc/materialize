@@ -357,11 +357,13 @@ mod tests {
         dataflow: &mut Vec<(GlobalId, MirRelationExpr)>,
         cat: &TestCatalog,
     ) -> Result<String, String> {
-        let result = match transform {
+        match transform {
             "filter" => {
                 let mut predicates = HashMap::new();
-                optimize_dataflow_filters_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut predicates);
-                format!("Pushed-down predicates:\n{}", log_pushed_outside_of_dataflow(predicates, cat))
+                match optimize_dataflow_filters_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut predicates) {
+                    Ok(()) => Ok(format!("Pushed-down predicates:\n{}", log_pushed_outside_of_dataflow(predicates, cat))),
+                    Err(e) => Err(format!("{}", e)),
+                }
             }
             "project" => {
                 let mut demand = HashMap::new();
@@ -369,14 +371,13 @@ mod tests {
                     demand.insert(Id::Global(*id), (0..rel.arity()).collect());
                 }
                 optimize_dataflow_demand_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut demand);
-                format!("Pushed-down demand:\n{}", log_pushed_outside_of_dataflow(demand, cat))
+                Ok(format!("Pushed-down demand:\n{}", log_pushed_outside_of_dataflow(demand, cat)))
             }
             _ => return Err(format!(
                 "no cross-view transform named {} (you might have to add it to apply_cross_view_transform)",
                 transform
             ))
-        };
-        Ok(result)
+        }
     }
 
     /// Converts a map of (source) -> (information pushed to source) into a string.

@@ -93,8 +93,7 @@ impl crate::Transform for PredicatePushdown {
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut empty = HashMap::new();
-        self.action(relation, &mut empty);
-        Ok(())
+        self.action(relation, &mut empty)
     }
 }
 
@@ -113,7 +112,7 @@ impl PredicatePushdown {
         &self,
         relation: &mut MirRelationExpr,
         get_predicates: &mut HashMap<Id, HashSet<MirScalarExpr>>,
-    ) {
+    ) -> Result<(), crate::TransformError> {
         // In the case of Filter or Get we have specific work to do;
         // otherwise we should recursively descend.
         match relation {
@@ -137,7 +136,7 @@ impl PredicatePushdown {
                             .take_dangerous()
                             .filter(std::mem::replace(predicates, Vec::new()));
 
-                        self.action(input, get_predicates);
+                        self.action(input, get_predicates)?;
                     }
                     MirRelationExpr::Get { id, .. } => {
                         // We can report the predicates upward in `get_predicates`,
@@ -275,7 +274,7 @@ impl PredicatePushdown {
                         *inputs = new_inputs;
 
                         // Recursively descend on the join
-                        self.action(input, get_predicates);
+                        self.action(input, get_predicates)?;
 
                         // remove all predicates that were pushed down from the current Filter node
                         std::mem::swap(&mut retain, predicates);
@@ -332,7 +331,7 @@ impl PredicatePushdown {
                         if !push_down.is_empty() {
                             *inner = Box::new(inner.take_dangerous().filter(push_down));
                         }
-                        self.action(inner, get_predicates);
+                        self.action(inner, get_predicates)?;
 
                         // remove all predicates that were pushed down from the current Filter node
                         std::mem::swap(&mut retain, predicates);
@@ -347,7 +346,7 @@ impl PredicatePushdown {
                             .filter(predicates)
                             .project(outputs.clone());
 
-                        self.action(relation, get_predicates);
+                        self.action(relation, get_predicates)?;
                     }
                     MirRelationExpr::Filter {
                         input,
@@ -359,7 +358,7 @@ impl PredicatePushdown {
                                 .into_iter()
                                 .chain(predicates2.clone().into_iter()),
                         );
-                        self.action(relation, get_predicates);
+                        self.action(relation, get_predicates)?;
                     }
                     MirRelationExpr::Map { input, scalars } => {
                         let (retained, pushdown) = self.push_filters_through_map(
@@ -373,7 +372,7 @@ impl PredicatePushdown {
                         if !pushdown.is_empty() {
                             result = result.filter(pushdown);
                         }
-                        self.action(&mut result, get_predicates);
+                        self.action(&mut result, get_predicates)?;
                         result = result.map(scalars);
                         if !retained.is_empty() {
                             result = result.filter(retained);
@@ -393,24 +392,24 @@ impl PredicatePushdown {
                         }
 
                         // ... and keep pushing predicates down
-                        self.action(input, get_predicates);
+                        self.action(input, get_predicates)?;
                     }
                     MirRelationExpr::Union { base, inputs } => {
                         let predicates = std::mem::replace(predicates, Vec::new());
                         *base = Box::new(base.take_dangerous().filter(predicates.clone()));
-                        self.action(base, get_predicates);
+                        self.action(base, get_predicates)?;
                         for input in inputs {
                             *input = input.take_dangerous().filter(predicates.clone());
-                            self.action(input, get_predicates);
+                            self.action(input, get_predicates)?;
                         }
                     }
                     MirRelationExpr::Negate { input: inner } => {
                         let predicates = std::mem::replace(predicates, Vec::new());
                         *relation = inner.take_dangerous().filter(predicates).negate();
-                        self.action(relation, get_predicates);
+                        self.action(relation, get_predicates)?;
                     }
                     x => {
-                        x.visit_mut_children(|e| self.action(e, get_predicates));
+                        x.try_visit_mut_children(|e| self.action(e, get_predicates))?;
                     }
                 }
 
@@ -421,6 +420,8 @@ impl PredicatePushdown {
                     }
                     _ => {}
                 }
+
+                Ok(())
             }
             MirRelationExpr::Get { id, .. } => {
                 // Purge all predicates associated with the id.
@@ -428,10 +429,12 @@ impl PredicatePushdown {
                     .entry(*id)
                     .or_insert_with(HashSet::new)
                     .clear();
+
+                Ok(())
             }
             MirRelationExpr::Let { id, body, value } => {
                 // Push predicates and collect intersection at `Get`s.
-                self.action(body, get_predicates);
+                self.action(body, get_predicates)?;
 
                 // `get_predicates` should now contain the intersection
                 // of predicates at each *use* of the binding. If it is
@@ -457,7 +460,7 @@ impl PredicatePushdown {
                 }
 
                 // Continue recursively on the value.
-                self.action(value, get_predicates);
+                self.action(value, get_predicates)
             }
             MirRelationExpr::Join {
                 inputs,
@@ -489,7 +492,7 @@ impl PredicatePushdown {
                         > 1
                     {
                         relation.take_safely();
-                        return;
+                        return Ok(());
                     }
 
                     let runtime_constants = equivalences[equivalence_pos]
@@ -689,12 +692,14 @@ impl PredicatePushdown {
                 *inputs = new_inputs;
                 // Recursively descend on each of the inputs.
                 for input in inputs.iter_mut() {
-                    self.action(input, get_predicates);
+                    self.action(input, get_predicates)?;
                 }
+
+                Ok(())
             }
             x => {
                 // Recursively descend.
-                x.visit_mut_children(|e| self.action(e, get_predicates));
+                x.try_visit_mut_children(|e| self.action(e, get_predicates))
             }
         }
     }
