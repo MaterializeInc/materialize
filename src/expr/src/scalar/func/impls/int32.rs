@@ -8,7 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use crate::EvalError;
-use repr::strconv;
+use repr::{
+    adt::system::{Oid, RegProc, RegType},
+    strconv,
+};
 
 sqlfunc!(
     #[sqlname = "-"]
@@ -55,6 +58,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "i32toi16"]
+    #[preserves_uniqueness = true]
     fn cast_int32_to_int16(a: i32) -> Result<i16, EvalError> {
         i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
     }
@@ -75,5 +79,29 @@ sqlfunc!(
         let mut buf = String::new();
         strconv::format_int32(&mut buf, a);
         buf
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "i32tooid"]
+    #[preserves_uniqueness = true]
+    fn cast_int32_to_oid(a: i32) -> Oid {
+        Oid(a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "i32toregproc"]
+    #[preserves_uniqueness = true]
+    fn cast_int32_to_reg_proc(a: i32) -> RegProc {
+        RegProc(a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "i32toregtype"]
+    #[preserves_uniqueness = true]
+    fn cast_int32_to_reg_type(a: i32) -> RegType {
+        RegType(a)
     }
 );

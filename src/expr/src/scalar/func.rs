@@ -20,7 +20,6 @@ use chrono::{
     DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
     Utc,
 };
-use dec::Rounding;
 use hmac::{Hmac, Mac, NewMac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
@@ -112,12 +111,6 @@ pub fn or<'a>(
             _ => unreachable!(),
         },
     }
-}
-
-fn abs_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut a = a.unwrap_numeric();
-    numeric::cx_datum().abs(&mut a.0);
-    Datum::Numeric(a)
 }
 
 fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -846,42 +839,6 @@ fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Time(t)
 }
 
-fn ceil_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut d = a.unwrap_numeric();
-    // ceil will be nop if has no fractional digits.
-    if d.0.exponent() >= 0 {
-        return a;
-    }
-    let mut cx = numeric::cx_datum();
-    cx.set_rounding(Rounding::Ceiling);
-    cx.round(&mut d.0);
-    numeric::munge_numeric(&mut d.0).unwrap();
-    Datum::Numeric(d)
-}
-
-fn floor_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut d = a.unwrap_numeric();
-    // floor will be nop if has no fractional digits.
-    if d.0.exponent() >= 0 {
-        return a;
-    }
-    let mut cx = numeric::cx_datum();
-    cx.set_rounding(Rounding::Floor);
-    cx.round(&mut d.0);
-    numeric::munge_numeric(&mut d.0).unwrap();
-    Datum::Numeric(d)
-}
-
-fn round_numeric_unary<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut d = a.unwrap_numeric();
-    // round will be nop if has no fractional digits.
-    if d.0.exponent() >= 0 {
-        return a;
-    }
-    numeric::cx_datum().round(&mut d.0);
-    Datum::Numeric(d)
-}
-
 fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let mut b = b.unwrap_int32();
@@ -1496,26 +1453,8 @@ fn mod_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::Numeric(a))
 }
 
-fn neg_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut a = a.unwrap_numeric();
-    numeric::cx_datum().neg(&mut a.0);
-    numeric::munge_numeric(&mut a.0).unwrap();
-    Datum::Numeric(a)
-}
-
 pub fn neg_interval<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_interval())
-}
-
-fn sqrt_numeric<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
-    let mut a = a.unwrap_numeric();
-    if a.0.is_negative() {
-        return Err(EvalError::NegSqrt);
-    }
-    let mut cx = numeric::cx_datum();
-    cx.sqrt(&mut a.0);
-    numeric::munge_numeric(&mut a.0).unwrap();
-    Ok(Datum::Numeric(a))
 }
 
 fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError> {
@@ -1563,39 +1502,6 @@ fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErr
 
         numeric::munge_numeric(&mut b).unwrap();
         Ok(Datum::from(b))
-    }
-}
-
-// From the `decNumber` library's documentation:
-// > Inexact results will almost always be correctly rounded, but may be up to 1
-// > ulp (unit in last place) in error in rare cases.
-//
-// See decNumberLog10 documentation at http://speleotrove.com/decimal/dnnumb.html
-fn log_numeric<'a, 'b, F: Fn(&mut dec::Context<Numeric>, &mut Numeric)>(
-    a: Datum<'a>,
-    logic: F,
-    name: &'b str,
-) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_numeric();
-    log_guard_numeric(&a.0, name)?;
-    let mut cx = numeric::cx_datum();
-    logic(&mut cx, &mut a.0);
-    numeric::munge_numeric(&mut a.0).unwrap();
-    Ok(Datum::Numeric(a))
-}
-
-fn exp_numeric<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_numeric();
-    let mut cx = numeric::cx_datum();
-    cx.exp(&mut a.0);
-    let cx_status = cx.status();
-    if cx_status.overflow() {
-        Err(EvalError::FloatOverflow)
-    } else if cx_status.subnormal() {
-        Err(EvalError::FloatUnderflow)
-    } else {
-        numeric::munge_numeric(&mut a.0).unwrap();
-        Ok(Datum::Numeric(a))
     }
 }
 
@@ -3610,17 +3516,17 @@ pub enum UnaryFunc {
     NegInt64(NegInt64),
     NegFloat32(NegFloat32),
     NegFloat64(NegFloat64),
-    NegNumeric,
+    NegNumeric(NegNumeric),
     NegInterval,
     SqrtFloat64(SqrtFloat64),
-    SqrtNumeric,
+    SqrtNumeric(SqrtNumeric),
     CbrtFloat64(CbrtFloat64),
     AbsInt16(AbsInt16),
     AbsInt32(AbsInt32),
     AbsInt64(AbsInt64),
     AbsFloat32(AbsFloat32),
     AbsFloat64(AbsFloat64),
-    AbsNumeric,
+    AbsNumeric(AbsNumeric),
     CastBoolToString,
     CastBoolToStringNonstandard,
     CastBoolToInt32,
@@ -3632,17 +3538,17 @@ pub enum UnaryFunc {
     CastInt32ToBool(CastInt32ToBool),
     CastInt32ToFloat32(CastInt32ToFloat32),
     CastInt32ToFloat64(CastInt32ToFloat64),
-    CastInt32ToOid,
-    CastInt32ToRegProc,
-    CastInt32ToRegType,
+    CastInt32ToOid(CastInt32ToOid),
+    CastInt32ToRegProc(CastInt32ToRegProc),
+    CastInt32ToRegType(CastInt32ToRegType),
     CastInt32ToInt16(CastInt32ToInt16),
     CastInt32ToInt64(CastInt32ToInt64),
     CastInt32ToString(CastInt32ToString),
-    CastOidToInt32,
-    CastOidToRegProc,
-    CastRegProcToOid,
-    CastOidToRegType,
-    CastRegTypeToOid,
+    CastOidToInt32(CastOidToInt32),
+    CastOidToRegProc(CastOidToRegProc),
+    CastRegProcToOid(CastRegProcToOid),
+    CastOidToRegType(CastOidToRegType),
+    CastRegTypeToOid(CastRegTypeToOid),
     CastInt64ToInt16,
     CastInt64ToInt32,
     CastInt16ToNumeric(CastInt16ToNumeric),
@@ -3769,10 +3675,10 @@ pub enum UnaryFunc {
     },
     CeilFloat32(CeilFloat32),
     CeilFloat64(CeilFloat64),
-    CeilNumeric,
+    CeilNumeric(CeilNumeric),
     FloorFloat32(FloorFloat32),
     FloorFloat64(FloorFloat64),
-    FloorNumeric,
+    FloorNumeric(FloorNumeric),
     Ascii,
     BitLengthBytes,
     BitLengthString,
@@ -3799,7 +3705,7 @@ pub enum UnaryFunc {
     JsonbPretty,
     RoundFloat32(RoundFloat32),
     RoundFloat64(RoundFloat64),
-    RoundNumeric,
+    RoundNumeric(RoundNumeric),
     TrimWhitespace,
     TrimLeadingWhitespace,
     TrimTrailingWhitespace,
@@ -3815,11 +3721,11 @@ pub enum UnaryFunc {
     Tanh(Tanh),
     Cot(Cot),
     Log10(Log10),
-    Log10Numeric,
+    Log10Numeric(Log10Numeric),
     Ln(Ln),
-    LnNumeric,
+    LnNumeric(LnNumeric),
     Exp(Exp),
-    ExpNumeric,
+    ExpNumeric(ExpNumeric),
     Sleep(Sleep),
     RescaleNumeric(u8),
     PgColumnSize(PgColumnSize),
@@ -3868,12 +3774,29 @@ derive_unary!(
     CastInt32ToInt16,
     CastInt32ToInt64,
     CastInt32ToString,
+    CastInt32ToOid,
+    CastInt32ToRegProc,
+    CastInt32ToRegType,
+    CastOidToInt32,
+    CastOidToRegProc,
+    CastRegProcToOid,
+    CastOidToRegType,
+    CastRegTypeToOid,
     PgColumnSize,
     MzRowSize,
     IsNull,
     IsTrue,
     IsFalse,
     Sleep,
+    NegNumeric,
+    AbsNumeric,
+    FloorNumeric,
+    CeilNumeric,
+    ExpNumeric,
+    LnNumeric,
+    Log10Numeric,
+    RoundNumeric,
+    SqrtNumeric,
     ToTimestamp,
     CastFloat64ToString,
     Cos,
@@ -3964,24 +3887,31 @@ impl UnaryFunc {
             | CastInt32ToInt16(_)
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
+            | CastInt32ToOid(_)
+            | CastInt32ToRegProc(_)
+            | CastInt32ToRegType(_)
+            | CastOidToInt32(_)
+            | CastOidToRegProc(_)
+            | CastRegProcToOid(_)
+            | CastOidToRegType(_)
+            | CastRegTypeToOid(_)
+            | NegNumeric(_)
+            | AbsNumeric(_)
+            | FloorNumeric(_)
+            | CeilNumeric(_)
+            | ExpNumeric(_)
+            | LnNumeric(_)
+            | Log10Numeric(_)
+            | RoundNumeric(_)
+            | SqrtNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            NegNumeric => Ok(neg_numeric(a)),
             NegInterval => Ok(neg_interval(a)),
-            AbsNumeric => Ok(abs_numeric(a)),
             CastBoolToString => Ok(cast_bool_to_string(a)),
             CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
             CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
             CastFloat32ToNumeric(scale) => cast_float32_to_numeric(a, *scale),
             CastFloat64ToNumeric(scale) => cast_float64_to_numeric(a, *scale),
-            CastInt32ToOid => Ok(a),
-            CastInt32ToRegProc => Ok(a),
-            CastInt32ToRegType => Ok(a),
             CastInt32ToNumeric(scale) => cast_int32_to_numeric(a, *scale),
-            CastOidToInt32 => Ok(a),
-            CastRegProcToOid => Ok(a),
-            CastOidToRegProc => Ok(a),
-            CastRegTypeToOid => Ok(a),
-            CastOidToRegType => Ok(a),
             CastInt64ToInt16 => cast_int64_to_int16(a),
             CastInt64ToInt32 => cast_int64_to_int32(a),
             CastInt64ToBool => Ok(cast_int64_to_bool(a)),
@@ -4061,9 +3991,6 @@ impl UnaryFunc {
             | CastMapToString { ty } => Ok(cast_collection_to_string(a, ty, temp_storage)),
             CastList1ToList2 { cast_expr, .. } => cast_list1_to_list2(a, &*cast_expr, temp_storage),
             CastInPlace { .. } => Ok(a),
-            CeilNumeric => Ok(ceil_numeric(a)),
-            FloorNumeric => Ok(floor_numeric(a)),
-            SqrtNumeric => sqrt_numeric(a),
             Ascii => Ok(ascii(a)),
             BitLengthString => bit_length(a.unwrap_str()),
             BitLengthBytes => bit_length(a.unwrap_bytes()),
@@ -4084,7 +4011,6 @@ impl UnaryFunc {
             JsonbTypeof => Ok(jsonb_typeof(a)),
             JsonbStripNulls => Ok(jsonb_strip_nulls(a, temp_storage)),
             JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
-            RoundNumeric => Ok(round_numeric_unary(a)),
             TrimWhitespace => Ok(trim_whitespace(a)),
             TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
             TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
@@ -4092,9 +4018,6 @@ impl UnaryFunc {
             ListLength => Ok(list_length(a)),
             Upper => Ok(upper(a, temp_storage)),
             Lower => Ok(lower(a, temp_storage)),
-            Log10Numeric => log_numeric(a, dec::Context::log10, "log10"),
-            LnNumeric => log_numeric(a, dec::Context::ln, "ln"),
-            ExpNumeric => exp_numeric(a),
             RescaleNumeric(scale) => rescale_numeric(a, *scale),
         }
     }
@@ -4169,6 +4092,23 @@ impl UnaryFunc {
             | CastInt32ToInt16(_)
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
+            | CastInt32ToOid(_)
+            | CastInt32ToRegProc(_)
+            | CastInt32ToRegType(_)
+            | CastOidToInt32(_)
+            | CastOidToRegProc(_)
+            | CastRegProcToOid(_)
+            | CastOidToRegType(_)
+            | CastRegTypeToOid(_)
+            | NegNumeric(_)
+            | AbsNumeric(_)
+            | FloorNumeric(_)
+            | CeilNumeric(_)
+            | ExpNumeric(_)
+            | LnNumeric(_)
+            | Log10Numeric(_)
+            | RoundNumeric(_)
+            | SqrtNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -4230,15 +4170,6 @@ impl UnaryFunc {
             | CastFloat32ToNumeric(scale)
             | CastFloat64ToNumeric(scale)
             | CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
-
-            CastInt32ToOid => ScalarType::Oid.nullable(nullable),
-            CastInt32ToRegProc => ScalarType::RegProc.nullable(nullable),
-            CastInt32ToRegType => ScalarType::RegType.nullable(nullable),
-            CastOidToInt32 => ScalarType::Int32.nullable(nullable),
-            CastRegProcToOid => ScalarType::Oid.nullable(nullable),
-            CastOidToRegProc => ScalarType::RegProc.nullable(nullable),
-            CastRegTypeToOid => ScalarType::Oid.nullable(nullable),
-            CastOidToRegType => ScalarType::RegType.nullable(nullable),
 
             CastStringToDate | CastTimestampToDate | CastTimestampTzToDate => {
                 ScalarType::Date.nullable(nullable)
@@ -4316,11 +4247,6 @@ impl UnaryFunc {
                 scale: Some(*scale),
             })
             .nullable(nullable),
-
-            AbsNumeric | CeilNumeric | ExpNumeric | FloorNumeric | LnNumeric | Log10Numeric
-            | NegNumeric | RoundNumeric | SqrtNumeric => {
-                ScalarType::Numeric { scale: None }.nullable(nullable)
-            }
         }
     }
 
@@ -4399,6 +4325,23 @@ impl UnaryFunc {
             | CastInt32ToInt16(_)
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
+            | CastInt32ToOid(_)
+            | CastInt32ToRegProc(_)
+            | CastInt32ToRegType(_)
+            | CastOidToInt32(_)
+            | CastOidToRegProc(_)
+            | CastRegProcToOid(_)
+            | CastOidToRegType(_)
+            | CastRegTypeToOid(_)
+            | NegNumeric(_)
+            | AbsNumeric(_)
+            | FloorNumeric(_)
+            | CeilNumeric(_)
+            | ExpNumeric(_)
+            | LnNumeric(_)
+            | Log10Numeric(_)
+            | RoundNumeric(_)
+            | SqrtNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4450,8 +4393,6 @@ impl UnaryFunc {
             | CastFloat32ToNumeric(_)
             | CastFloat64ToNumeric(_)
             | CastJsonbToNumeric(_) => false,
-            CastInt32ToOid | CastOidToInt32 | CastInt32ToRegProc | CastRegProcToOid
-            | CastOidToRegProc | CastInt32ToRegType | CastOidToRegType | CastRegTypeToOid => false,
             CastStringToDate | CastTimestampToDate | CastTimestampTzToDate => false,
             CastStringToTime | CastIntervalToTime | TimezoneTime { .. } => false,
             CastStringToTimestamp
@@ -4474,8 +4415,7 @@ impl UnaryFunc {
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
             NegInterval => false,
-            AbsNumeric | CeilNumeric | ExpNumeric | FloorNumeric | LnNumeric | Log10Numeric
-            | NegNumeric | RoundNumeric | SqrtNumeric | RescaleNumeric(_) => false,
+            RescaleNumeric(_) => false,
         }
     }
 
@@ -4532,8 +4472,7 @@ impl UnaryFunc {
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            NegNumeric
-            | CastBoolToString
+            CastBoolToString
             | CastBoolToStringNonstandard
             | CastCharToString
             | CastVarCharToString
@@ -4611,22 +4550,29 @@ impl UnaryFunc {
             | CastInt32ToInt16(_)
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
+            | CastInt32ToOid(_)
+            | CastInt32ToRegProc(_)
+            | CastInt32ToRegType(_)
+            | CastOidToInt32(_)
+            | CastOidToRegProc(_)
+            | CastRegProcToOid(_)
+            | CastOidToRegType(_)
+            | CastRegTypeToOid(_)
+            | NegNumeric(_)
+            | AbsNumeric(_)
+            | FloorNumeric(_)
+            | CeilNumeric(_)
+            | ExpNumeric(_)
+            | LnNumeric(_)
+            | Log10Numeric(_)
+            | RoundNumeric(_)
+            | SqrtNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            NegNumeric => f.write_str("-"),
             NegInterval => f.write_str("-"),
-            AbsNumeric => f.write_str("abs"),
             CastBoolToString => f.write_str("booltostr"),
             CastBoolToStringNonstandard => f.write_str("booltostrns"),
             CastBoolToInt32 => f.write_str("booltoi32"),
-            CastInt32ToOid => f.write_str("i32tooid"),
-            CastInt32ToRegProc => f.write_str("i32toregproc"),
-            CastInt32ToRegType => f.write_str("i32toregtype"),
             CastInt32ToNumeric(..) => f.write_str("i32tonumeric"),
-            CastOidToInt32 => f.write_str("oidtoi32"),
-            CastRegProcToOid => f.write_str("regproctooid"),
-            CastOidToRegProc => f.write_str("oidtoregproc"),
-            CastRegTypeToOid => f.write_str("regtypetooid"),
-            CastOidToRegType => f.write_str("oidtoregtype"),
             CastInt64ToInt16 => f.write_str("i64toi16"),
             CastInt64ToInt32 => f.write_str("i64toi32"),
             CastInt64ToBool => f.write_str("i64tobool"),
@@ -4695,9 +4641,6 @@ impl UnaryFunc {
             CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             CastMapToString { .. } => f.write_str("maptostr"),
             CastInPlace { .. } => f.write_str("castinplace"),
-            CeilNumeric => f.write_str("ceilnumeric"),
-            FloorNumeric => f.write_str("floornumeric"),
-            SqrtNumeric => f.write_str("sqrtnumeric"),
             Ascii => f.write_str("ascii"),
             CharLength => f.write_str("char_length"),
             BitLengthBytes => f.write_str("bit_length"),
@@ -4718,7 +4661,6 @@ impl UnaryFunc {
             JsonbTypeof => f.write_str("jsonb_typeof"),
             JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
             JsonbPretty => f.write_str("jsonb_pretty"),
-            RoundNumeric => f.write_str("roundnumeric"),
             TrimWhitespace => f.write_str("btrim"),
             TrimLeadingWhitespace => f.write_str("ltrim"),
             TrimTrailingWhitespace => f.write_str("rtrim"),
@@ -4726,9 +4668,6 @@ impl UnaryFunc {
             ListLength => f.write_str("list_length"),
             Upper => f.write_str("upper"),
             Lower => f.write_str("lower"),
-            Log10Numeric => f.write_str("log10numeric"),
-            LnNumeric => f.write_str("lnnumeric"),
-            ExpNumeric => f.write_str("expnumeric"),
             RescaleNumeric(..) => f.write_str("rescale_numeric"),
         }
     }

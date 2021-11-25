@@ -141,9 +141,9 @@ lazy_static! {
 
             //INT32
             (Int32, Bool) => Explicit: CastInt32ToBool(func::CastInt32ToBool),
-            (Int32, Oid) => Implicit: CastInt32ToOid,
-            (Int32, RegProc) => Implicit: CastInt32ToRegProc,
-            (Int32, RegType) => Implicit: CastInt32ToRegType,
+            (Int32, Oid) => Implicit: CastInt32ToOid(func::CastInt32ToOid),
+            (Int32, RegProc) => Implicit: CastInt32ToRegProc(func::CastInt32ToRegProc),
+            (Int32, RegType) => Implicit: CastInt32ToRegType(func::CastInt32ToRegType),
             (Int32, Int16) => Assignment: CastInt32ToInt16(func::CastInt32ToInt16),
             (Int32, Int64) => Implicit: CastInt32ToInt64(func::CastInt32ToInt64),
             (Int32, Float32) => Implicit: CastInt32ToFloat32(func::CastInt32ToFloat32),
@@ -167,13 +167,13 @@ lazy_static! {
             (Int64, String) => Assignment: CastInt64ToString,
 
             // OID
-            (Oid, Int32) => Assignment: CastOidToInt32,
+            (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
             (Oid, String) => Explicit: CastInt32ToString(func::CastInt32ToString),
-            (Oid, RegProc) => Assignment: CastOidToRegProc,
-            (Oid, RegType) => Assignment: CastOidToRegType,
+            (Oid, RegProc) => Assignment: CastOidToRegProc(func::CastOidToRegProc),
+            (Oid, RegType) => Assignment: CastOidToRegType(func::CastOidToRegType),
 
             // REGPROC
-            (RegProc, Oid) => Implicit: CastRegProcToOid,
+            (RegProc, Oid) => Implicit: CastRegProcToOid(func::CastRegProcToOid),
             (RegProc, String) => Explicit: sql_impl_cast("(
                 SELECT COALESCE(t.name, v.x::pg_catalog.text)
                 FROM (
@@ -183,7 +183,7 @@ lazy_static! {
             )"),
 
             // REGTYPE
-            (RegType, Oid) => Implicit: CastRegTypeToOid,
+            (RegType, Oid) => Implicit: CastRegTypeToOid(func::CastRegTypeToOid),
             (RegType, String) => Explicit: sql_impl_cast("(
                 SELECT COALESCE(t.name, v.x::pg_catalog.text)
                 FROM (

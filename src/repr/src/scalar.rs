@@ -24,6 +24,7 @@ use lowertest::MzEnumReflect;
 use crate::adt::array::Array;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
+use crate::adt::system::{Oid, RegProc, RegType};
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
 
@@ -1065,6 +1066,57 @@ impl<E> DatumType<E> for Numeric {
 
     fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
         Ok(Datum::from(self))
+    }
+}
+
+impl<E> DatumType<E> for Oid {
+    fn as_column_type() -> ColumnType {
+        ScalarType::Oid.nullable(false)
+    }
+
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+        match res {
+            Ok(Datum::Int32(a)) => Ok(Oid(a)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+        Ok(Datum::Int32(self.0))
+    }
+}
+
+impl<E> DatumType<E> for RegProc {
+    fn as_column_type() -> ColumnType {
+        ScalarType::RegProc.nullable(false)
+    }
+
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+        match res {
+            Ok(Datum::Int32(a)) => Ok(RegProc(a)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+        Ok(Datum::Int32(self.0))
+    }
+}
+
+impl<E> DatumType<E> for RegType {
+    fn as_column_type() -> ColumnType {
+        ScalarType::RegType.nullable(false)
+    }
+
+    fn try_from_result(res: Result<Datum, E>) -> Result<Self, Result<Datum, E>> {
+        match res {
+            Ok(Datum::Int32(a)) => Ok(RegType(a)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &RowArena) -> Result<Datum, E> {
+        Ok(Datum::Int32(self.0))
     }
 }
 
