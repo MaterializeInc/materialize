@@ -38,8 +38,7 @@ impl crate::Transform for RedundantJoin {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation, &mut HashMap::new());
-        Ok(())
+        self.action(relation, &mut HashMap::new()).map(|_| ())
     }
 }
 
@@ -61,19 +60,19 @@ impl RedundantJoin {
         &self,
         relation: &mut MirRelationExpr,
         lets: &mut HashMap<Id, Vec<ProvInfo>>,
-    ) -> Vec<ProvInfo> {
+    ) -> Result<Vec<ProvInfo>, crate::TransformError> {
         match relation {
             MirRelationExpr::Let { id, value, body } => {
                 // Recursively determine provenance of the value.
-                let value_prov = self.action(value, lets);
+                let value_prov = self.action(value, lets)?;
                 let old = lets.insert(Id::Local(*id), value_prov);
-                let result = self.action(body, lets);
+                let result = self.action(body, lets)?;
                 if let Some(old) = old {
                     lets.insert(Id::Local(*id), old);
                 } else {
                     lets.remove(&Id::Local(*id));
                 }
-                result
+                Ok(result)
             }
             MirRelationExpr::Get { id, typ } => {
                 // Extract the value provenance, or an empty list if unavailable.
@@ -84,7 +83,7 @@ impl RedundantJoin {
                     binding: (0..typ.arity()).map(|c| (c, c)).collect::<Vec<_>>(),
                     exact: true,
                 });
-                val_info
+                Ok(val_info)
             }
 
             MirRelationExpr::Join {
@@ -99,10 +98,10 @@ impl RedundantJoin {
                 // unable to find a rendundant join it produces meaningful provenance information.
 
                 // Recursively apply transformation, and determine the provenance of inputs.
-                let input_prov = inputs
-                    .iter_mut()
-                    .map(|i| self.action(i, lets))
-                    .collect::<Vec<_>>();
+                let mut input_prov = Vec::new();
+                for i in inputs.iter_mut() {
+                    input_prov.push(self.action(i, lets)?);
+                }
 
                 // Determine useful information about the structure of the inputs.
                 let mut input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -174,7 +173,7 @@ impl RedundantJoin {
                     *relation = relation.take_dangerous().project(projection);
                     // The projection will gum up provenance reasoning anyhow, so don't work hard.
                     // We will return to this expression again with the same analysis.
-                    Vec::new()
+                    Ok(Vec::new())
                 } else {
                     // Provenance information should be the union of input provenance information,
                     // with columns updated. Because rows may be dropped in the join, all `exact`
@@ -189,26 +188,26 @@ impl RedundantJoin {
                             results.push(prov);
                         }
                     }
-                    results
+                    Ok(results)
                 }
             }
 
             MirRelationExpr::Filter { input, .. } => {
                 // Filter may drop records, and so we unset `exact`.
-                let mut result = self.action(input, lets);
+                let mut result = self.action(input, lets)?;
                 for prov in result.iter_mut() {
                     prov.exact = false;
                 }
-                result
+                Ok(result)
             }
 
             MirRelationExpr::Map { input, .. } => self.action(input, lets),
             MirRelationExpr::DeclareKeys { input, .. } => self.action(input, lets),
 
             MirRelationExpr::Union { base, inputs } => {
-                let mut prov = self.action(base, lets);
+                let mut prov = self.action(base, lets)?;
                 for input in inputs {
-                    let input_prov = self.action(input, lets);
+                    let input_prov = self.action(input, lets)?;
                     // To merge a new list of provenances, we look at the cross
                     // produce of things we might know about each source.
                     // TODO(mcsherry): this can be optimized to use datastructures
@@ -219,17 +218,17 @@ impl RedundantJoin {
                     }
                     prov = new_prov;
                 }
-                prov
+                Ok(prov)
             }
 
-            MirRelationExpr::Constant { .. } => Vec::new(),
+            MirRelationExpr::Constant { .. } => Ok(Vec::new()),
 
             MirRelationExpr::Reduce {
                 input, group_key, ..
             } => {
                 // Reduce yields its first few columns as a key, and produces
                 // all key tuples that were present in its input.
-                let mut result = self.action(input, lets);
+                let mut result = self.action(input, lets)?;
                 for prov in result.iter_mut() {
                     // update the bindings. no need to update `exact`.
                     let new_bindings = group_key
@@ -257,31 +256,31 @@ impl RedundantJoin {
                 // if the expression references a column. We would need to un-set
                 // the `exact` bit in that case, and so we would want to keep both
                 // sets of provenance information.
-                result
+                Ok(result)
             }
 
             MirRelationExpr::Threshold { input } => {
                 // Threshold may drop records, and so we unset `exact`.
-                let mut result = self.action(input, lets);
+                let mut result = self.action(input, lets)?;
                 for prov in result.iter_mut() {
                     prov.exact = false;
                 }
-                result
+                Ok(result)
             }
 
             MirRelationExpr::TopK { input, .. } => {
                 // TopK may drop records, and so we unset `exact`.
-                let mut result = self.action(input, lets);
+                let mut result = self.action(input, lets)?;
                 for prov in result.iter_mut() {
                     prov.exact = false;
                 }
-                result
+                Ok(result)
             }
 
             MirRelationExpr::Project { input, outputs } => {
                 // Projections re-order, drop, and duplicate columns,
                 // but they neither drop rows nor invent values.
-                let mut result = self.action(input, lets);
+                let mut result = self.action(input, lets)?;
                 for provenance in result.iter_mut() {
                     let new_binding = outputs
                         .iter()
@@ -297,16 +296,16 @@ impl RedundantJoin {
 
                     provenance.binding = new_binding;
                 }
-                result
+                Ok(result)
             }
 
             MirRelationExpr::FlatMap { input, .. } => {
                 // FlatMap may drop records, and so we unset `exact`.
-                let mut result = self.action(input, lets);
+                let mut result = self.action(input, lets)?;
                 for prov in result.iter_mut() {
                     prov.exact = false;
                 }
-                result
+                Ok(result)
             }
 
             MirRelationExpr::Negate { input } => {
@@ -315,11 +314,11 @@ impl RedundantJoin {
                 // been a problem in `Union`, where we might report
                 // that the union of positive and negative records is
                 // "exact": cancellations would make this false.
-                let mut result = self.action(input, lets);
+                let mut result = self.action(input, lets)?;
                 for prov in result.iter_mut() {
                     prov.exact = false;
                 }
-                result
+                Ok(result)
             }
 
             MirRelationExpr::ArrangeBy { input, .. } => self.action(input, lets),
