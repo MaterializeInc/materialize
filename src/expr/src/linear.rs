@@ -1159,7 +1159,9 @@ pub mod plan {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc};
+    use crate::{
+        func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc,
+    };
     use repr::adt::numeric::Numeric;
     use repr::{Datum, Diff, Row, RowArena, ScalarType};
 
@@ -1372,7 +1374,7 @@ pub mod plan {
                     // of negative values intact. (Negative values are never
                     // chosen as valid bounds, so their resultant values matter
                     // little, but we do want to know they were negative.)
-                    let expr2_floor = expr2.call_unary(UnaryFunc::FloorNumeric);
+                    let expr2_floor = expr2.call_unary(UnaryFunc::FloorNumeric(func::FloorNumeric));
 
                     // MzLogicalTimestamp <OP> <EXPR2> for several supported operators.
                     match func {

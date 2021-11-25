@@ -14,6 +14,7 @@ mod int16;
 mod int32;
 mod int64;
 mod not;
+mod numeric;
 mod oid;
 mod regproc;
 
@@ -24,5 +25,6 @@ pub use int16::*;
 pub use int32::*;
 pub use int64::*;
 pub use not::Not;
+pub use numeric::*;
 pub use oid::*;
 pub use regproc::*;

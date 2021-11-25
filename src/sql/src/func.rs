@@ -1330,7 +1330,7 @@ lazy_static! {
                 params!(Int16) => UnaryFunc::AbsInt16(func::AbsInt16), 1398;
                 params!(Int32) => UnaryFunc::AbsInt32(func::AbsInt32), 1397;
                 params!(Int64) => UnaryFunc::AbsInt64(func::AbsInt64), 1396;
-                params!(Numeric) => UnaryFunc::AbsNumeric, 1705;
+                params!(Numeric) => UnaryFunc::AbsNumeric(func::AbsNumeric), 1705;
                 params!(Float32) => UnaryFunc::AbsFloat32(func::AbsFloat32), 1394;
                 params!(Float64) => UnaryFunc::AbsFloat64(func::AbsFloat64), 1395;
             },
@@ -1375,7 +1375,7 @@ lazy_static! {
             "ceil" => Scalar {
                 params!(Float32) => UnaryFunc::CeilFloat32(func::CeilFloat32), oid::FUNC_CEIL_F32_OID;
                 params!(Float64) => UnaryFunc::CeilFloat64(func::CeilFloat64), 2308;
-                params!(Numeric) => UnaryFunc::CeilNumeric, 1711;
+                params!(Numeric) => UnaryFunc::CeilNumeric(func::CeilNumeric), 1711;
             },
             "char_length" => Scalar {
                 params!(String) => UnaryFunc::CharLength, 1381;
@@ -1475,12 +1475,12 @@ lazy_static! {
             },
             "exp" => Scalar {
                 params!(Float64) => UnaryFunc::Exp(func::Exp), 1347;
-                params!(Numeric) => UnaryFunc::ExpNumeric, 1732;
+                params!(Numeric) => UnaryFunc::ExpNumeric(func::ExpNumeric), 1732;
             },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32(func::FloorFloat32), oid::FUNC_FLOOR_F32_OID;
                 params!(Float64) => UnaryFunc::FloorFloat64(func::FloorFloat64), 2309;
-                params!(Numeric) => UnaryFunc::FloorNumeric, 1712;
+                params!(Numeric) => UnaryFunc::FloorNumeric(func::FloorNumeric), 1712;
             },
             "format_type" => Scalar {
                 params!(Oid, Int32) => sql_impl_func(
@@ -1540,15 +1540,15 @@ lazy_static! {
             },
             "ln" => Scalar {
                 params!(Float64) => UnaryFunc::Ln(func::Ln), 1341;
-                params!(Numeric) => UnaryFunc::LnNumeric, 1734;
+                params!(Numeric) => UnaryFunc::LnNumeric(func::LnNumeric), 1734;
             },
             "log10" => Scalar {
                 params!(Float64) => UnaryFunc::Log10(func::Log10), 1194;
-                params!(Numeric) => UnaryFunc::Log10Numeric, 1481;
+                params!(Numeric) => UnaryFunc::Log10Numeric(func::Log10Numeric), 1481;
             },
             "log" => Scalar {
                 params!(Float64) => UnaryFunc::Log10(func::Log10), 1340;
-                params!(Numeric) => UnaryFunc::Log10Numeric, 1741;
+                params!(Numeric) => UnaryFunc::Log10Numeric(func::Log10Numeric), 1741;
                 params!(Numeric, Numeric) => BinaryFunc::LogNumeric, 1736;
             },
             "lower" => Scalar {
@@ -1683,7 +1683,7 @@ lazy_static! {
             "round" => Scalar {
                 params!(Float32) => UnaryFunc::RoundFloat32(func::RoundFloat32), oid::FUNC_ROUND_F32_OID;
                 params!(Float64) => UnaryFunc::RoundFloat64(func::RoundFloat64), 1342;
-                params!(Numeric) => UnaryFunc::RoundNumeric, 1708;
+                params!(Numeric) => UnaryFunc::RoundNumeric(func::RoundNumeric), 1708;
                 params!(Numeric, Int32) => BinaryFunc::RoundNumeric, 1707;
             },
             "rtrim" => Scalar {
@@ -1730,7 +1730,7 @@ lazy_static! {
             },
             "sqrt" => Scalar {
                 params!(Float64) => UnaryFunc::SqrtFloat64(func::SqrtFloat64), 1344;
-                params!(Numeric) => UnaryFunc::SqrtNumeric, 1730;
+                params!(Numeric) => UnaryFunc::SqrtNumeric(func::SqrtNumeric), 1730;
             },
             "tan" => Scalar {
                 params!(Float64) => UnaryFunc::Tan(func::Tan), 1606;
@@ -2418,7 +2418,7 @@ lazy_static! {
                 params!(Int64) => UnaryFunc::NegInt64(func::NegInt64), 484;
                 params!(Float32) => UnaryFunc::NegFloat32(func::NegFloat32), 584;
                 params!(Float64) => UnaryFunc::NegFloat64(func::NegFloat64), 585;
-                params!(Numeric) => UnaryFunc::NegNumeric, 17510;
+                params!(Numeric) => UnaryFunc::NegNumeric(func::NegNumeric), 17510;
                 params!(Interval) => UnaryFunc::NegInterval, 1336;
                 params!(Int32, Int32) => SubInt32, 555;
                 params!(Int64, Int64) => SubInt64, 685;
