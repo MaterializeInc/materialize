@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import os
 from pathlib import Path
 
 from materialize import spawn
@@ -31,7 +32,7 @@ def main() -> None:
         # cross compiler. Instead, you just pass the `-target` flag to clang.
         # CMake understands this, but autoconf does not. So explicitly set
         # the `-target` flag to help our autoconf-based C dependencies along.
-        env={"CFLAGS": f"-target {target}"},
+        env=dict(os.environ, CFLAGS=f"-target {target}"),
     )
 
     print("--- Uploading binary tarball")
