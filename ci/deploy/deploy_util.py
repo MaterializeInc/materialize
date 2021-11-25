@@ -47,18 +47,27 @@ def upload_tarball(tarball: Path, platform: str, version: str) -> None:
         Bucket=BINARIES_BUCKET,
         Key=s3_object,
     )
+    if "aarch64" in platform:
+        upload_redirect(platform.replace("aarch64", "arm64"), f"/{s3_object}")
 
 
-def set_latest_redirect(platform: str, version: str) -> None:
+def upload_redirect(key: str, to: str) -> None:
     with tempfile.NamedTemporaryFile() as empty:
         boto3.client("s3").upload_fileobj(
             Fileobj=empty,
             Bucket=BINARIES_BUCKET,
-            Key=f"materialized-latest-{platform}.tar.gz",
-            ExtraArgs={
-                "WebsiteRedirectLocation": f"/materialized-{version}-{platform}.tar.gz",
-            },
+            Key=key,
+            ExtraArgs={"WebsiteRedirectLocation": to},
         )
+
+
+def upload_latest_redirect(platform: str, version: str) -> None:
+    upload_redirect(
+        f"materialized-latest-{platform}.tar.gz",
+        f"/materialized-{version}-{platform}.tar.gz",
+    )
+    if "aarch64" in platform:
+        upload_latest_redirect(platform.replace("aarch64", "arm64"), version)
 
 
 def deploy_tarball(platform: str, materialized: Path) -> None:
@@ -81,4 +90,4 @@ def deploy_tarball(platform: str, materialized: Path) -> None:
     else:
         commit_sha = git.rev_parse("HEAD")
         upload_tarball(tar_path, platform, commit_sha)
-        set_latest_redirect(platform, commit_sha)
+        upload_latest_redirect(platform, commit_sha)
