@@ -16,7 +16,8 @@
 
 use std::collections::HashMap;
 
-use expr::{Id, LocalId, MirRelationExpr};
+use expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformArgs;
 
@@ -45,12 +46,30 @@ impl crate::Transform for RelationCSE {
 /// The bindings can be interpreted as an ordered sequence of let bindings,
 /// ordered by their identifier, that should be applied in order before the
 /// use of the expression from which they have been extracted.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Bindings {
     /// A list of let-bound expressions and their order / identifier.
     bindings: HashMap<MirRelationExpr, u64>,
     /// Mapping from conventional local `Get` identifiers to new ones.
     rebindings: HashMap<LocalId, LocalId>,
+    // A guard for tracking the maximum depth of recursive tree traversal.
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for Bindings {
+    fn default() -> Bindings {
+        Bindings {
+            bindings: HashMap::new(),
+            rebindings: HashMap::new(),
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for Bindings {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
 }
 
 impl Bindings {
