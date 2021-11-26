@@ -14,12 +14,12 @@
 //! pushdown can be applied across views once we understand the context
 //! in which the views will be executed.
 
-use dataflow_types::{DataflowDesc, LinearOperator};
+use dataflow_types::{DataflowDesc, LinearOperator, SourceConnector, SourceEnvelope};
 use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use ore::id_gen::IdGen;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::{Optimizer, TransformError};
+use crate::{monotonic::MonotonicFlag, Optimizer, TransformError};
 
 /// Optimizes the implementation of each dataflow.
 ///
@@ -52,7 +52,7 @@ pub fn optimize_dataflow(
     // Physical optimization pass
     optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer());
 
-    monotonic::optimize_dataflow_monotonic(dataflow);
+    optimize_dataflow_monotonic(dataflow);
 
     Ok(())
 }
@@ -346,124 +346,27 @@ where
     Ok(())
 }
 
-/// Analysis to identify monotonic collections, especially TopK inputs.
-pub mod monotonic {
-
-    use dataflow_types::{DataflowDesc, SourceConnector, SourceEnvelope};
-    use expr::MirRelationExpr;
-    use expr::{GlobalId, Id, LocalId};
-    use std::collections::HashSet;
-
-    // Determines if a relation is monotonic, and applies any optimizations along the way.
-    fn is_monotonic(
-        expr: &mut MirRelationExpr,
-        sources: &HashSet<GlobalId>,
-        locals: &mut HashSet<LocalId>,
-    ) -> bool {
-        match expr {
-            MirRelationExpr::Get { id, .. } => match id {
-                Id::Global(id) => sources.contains(id),
-                Id::Local(id) => locals.contains(id),
-                _ => false,
-            },
-            MirRelationExpr::Project { input, .. } => is_monotonic(input, sources, locals),
-            MirRelationExpr::Filter { input, predicates } => {
-                let is_monotonic = is_monotonic(input, sources, locals);
-                // Non-temporal predicates can introduce non-monotonicity, as they
-                // can result in the future removal of records.
-                // TODO: this could be improved to only restrict if upper bounds
-                // are present, as temporal lower bounds only delay introduction.
-                is_monotonic && !predicates.iter().any(|p| p.contains_temporal())
-            }
-            MirRelationExpr::Map { input, .. } => is_monotonic(input, sources, locals),
-            MirRelationExpr::TopK {
-                input, monotonic, ..
-            } => {
-                *monotonic = is_monotonic(input, sources, locals);
-                false
-            }
-            MirRelationExpr::Reduce {
-                input,
-                aggregates,
-                monotonic,
-                ..
-            } => {
-                *monotonic = is_monotonic(input, sources, locals);
-                // Reduce is monotonic iff its input is and it is a "distinct",
-                // with no aggregate values; otherwise it may need to retract.
-                *monotonic && aggregates.is_empty()
-            }
-            MirRelationExpr::Union { base, inputs } => {
-                let mut monotonic = is_monotonic(base, sources, locals);
-                for input in inputs.iter_mut() {
-                    let monotonic_i = is_monotonic(input, sources, locals);
-                    monotonic = monotonic && monotonic_i;
-                }
-                monotonic
-            }
-            MirRelationExpr::ArrangeBy { input, .. }
-            | MirRelationExpr::DeclareKeys { input, .. } => is_monotonic(input, sources, locals),
-            MirRelationExpr::FlatMap { input, func, .. } => {
-                let is_monotonic = is_monotonic(input, sources, locals);
-                is_monotonic && func.preserves_monotonicity()
-            }
-            MirRelationExpr::Join { inputs, .. } => {
-                // If all inputs to the join are monotonic then so is the join.
-                let mut monotonic = true;
-                for input in inputs.iter_mut() {
-                    let monotonic_i = is_monotonic(input, sources, locals);
-                    monotonic = monotonic && monotonic_i;
-                }
-                monotonic
-            }
-            MirRelationExpr::Constant { rows: Ok(rows), .. } => {
-                rows.iter().all(|(_, diff)| diff > &0)
-            }
-            MirRelationExpr::Threshold { input } => is_monotonic(input, sources, locals),
-            MirRelationExpr::Let { id, value, body } => {
-                let prior = locals.remove(id);
-                if is_monotonic(value, sources, locals) {
-                    locals.insert(*id);
-                }
-                let result = is_monotonic(body, sources, locals);
-                if prior {
-                    locals.insert(*id);
-                } else {
-                    locals.remove(id);
-                }
-                result
-            }
-            // The default behavior.
-            // TODO: check that this is the behavior we want.
-            MirRelationExpr::Negate { .. } | MirRelationExpr::Constant { rows: Err(_), .. } => {
-                expr.visit_mut_children(|e| {
-                    is_monotonic(e, sources, locals);
-                });
-                false
-            }
+/// Propagates information about monotonic inputs through views.
+pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) {
+    let mut monotonic = std::collections::HashSet::new();
+    for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
+        if let SourceConnector::External {
+            envelope: SourceEnvelope::None(_),
+            ..
+        } = source_desc.connector
+        {
+            monotonic.insert(source_id.clone());
         }
     }
 
-    /// Propagates information about monotonic inputs through views.
-    pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) {
-        let mut monotonic = std::collections::HashSet::new();
-        for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
-            if let SourceConnector::External {
-                envelope: SourceEnvelope::None(_),
-                ..
-            } = source_desc.connector
-            {
-                monotonic.insert(source_id.clone());
-            }
-        }
+    let monotonic_flag = MonotonicFlag::default();
 
-        // Propagate predicate information from outputs to inputs.
-        for build_desc in dataflow.objects_to_build.iter_mut() {
-            is_monotonic(
-                build_desc.view.as_inner_mut(),
-                &monotonic,
-                &mut HashSet::new(),
-            );
-        }
+    // Propagate predicate information from outputs to inputs.
+    for build_desc in dataflow.objects_to_build.iter_mut() {
+        monotonic_flag.apply(
+            build_desc.view.as_inner_mut(),
+            &monotonic,
+            &mut HashSet::new(),
+        );
     }
 }
