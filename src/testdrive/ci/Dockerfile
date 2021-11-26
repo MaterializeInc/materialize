@@ -11,6 +11,7 @@ MZFROM ubuntu-base
 
 RUN apt-get update && apt-get -qy install \
     ca-certificates \
+    postgresql-client \
     wait-for-it
 
 COPY kdestroy kinit testdrive /usr/local/bin/

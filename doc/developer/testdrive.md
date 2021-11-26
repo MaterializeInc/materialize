@@ -708,3 +708,10 @@ The test will fail unless the HTTP status code of the response is in the 200 ran
 #### `$ schema-registry-wait-schema schema=...`
 
 Block the test until the specified schema has been defined at the schema registry. This is used to fortify tests that expect an external party, e.g. Debezium to  upload a particular schema.
+
+## Actions with `psql`
+
+#### `$ psql-execute command=...`
+
+Executes a command against Materialize via `psql`. This is intended for testing
+`psql`-specific commands like `\dn`.

@@ -44,6 +44,7 @@ mod kafka;
 mod kinesis;
 mod postgres;
 mod protobuf;
+mod psql;
 mod s3;
 mod schema_registry;
 mod sleep;
@@ -450,6 +451,7 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
                     "protobuf-compile-descriptors" => {
                         Box::new(protobuf::build_compile_descriptors(builtin).map_err(wrap_err)?)
                     }
+                    "psql-execute" => Box::new(psql::build_execute(builtin).map_err(wrap_err)?),
                     "schema-registry-publish" => {
                         Box::new(schema_registry::build_publish(builtin).map_err(wrap_err)?)
                     }

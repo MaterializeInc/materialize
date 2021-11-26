@@ -20,6 +20,13 @@ public
 mz_catalog
 mz_internal
 pg_catalog
+$ psql-execute command=\dn
+\   List of schemas
+    Name     | Owner
+-------------+-------
+ mz_catalog  |
+ mz_internal |
+ public      |
 
 # What objects do we have by default?
 > SHOW OBJECTS
