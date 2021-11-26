@@ -48,7 +48,10 @@ def upload_tarball(tarball: Path, platform: str, version: str) -> None:
         Key=s3_object,
     )
     if "aarch64" in platform:
-        upload_redirect(platform.replace("aarch64", "arm64"), f"/{s3_object}")
+        upload_redirect(
+            f"materialized-{version}-{platform.replace('aarch64', 'arm64')}.tar.gz",
+            f"/{s3_object}",
+        )
 
 
 def upload_redirect(key: str, to: str) -> None:
