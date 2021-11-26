@@ -77,7 +77,9 @@ def parse_args() -> argparse.Namespace:
         description="Swiss army knife for mzbuild images.",
         epilog="For additional help on a subcommand, run:\n\n  %(prog)s <command> -h",
     )
-    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+    subparsers = parser.add_subparsers(
+        dest="command", metavar="<command>", required=True
+    )
 
     def add_subcommand(name: str, **kwargs: Any) -> argparse.ArgumentParser:
         subparser = subparsers.add_parser(name, **kwargs)
@@ -143,13 +145,7 @@ def parse_args() -> argparse.Namespace:
         help="compute transitive inputs and dependencies",
     )
 
-    args = parser.parse_args()
-    if args.command is None:
-        # TODO(benesch): we can set `required=True` in the call to
-        # `add_subparsers` when we upgrade to Python v3.7+.
-        parser.print_help(file=sys.stderr)
-        sys.exit(1)
-    return args
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
