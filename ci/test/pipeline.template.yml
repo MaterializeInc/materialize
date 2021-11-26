@@ -87,7 +87,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: ci
+          run: testdrive-ci
 
   - id: cluster-smoke
     label: "Cluster smoke test"

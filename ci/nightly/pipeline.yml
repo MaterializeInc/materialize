@@ -13,13 +13,6 @@
 #   timeout_in_minutes: 240
 #   command: bin/ci-builder run nightly bin/pyactivate --dev -m ci.nightly.coverage
 
-- id: pubnub
-  label: "pubnub source"
-  plugins:
-    - ./ci/plugins/mzcompose:
-        composition: testdrive
-        run: ci-pubnub
-
 - id: kafka-matrix
   label: Kafka smoke test against previous Kafka versions
   plugins:
@@ -71,3 +64,21 @@
     - ./ci/plugins/mzcompose:
         composition: proxy
         run: proxy-ci
+
+- id: testdrive_workers_1
+  label: ":racing_car: testdrive with --workers 1"
+  timeout_in_minutes: 30
+  plugins:
+    - ./ci/plugins/scratch-aws-access: ~
+    - ./ci/plugins/mzcompose:
+        composition: testdrive
+        run: testdrive-ci-workers-1
+
+- id: testdrive_workers_32
+  label: ":racing_car: testdrive with --workers 32"
+  timeout_in_minutes: 30
+  plugins:
+    - ./ci/plugins/scratch-aws-access: ~
+    - ./ci/plugins/mzcompose:
+        composition: testdrive
+        run: testdrive-ci-workers-32
