@@ -38,6 +38,7 @@ pub mod fusion;
 pub mod inline_let;
 pub mod join_implementation;
 pub mod map_lifting;
+pub mod monotonic;
 pub mod nonnull_requirements;
 pub mod nonnullable;
 pub mod predicate_pushdown;
