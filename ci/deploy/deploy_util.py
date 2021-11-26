@@ -17,13 +17,23 @@ import boto3
 import humanize
 
 from materialize import git
+from materialize.xcompile import Arch
 
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
 
 
-def apt_materialized_path(version: str) -> str:
-    return f"pool/generic/m/ma/materialized-{version}.deb"
+def apt_arch(arch: Arch) -> str:
+    if arch == Arch.X86_64:
+        return "amd64"
+    elif arch == Arch.AARCH64:
+        return "arm64"
+    else:
+        raise RuntimeError("unreachable")
+
+
+def apt_materialized_path(arch: Arch, version: str) -> str:
+    return f"pool/generic/m/ma/materialized_{version}_{apt_arch(arch)}.deb"
 
 
 def _tardir(name: str) -> tarfile.TarInfo:

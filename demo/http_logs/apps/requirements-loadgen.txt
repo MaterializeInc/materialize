@@ -1,6 +1,6 @@
 certifi==2019.11.28
 chardet==3.0.4
 idna==2.8
-numpy==1.18.1
+numpy==1.21.4
 requests==2.25.1
 urllib3==1.26.5

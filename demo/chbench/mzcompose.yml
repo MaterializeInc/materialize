@@ -81,6 +81,7 @@ services:
     ports:
      - *mysql
     environment:
+     - MYSQL_ROOT_HOST=%
      - MYSQL_ROOT_PASSWORD=rootpw
      - MYSQL_USER=mysqluser
      - MYSQL_PASSWORD=mysqlpw
@@ -88,7 +89,6 @@ services:
       - type: volume
         source: chbench-gen
         target: /var/lib/mysql-files
-        read_only: true
       - type: tmpfs
         target: /var/lib/mysql
   mysqlcli:

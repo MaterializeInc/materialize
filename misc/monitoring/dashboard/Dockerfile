@@ -13,19 +13,20 @@ MZFROM ubuntu-base AS build
 
 ARG GRAFANA_VERSION
 ARG PROM_VERSION
+ARG ARCH_GO
 
 RUN set -x && export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get install -qy apt-utils ca-certificates \
     && apt-get install -qy --no-install-recommends \
         adduser libfontconfig1 curl \
-    && curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz" \
+    && curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-$ARCH_GO.tar.gz" \
             > /prometheus.tar.gz \
     && tar -xzf /prometheus.tar.gz \
-    && mv /prometheus-${PROM_VERSION}.linux-amd64 /prometheus \
-    && curl -fsSL "https://dl.grafana.com/oss/release/grafana_${GRAFANA_VERSION}_amd64.deb" \
-        > /grafana_amd64.deb \
-    && dpkg -i /grafana_amd64.deb \
+    && mv /prometheus-${PROM_VERSION}.linux-$ARCH_GO /prometheus \
+    && curl -fsSL "https://dl.grafana.com/oss/release/grafana_${GRAFANA_VERSION}_$ARCH_GO.deb" \
+        > /grafana_$ARCH_GO.deb \
+    && dpkg -i /grafana_$ARCH_GO.deb \
     ;
 
 MZFROM ubuntu-base

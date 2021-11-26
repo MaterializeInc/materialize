@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM mysql:5.7
+FROM mysql/mysql-server:8.0.27
 
 COPY mysql.cnf /etc/mysql/conf.d/
 COPY replication.sql /docker-entrypoint-initdb.d/

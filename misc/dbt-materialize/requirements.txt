@@ -1,3 +1,2 @@
-dbt==0.21.0
 pytest-dbt-adapter==0.5.1
 ../dbt-materialize

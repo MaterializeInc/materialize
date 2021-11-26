@@ -14,7 +14,7 @@ from pathlib import Path
 
 import boto3
 
-from materialize import cargo, ci_util, deb, errors, git, mzbuild, spawn
+from materialize import cargo, ci_util, deb, mzbuild, spawn
 
 from ..deploy.deploy_util import APT_BUCKET, apt_materialized_path
 
@@ -27,11 +27,9 @@ def main() -> None:
     # images that we build to Docker Hub, where they will be accessible to
     # other build agents.
     print("--- Acquiring mzbuild images")
-    commit_tag = f'unstable-{git.rev_parse("HEAD")}'
     deps = repo.resolve_dependencies(image for image in repo if image.publish)
     deps.acquire()
     deps.push()
-    deps.push_tagged(commit_tag)
 
     print("--- Staging Debian package")
     if os.environ["BUILDKITE_BRANCH"] == "main":
@@ -42,8 +40,6 @@ def main() -> None:
             f"v{version}" == os.environ["BUILDKITE_TAG"]
         ), f'materialized version {version} does not match tag {os.environ["BUILDKITE_TAG"]}'
         stage_deb(repo, "materialized", str(version))
-    elif os.environ["BUILDKITE_BRANCH"] == "master":
-        raise errors.MzError(f"Tried to build branch master {git.rev_parse('HEAD')}")
     else:
         print("Not on main branch or tag; skipping")
 
@@ -61,15 +57,14 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     # Extract the materialized binary from the Docker image. This avoids
     # an expensive rebuild if we're using a cached image.
     ci_util.acquire_materialized(
-        repo, repo.rd.xcargo_target_dir() / "release" / "materialized"
+        repo, repo.rd.cargo_target_dir() / "release" / "materialized"
     )
 
     # Build the Debian package.
-    deb_path = repo.rd.xcargo_target_dir() / "debian" / f"materialized-{version}.deb"
+    deb_path = repo.rd.cargo_target_dir() / "debian" / f"materialized_{version}.deb"
     spawn.runv(
         [
-            repo.rd.xcargo(),
-            "deb",
+            *repo.rd.cargo("deb", rustflags=[]),
             f"--variant={package}",
             "--no-build",
             "--no-strip",
@@ -87,7 +82,7 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     boto3.client("s3").upload_file(
         Filename=str(deb_path),
         Bucket=APT_BUCKET,
-        Key=apt_materialized_path(version),
+        Key=apt_materialized_path(repo.rd.arch, version),
     )
 
 
