@@ -31,7 +31,7 @@ impl crate::Transform for RelationCSE {
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut bindings = Bindings::default();
-        bindings.intern_expression(relation);
+        bindings.intern_expression(relation)?;
         bindings.populate_expression(relation);
         Ok(())
     }
@@ -62,10 +62,13 @@ impl Bindings {
     ///
     /// Once each sub-expression is replaced by a canonical `Get` expression, each expression is also
     /// in a canonical representation, which is used to check for prior instances and drives re-use.
-    fn intern_expression(&mut self, relation: &mut MirRelationExpr) {
+    fn intern_expression(
+        &mut self,
+        relation: &mut MirRelationExpr,
+    ) -> Result<(), crate::TransformError> {
         match relation {
             MirRelationExpr::Let { id, value, body } => {
-                self.intern_expression(value);
+                self.intern_expression(value)?;
                 let new_id = if let MirRelationExpr::Get {
                     id: Id::Local(x), ..
                 } = **value
@@ -75,7 +78,7 @@ impl Bindings {
                     panic!("Invariant violated")
                 };
                 self.rebindings.insert(*id, new_id);
-                self.intern_expression(body);
+                self.intern_expression(body)?;
                 let body = body.take_dangerous();
                 self.rebindings.remove(id);
                 *relation = body;
@@ -88,9 +91,7 @@ impl Bindings {
 
             _ => {
                 // All other expressions just need to apply the logic recursively.
-                relation.visit_mut_children(&mut |expr| {
-                    self.intern_expression(expr);
-                })
+                relation.try_visit_mut_children(&mut |expr| self.intern_expression(expr))?;
             }
         };
 
@@ -114,6 +115,8 @@ impl Bindings {
                 typ,
             }
         }
+
+        Ok(())
     }
 
     /// Populates `expression` with necessary `Let` bindings.
