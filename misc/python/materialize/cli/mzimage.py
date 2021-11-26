@@ -19,7 +19,7 @@ from materialize import mzbuild, ui
 
 
 def main() -> int:
-    args = parse_args()
+    args = _parse_args()
     ui.Verbosity.init_from_env(explicit=None)
     root = Path(os.environ["MZ_ROOT"])
     repo = mzbuild.Repository(
@@ -69,8 +69,7 @@ def main() -> int:
     return 0
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse known args, or exit the program"""
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="mzimage",
         formatter_class=argparse.RawDescriptionHelpFormatter,
