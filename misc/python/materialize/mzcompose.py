@@ -683,6 +683,7 @@ class Materialized(PythonService):
         hostname: Optional[str] = None,
         image: Optional[str] = None,
         port: int = 6875,
+        workers: Optional[int] = None,
         memory: Optional[str] = None,
         data_directory: str = "/share/mzdata",
         options: str = "",
@@ -710,7 +711,20 @@ class Materialized(PythonService):
         if volumes is None:
             volumes = DEFAULT_MZ_VOLUMES
 
-        command = f"--data-directory={data_directory} {options} --disable-telemetry --experimental --listen-addr 0.0.0.0:{port} --timestamp-frequency 100ms --retain-prometheus-metrics 1s"
+        command_list = [
+            f"--data-directory={data_directory}",
+            f"--listen-addr 0.0.0.0:{port}",
+            "--disable-telemetry",
+            "--experimental",
+            "--timestamp-frequency 100ms",
+            "--retain-prometheus-metrics 1s",
+        ]
+
+        if options:
+            command_list.append(options)
+
+        if workers:
+            command_list.append(f"--workers {workers}")
 
         config: PythonServiceConfig = (
             {"image": image} if image else {"mzbuild": "materialized"}
@@ -726,7 +740,7 @@ class Materialized(PythonService):
 
         config.update(
             {
-                "command": command,
+                "command": " ".join(command_list),
                 "ports": [port],
                 "environment": environment,
                 "volumes": volumes,
@@ -1116,6 +1130,7 @@ class Testdrive(PythonService):
         if entrypoint is None:
             entrypoint = [
                 "testdrive",
+                "--default-timeout 30",
                 "--kafka-addr=kafka:9092",
                 "--schema-registry-url=http://schema-registry:8081",
                 "--materialized-url=postgres://materialize@materialized:6875",
