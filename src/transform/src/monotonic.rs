@@ -8,14 +8,31 @@
 // by the Apache License, Version 2.0.
 
 //! Analysis to identify monotonic collections, especially TopK inputs.
-use expr::MirRelationExpr;
 use expr::{GlobalId, Id, LocalId};
+use expr::{MirRelationExpr, RECURSION_LIMIT};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use std::collections::HashSet;
 
 /// A struct that holds a recursive function that determines if a
-/// relation is monotonic, and applies any optimizations along the way
-#[derive(Debug, Default)]
-pub struct MonotonicFlag;
+/// relation is monotonic, and applies any optimizations along the way.
+#[derive(Debug)]
+pub struct MonotonicFlag {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for MonotonicFlag {
+    fn default() -> MonotonicFlag {
+        MonotonicFlag {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for MonotonicFlag {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl MonotonicFlag {
     /// Determines if a relation is monotonic, and applies any optimizations along the way.
