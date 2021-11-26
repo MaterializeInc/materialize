@@ -52,7 +52,7 @@ pub fn optimize_dataflow(
     // Physical optimization pass
     optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer());
 
-    optimize_dataflow_monotonic(dataflow);
+    optimize_dataflow_monotonic(dataflow)?;
 
     Ok(())
 }
@@ -347,7 +347,7 @@ where
 }
 
 /// Propagates information about monotonic inputs through views.
-pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) {
+pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     let mut monotonic = std::collections::HashSet::new();
     for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
         if let SourceConnector::External {
@@ -367,6 +367,8 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) {
             build_desc.view.as_inner_mut(),
             &monotonic,
             &mut HashSet::new(),
-        );
+        )?;
     }
+
+    Ok(())
 }
