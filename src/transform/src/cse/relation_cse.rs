@@ -85,57 +85,59 @@ impl Bindings {
         &mut self,
         relation: &mut MirRelationExpr,
     ) -> Result<(), crate::TransformError> {
-        match relation {
-            MirRelationExpr::Let { id, value, body } => {
-                self.intern_expression(value)?;
-                let new_id = if let MirRelationExpr::Get {
-                    id: Id::Local(x), ..
-                } = **value
-                {
-                    x
-                } else {
-                    panic!("Invariant violated")
-                };
-                self.rebindings.insert(*id, new_id);
-                self.intern_expression(body)?;
-                let body = body.take_dangerous();
-                self.rebindings.remove(id);
-                *relation = body;
-            }
-            MirRelationExpr::Get { id, .. } => {
-                if let Id::Local(id) = id {
-                    *id = self.rebindings[id];
+        self.checked_recur_mut(|this| {
+            match relation {
+                MirRelationExpr::Let { id, value, body } => {
+                    this.intern_expression(value)?;
+                    let new_id = if let MirRelationExpr::Get {
+                        id: Id::Local(x), ..
+                    } = **value
+                    {
+                        x
+                    } else {
+                        panic!("Invariant violated")
+                    };
+                    this.rebindings.insert(*id, new_id);
+                    this.intern_expression(body)?;
+                    let body = body.take_dangerous();
+                    this.rebindings.remove(id);
+                    *relation = body;
+                }
+                MirRelationExpr::Get { id, .. } => {
+                    if let Id::Local(id) = id {
+                        *id = this.rebindings[id];
+                    }
+                }
+
+                _ => {
+                    // All other expressions just need to apply the logic recursively.
+                    relation.try_visit_mut_children(&mut |expr| this.intern_expression(expr))?;
+                }
+            };
+
+            // This should be fast, as it depends directly on only `Get` expressions.
+            let typ = relation.typ();
+            // We want to maintain the invariant that `relation` ends up as a local `Get`.
+            if let MirRelationExpr::Get {
+                id: Id::Local(_), ..
+            } = relation
+            {
+                // Do nothing, as the expression is already a local `Get` expression.
+            } else {
+                // Either find an instance of `relation` or insert this one.
+                let bindings_len = this.bindings.len() as u64;
+                let id = this
+                    .bindings
+                    .entry(relation.take_dangerous())
+                    .or_insert(bindings_len);
+                *relation = MirRelationExpr::Get {
+                    id: Id::Local(LocalId::new(*id)),
+                    typ,
                 }
             }
 
-            _ => {
-                // All other expressions just need to apply the logic recursively.
-                relation.try_visit_mut_children(&mut |expr| self.intern_expression(expr))?;
-            }
-        };
-
-        // This should be fast, as it depends directly on only `Get` expressions.
-        let typ = relation.typ();
-        // We want to maintain the invariant that `relation` ends up as a local `Get`.
-        if let MirRelationExpr::Get {
-            id: Id::Local(_), ..
-        } = relation
-        {
-            // Do nothing, as the expression is already a local `Get` expression.
-        } else {
-            // Either find an instance of `relation` or insert this one.
-            let bindings_len = self.bindings.len() as u64;
-            let id = self
-                .bindings
-                .entry(relation.take_dangerous())
-                .or_insert(bindings_len);
-            *relation = MirRelationExpr::Get {
-                id: Id::Local(LocalId::new(*id)),
-                typ,
-            }
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Populates `expression` with necessary `Let` bindings.
