@@ -4655,6 +4655,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "similar"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e24979f63a11545f5f2c60141afe249d4f19f84581ea2138065e400941d83d3"
+
+[[package]]
 name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5101,6 +5107,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "similar",
  "sql-parser",
  "structopt",
  "tempfile",

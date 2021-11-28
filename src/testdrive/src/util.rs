@@ -8,3 +8,4 @@
 // by the Apache License, Version 2.0.
 
 pub mod postgres;
+pub mod text;
