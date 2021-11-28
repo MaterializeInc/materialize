@@ -9,10 +9,13 @@
 
 use std::fmt;
 
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use lowertest::MzStructReflect;
 use ore::result::ResultExt;
+use repr::adt::interval::Interval;
 use repr::adt::numeric::{self, Numeric};
 use repr::{strconv, ColumnType, ScalarType};
 
@@ -98,3 +101,45 @@ impl fmt::Display for CastStringToNumeric {
         f.write_str("i64tonumeric")
     }
 }
+
+sqlfunc!(
+    #[sqlname = "strtodate"]
+    fn cast_string_to_date<'a>(a: &'a str) -> Result<NaiveDate, EvalError> {
+        strconv::parse_date(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "strtotime"]
+    fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
+        strconv::parse_time(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "strtots"]
+    fn cast_string_to_timestamp<'a>(a: &'a str) -> Result<NaiveDateTime, EvalError> {
+        strconv::parse_timestamp(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "strtotstz"]
+    fn cast_string_to_timestamp_tz<'a>(a: &'a str) -> Result<DateTime<Utc>, EvalError> {
+        strconv::parse_timestamptz(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "strtoiv"]
+    fn cast_string_to_interval<'a>(a: &'a str) -> Result<Interval, EvalError> {
+        strconv::parse_interval(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "strtouuid"]
+    fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
+        strconv::parse_uuid(a).err_into()
+    }
+);

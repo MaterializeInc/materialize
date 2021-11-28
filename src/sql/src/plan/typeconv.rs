@@ -317,14 +317,14 @@ lazy_static! {
                 let s = to_type.unwrap_numeric_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(func::CastStringToNumeric(s))))
             }),
-            (String, Date) => Explicit: CastStringToDate,
-            (String, Time) => Explicit: CastStringToTime,
-            (String, Timestamp) => Explicit: CastStringToTimestamp,
-            (String, TimestampTz) => Explicit: CastStringToTimestampTz,
-            (String, Interval) => Explicit: CastStringToInterval,
+            (String, Date) => Explicit: CastStringToDate(func::CastStringToDate),
+            (String, Time) => Explicit: CastStringToTime(func::CastStringToTime),
+            (String, Timestamp) => Explicit: CastStringToTimestamp(func::CastStringToTimestamp),
+            (String, TimestampTz) => Explicit: CastStringToTimestampTz(func::CastStringToTimestampTz),
+            (String, Interval) => Explicit: CastStringToInterval(func::CastStringToInterval),
             (String, Bytes) => Explicit: CastStringToBytes(func::CastStringToBytes),
             (String, Jsonb) => Explicit: CastStringToJsonb,
-            (String, Uuid) => Explicit: CastStringToUuid,
+            (String, Uuid) => Explicit: CastStringToUuid(func::CastStringToUuid),
             (String, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_array_element_type();

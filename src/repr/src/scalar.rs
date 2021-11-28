@@ -1020,7 +1020,12 @@ impl_datum_type_copy!(f64, Float64);
 impl_datum_type_copy!(i16, Int16);
 impl_datum_type_copy!(i32, Int32);
 impl_datum_type_copy!(i64, Int64);
+impl_datum_type_copy!(Interval, Interval);
+impl_datum_type_copy!(NaiveDate, Date);
+impl_datum_type_copy!(NaiveTime, Time);
+impl_datum_type_copy!(NaiveDateTime, Timestamp);
 impl_datum_type_copy!(DateTime<Utc>, TimestampTz);
+impl_datum_type_copy!(Uuid, Uuid);
 impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
 
