@@ -42,7 +42,7 @@ Testdrive is the preferred system test framework when testing:
 
 `testdrive` is currently sub-optimal for the situations listed below and `sqllogictest` is the better driver in those cases:
 - test cases containing many `EXPLAIN` statements and a lot of recorded query plans
-- tests that require the use of `INSERT SELECT, `UPDATE` and `DELETE`
+- tests that require the use of `INSERT`, `SELECT`, `UPDATE`, and `DELETE`
 - test cases where substantial changes of the ouput over time are expected, which is often the case if many query plans have been recorded in the test.
 
 Unlike the `sqllogictest` driver, `testdrive` will fail the test at the first difference, and there is no ability to automatically produce a new version of the test file that includes all the required updates to make the test pass.
