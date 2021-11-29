@@ -354,17 +354,23 @@ impl KafkaSourceReader {
 
         // Since librdkafka v1.6.0, we need to recreate all partition queues
         // after every call to `self.consumer.assign`.
+        let context = self.consumer.context().clone();
         for pc in &mut self.partition_consumers {
             pc.partition_queue = self
                 .consumer
                 .split_partition_queue(&self.topic_name, pc.pid)
                 .expect("partition known to be valid");
+            pc.partition_queue.set_nonempty_callback({
+                let context = context.clone();
+                move || context.activate()
+            });
         }
 
-        let partition_queue = self
+        let mut partition_queue = self
             .consumer
             .split_partition_queue(&self.topic_name, partition_id)
             .expect("partition known to be valid");
+        partition_queue.set_nonempty_callback(move || context.activate());
         self.partition_consumers
             .push_front(PartitionConsumer::new(partition_id, partition_queue));
         assert_eq!(
@@ -555,8 +561,8 @@ impl PartitionConsumer {
     }
 }
 
-/// An implementation of [`ConsumerContext`] that unparks the wrapped thread
-/// when the message queue switches from nonempty to empty.
+/// An implementation of [`ConsumerContext`] that forwards statistics to the
+/// worker
 struct GlueConsumerContext {
     activator: SyncActivator,
     stats_tx: crossbeam_channel::Sender<Jsonb>,
@@ -584,8 +590,4 @@ impl GlueConsumerContext {
     }
 }
 
-impl ConsumerContext for GlueConsumerContext {
-    fn message_queue_nonempty_callback(&self) {
-        self.activate();
-    }
-}
+impl ConsumerContext for GlueConsumerContext {}
