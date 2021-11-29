@@ -11,7 +11,7 @@ path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-anyhow = "1.0.47"
+anyhow = "1.0.50"
 avro-derive = { path = "../avro-derive" }
 base64 = "0.13.0"
 byteorder = "1.4.3"

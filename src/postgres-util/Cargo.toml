@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.47"
+anyhow = "1.0.50"
 openssl = { version = "0.10.38", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 sql-parser = { path = "../sql-parser" }
