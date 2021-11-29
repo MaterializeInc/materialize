@@ -19,8 +19,8 @@ use uuid::Uuid;
 use ore::stack::{CheckedRecursion, RecursionGuard};
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, OrderByExpr, Query, Raw, Select, SelectItem, TableAlias,
-    TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
+    Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Raw, Select, SelectItem,
+    TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
 };
 
 use crate::func::Func;
@@ -457,13 +457,13 @@ impl<'a> Desugarer<'a> {
             if *negated {
                 *expr = Expr::AllSubquery {
                     left: Box::new(e.take()),
-                    op: "<>".into(),
+                    op: Op::bare("<>"),
                     right: Box::new(subquery.take()),
                 };
             } else {
                 *expr = Expr::AnySubquery {
                     left: Box::new(e.take()),
-                    op: "=".into(),
+                    op: Op::bare("="),
                     right: Box::new(subquery.take()),
                 };
             }
@@ -556,7 +556,7 @@ impl<'a> Desugarer<'a> {
                 .project(SelectItem::Expr {
                     expr: left
                         .binop(
-                            &op,
+                            op.clone(),
                             Expr::Row {
                                 exprs: bindings
                                     .into_iter()
@@ -599,7 +599,7 @@ impl<'a> Desugarer<'a> {
             if let (Expr::Row { exprs: left }, Expr::Row { exprs: right }) =
                 (&mut **left, &mut **right)
             {
-                if matches!(op.as_str(), "=" | "<>" | "<" | "<=" | ">" | ">=") {
+                if matches!(op.op_str(), "=" | "<>" | "<" | "<=" | ">" | ">=") {
                     if left.len() != right.len() {
                         bail!("unequal number of entries in row expressions");
                     }
@@ -608,29 +608,29 @@ impl<'a> Desugarer<'a> {
                         bail!("cannot compare rows of zero length");
                     }
                 }
-                match op.as_str() {
+                match op.op_str() {
                     "=" | "<>" => {
                         let mut new = Expr::Value(Value::Boolean(true));
                         for (l, r) in left.iter_mut().zip(right) {
                             new = l.take().equals(r.take()).and(new);
                         }
-                        if op == "<>" {
+                        if op.op_str() == "<>" {
                             new = new.negate();
                         }
                         *expr = new;
                     }
                     "<" | "<=" | ">" | ">=" => {
-                        let strict_op = match op.as_str() {
+                        let strict_op = match op.op_str() {
                             "<" | "<=" => "<",
                             ">" | ">=" => ">",
                             _ => unreachable!(),
                         };
                         let (l, r) = (left.last_mut().unwrap(), right.last_mut().unwrap());
-                        let mut new = l.take().binop(&op, r.take());
+                        let mut new = l.take().binop(op.clone(), r.take());
                         for (l, r) in left.iter_mut().zip(right).rev().skip(1) {
                             new = l
                                 .clone()
-                                .binop(strict_op, r.clone())
+                                .binop(Op::Bare(String::from(strict_op)), r.clone())
                                 .or(l.take().equals(r.take()).and(new));
                         }
                         *expr = new;

@@ -25,7 +25,7 @@ use lazy_static::lazy_static;
 use protobuf::Message;
 use regex::Regex;
 use reqwest::Url;
-use sql_parser::ast::CsrSeedCompiledOrLegacy;
+use sql_parser::ast::{CsrSeedCompiledOrLegacy, Op};
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
@@ -346,7 +346,7 @@ pub fn purify(
                                         joins: vec![],
                                     }],
                                     selection: Some(Expr::Op {
-                                        op: "=".to_string(),
+                                        op: Op::bare("="),
                                         expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
                                         expr2: Some(Box::new(Expr::Value(Value::Number(
                                             table_info.rel_id.to_string(),
