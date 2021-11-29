@@ -481,13 +481,11 @@ impl<'a> Iterator for BuiltinReader<'a> {
                         ),
                     }));
                 }
-            } else if c == '"' {
-                quoted = !quoted;
+            } else if c == '"' && nesting.is_empty() {
                 // remove the double quote for un-nested commands such as: command="\dt public"
-                // keep the quotes when inside of a nested schema such as: schema={ "type" : "array" }
-                if nesting.is_empty() {
-                    continue;
-                }
+                // keep the quotes when inside of a nested object such as: schema={ "type" : "array" }
+                quoted = !quoted;
+                continue;
             }
             token.push(c);
         }
