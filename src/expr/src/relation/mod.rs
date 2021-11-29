@@ -43,7 +43,7 @@ pub mod join_input_mapper;
 /// - (2) `CallBinary` calls with associative functions such as `OR` and `+`
 ///
 /// Until we fix those, we need to stick with the larger recursion limit.
-pub const RECURSION_LIMIT: usize = 1024;
+pub const RECURSION_LIMIT: usize = 2048;
 
 /// An abstract syntax tree which defines a collection.
 ///
