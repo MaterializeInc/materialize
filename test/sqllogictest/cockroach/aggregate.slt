@@ -1444,7 +1444,7 @@ DROP TABLE string_agg_test2
 query error supported
 SELECT string_agg('foo', CAST ((SELECT NULL) AS BYTEA)) OVER ();
 
-query error supported
+query error table functions are not allowed in aggregate function calls
 SELECT array_agg(generate_series(1, 2))
 
 # Regression test for #31882.

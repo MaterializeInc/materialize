@@ -708,13 +708,20 @@ jsonb_each
 query error multiple table functions in select projections not yet supported
 SELECT 1, jsonb_object_keys('{"1":2,"3":4}'::JSONB), jsonb_object_keys('{"1":2,"3":4,"5":6}'::JSONB) ORDER BY 1
 
-query error table function .* in scalar position not yet supported
+query T colnames
 SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3) ORDER BY 1
+----
+jsonb_build_object
+{"a":1,"c":3}
+{"b":1,"c":3}
 
-query error table function .* in scalar position not yet supported
+query TT
 SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3) ORDER BY 1
+----
+{"a":1,"c":3} {"a":1,"c":3}
+{"b":1,"c":3} {"b":1,"c":3}
 
-query error table function .* in scalar position not yet supported
+query error multiple table functions in select projections not yet supported
 SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb_build_object(jsonb_object_keys('{"a":2}'), 1, 'c', 3);
 
 query error multiple table functions in select projections not yet supported
@@ -723,12 +730,25 @@ SELECT jsonb_array_elements(jsonb_array_elements('[[1,2],[3,4]]')), jsonb_array_
 query error multiple table functions in select projections not yet supported
 SELECT jsonb_array_elements(jsonb_array_elements('[[1,2],[3,4]]')), jsonb_array_elements('[7,8,9]') ORDER BY 1
 
-# Postgres explicitly disallows this use case.
-query error table function .* in scalar position not yet supported
+# Postgres explicitly disallows table funcs (although it uses "set-returning
+# functions") in CASE and COALESCE.
+query error table functions are not allowed in CASE
 SELECT i, CASE WHEN i > 0 THEN generate_series(1, 5) ELSE 0 END FROM t
 
-query error multiple table functions in select projections not yet supported
-SELECT generate_series(1,2), generate_series(1,2)
+query error table functions are not allowed in COALESCE
+SELECT COALESCE(1, generate_series(1, 1))
+
+query error table functions are not allowed in aggregate function calls
+SELECT array_agg(generate_series(1, 2))
+
+# Subqueries avoid the CASE errors.
+query I
+SELECT COALESCE(1, (SELECT generate_series(1, 1)))
+----
+1
+
+query error table functions are not allowed in WHERE clause
+SELECT 1 WHERE generate_series(1, 1)
 
 # timestamp-based generate series
 
@@ -1026,3 +1046,41 @@ SELECT * FROM LATERAL ROWS FROM (generate_series(1,1), information_schema._pg_ex
 ----
 a b c
 1 1 1
+
+# Multiple table funcs in SELECT projection.
+
+query II colnames rowsort
+SELECT generate_series(1,2) x, generate_series(1,2) ORDER BY 1
+----
+x generate_series
+1 1
+2 2
+
+query II colnames rowsort
+SELECT generate_series(1,2), generate_series(1,2) y ORDER BY 1
+----
+generate_series y
+1 1
+2 2
+
+query II colnames rowsort
+SELECT generate_series(1,2) x, generate_series(1,2) y ORDER BY 1
+----
+x y
+1 1
+2 2
+
+query IT colnames
+SELECT (information_schema._pg_expandarray(array[10])).x, information_schema._pg_expandarray(array[10])
+----
+x _pg_expandarray
+10 (10,1)
+
+query error multiple table functions in select projections not yet supported
+SELECT generate_series(1, 1), generate_series(2, 2)
+
+# Subqueries avoid the uniqueness check.
+query II
+SELECT generate_series(1, 1), (SELECT generate_series(2, 2))
+----
+1 2
