@@ -60,8 +60,7 @@ build apply=PredicateKnowledge
 (filter (constant [[1] [1]] [int64]) [(call_binary eq #0 2)])
 ----
 %0 =
-| Constant (1) (1)
-| Filter (#0 = 2)
+| Constant
 
 # Reduce
 
@@ -425,8 +424,8 @@ canonicalize-join
 ]]
 [int32]
 ----
-((#0 && (#0 + #0)) = (#0 + #0))
-((#0 && (#0 + #0)) = (#0 + (#0 + #0)))
+((#0 + #0) = (#0 && (#0 + #0)))
+((#0 + #0) = (#0 + (#0 + #0)))
 
 canonicalize-join
 [
@@ -494,7 +493,7 @@ canonicalize-join
 ]]
 [int32]
 ----
-(-(i16toi32(#0)) = i16toi32(#0))
+(i16toi32(#0) = -(i16toi32(#0)))
 
 # literals don't get overwritten with equivalent expressions
 
@@ -506,8 +505,8 @@ canonicalize-join
 ]]
 [int32 int32]
 ----
-(#0 = 4)
-(#0 = (#1 + 4))
+(4 = #0)
+(4 = (#1 + 4))
 
 # functions on literals don't cause cycling
 canonicalize-join
@@ -518,8 +517,8 @@ canonicalize-join
 ]
 [int32 int32 int32 int32]
 ----
-(#0 = 4)
 (#3 = (#1 + -4))
+(4 = #0)
 (-4 = -(#1))
 
 canonicalize-join
@@ -531,8 +530,8 @@ canonicalize-join
 ]
 [int32 int32 int32 int32]
 ----
-(#0 = 4)
 (#3 = (#1 + -4))
+(4 = #0)
 (-4 = -(#1))
 
 # expressions in join equivalences get reduced after simpler equivalent
@@ -547,8 +546,7 @@ canonicalize-join
 ]
 [int64]
 ----
-(0 = 1234)
-(0 = (0 + #0))
+false
 
 ## consecutive nots cancel each other
 
@@ -559,7 +557,7 @@ canonicalize-join
 ]
 [bool string string]
 ----
-(#0 = false)
+(false = #0)
 (true = (#1 ~* #2))
 
 canonicalize-join
@@ -569,8 +567,8 @@ canonicalize-join
 ]
 [bool bool]
 ----
-(#0 = false)
-(#1 = true)
+(false = #0)
+(true = #1)
 
 ## demorgans
 

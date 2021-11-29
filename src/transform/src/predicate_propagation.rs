@@ -412,9 +412,33 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: &repr::
 
     canonicalize::canonicalize_equivalences(&mut classes, std::slice::from_ref(input_type));
 
-    // let mut normalization = HashMap::<&MirScalarExpr, &MirScalarExpr>::new();
     let mut structured = PredicateStructure::default();
-    for class in classes.iter() {
+    for class in classes.iter_mut() {
+        use std::cmp::Ordering;
+        class.sort_by(|x, y| match (x, y) {
+            (MirScalarExpr::Literal { .. }, MirScalarExpr::Literal { .. }) => x.cmp(y),
+            (MirScalarExpr::Literal { .. }, _) => Ordering::Less,
+            (_, MirScalarExpr::Literal { .. }) => Ordering::Greater,
+            (MirScalarExpr::Column(_), MirScalarExpr::Column(_)) => x.cmp(y),
+            (MirScalarExpr::Column(_), _) => Ordering::Less,
+            (_, MirScalarExpr::Column(_)) => Ordering::Greater,
+            // This last class could be problematic if a complex expression sorts lower than
+            // expressions it contains (e.g. in x + y = x, if x + y comes before x then x would
+            // repeatedly be replaced by x + y).
+            _ => (nodes(x), x).cmp(&(nodes(y), y)),
+        });
+        class.dedup();
+
+        // If we have a second literal, not equal to the first, we have a contradiction and can
+        // just replace everything with false.
+        if let Some(second) = class.get(1) {
+            if second.is_literal_ok() {
+                predicates.clear();
+                predicates.push(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
+                return;
+            }
+        }
+
         let mut iter = class.iter();
         if let Some(representative) = iter.next() {
             for other in iter {
@@ -489,6 +513,13 @@ fn optimize(expr: &mut MirScalarExpr, predicates: &PredicateStructure) {
             }
         },
     );
+}
+
+/// The number of nodes in the expression.
+fn nodes(expr: &MirScalarExpr) -> usize {
+    let mut count = 0;
+    expr.visit(&mut |_e| count += 1);
+    count
 }
 
 #[derive(Default)]
