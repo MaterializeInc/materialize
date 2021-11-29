@@ -20,7 +20,7 @@ ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
 flate2 = "1.0.22"
-futures = "0.3.17"
+futures = "0.3.18"
 http = "0.2.5"
 interchange = { path = "../interchange" }
 itertools = "0.10.1"

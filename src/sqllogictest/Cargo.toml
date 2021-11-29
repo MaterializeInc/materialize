@@ -11,7 +11,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["clock", "st
 coord = { path = "../coord" }
 expr = { path = "../expr" }
 fallible-iterator = "0.2.0"
-futures = "0.3.17"
+futures = "0.3.18"
 lazy_static = "1.0.0"
 materialized = { path = "../materialized" }
 md-5 = "0.9.0"

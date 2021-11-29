@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.47"
-futures = "0.3.17"
+futures = "0.3.18"
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
 native-tls = "0.2.8"
 openssl = { version = "0.10.38", features = ["vendored"] }
