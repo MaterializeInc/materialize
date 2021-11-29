@@ -584,6 +584,7 @@ impl AstDisplay for Op {
 impl_display!(Op);
 
 impl Op {
+    // returns the bare operator name in all cases, rather than the fully qualified name
     pub fn op_str(&self) -> &str {
         match self {
             Op::Bare(name) => &*name,
