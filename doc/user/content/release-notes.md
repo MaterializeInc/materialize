@@ -112,6 +112,8 @@ List new features before bug fixes.
 
 - Support `ROWS FROM` in `FROM` clauses.
 
+- Added support for `OPERATOR(<schema>.<op>)`. Schema can either be omitted or must be `pg_catalog`.
+
 {{% version-header v0.10.0 %}}
 
 - Allow ingesting avro schemas whose top node is not a record type.

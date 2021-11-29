@@ -90,7 +90,7 @@ pub enum Expr<T: AstInfo> {
     },
     /// Unary or binary operator
     Op {
-        op: String,
+        op: Op,
         expr1: Box<Expr<T>>,
         expr2: Option<Box<Expr<T>>>,
     },
@@ -149,25 +149,25 @@ pub enum Expr<T: AstInfo> {
     /// `<expr> <op> ANY/SOME (<query>)`
     AnySubquery {
         left: Box<Expr<T>>,
-        op: String,
+        op: Op,
         right: Box<Query<T>>,
     },
     /// `<expr> <op> ANY (<array_expr>)`
     AnyExpr {
         left: Box<Expr<T>>,
-        op: String,
+        op: Op,
         right: Box<Expr<T>>,
     },
     /// `<expr> <op> ALL (<query>)`
     AllSubquery {
         left: Box<Expr<T>>,
-        op: String,
+        op: Op,
         right: Box<Query<T>>,
     },
     /// `<expr> <op> ALL (<array_expr>)`
     AllExpr {
         left: Box<Expr<T>>,
-        op: String,
+        op: Op,
         right: Box<Expr<T>>,
     },
     /// `ARRAY[<expr>*]`
@@ -492,48 +492,48 @@ impl<T: AstInfo> Expr<T> {
         }
     }
 
-    pub fn binop(self, op: &str, right: Expr<T>) -> Expr<T> {
+    pub fn binop(self, op: Op, right: Expr<T>) -> Expr<T> {
         Expr::Op {
-            op: op.to_string(),
+            op,
             expr1: Box::new(self),
             expr2: Some(Box::new(right)),
         }
     }
 
     pub fn lt(self, right: Expr<T>) -> Expr<T> {
-        self.binop("<", right)
+        self.binop(Op::bare("<"), right)
     }
 
     pub fn lt_eq(self, right: Expr<T>) -> Expr<T> {
-        self.binop("<=", right)
+        self.binop(Op::bare("<="), right)
     }
 
     pub fn gt(self, right: Expr<T>) -> Expr<T> {
-        self.binop(">", right)
+        self.binop(Op::bare(">"), right)
     }
 
     pub fn gt_eq(self, right: Expr<T>) -> Expr<T> {
-        self.binop(">=", right)
+        self.binop(Op::bare(">="), right)
     }
 
     pub fn equals(self, right: Expr<T>) -> Expr<T> {
-        self.binop("=", right)
+        self.binop(Op::bare("="), right)
     }
 
     pub fn minus(self, right: Expr<T>) -> Expr<T> {
-        self.binop("-", right)
+        self.binop(Op::bare("-"), right)
     }
 
     pub fn multiply(self, right: Expr<T>) -> Expr<T> {
-        self.binop("*", right)
+        self.binop(Op::bare("*"), right)
     }
 
     pub fn modulo(self, right: Expr<T>) -> Expr<T> {
-        self.binop("%", right)
+        self.binop(Op::bare("%"), right)
     }
 
     pub fn divide(self, right: Expr<T>) -> Expr<T> {
-        self.binop("/", right)
+        self.binop(Op::bare("/"), right)
     }
 
     pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
@@ -556,6 +556,47 @@ impl<T: AstInfo> Expr<T> {
 
     pub fn take(&mut self) -> Expr<T> {
         mem::replace(self, Expr::Identifier(vec![]))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Op {
+    Bare(String),
+    Qualified { schema: Vec<Ident>, name: String },
+}
+
+impl AstDisplay for Op {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Op::Bare(s) => f.write_str(s),
+            Op::Qualified { schema, name } => {
+                f.write_str("OPERATOR(");
+                for part in schema {
+                    f.write_node(part);
+                    f.write_str(".");
+                }
+                f.write_str(&name);
+                f.write_str(")");
+            }
+        }
+    }
+}
+impl_display!(Op);
+
+impl Op {
+    // returns the bare operator name in all cases, rather than the fully qualified name
+    pub fn op_str(&self) -> &str {
+        match self {
+            Op::Bare(name) => &*name,
+            Op::Qualified { schema: _, name } => &*name,
+        }
+    }
+
+    pub fn bare<S>(name: S) -> Op
+    where
+        S: Into<String>,
+    {
+        Op::Bare(name.into())
     }
 }
 

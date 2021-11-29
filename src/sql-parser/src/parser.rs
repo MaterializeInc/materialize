@@ -393,18 +393,18 @@ impl<'a> Parser<'a> {
                 }
 
                 Ok(Expr::Op {
-                    op,
+                    op: Op::bare(op),
                     expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                     expr2: None,
                 })
             }
             Token::Op(op) if op == "+" => Ok(Expr::Op {
-                op,
+                op: Op::bare(op),
                 expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                 expr2: None,
             }),
             Token::Op(op) if op == "~" => Ok(Expr::Op {
-                op,
+                op: Op::bare(op),
                 expr1: Box::new(self.parse_subexpr(Precedence::Other)?),
                 expr2: None,
             }),
@@ -903,19 +903,25 @@ impl<'a> Parser<'a> {
         let tok = self.next_token().unwrap(); // safe as EOF's precedence is the lowest
 
         let regular_binary_operator = match &tok {
-            Token::Op(s) => Some(s.as_str()),
-            Token::Eq => Some("="),
-            Token::Star => Some("*"),
-            Token::Keyword(ILIKE) => Some("~~*"),
-            Token::Keyword(LIKE) => Some("~~"),
+            Token::Op(s) => Some(Op::bare(s)),
+            Token::Eq => Some(Op::bare("=")),
+            Token::Star => Some(Op::bare("*")),
+            Token::Keyword(ILIKE) => Some(Op::bare("~~*")),
+            Token::Keyword(LIKE) => Some(Op::bare("~~")),
             Token::Keyword(NOT) => {
                 if self.parse_keyword(LIKE) {
-                    Some("!~~")
+                    Some(Op::bare("!~~"))
                 } else if self.parse_keyword(ILIKE) {
-                    Some("!~~*")
+                    Some(Op::bare("!~~*"))
                 } else {
                     None
                 }
+            }
+            Token::Keyword(OPERATOR) => {
+                self.expect_token(&Token::LParen)?;
+                let op = self.parse_operator_name()?;
+                self.expect_token(&Token::RParen)?;
+                Some(op)
             }
             _ => None,
         };
@@ -931,13 +937,13 @@ impl<'a> Parser<'a> {
                     if kw == ALL {
                         Expr::AllSubquery {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op,
                             right: Box::new(subquery),
                         }
                     } else {
                         Expr::AnySubquery {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op,
                             right: Box::new(subquery),
                         }
                     }
@@ -947,13 +953,13 @@ impl<'a> Parser<'a> {
                     if kw == ALL {
                         Expr::AllExpr {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op,
                             right: Box::new(right),
                         }
                     } else {
                         Expr::AnyExpr {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op,
                             right: Box::new(right),
                         }
                     }
@@ -963,7 +969,7 @@ impl<'a> Parser<'a> {
                 Ok(expr)
             } else {
                 Ok(Expr::Op {
-                    op: op.into(),
+                    op,
                     expr1: Box::new(expr),
                     expr2: Some(Box::new(self.parse_subexpr(precedence)?)),
                 })
@@ -1160,6 +1166,40 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    /// Parse a possibly qualified, possibly quoted operator, e.g.
+    /// `+`, `pg_catalog.+`, or `"pg_catalog".+`
+    fn parse_operator_name(&mut self) -> Result<Op, ParserError> {
+        let mut schema = vec![];
+        let original_pos = self.index;
+        while !matches!(self.peek_token(), Some(Token::Op(_)) | Some(Token::Star)) {
+            schema.push(self.parse_identifier()?);
+            self.expect_token(&Token::Dot)?;
+        }
+
+        // Supporting qualified operators fully is difficult, so we simplify the
+        // problem by requiring that the operator's schema is `pg_catalog`.
+        // See #9282 for details.
+        // Once materialize supports the creation of custom operators, this code can be removed
+        if !(schema.is_empty() || (schema.len() == 1 && schema[0].as_str() == "pg_catalog")) {
+            return parser_err!(
+                self,
+                original_pos,
+                "Expected {}, found {}",
+                "pg_catalog",
+                schema.iter().map(|e| e.to_string()).join("."),
+            );
+        }
+
+        match self.next_token() {
+            Some(Token::Op(op)) => Ok(Op::Qualified { schema, name: op }),
+            Some(Token::Star) => Ok(Op::Qualified {
+                schema,
+                name: String::from("*"),
+            }),
+            _ => self.expected(self.peek_pos(), "operator", self.peek_token()),
+        }
+    }
+
     /// Parses the parens following the `[ NOT ] IN` operator
     fn parse_in(&mut self, expr: Expr<Raw>, negated: bool) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
@@ -1232,6 +1272,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(BETWEEN) => Precedence::Like,
                 Token::Keyword(ILIKE) => Precedence::Like,
                 Token::Keyword(LIKE) => Precedence::Like,
+                Token::Keyword(OPERATOR) => Precedence::Other,
                 Token::Op(s) => match s.as_str() {
                     "<" | "<=" | "<>" | "!=" | ">" | ">=" => Precedence::Cmp,
                     "+" | "-" => Precedence::PlusMinus,
