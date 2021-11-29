@@ -121,7 +121,7 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, InputEr
             return Err(InputError {
                 msg: format!(
                     "invalid builtin argument name '{}': \
-                     only lowercase letters, numbers, and hyphens allowed",
+                     only lowercase letters, numbers, hyphens, underscores, and stars allowed",
                     pieces[0]
                 ),
                 pos,
