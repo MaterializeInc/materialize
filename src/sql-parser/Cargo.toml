@@ -12,7 +12,7 @@ hex = "0.4.3"
 itertools = "0.10.1"
 lazy_static = "1.4.0"
 log = "0.4.13"
-ore = { path = "../ore", default-features = false }
+ore = { path = "../ore", default-features = false, features = ["stack"] }
 phf = { version = "0.10.0", features = ["uncased"] }
 uncased = "0.9.6"
 
@@ -22,7 +22,7 @@ unicode-width = "0.1.9"
 
 [build-dependencies]
 anyhow = "1.0.50"
-ore = { path = "../ore", default-features = false }
+ore = { path = "../ore", default-features = false, features = ["stack"] }
 phf = { version = "0.10.0", features = ["uncased"] }
 phf_codegen = { version = "0.10.0" }
 uncased = "0.9.6"
