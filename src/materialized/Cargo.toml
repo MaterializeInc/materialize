@@ -61,7 +61,7 @@ num_cpus = "1.0.0"
 openssl = { version = "0.10.38", features = ["vendored"] }
 openssl-sys = { version = "0.9.71", features = ["vendored"] }
 ore = { path = "../ore" }
-os_info = "3.0.7"
+os_info = "3.0.8"
 pid-file = { path = "../pid-file" }
 pgwire = { path = "../pgwire" }
 prof = { path = "../prof" }
@@ -72,7 +72,7 @@ reqwest = { version = "0.11.6", features = ["json"] }
 rlimit = "0.6.2"
 semver = "1.0.4"
 serde = { version = "1.0.130", features = ["derive"] }
-serde_json = "1.0.71"
+serde_json = "1.0.72"
 shell-words = "1.0.0"
 sql = { path = "../sql" }
 structopt = "0.3.25"
@@ -115,7 +115,7 @@ predicates = "2.0.3"
 rand = "0.8.4"
 repr = { path = "../repr" }
 reqwest = { version = "0.11.6", features = ["blocking"] }
-serde_json = "1.0.71"
+serde_json = "1.0.72"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
