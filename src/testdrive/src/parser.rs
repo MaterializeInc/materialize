@@ -115,7 +115,7 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, InputEr
             }
         };
         lazy_static! {
-            static ref VALID_KEY_REGEX: Regex = Regex::new("^[a-z0-9\\-]*$").unwrap();
+            static ref VALID_KEY_REGEX: Regex = Regex::new("^[a-z0-9_\\-\\.\\*]*$").unwrap();
         }
         if !VALID_KEY_REGEX.is_match(pieces[0]) {
             return Err(InputError {
@@ -438,8 +438,9 @@ impl<'a> Iterator for BuiltinReader<'a> {
         let mut token = String::new();
         let mut nesting = Vec::new();
         let mut done = false;
+        let mut quoted = false;
         for (i, c) in iter {
-            if c == ' ' && nesting.is_empty() {
+            if c == ' ' && nesting.is_empty() && !quoted {
                 done = true;
                 continue;
             } else if done {
@@ -456,9 +457,9 @@ impl<'a> Iterator for BuiltinReader<'a> {
                 self.pos += i;
                 self.inner = &self.inner[i..];
                 return Some(Ok((pos, token)));
-            } else if c == '{' || c == '[' {
+            } else if (c == '{' || c == '[') && !quoted {
                 nesting.push(c);
-            } else if c == '}' || c == ']' {
+            } else if (c == '}' || c == ']') && !quoted {
                 if let Some(nested) = nesting.last() {
                     if (nested == &'{' && c == '}') || (nested == &'[' && c == ']') {
                         nesting.pop();
@@ -480,6 +481,9 @@ impl<'a> Iterator for BuiltinReader<'a> {
                         ),
                     }));
                 }
+            } else if c == '"' {
+                quoted = !quoted;
+                continue;
             }
             token.push(c);
         }
@@ -491,6 +495,13 @@ impl<'a> Iterator for BuiltinReader<'a> {
                     "command argument has unterminated open {}",
                     if nested == &'{' { "brace" } else { "bracket" }
                 ),
+            }));
+        }
+
+        if quoted {
+            return Some(Err(InputError {
+                pos: self.pos,
+                msg: format!("command argument has unterminated open double quote",),
             }));
         }
 
