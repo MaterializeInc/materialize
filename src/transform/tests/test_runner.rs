@@ -20,13 +20,15 @@ mod tests {
     use std::fmt::Write;
 
     use anyhow::{anyhow, Error};
-    use expr::{GlobalId, Id, MirRelationExpr};
+    use expr::{GlobalId, Id, MirRelationExpr, MirScalarExpr};
     use expr_test_util::{
-        build_rel, json_to_spec, MirRelationExprDeserializeContext, TestCatalog, RTI,
+        build_rel, json_to_spec, MirRelationExprDeserializeContext,
+        MirScalarExprDeserializeContext, TestCatalog, RTI,
     };
     use lowertest::{deserialize, tokenize};
     use ore::str::separated;
     use proc_macro2::TokenTree;
+    use repr::RelationType;
     use transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
     use transform::{Optimizer, Transform, TransformArgs};
 
@@ -420,6 +422,33 @@ mod tests {
         Ok(out)
     }
 
+    fn test_canonicalize_equiv(s: &str) -> Result<String, Error> {
+        let mut input_stream = tokenize(&s).map_err(|e| anyhow!(e))?.into_iter();
+        let mut ctx = MirScalarExprDeserializeContext::default();
+        let equivalences: Vec<Vec<MirScalarExpr>> =
+            deserialize(&mut input_stream, "Vec<Vec<MirScalarExpr>>", &RTI, &mut ctx)
+                .map_err(|e| anyhow!(e))?;
+        let input_type: RelationType =
+            deserialize(&mut input_stream, "RelationType", &RTI, &mut ctx)
+                .map_err(|e| anyhow!(e))?;
+
+        let mut join = MirRelationExpr::join_scalars(
+            vec![MirRelationExpr::constant(Vec::new(), input_type)],
+            equivalences,
+        );
+
+        let predicates = transform::predicate_propagation::PredicateKnowledge::action(
+            &mut join,
+            &mut Default::default(),
+        )?;
+        let mut out = String::new();
+        for predicate in predicates {
+            write!(out, "{}\n", predicate)?;
+        }
+
+        Ok(out)
+    }
+
     #[test]
     fn run() {
         datadriven::walk("tests/testdata", |f| {
@@ -491,6 +520,10 @@ mod tests {
                             Err(err) => format!("error: {}\n", err),
                         }
                     }
+                    "canonicalize-join" => match test_canonicalize_equiv(&s.input) {
+                        Ok(msg) => msg,
+                        Err(err) => format!("error: {}\n", err),
+                    },
                     _ => panic!("unknown directive: {}", s.directive),
                 }
             })
