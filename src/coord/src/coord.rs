@@ -4122,7 +4122,7 @@ where
     fn prep_scalar_expr(expr: &mut MirScalarExpr, style: ExprPrepStyle) -> Result<(), CoordError> {
         // Replace calls to `MzLogicalTimestamp` as described above.
         let mut observes_ts = false;
-        expr.visit_mut(&mut |e| {
+        expr.visit_mut_post(&mut |e| {
             if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
                 observes_ts = true;
                 if let ExprPrepStyle::OneShot { logical_time } = style {

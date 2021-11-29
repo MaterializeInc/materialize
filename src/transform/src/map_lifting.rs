@@ -335,7 +335,7 @@ impl LiteralLifting {
                                 } else {
                                     let mut cloned_scalar = scalar.clone();
                                     // Propagate literals through expressions and remap columns.
-                                    cloned_scalar.visit_mut(&mut |e| {
+                                    cloned_scalar.visit_mut_post(&mut |e| {
                                         if let MirScalarExpr::Column(old_id) = e {
                                             let new_id = projection[*old_id];
                                             if new_id >= first_literal_id {
@@ -362,7 +362,7 @@ impl LiteralLifting {
                     if !literals.is_empty() {
                         let input_arity = input.arity();
                         for expr in exprs.iter_mut() {
-                            expr.visit_mut(&mut |e| {
+                            expr.visit_mut_post(&mut |e| {
                                 if let MirScalarExpr::Column(c) = e {
                                     if *c >= input_arity {
                                         *e = literals[*c - input_arity].clone();
@@ -388,7 +388,7 @@ impl LiteralLifting {
                         // in predicates and then lift the `map` around the filter.
                         let input_arity = input.arity();
                         for expr in predicates.iter_mut() {
-                            expr.visit_mut(&mut |e| {
+                            expr.visit_mut_post(&mut |e| {
                                 if let MirScalarExpr::Column(c) = e {
                                     if *c >= input_arity {
                                         *e = literals[*c - input_arity].clone();
@@ -441,7 +441,7 @@ impl LiteralLifting {
                         let new_input_mapper = JoinInputMapper::new(inputs);
                         for equivalence in equivalences.iter_mut() {
                             for expr in equivalence.iter_mut() {
-                                expr.visit_mut(&mut |e| {
+                                expr.visit_mut_post(&mut |e| {
                                     if let MirScalarExpr::Column(c) = e {
                                         let (col, input) = old_input_mapper.map_column_to_local(*c);
                                         if col >= new_input_mapper.input_arity(input) {
@@ -499,7 +499,7 @@ impl LiteralLifting {
                         let input_arity = input.arity();
                         // Inline literals into group key expressions.
                         for expr in group_key.iter_mut() {
-                            expr.visit_mut(&mut |e| {
+                            expr.visit_mut_post(&mut |e| {
                                 if let MirScalarExpr::Column(c) = e {
                                     if *c >= input_arity {
                                         *e = literals[*c - input_arity].clone();
@@ -509,7 +509,7 @@ impl LiteralLifting {
                         }
                         // Inline literals into aggregate value selector expressions.
                         for aggr in aggregates.iter_mut() {
-                            aggr.expr.visit_mut(&mut |e| {
+                            aggr.expr.visit_mut_post(&mut |e| {
                                 if let MirScalarExpr::Column(c) = e {
                                     if *c >= input_arity {
                                         *e = literals[*c - input_arity].clone();
@@ -671,7 +671,7 @@ impl LiteralLifting {
                         let input_arity = input.arity();
                         for key in keys.iter_mut() {
                             for expr in key.iter_mut() {
-                                expr.visit_mut(&mut |e| {
+                                expr.visit_mut_post(&mut |e| {
                                     if let MirScalarExpr::Column(c) = e {
                                         if *c >= input_arity {
                                             *e = literals[*c - input_arity].clone();
