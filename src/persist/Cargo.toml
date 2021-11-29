@@ -26,7 +26,7 @@ aws-sdk-s3 = { version = "0.0.25-alpha", default-features = false }
 crossbeam-channel = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
-futures-util = "0.3.16"
+futures-util = "0.3.18"
 futures-executor = "0.3.16"
 log = "0.4.13"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
