@@ -624,8 +624,7 @@ impl AppliedState {
         let mut deleted_unsealed_batches = vec![];
         let mut deleted_trace_batches = vec![];
         for arrangement in self.arrangements.values_mut() {
-            deleted_unsealed_batches
-                .extend(arrangement.unsealed_truncate(arrangement.trace_ts_upper())?);
+            deleted_unsealed_batches.extend(arrangement.unsealed_evict());
             let (written_bytes, deleted_batches) = arrangement.trace_step(maintainer)?;
             total_written_bytes += written_bytes;
             deleted_trace_batches.extend(deleted_batches);
