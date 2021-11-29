@@ -107,12 +107,17 @@ List new features before bug fixes.
 
 - Prevent overflow on operations combining [`timestamp`] and [`interval`].
 
-- Support explicit reference to the default collation (`<expr> COLLATE pg_catalog.default`).
-  Other collations are not yet supported.
-
 - Support `ROWS FROM` in `FROM` clauses.
 
-- Added support for `OPERATOR(<schema>.<op>)`. Schema can either be omitted or must be `pg_catalog`.
+- Improve PostgreSQL compatibility:
+
+  - Added support for `OPERATOR(<schema>.<op>)`. Schema can either be omitted or must be `pg_catalog`.
+
+  - Support explicit reference to the default collation (`<expr> COLLATE pg_catalog.default`).
+      Other collations are not yet supported.
+
+  Together these changes enable the `\dt <pattern>` command
+  in the [psql terminal](/connect/cli).
 
 {{% version-header v0.10.0 %}}
 
