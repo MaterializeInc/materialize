@@ -438,8 +438,9 @@ impl<'a> Iterator for BuiltinReader<'a> {
         let mut token = String::new();
         let mut nesting = Vec::new();
         let mut done = false;
+        let mut quoted = false;
         for (i, c) in iter {
-            if c == ' ' && nesting.is_empty() {
+            if c == ' ' && nesting.is_empty() && !quoted {
                 done = true;
                 continue;
             } else if done {
@@ -456,9 +457,9 @@ impl<'a> Iterator for BuiltinReader<'a> {
                 self.pos += i;
                 self.inner = &self.inner[i..];
                 return Some(Ok((pos, token)));
-            } else if c == '{' || c == '[' {
+            } else if (c == '{' || c == '[') && !quoted {
                 nesting.push(c);
-            } else if c == '}' || c == ']' {
+            } else if (c == '}' || c == ']') && !quoted {
                 if let Some(nested) = nesting.last() {
                     if (nested == &'{' && c == '}') || (nested == &'[' && c == ']') {
                         nesting.pop();
@@ -480,6 +481,11 @@ impl<'a> Iterator for BuiltinReader<'a> {
                         ),
                     }));
                 }
+            } else if c == '"' && nesting.is_empty() {
+                // remove the double quote for un-nested commands such as: command="\dt public"
+                // keep the quotes when inside of a nested object such as: schema={ "type" : "array" }
+                quoted = !quoted;
+                continue;
             }
             token.push(c);
         }
@@ -491,6 +497,13 @@ impl<'a> Iterator for BuiltinReader<'a> {
                     "command argument has unterminated open {}",
                     if nested == &'{' { "brace" } else { "bracket" }
                 ),
+            }));
+        }
+
+        if quoted {
+            return Some(Err(InputError {
+                pos: self.pos,
+                msg: format!("command argument has unterminated open double quote",),
             }));
         }
 

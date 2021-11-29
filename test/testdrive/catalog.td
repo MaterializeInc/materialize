@@ -28,6 +28,20 @@ $ psql-execute command=\dn
  mz_internal |
  public      |
 
+$ psql-execute command="\dn mz_catalog"
+\  List of schemas
+    Name    | Owner
+------------+-------
+ mz_catalog |
+
+
+$ psql-execute command="\dn mz_*"
+\   List of schemas
+    Name     | Owner
+-------------+-------
+ mz_catalog  |
+ mz_internal |
+
 # What objects do we have by default?
 > SHOW OBJECTS
 name
