@@ -546,3 +546,27 @@ mz_peek_durations
 mz_perf_peek_durations_aggregates
 mz_perf_peek_durations_bucket
 mz_perf_peek_durations_core
+
+# Create a second schema with the same table name as above
+> CREATE SCHEMA tester2
+
+> CREATE TABLE tester2.test_table (a int)
+
+$ psql-execute command="\dt tester.*"
+\          List of relations
+ Schema |    Name    | Type  | Owner
+--------+------------+-------+-------
+ tester | test_table | table |
+
+$ psql-execute command="\dt tester.test_table"
+\          List of relations
+ Schema |    Name    | Type  | Owner
+--------+------------+-------+-------
+ tester | test_table | table |
+
+$ psql-execute command="\dt *.test_table"
+\          List of relations
+ Schema  |    Name    | Type  | Owner
+---------+------------+-------+-------
+ tester  | test_table | table |
+ tester2 | test_table | table |
