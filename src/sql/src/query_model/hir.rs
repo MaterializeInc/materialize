@@ -66,9 +66,12 @@ impl FromHir {
             }
             HirRelationExpr::Map { input, mut scalars } => {
                 let mut box_id = self.generate_select(*input);
+
                 loop {
                     let old_arity = self.model.get_box(box_id).borrow().columns.len();
 
+                    // 1) Find a batch of scalars such that no scalar in the
+                    // current batch depends on columns from the same batch.
                     let end_idx = scalars
                         .iter_mut()
                         .position(|s| {
@@ -81,11 +84,16 @@ impl FromHir {
                             requires_nonexistent_column
                         })
                         .unwrap_or(scalars.len());
+
+                    // 2) Add the scalars in the batch to the box.
                     for scalar in scalars.drain(0..end_idx) {
                         let expr = self.generate_expr(scalar, box_id);
                         let b = self.model.get_box(box_id);
                         b.borrow_mut().columns.push(Column { expr, alias: None });
                     }
+
+                    // 3) If there are scalars remaining, wrap the box so the
+                    // remaining scalars can point to the scalars in this batch.
                     if scalars.is_empty() {
                         break;
                     }
