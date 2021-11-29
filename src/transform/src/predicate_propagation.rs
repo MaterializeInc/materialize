@@ -450,6 +450,8 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: &repr::
     // Visit each predicate and rewrite using the representative from each class.
     for predicate in predicates.iter_mut() {
         optimize(predicate, &structured);
+        // Simplify the predicate after replacements
+        predicate.reduce(input_type);
         // Add the optimized predicate to the knowledge base
         structured.add_predicate(predicate);
     }
