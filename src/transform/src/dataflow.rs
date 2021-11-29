@@ -31,10 +31,10 @@ pub fn optimize_dataflow(
     indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
 ) -> Result<(), TransformError> {
     // Inline views that are used in only one other view.
-    inline_views(dataflow);
+    inline_views(dataflow)?;
 
     // Logical optimization pass after view inlining
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer());
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer())?;
 
     optimize_dataflow_filters(dataflow)?;
     // TODO: when the linear operator contract ensures that propagated
@@ -47,10 +47,10 @@ pub fn optimize_dataflow(
 
     // A smaller logical optimization pass after projections and filters are
     // pushed down across views.
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_cleanup_pass());
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_cleanup_pass())?;
 
     // Physical optimization pass
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer());
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer())?;
 
     optimize_dataflow_monotonic(dataflow)?;
 
@@ -58,7 +58,7 @@ pub fn optimize_dataflow(
 }
 
 /// Inline views used in one other view, and in no exported objects.
-fn inline_views(dataflow: &mut DataflowDesc) {
+fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // We cannot inline anything whose `BuildDesc::id` appears in either the
     // `index_exports` or `sink_exports` of `dataflow`, because we lose our
     // ability to name it.
@@ -111,21 +111,17 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             let mut id_gen = crate::IdGen::default();
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
-            update_let
-                .action(
-                    dataflow.objects_to_build[index].view.as_inner_mut(),
-                    &mut HashMap::new(),
-                    &mut id_gen,
-                )
-                .expect("Expecting `update_let` to be infallible");
+            update_let.action(
+                dataflow.objects_to_build[index].view.as_inner_mut(),
+                &mut HashMap::new(),
+                &mut id_gen,
+            )?;
             // Assign new identifiers to the other relation.
-            update_let
-                .action(
-                    dataflow.objects_to_build[other].view.as_inner_mut(),
-                    &mut HashMap::new(),
-                    &mut id_gen,
-                )
-                .expect("Expecting `update_let` to be infallible");
+            update_let.action(
+                dataflow.objects_to_build[other].view.as_inner_mut(),
+                &mut HashMap::new(),
+                &mut id_gen,
+            )?;
             // Install the `new_local` name wherever `global_id` was used.
             dataflow.objects_to_build[other]
                 .view
@@ -157,6 +153,8 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             dataflow.objects_to_build.remove(index);
         }
     }
+
+    Ok(())
 }
 
 /// Performs either the logical or the physical optimization pass on the
@@ -165,7 +163,7 @@ fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
     indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     optimizer: &Optimizer,
-) {
+) -> Result<(), TransformError> {
     // Re-optimize each dataflow
     // TODO(mcsherry): we should determine indexes from the optimized representation
     // just before we plan to install the dataflow. This would also allow us to not
@@ -174,10 +172,10 @@ fn optimize_dataflow_relations(
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.
         // Re-run all optimizations on the composite views.
-        optimizer
-            .transform(object.view.as_inner_mut(), &indexes)
-            .unwrap();
+        optimizer.transform(object.view.as_inner_mut(), &indexes)?;
     }
+
+    Ok(())
 }
 
 /// Pushes demand information from published outputs to dataflow inputs,
