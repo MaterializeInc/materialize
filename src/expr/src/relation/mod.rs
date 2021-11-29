@@ -1436,7 +1436,7 @@ impl MirRelationExprVisitor {
             f(e);
             Ok::<_, RecursionLimitError>(())
         })
-        .unwrap()
+        .expect("Unexpected error in `visit_children` call")
     }
 
     /// Applies an infallible mutable `f` to each `expr` child of type `MirRelationExpr`.
@@ -1449,7 +1449,7 @@ impl MirRelationExprVisitor {
             f(e);
             Ok::<_, RecursionLimitError>(())
         })
-        .unwrap()
+        .expect("Unexpected error in `visit_mut_children` call")
     }
 
     /// Post-order immutable fallible `MirRelationExpr` visitor for `expr`.
@@ -1684,7 +1684,7 @@ impl MirRelationExprVisitor {
             f(s);
             Ok::<_, RecursionLimitError>(())
         })
-        .unwrap()
+        .expect("Unexpected error in `visit_scalars_mut` call")
     }
 }
 
