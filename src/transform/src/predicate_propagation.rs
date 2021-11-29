@@ -25,6 +25,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
+use expr::canonicalize;
 use expr::{BinaryFunc, JoinInputMapper, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use repr::Datum;
 use repr::ScalarType;
@@ -258,7 +259,7 @@ impl PredicateKnowledge {
                 }
 
                 knowledge.extend(new_predicates);
-                normalize_predicates(&mut knowledge);
+                normalize_predicates(&mut knowledge, &self_type);
                 knowledge
             }
             MirRelationExpr::Reduce {
@@ -366,7 +367,7 @@ impl PredicateKnowledge {
             }
         };
 
-        normalize_predicates(&mut predicates);
+        normalize_predicates(&mut predicates, &self_type);
         if predicates
             .iter()
             .any(|p| p.is_literal_false() || p.is_literal_null())
@@ -381,7 +382,7 @@ impl PredicateKnowledge {
 ///
 /// The method extracts equality statements, chooses representatives for each equivalence relation,
 /// and substitutes the representatives.
-fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
+fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: &repr::RelationType) {
     // Remove duplicates
     predicates.sort();
     predicates.dedup();
@@ -393,58 +394,23 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
     // an expression with substitutions performed.
 
     let mut classes = Vec::new();
-    for predicate in predicates.iter() {
+    let mut non_equiv_predicates = Vec::new();
+    for predicate in predicates.drain(..) {
         if let MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::Eq,
         } = predicate
         {
-            let mut class = Vec::new();
-            class.extend(
-                classes
-                    .iter()
-                    .position(|c: &Vec<MirScalarExpr>| c.contains(&**expr1))
-                    .map(|p| classes.remove(p))
-                    .unwrap_or_else(|| vec![(**expr1).clone()]),
-            );
-            class.extend(
-                classes
-                    .iter()
-                    .position(|c: &Vec<MirScalarExpr>| c.contains(&**expr2))
-                    .map(|p| classes.remove(p))
-                    .unwrap_or_else(|| vec![(**expr2).clone()]),
-            );
-            classes.push(class);
+            classes.push(vec![(*expr1), (*expr2)]);
+        } else {
+            non_equiv_predicates.push(predicate);
         }
     }
 
-    // Order each class so that literals come first, then column references, then weird things.
-    for class in classes.iter_mut() {
-        use std::cmp::Ordering;
-        class.sort_by(|x, y| match (x, y) {
-            (MirScalarExpr::Literal { .. }, MirScalarExpr::Literal { .. }) => x.cmp(y),
-            (MirScalarExpr::Literal { .. }, _) => Ordering::Less,
-            (_, MirScalarExpr::Literal { .. }) => Ordering::Greater,
-            (MirScalarExpr::Column(_), MirScalarExpr::Column(_)) => x.cmp(y),
-            (MirScalarExpr::Column(_), _) => Ordering::Less,
-            (_, MirScalarExpr::Column(_)) => Ordering::Greater,
-            // This last class could be problematic if a complex expression sorts lower than
-            // expressions it contains (e.g. in x + y = x, if x + y comes before x then x would
-            // repeatedly be replaced by x + y).
-            _ => (nodes(x), x).cmp(&(nodes(y), y)),
-        });
-        class.dedup();
-        // If we have a second literal, not equal to the first, we have a contradiction and can
-        // just replace everything with false.
-        if let Some(second) = class.get(1) {
-            if second.is_literal_ok() {
-                predicates.push(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
-            }
-        }
-    }
-    // TODO: Sort by complexity of representative, and perform substitutions within predicates.
-    classes.sort();
+    *predicates = non_equiv_predicates;
+
+    canonicalize::canonicalize_equivalences(&mut classes, std::slice::from_ref(input_type));
 
     // let mut normalization = HashMap::<&MirScalarExpr, &MirScalarExpr>::new();
     let mut structured = PredicateStructure::default();
@@ -458,7 +424,6 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
     }
 
     // Visit each predicate and rewrite using the representative from each class.
-    // Feel welcome to remove all equality tests and re-introduce canonical tests.
     for predicate in predicates.iter_mut() {
         optimize(predicate, &structured);
         // Add the optimized predicate to the knowledge base
@@ -524,13 +489,6 @@ fn optimize(expr: &mut MirScalarExpr, predicates: &PredicateStructure) {
             }
         },
     );
-}
-
-/// The number of nodes in the expression.
-fn nodes(expr: &MirScalarExpr) -> usize {
-    let mut count = 0;
-    expr.visit(&mut |_e| count += 1);
-    count
 }
 
 #[derive(Default)]

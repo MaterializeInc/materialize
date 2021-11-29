@@ -29,7 +29,6 @@ predicate-propagation
 (filter (project (constant [[null]] [int64]) [#0 #0]) [(call_binary eq #0 #1)])
 ----
 isnull(#0)
-(#0 = #0)
 (#0 = #1)
 
 build apply=PredicateKnowledge
@@ -61,7 +60,8 @@ build apply=PredicateKnowledge
 (filter (constant [[1] [1]] [int64]) [(call_binary eq #0 2)])
 ----
 %0 =
-| Constant
+| Constant (1) (1)
+| Filter (#0 = 2)
 
 # Reduce
 
@@ -142,6 +142,13 @@ build apply=PredicateKnowledge
 | Filter (#0 = #0)
 | Project (#2, #3)
 
+predicate-propagation
+(map (project (get x) [#0 #0]) [#1 (call_binary add_int32 #1 1)])
+----
+(#0 = #1)
+(#0 = #2)
+(#3 = (#0 + 1))
+
 # Union
 
 # #0 = #1 lifted from all branches
@@ -210,9 +217,7 @@ build apply=PredicateKnowledge
 predicate-propagation
 (map (union [(project (get x) [#0 #0]) (get x) (project (get x) [#0 #0])]) [#1 (call_binary add_int32 #1 1)])
 ----
-(#1 = #1)
 (#1 = #2)
-(#3 = #3)
 (#3 = (#1 + 1))
 
 # FlatMap
@@ -334,46 +339,38 @@ predicate-propagation
 (filter (get x) [(call_binary eq #0 (call_binary add_int32 #0 #1))])
 ----
 !(isnull(#1))
-(#0 = #0)
 (#0 = (#0 + #1))
 
 predicate-propagation
 (project (filter (get x) [(call_binary eq #0 (call_binary add_int32 #0 #1))]) [0 1])
 ----
 !(isnull(#1))
-(#0 = #0)
 (#0 = (#0 + #1))
 
 predicate-propagation
 (filter (get x) [(call_binary eq #0 (call_binary add_int32 #0 #1)) (call_binary eq #0 #1)])
 ----
 !(isnull(#0))
-(#0 = #0)
 (#0 = #1)
 (#0 = (#0 + #0))
-(#0 = (#0 + #1))
 
 predicate-propagation
 (project (filter (get x) [(call_binary eq #0 (call_binary add_int32 #0 #1)) (call_binary eq #0 #1)]) [0 1])
 ----
 !(isnull(#0))
-(#0 = #0)
 (#0 = #1)
 (#0 = (#0 + #0))
-(#0 = (#0 + #1))
 
 predicate-propagation
 (filter (get x) [(call_binary eq (call_binary add_int32 #0 #1) (call_binary mul_int32 10 (call_binary add_int32 #0 #1)))])
 ----
 !(isnull(#1))
-((#0 + #1) = (#0 + #1))
 ((#0 + #1) = (10 * (#0 + #1)))
 
 predicate-propagation
 (project (filter (get x) [(call_binary eq (call_binary add_int32 #0 #1) (call_binary mul_int32 10 (call_binary add_int32 #0 #1)))]) [0 1])
 ----
 !(isnull(#1))
-((#0 + #1) = (#0 + #1))
 ((#0 + #1) = (10 * (#0 + #1)))
 
 predicate-propagation
@@ -381,72 +378,42 @@ predicate-propagation
 ----
 !(isnull(#1))
 !(isnull(#3))
-(#0 = #0)
 (#0 = #2)
-((#0 + 1) = (#0 + 1))
-((#0 + 1) = (#2 + 1))
-(((#0 + 1) + 1) = ((#0 + 1) + 1))
-(((#0 + 1) + 1) = ((#2 + 1) + 1))
 
 predicate-propagation
 (project (join [(get x) (get x)] [[#0 #2] [(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)]]) [0 1 2 3])
 ----
 !(isnull(#1))
 !(isnull(#3))
-(#0 = #0)
 (#0 = #2)
-((#0 + 1) = (#0 + 1))
-((#0 + 1) = (#2 + 1))
-(((#0 + 1) + 1) = ((#0 + 1) + 1))
-(((#0 + 1) + 1) = ((#2 + 1) + 1))
 
 predicate-propagation
 (join [(get x) (get x)] [[(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)] [#0 #2] ])
 ----
 !(isnull(#1))
 !(isnull(#3))
-(#0 = #0)
 (#0 = #2)
-((#0 + 1) = (#0 + 1))
-((#0 + 1) = (#2 + 1))
-(((#0 + 1) + 1) = ((#0 + 1) + 1))
-(((#0 + 1) + 1) = ((#2 + 1) + 1))
 
 predicate-propagation
 (project (join [(get x) (get x)] [[(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)] [#0 #2] ]) [0 1 2 3])
 ----
 !(isnull(#1))
 !(isnull(#3))
-(#0 = #0)
 (#0 = #2)
-((#0 + 1) = (#0 + 1))
-((#0 + 1) = (#2 + 1))
-(((#0 + 1) + 1) = ((#0 + 1) + 1))
-(((#0 + 1) + 1) = ((#2 + 1) + 1))
 
 predicate-propagation
 (join [(get x) (get x)] [[(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)] [(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [#0 #2] ])
 ----
 !(isnull(#1))
 !(isnull(#3))
-(#0 = #0)
 (#0 = #2)
-((#0 + 1) = (#0 + 1))
-((#0 + 1) = (#2 + 1))
-(((#0 + 1) + 1) = ((#0 + 1) + 1))
-(((#0 + 1) + 1) = ((#2 + 1) + 1))
 
 predicate-propagation
 (project (join [(get x) (get x)] [[(call_binary add_int32 (call_binary add_int32 #0 1) 1) (call_binary add_int32 (call_binary add_int32 #2 1) 1)] [(call_binary add_int32 #0 1) (call_binary add_int32 #2 1)] [#0 #2] ]) [0 1 2 3])
 ----
 !(isnull(#1))
 !(isnull(#3))
-(#0 = #0)
 (#0 = #2)
-((#0 + 1) = (#0 + 1))
-((#0 + 1) = (#2 + 1))
-(((#0 + 1) + 1) = ((#0 + 1) + 1))
-(((#0 + 1) + 1) = ((#2 + 1) + 1))
 
 # expressions in equivalence classes only become simpler.
 
@@ -458,9 +425,8 @@ canonicalize-join
 ]]
 [int32]
 ----
-((#0 + #0) = (#0 && (#0 + #0)))
-((#0 + #0) = (#0 + #0))
-((#0 + #0) = (#0 + (#0 + #0)))
+((#0 && (#0 + #0)) = (#0 + #0))
+((#0 && (#0 + #0)) = (#0 + (#0 + #0)))
 
 canonicalize-join
 [
@@ -475,13 +441,9 @@ canonicalize-join
 ]
 [int32 int32 int32 int32]
 ----
-(#0 = #0)
 (#0 = #3)
-(#1 = #1)
 (#1 = ((#0 + #0) + #0))
 (#1 = ((#2 + #2) + #1))
-(#1 = ((#2 + #2) + ((#0 + #0) + #0)))
-(#1 = ((#3 + #3) + #3))
 
 canonicalize-join
 [
@@ -497,14 +459,9 @@ canonicalize-join
 ]
 [int32 int32 int32 int32 int32 int32]
 ----
-(#0 = #0)
 (#0 = #3)
-(#1 = #1)
 (#1 = ((#0 + #0) + #0))
 (#1 = ((#2 + #2) + #1))
-(#1 = ((#3 + #3) + #3))
-(#1 = ((#4 * #5) + ((#0 + #0) + #0)))
-((#2 + #2) = (#2 + #2))
 ((#2 + #2) = (#4 * #5))
 
 canonicalize-join
@@ -512,12 +469,9 @@ canonicalize-join
 #2]]
 [int32 int32 int32 int32]
 ----
-(#0 = #0)
 (#0 = #3)
-(#1 = #1)
 (#1 = #2)
 (#1 = (#0 + #0))
-(#1 = (#3 + #3))
 
 # replacing expressions with simpler equivalent ones can result in the
 # removal of redundant equivalence classes.
@@ -526,10 +480,7 @@ canonicalize-join
 [[#0 #0 #3] [(call_binary add_int32 #0 #0) (call_binary add_int32 #3 #3)]]
 [int32 int32 int32 int32]
 ----
-(#0 = #0)
 (#0 = #3)
-((#0 + #0) = (#0 + #0))
-((#0 + #0) = (#3 + #3))
 
 # test an equivalence class when the number of leaves are the same but the
 # number of nonleaves are not.
@@ -543,9 +494,7 @@ canonicalize-join
 ]]
 [int32]
 ----
-(i16toi32(#0) = -(-(i16toi32(#0))))
-(i16toi32(#0) = -(i16toi32(#0)))
-(i16toi32(#0) = i16toi32(#0))
+(-(i16toi32(#0)) = i16toi32(#0))
 
 # literals don't get overwritten with equivalent expressions
 
@@ -557,9 +506,8 @@ canonicalize-join
 ]]
 [int32 int32]
 ----
-(4 = #0)
-(4 = 4)
-(4 = (#1 + 4))
+(#0 = 4)
+(#0 = (#1 + 4))
 
 # functions on literals don't cause cycling
 canonicalize-join
@@ -570,14 +518,9 @@ canonicalize-join
 ]
 [int32 int32 int32 int32]
 ----
-(#3 = #3)
-(#3 = (#1 + -(#0)))
-(#3 = (#1 + -(#1)))
-(4 = #0)
-(4 = 4)
-(-(#0) = -(#0))
-(-(#0) = -(#1))
-(-(#0) = -(4))
+(#0 = 4)
+(#3 = (#1 + -4))
+(-4 = -(#1))
 
 canonicalize-join
 [
@@ -588,14 +531,9 @@ canonicalize-join
 ]
 [int32 int32 int32 int32]
 ----
-(#3 = #3)
-(#3 = (#1 + -(#0)))
-(#3 = (#1 + -(#1)))
-(4 = #0)
-(4 = 4)
-(-(#0) = -(#0))
-(-(#0) = -(#1))
-(-(#0) = -(4))
+(#0 = 4)
+(#3 = (#1 + -4))
+(-4 = -(#1))
 
 # expressions in join equivalences get reduced after simpler equivalent
 # expressions are substituted
@@ -609,11 +547,8 @@ canonicalize-join
 ]
 [int64]
 ----
-(0 = 0)
+(0 = 1234)
 (0 = (0 + #0))
-(1234 = 1234)
-(1234 = (0 + 0))
-(1234 = ((0 + #0) + 0))
 
 ## consecutive nots cancel each other
 
@@ -624,11 +559,8 @@ canonicalize-join
 ]
 [bool string string]
 ----
-(false = false)
-(false = !(!(#0)))
-(false = !((#1 ~* #2)))
-(!(#0) = !(#0))
-(!(#0) = (#1 ~* #2))
+(#0 = false)
+(true = (#1 ~* #2))
 
 canonicalize-join
 [
@@ -637,11 +569,8 @@ canonicalize-join
 ]
 [bool bool]
 ----
-(false = false)
-(false = !(!(#0)))
-(false = !((#0 || #1)))
-(!(#0) = !(#0))
-(!(#0) = (#0 || #1))
+(#0 = false)
+(#1 = true)
 
 ## demorgans
 
@@ -652,10 +581,7 @@ canonicalize-join
 ]
 [bool bool bool bool bool]
 ----
-(#0 = #0)
-(#0 = ((#2 && #3) || (#2 && #4)))
-(#0 = (coalesce(#0, #1, false) || (#2 && #4)))
-((#2 && #3) = (#2 && #3))
+(#0 = (#2 && (#3 || #4)))
 ((#2 && #3) = coalesce(#0, #1, false))
 
 ## decompose is_null
@@ -667,8 +593,5 @@ canonicalize-join
 ]
 [int32 int32 int32 int32]
 ----
-(#0 = #0)
-(#0 = isnull((#2 + #3)))
-(#0 = isnull(coalesce(#0, #1, false)))
-((#2 + #3) = (#2 + #3))
+(#0 = (isnull(#2) || isnull(#3)))
 ((#2 + #3) = coalesce(#0, #1, false))
