@@ -25,10 +25,8 @@ use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::time::Instant;
 
-use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
-use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
+use timely::progress::Antichain;
 
 use crate::error::Error;
 use crate::indexed::arrangement::{Arrangement, ArrangementSnapshot};
@@ -36,8 +34,8 @@ use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
-    ArrangementMeta, BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration,
-    TraceBatchMeta, UnsealedBatchMeta,
+    ArrangementMeta, BlobMeta, BlobUnsealedBatch, Id, StreamRegistration, TraceBatchMeta,
+    UnsealedBatchMeta,
 };
 use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFutureHandle;
@@ -876,51 +874,10 @@ impl AppliedState {
 
     /// Atomically moves all writes in unsealed not in advance of the trace's
     /// seal frontier into the trace and does any necessary resulting eviction
-    /// work to remove uneccessary batches.
+    /// work to remove unnecessary batches.
     fn drain_unsealed<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<(), Error> {
-        let mut updates_by_id = vec![];
-        for (id, arrangement) in self.arrangements.iter_mut() {
-            // If this unsealed is already properly sealed then we don't need
-            // to do anything.
-            let seal = arrangement.get_seal();
-            let trace_upper = arrangement.trace_ts_upper();
-            if seal == trace_upper {
-                continue;
-            }
-
-            let desc = Description::new(
-                trace_upper,
-                seal.clone(),
-                Antichain::from_elem(Timestamp::minimum()),
-            );
-            if PartialOrder::less_equal(desc.upper(), desc.lower()) {
-                return Err(format!("invalid batch bounds: {:?}", desc).into());
-            }
-
-            // Move a batch of data from unsealed into trace by reading a
-            // snapshot from unsealed...
-            let snap =
-                arrangement.unsealed_snapshot(desc.lower().clone(), desc.upper().clone(), blob)?;
-            let mut updates = snap
-                .into_iter()
-                .collect::<Result<Vec<_>, Error>>()
-                .map_err(|err| format!("failed to fetch snapshot: {}", err))?;
-
-            // Don't bother minting empty trace batches that we'll just have to
-            // compact later, it's wasteful of precious storage bandwidth and
-            // everything works perfectly well when the trace upper hasn't yet
-            // caught up to sealed.
-            if updates.is_empty() {
-                continue;
-            }
-
-            // Trace batches are required to be sorted and consolidated by ((k, v), t)
-            differential_dataflow::consolidation::consolidate_updates(&mut updates);
-            updates_by_id.push((*id, seal, updates.clone()));
-
-            // ...and atomically swapping that snapshot's data into trace.
-            let batch = BlobTraceBatch { desc, updates };
-            arrangement.trace_append(batch, blob)?;
+        for arrangement in self.arrangements.values_mut() {
+            arrangement.unsealed_drain(blob)?;
         }
         Ok(())
     }
@@ -1072,13 +1029,8 @@ impl AppliedState {
             .arrangements
             .get(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        let seal_frontier = arrangement.get_seal();
-        let trace = arrangement.trace_snapshot(blob);
-        let unsealed =
-            arrangement.unsealed_snapshot(trace.ts_upper.clone(), Antichain::new(), blob)?;
-
         let seqno = self.highest_assigned_seqno;
-        Ok(ArrangementSnapshot(unsealed, trace, seqno, seal_frontier))
+        arrangement.snapshot(seqno, blob)
     }
 }
 

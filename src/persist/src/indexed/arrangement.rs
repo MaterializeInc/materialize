@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::{fmt, mem};
 
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::Description;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use uuid::Uuid;
@@ -195,6 +196,19 @@ impl Arrangement {
             .map_or_else(|| SeqNo(0), |meta| meta.desc.end)
     }
 
+    /// Returns a consistent read of all the updates contained in this
+    /// arrangement.
+    pub fn snapshot<L: Blob>(
+        &self,
+        seqno: SeqNo,
+        blob: &BlobCache<L>,
+    ) -> Result<ArrangementSnapshot, Error> {
+        let seal_frontier = self.get_seal();
+        let trace = self.trace_snapshot(blob);
+        let unsealed = self.unsealed_snapshot(trace.ts_upper.clone(), Antichain::new(), blob)?;
+        Ok(ArrangementSnapshot(unsealed, trace, seqno, seal_frontier))
+    }
+
     /// Write a [BlobUnsealedBatch] to [Blob] storage and return the corresponding
     /// [UnsealedBatchMeta].
     ///
@@ -315,6 +329,51 @@ impl Arrangement {
             ts_upper,
             batches,
         })
+    }
+
+    /// Atomically moves all writes in unsealed not in advance of the trace's
+    /// seal frontier into the trace and does any necessary resulting eviction
+    /// work to remove unnecessary batches.
+    pub fn unsealed_drain<L: Blob>(&mut self, blob: &mut BlobCache<L>) -> Result<(), Error> {
+        // If the trace's physical frontier matches the arrangement's logical
+        // seal frontier, then nothing to do.
+        let seal = self.get_seal();
+        let trace_upper = self.trace_ts_upper();
+        if seal == trace_upper {
+            return Ok(());
+        }
+
+        let desc = Description::new(
+            trace_upper,
+            seal,
+            Antichain::from_elem(Timestamp::minimum()),
+        );
+        if PartialOrder::less_equal(desc.upper(), desc.lower()) {
+            return Err(format!("invalid batch bounds: {:?}", desc).into());
+        }
+
+        // Move a batch of data from unsealed into trace by reading a
+        // snapshot from unsealed...
+        let snap = self.unsealed_snapshot(desc.lower().clone(), desc.upper().clone(), blob)?;
+        let mut updates = snap
+            .into_iter()
+            .collect::<Result<Vec<_>, Error>>()
+            .map_err(|err| format!("failed to fetch snapshot: {}", err))?;
+
+        // Don't bother minting empty trace batches that we'll just have to
+        // compact later, it's wasteful of precious storage bandwidth and
+        // everything works perfectly well when the trace upper hasn't yet
+        // caught up to sealed.
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        // Trace batches are required to be sorted and consolidated by ((k, v), t)
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+
+        // ...and atomically swapping that snapshot's data into trace.
+        let batch = BlobTraceBatch { desc, updates };
+        self.trace_append(batch, blob)
     }
 
     /// Removes all updates contained in this unsealed before the given bound.
