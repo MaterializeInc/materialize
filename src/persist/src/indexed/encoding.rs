@@ -331,7 +331,7 @@ impl Codec for BlobMeta {
 
 impl BlobMeta {
     const MAGIC: &'static [u8] = b"mz";
-    const CURRENT_VERSION: u8 = 3;
+    const CURRENT_VERSION: u8 = 4;
 
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
