@@ -483,7 +483,11 @@ impl<'a> Iterator for BuiltinReader<'a> {
                 }
             } else if c == '"' {
                 quoted = !quoted;
-                continue;
+                // remove the double quote for un-nested commands such as: command="\dt public"
+                // keep the quotes when inside of a nested schema such as: schema={ "type" : "array" }
+                if nesting.is_empty() {
+                    continue;
+                }
             }
             token.push(c);
         }
