@@ -25,8 +25,8 @@ use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
-    IfExistsBehavior, Query, Raw, SqlOption, Statement, TableFactor, UnresolvedObjectName, Value,
-    ViewDefinition,
+    IfExistsBehavior, Query, Raw, SqlOption, Statement, TableFactor, TableFunction,
+    UnresolvedObjectName, Value, ViewDefinition,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -199,8 +199,7 @@ pub fn create_statement(
                     }
                 }
                 TableFactor::Function {
-                    ref mut name,
-                    args,
+                    function: TableFunction { ref mut name, args },
                     alias,
                 } => {
                     if let Err(e) = normalize_function_name(self.scx, name) {

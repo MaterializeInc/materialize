@@ -20,7 +20,7 @@ use ore::stack::{CheckedRecursion, RecursionGuard};
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, OrderByExpr, Query, Raw, Select, SelectItem, TableAlias,
-    TableFactor, TableWithJoins, UnresolvedObjectName, Value,
+    TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
 };
 
 use crate::func::Func;
@@ -378,8 +378,10 @@ impl<'a> Desugarer<'a> {
             // We have a table func in a select item's position, move it to FROM.
             node.from.push(TableWithJoins {
                 relation: TableFactor::Function {
-                    name: func.name.clone(),
-                    args: func.args.clone(),
+                    function: TableFunction {
+                        name: func.name.clone(),
+                        args: func.args.clone(),
+                    },
                     alias: Some(TableAlias {
                         name: name.clone(),
                         columns: vec![],
@@ -479,11 +481,13 @@ impl<'a> Desugarer<'a> {
                 Select::default()
                     .from(TableWithJoins {
                         relation: TableFactor::Function {
-                            name: UnresolvedObjectName(vec![
-                                Ident::new("mz_catalog"),
-                                Ident::new("unnest"),
-                            ]),
-                            args: FunctionArgs::args(vec![right.take()]),
+                            function: TableFunction {
+                                name: UnresolvedObjectName(vec![
+                                    Ident::new("mz_catalog"),
+                                    Ident::new("unnest"),
+                                ]),
+                                args: FunctionArgs::args(vec![right.take()]),
+                            },
                             alias: Some(TableAlias {
                                 name: Ident::new("_"),
                                 columns: vec![binding.clone()],

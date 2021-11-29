@@ -915,3 +915,114 @@ SELECT * FROM generate_series('2020-01-01 22:00:00'::TIMESTAMPTZ, '2021-01-01 00
 
 query error step size cannot equal zero
 SELECT * FROM generate_series('2021-01-01 03:00:00'::TIMESTAMPTZ, '2021-01-03 00:00:00'::TIMESTAMPTZ, '0 day');
+
+# Test ROWS FROM
+
+query I colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1,1));
+----
+generate_series
+1
+
+query II colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1, 2), generate_series(3, 6)) ORDER BY 2;
+----
+generate_series generate_series
+1 3
+2 4
+NULL 5
+NULL 6
+
+query IIII colnames
+SELECT * FROM ROWS FROM (generate_series(1, 2), information_schema._pg_expandarray(array[9]), generate_series(3, 6)) ORDER BY 4;
+----
+generate_series x n generate_series
+1  9  1  3
+2  NULL  NULL  4
+NULL  NULL  NULL  5
+NULL  NULL  NULL  6
+
+query I colnames
+SELECT generate_series FROM ROWS FROM (generate_series(1, 1))
+----
+generate_series
+1
+
+query error column name "generate_series" is ambiguous
+SELECT generate_series FROM ROWS FROM (generate_series(1, 1), generate_series(2, 2))
+
+query I colnames
+SELECT generate_series FROM ROWS FROM (generate_series(1, 1), information_schema._pg_expandarray(array[9]))
+----
+generate_series
+1
+
+query error column "_pg_expandarray" does not exist
+SELECT _pg_expandarray FROM ROWS FROM (generate_series(1, 1), information_schema._pg_expandarray(array[9]))
+
+query I colnames
+SELECT x FROM ROWS FROM (generate_series(1, 1), information_schema._pg_expandarray(array[9]))
+----
+x
+9
+
+# Convert to text because sqllogictest doesn't know how to format records.
+query T colnames
+SELECT _pg_expandarray::text FROM ROWS FROM (information_schema._pg_expandarray(array[9]))
+----
+_pg_expandarray
+(9,1)
+
+query II colnames
+SELECT _pg_expandarray.* FROM ROWS FROM (information_schema._pg_expandarray(array[9]))
+----
+x n
+9 1
+
+# ROWS FROM with aliases
+
+query error Expected right parenthesis
+SELECT * FROM LATERAL ROWS FROM (generate_series(1,1) AS g)
+
+
+query I colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1,1)) AS g
+----
+g
+1
+
+query I colnames
+SELECT g.g FROM LATERAL ROWS FROM (generate_series(1,1)) AS g
+----
+g
+1
+
+query I colnames
+SELECT g.g FROM LATERAL ROWS FROM (generate_series(1,1)) AS g(g)
+----
+g
+1
+
+query II colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1,1), generate_series(1,1)) AS g
+----
+generate_series generate_series
+1 1
+
+query II colnames
+SELECT g.* FROM LATERAL ROWS FROM (generate_series(1,1), generate_series(1,1)) AS g
+----
+generate_series generate_series
+1 1
+
+query III colnames
+SELECT g.* FROM LATERAL ROWS FROM (generate_series(1,1), information_schema._pg_expandarray(array[1])) AS g
+----
+generate_series x n
+1 1 1
+
+query III colnames
+SELECT * FROM LATERAL ROWS FROM (generate_series(1,1), information_schema._pg_expandarray(array[1])) AS g(a,b,c)
+----
+a b c
+1 1 1

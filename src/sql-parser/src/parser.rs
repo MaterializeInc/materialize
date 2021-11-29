@@ -3855,13 +3855,16 @@ impl<'a> Parser<'a> {
             // LATERAL must always be followed by a subquery or table function.
             if self.consume_token(&Token::LParen) {
                 return self.parse_derived_table_factor(Lateral);
+            } else if self.parse_keywords(&[ROWS, FROM]) {
+                return Ok(self.parse_rows_from()?);
             } else {
                 let name = self.parse_object_name()?;
                 self.expect_token(&Token::LParen)?;
+                let args = self.parse_optional_args(false)?;
+                let alias = self.parse_optional_table_alias()?;
                 return Ok(TableFactor::Function {
-                    name,
-                    args: self.parse_optional_args(false)?,
-                    alias: self.parse_optional_table_alias()?,
+                    function: TableFunction { name, args },
+                    alias,
                 });
             }
         }
@@ -3937,13 +3940,16 @@ impl<'a> Parser<'a> {
                 name: RawName::Id(id, name),
                 alias: self.parse_optional_table_alias()?,
             })
+        } else if self.parse_keywords(&[ROWS, FROM]) {
+            Ok(self.parse_rows_from()?)
         } else {
             let name = self.parse_object_name()?;
             if self.consume_token(&Token::LParen) {
+                let args = self.parse_optional_args(false)?;
+                let alias = self.parse_optional_table_alias()?;
                 Ok(TableFactor::Function {
-                    name,
-                    args: self.parse_optional_args(false)?,
-                    alias: self.parse_optional_table_alias()?,
+                    function: TableFunction { name, args },
+                    alias,
                 })
             } else {
                 Ok(TableFactor::Table {
@@ -3952,6 +3958,23 @@ impl<'a> Parser<'a> {
                 })
             }
         }
+    }
+
+    fn parse_rows_from(&mut self) -> Result<TableFactor<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let functions = self.parse_comma_separated(Parser::parse_table_function)?;
+        self.expect_token(&Token::RParen)?;
+        let alias = self.parse_optional_table_alias()?;
+        Ok(TableFactor::RowsFrom { functions, alias })
+    }
+
+    fn parse_table_function(&mut self) -> Result<TableFunction<Raw>, ParserError> {
+        let name = self.parse_object_name()?;
+        self.expect_token(&Token::LParen)?;
+        Ok(TableFunction {
+            name,
+            args: self.parse_optional_args(false)?,
+        })
     }
 
     fn parse_derived_table_factor(
