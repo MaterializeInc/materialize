@@ -237,6 +237,28 @@ impl<'a> Lowerer<'a> {
             BoxScalarExpr::Literal(row, column_type) => {
                 expr::MirScalarExpr::Literal(Ok(row.clone()), column_type.clone())
             }
+            BoxScalarExpr::CallNullary(func) => expr::MirScalarExpr::CallNullary(func.clone()),
+            BoxScalarExpr::CallUnary { func, expr } => expr::MirScalarExpr::CallUnary {
+                func: func.clone(),
+                expr: Box::new(Self::lower_expression(&*expr, column_map)),
+            },
+            BoxScalarExpr::CallBinary { func, expr1, expr2 } => expr::MirScalarExpr::CallBinary {
+                func: func.clone(),
+                expr1: Box::new(Self::lower_expression(expr1, column_map)),
+                expr2: Box::new(Self::lower_expression(expr2, column_map)),
+            },
+            BoxScalarExpr::CallVariadic { func, exprs } => expr::MirScalarExpr::CallVariadic {
+                func: func.clone(),
+                exprs: exprs
+                    .into_iter()
+                    .map(|expr| Self::lower_expression(expr, column_map))
+                    .collect::<Vec<_>>(),
+            },
+            BoxScalarExpr::If { cond, then, els } => expr::MirScalarExpr::If {
+                cond: Box::new(Self::lower_expression(cond, column_map)),
+                then: Box::new(Self::lower_expression(then, column_map)),
+                els: Box::new(Self::lower_expression(els, column_map)),
+            },
             _ => panic!("unsupported expression"),
         }
     }

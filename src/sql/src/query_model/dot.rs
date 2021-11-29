@@ -13,8 +13,10 @@
 
 use crate::query_model::{BoxType, Model, Quantifier, QuantifierId, QueryBox};
 use itertools::Itertools;
+use ore::str::separated;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fmt::{self, Write};
 
 /// Generates a graphviz graph from a Query Graph Model, defined in the DOT language.
 /// See <https://graphviz.org/doc/info/lang.html>.
@@ -22,6 +24,20 @@ pub(crate) struct DotGenerator {
     output: String,
     indent: u32,
 }
+
+/// Generates a label for a graphviz graph.
+#[derive(Debug)]
+pub enum DotLabel<'a> {
+    /// Plain label
+    SingleRow(&'a str),
+    /// A single-column table that has a row for each string in the array.
+    MultiRow(&'a [String]),
+}
+
+/// Generates a string that escapes characters that would problematic inside the
+/// specification for a label.
+/// The set of escaped characters is "|{}.
+struct DotLabelEscapedString<'a>(&'a str);
 
 impl DotGenerator {
     pub fn new() -> Self {
@@ -37,7 +53,7 @@ impl DotGenerator {
         self.inc();
         self.new_line("compound = true");
         self.new_line("labeljust = l");
-        self.new_line(&format!("label=\"{}\"", label.trim()));
+        self.new_line(&DotLabel::SingleRow(label.trim()).to_string());
         self.new_line("node [ shape = box ]");
 
         // list of quantifiers for adding the edges connecting them to their
@@ -51,13 +67,12 @@ impl DotGenerator {
 
                 self.new_line(&format!("subgraph cluster{} {{", box_id));
                 self.inc();
+                self.new_line(
+                    &DotLabel::SingleRow(&format!("Box{}:{}", box_id, Self::get_box_title(&b)))
+                        .to_string(),
+                );
                 self.new_line(&format!(
-                    "label = \"Box{}:{}\"",
-                    box_id,
-                    Self::get_box_title(&b)
-                ));
-                self.new_line(&format!(
-                    "boxhead{} [ shape = record, label=\"{{ {} }}\" ]",
+                    "boxhead{} [ shape = record, {} ]",
                     box_id,
                     Self::get_box_head(&b)
                 ));
@@ -75,10 +90,14 @@ impl DotGenerator {
 
                     let q = model.get_quantifier(*q_id).borrow();
                     self.new_line(&format!(
-                        "Q{0} [ label=\"Q{0}({1}){2}\" ]",
+                        "Q{0} [ {1} ]",
                         q_id,
-                        q.quantifier_type,
-                        Self::get_quantifier_alias(&q)
+                        DotLabel::SingleRow(&format!(
+                            "Q{0}({1}){2}",
+                            q_id,
+                            q.quantifier_type,
+                            Self::get_quantifier_alias(&q)
+                        ))
                     ));
                 }
 
@@ -115,15 +134,16 @@ impl DotGenerator {
     }
 
     fn get_box_head(b: &QueryBox) -> String {
-        let mut r = String::new();
+        let mut rows = Vec::new();
 
-        r.push_str(&format!("Distinct: {:?}", b.distinct));
+        rows.push(format!("Distinct: {:?}", b.distinct));
 
         // The projection of the box
         for (i, c) in b.columns.iter().enumerate() {
-            r.push_str(&format!("| {}: {}", i, c.expr));
-            if let Some(c) = &c.alias {
-                r.push_str(&format!(" as {}", c.as_str()));
+            if let Some(alias) = &c.alias {
+                rows.push(format!("{}: {} as {}", i, c.expr, alias.as_str()));
+            } else {
+                rows.push(format!("{}: {}", i, c.expr));
             }
         }
 
@@ -131,36 +151,20 @@ impl DotGenerator {
         match &b.box_type {
             BoxType::Select(select) => {
                 if let Some(order_key) = &select.order_key {
-                    r.push_str("| ORDER BY: ");
-                    for (i, key_item) in order_key.iter().enumerate() {
-                        if i > 0 {
-                            r.push_str(", ");
-                        }
-                        // @todo direction
-                        r.push_str(&format!("{}", key_item));
-                    }
+                    rows.push(format!("ORDER BY: {}", separated(", ", order_key.iter())))
                 }
             }
             BoxType::Grouping(grouping) => {
                 if !grouping.key.is_empty() {
-                    r.push_str("| GROUP BY: ");
-                    for (i, key_item) in grouping.key.iter().enumerate() {
-                        if i > 0 {
-                            r.push_str(", ");
-                        }
-                        r.push_str(&format!("{}", key_item));
-                    }
+                    rows.push(format!(
+                        "GROUP BY: {}",
+                        separated(", ", grouping.key.iter())
+                    ))
                 }
             }
             BoxType::Values(values) => {
-                for (i, row) in values.rows.iter().enumerate() {
-                    r.push_str(&format!("| ROW {}: ", i));
-                    for (i, value) in row.iter().enumerate() {
-                        if i > 0 {
-                            r.push_str(", ");
-                        }
-                        r.push_str(&format!("{}", value));
-                    }
+                for row in values.rows.iter() {
+                    rows.push(format!("ROW: {}", separated(", ", row.iter())))
                 }
             }
             _ => {}
@@ -172,12 +176,10 @@ impl DotGenerator {
             BoxType::OuterJoin(outer_join) => Some(&outer_join.predicates),
             _ => None,
         } {
-            for predicate in predicates.iter() {
-                r.push_str(&format!("| {}", predicate));
-            }
+            rows.extend(predicates.iter().map(|p| p.to_string()));
         }
 
-        r
+        DotLabel::MultiRow(&rows).to_string()
     }
 
     /// Adds red arrows from correlated quantifiers to the sibling quantifiers they
@@ -202,8 +204,10 @@ impl DotGenerator {
         for (correlated_q, quantifiers) in correlation_info.iter() {
             for q in quantifiers.iter() {
                 self.new_line(&format!(
-                    "Q{0} -> Q{1} [ label = \"correlation\", style = filled, color = red ]",
-                    correlated_q, q
+                    "Q{0} -> Q{1} [ {2}, style = filled, color = red ]",
+                    correlated_q,
+                    q,
+                    DotLabel::SingleRow("correlation")
                 ));
             }
         }
@@ -237,5 +241,38 @@ impl DotGenerator {
 
     fn end_line(&mut self) {
         self.output.push('\n');
+    }
+}
+
+impl<'a> fmt::Display for DotLabelEscapedString<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for c in self.0.chars() {
+            match c {
+                '"' => f.write_str("\\\"")?,
+                '|' => f.write_str("\\|")?,
+                '{' => f.write_str("\\{")?,
+                '}' => f.write_str("\\}")?,
+                _ => f.write_char(c)?,
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'a> fmt::Display for DotLabel<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("label = \"")?;
+        match self {
+            DotLabel::SingleRow(str) => f.write_str(&DotLabelEscapedString(str).to_string()),
+            DotLabel::MultiRow(strs) => {
+                f.write_str("{ ")?;
+                f.write_str(&format!(
+                    "{}",
+                    separated("| ", strs.into_iter().map(|str| DotLabelEscapedString(str)))
+                ))?;
+                f.write_str(" }")
+            }
+        }?;
+        f.write_char('\"')
     }
 }

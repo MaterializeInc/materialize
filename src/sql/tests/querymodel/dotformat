@@ -1,0 +1,113 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# The following do not cause an invalid graph to be generated:
+# * Quotes in the column name.
+# * The presence of a string literal.
+build
+select case when x."a3R" is null then coalesce(x.b, x.c, 'hello') else substr(x.b, 3) end, mz_logical_timestamp()
+from (select null as "a3R", null as b, null as c) x
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "select case when x.\"a3R\" is null then coalesce(x.b, x.c, 'hello') else substr(x.b, 3) end, mz_logical_timestamp()
+from (select null as \"a3R\", null as b, null as c) x"
+    node [ shape = box ]
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C3| 1: Q2.C4 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C0| 1: Q1.C1| 2: Q1.C2| 3: if isnull(Q1.C0) then \{coalesce(Q1.C1, Q1.C2, \"hello\")\} else \{substr(Q1.C1, i32toi64(3))\}| 4: mz_logical_timestamp() }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: null| 1: null| 2: null }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Values"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| ROW:  }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+# The following do not cause an invalid graph to be generated:
+# * The presence of an OR operator.
+# * Quotes in the table name.
+
+build
+select "CdX".a or false from (select true as a) "CdX"
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = "select \"CdX\".a or false from (select true as a) \"CdX\""
+    node [ shape = box ]
+    subgraph cluster3 {
+        label = "Box3:Select"
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C1 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q2 [ label = "Q2(F)" ]
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C0| 1: (Q1.C0 \|\| false) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: true }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Values"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| ROW:  }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead1 [ lhead = cluster1 ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}

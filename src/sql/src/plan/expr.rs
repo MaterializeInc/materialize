@@ -1464,10 +1464,10 @@ impl HirScalarExpr {
         }
     }
 
-    /// A generalization of `visit_mut`. The function `pre` runs on a
-    /// `MirScalarExpr` before it runs on any of the child `MirScalarExpr`s.
-    /// The function `post` runs on child `MirScalarExpr`s first before the
-    /// parent. Optionally, `pre` can return which child `MirScalarExpr`s, if
+    /// A generalization of `visit`. The function `pre` runs on a
+    /// `HirScalarExpr` before it runs on any of the child `HirScalarExpr`s.
+    /// The function `post` runs on child `HirScalarExpr`s first before the
+    /// parent. Optionally, `pre` can return which child `HirScalarExpr`s, if
     /// any, should be visited (default is to visit all children).
     pub fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
     where
