@@ -966,7 +966,7 @@ impl MapFilterProject {
         // Inline expressions per `should_inline`.
         for index in 0..self.expressions.len() {
             let (prior, expr) = self.expressions.split_at_mut(index);
-            expr[0].visit_mut(&mut |e| {
+            expr[0].visit_mut_post(&mut |e| {
                 if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
                         *e = prior[*i - input_arity].clone();
@@ -976,7 +976,7 @@ impl MapFilterProject {
         }
         for (_index, pred) in self.predicates.iter_mut() {
             let expressions = &self.expressions;
-            pred.visit_mut(&mut |e| {
+            pred.visit_mut_post(&mut |e| {
                 if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
                         *e = expressions[*i - input_arity].clone();

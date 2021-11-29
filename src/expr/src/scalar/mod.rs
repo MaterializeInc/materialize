@@ -114,7 +114,8 @@ impl MirScalarExpr {
         }
     }
 
-    pub fn visit1<'a, F>(&'a self, mut f: F)
+    /// Applies an infallible immutable `f` to each child of type `MirScalarExpr`.
+    pub fn visit_children<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),
     {
@@ -142,15 +143,8 @@ impl MirScalarExpr {
         }
     }
 
-    pub fn visit<'a, F>(&'a self, f: &mut F)
-    where
-        F: FnMut(&'a Self),
-    {
-        self.visit1(|e| e.visit(f));
-        f(self);
-    }
-
-    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
+    /// Applies an infallible mutable `f` to each child of type `MirScalarExpr`.
+    pub fn visit_mut_children<'a, F>(&'a mut self, mut f: F)
     where
         F: FnMut(&'a mut Self),
     {
@@ -178,11 +172,21 @@ impl MirScalarExpr {
         }
     }
 
-    pub fn visit_mut<F>(&mut self, f: &mut F)
+    /// Post-order immutable infallible `MirScalarExpr` visitor.
+    pub fn visit_post<'a, F>(&'a self, f: &mut F)
+    where
+        F: FnMut(&'a Self),
+    {
+        self.visit_children(|e| e.visit_post(f));
+        f(self);
+    }
+
+    /// Post-order mutable infallible `MirScalarExpr` visitor.
+    pub fn visit_mut_post<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
-        self.visit1_mut(|e| e.visit_mut(f));
+        self.visit_mut_children(|e| e.visit_mut_post(f));
         f(self);
     }
 
@@ -202,7 +206,7 @@ impl MirScalarExpr {
                 e.visit_mut_pre_post(pre, post);
             }
         } else {
-            self.visit1_mut(|e| e.visit_mut_pre_post(pre, post));
+            self.visit_mut_children(|e| e.visit_mut_pre_post(pre, post));
         }
         post(self);
     }
@@ -213,7 +217,7 @@ impl MirScalarExpr {
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
     pub fn permute(&mut self, permutation: &[usize]) {
-        self.visit_mut(&mut |e| {
+        self.visit_mut_post(&mut |e| {
             if let MirScalarExpr::Column(old_i) = e {
                 *old_i = permutation[*old_i];
             }
@@ -226,7 +230,7 @@ impl MirScalarExpr {
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
     pub fn permute_map(&mut self, permutation: &std::collections::HashMap<usize, usize>) {
-        self.visit_mut(&mut |e| {
+        self.visit_mut_post(&mut |e| {
             if let MirScalarExpr::Column(old_i) = e {
                 *old_i = permutation[old_i];
             }
@@ -235,7 +239,7 @@ impl MirScalarExpr {
 
     pub fn support(&self) -> HashSet<usize> {
         let mut support = HashSet::new();
-        self.visit(&mut |e| {
+        self.visit_post(&mut |e| {
             if let MirScalarExpr::Column(i) = e {
                 support.insert(*i);
             }
@@ -968,7 +972,7 @@ impl MirScalarExpr {
     /// True iff the expression contains `NullaryFunc::MzLogicalTimestamp`.
     pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
-        self.visit(&mut |e| {
+        self.visit_post(&mut |e| {
             if let MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp) = e {
                 contains = true;
             }

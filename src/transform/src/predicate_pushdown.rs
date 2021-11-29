@@ -317,7 +317,7 @@ impl PredicatePushdown {
                                 if !predicate.is_literal_err() || all_errors {
                                     let mut supported = true;
                                     let mut new_predicate = predicate.clone();
-                                    new_predicate.visit_mut(&mut |e| {
+                                    new_predicate.visit_mut_post(&mut |e| {
                                         if let MirScalarExpr::Column(c) = e {
                                             if *c >= group_key.len() {
                                                 supported = false;
@@ -325,7 +325,7 @@ impl PredicatePushdown {
                                         }
                                     });
                                     if supported {
-                                        new_predicate.visit_mut(&mut |e| {
+                                        new_predicate.visit_mut_post(&mut |e| {
                                             if let MirScalarExpr::Column(i) = e {
                                                 *e = group_key[*i].clone();
                                             }
@@ -762,7 +762,7 @@ impl PredicatePushdown {
                         || PredicatePushdown::can_inline(&scalars[*c - input_arity], input_arity)
                 })
             {
-                predicate.visit_mut(&mut |e| {
+                predicate.visit_mut_post(&mut |e| {
                     if let MirScalarExpr::Column(c) = e {
                         // NB: this inlining would be invalid if can_inline did not
                         // verify that scalars[*c - input_arity] referenced only
