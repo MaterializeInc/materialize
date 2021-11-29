@@ -590,7 +590,7 @@ pub enum CreateSinkConnector<T: AstInfo> {
     Kafka {
         broker: String,
         topic: String,
-        key: Option<Vec<Ident>>,
+        key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
     },
     /// Avro Object Container File
@@ -613,9 +613,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
                 f.write_node(&display::escape_single_quote_string(topic));
                 f.write_str("'");
                 if let Some(key) = key.as_ref() {
-                    f.write_str(" KEY (");
-                    f.write_node(&display::comma_separated(&key));
-                    f.write_str(")");
+                    f.write_node(key);
                 }
                 if let Some(consistency) = consistency.as_ref() {
                     f.write_node(consistency);
@@ -651,6 +649,23 @@ impl<T: AstInfo> AstDisplay for KafkaConsistency<T> {
     }
 }
 impl_display_t!(KafkaConsistency);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KafkaSinkKey {
+    pub key_columns: Vec<Ident>,
+    pub not_enforced: bool,
+}
+
+impl AstDisplay for KafkaSinkKey {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(" KEY (");
+        f.write_node(&display::comma_separated(&self.key_columns));
+        f.write_str(")");
+        if self.not_enforced {
+            f.write_str(" NOT ENFORCED");
+        }
+    }
+}
 
 /// Information about upstream Postgres tables used for replication sources
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

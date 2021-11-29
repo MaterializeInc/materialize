@@ -1648,17 +1648,18 @@ pub fn plan_create_sink(
     let key_indices = match &connector {
         CreateSinkConnector::Kafka { key, .. } => {
             if let Some(key) = key.clone() {
-                let key = key
+                let key_columns = key
+                    .key_columns
                     .into_iter()
                     .map(normalize::column_name)
                     .collect::<Vec<_>>();
                 let mut uniq = HashSet::new();
-                for col in key.iter() {
+                for col in key_columns.iter() {
                     if !uniq.insert(col) {
                         bail!("Repeated column name in sink key: {}", col);
                     }
                 }
-                let indices = key
+                let indices = key_columns
                     .iter()
                     .map(|col| -> anyhow::Result<usize> {
                         let name_idx = desc
@@ -1675,8 +1676,15 @@ pub fn plan_create_sink(
                     desc.typ().keys.iter().any(|key_columns| {
                         key_columns.iter().all(|column| indices.contains(column))
                     });
-                if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                    return Err(invalid_upsert_key_err(&desc, &key));
+                if key.not_enforced && envelope == SinkEnvelope::Upsert {
+                    // TODO: We should report a warning notice back to the user via the pgwire
+                    // protocol. See https://github.com/MaterializeInc/materialize/issues/9333.
+                    log::warn!(
+                        "Verification of upsert key disabled for sink '{}' via 'NOT ENFORCED'. This is potentially dangerous and can lead to crashing materialize when the specified key is not in fact a unique key of the sinked view.",
+                        name
+                    );
+                } else if !is_valid_key && envelope == SinkEnvelope::Upsert {
+                    return Err(invalid_upsert_key_err(&desc, &key_columns));
                 }
                 Some(indices)
             } else {
