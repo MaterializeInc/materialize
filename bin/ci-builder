@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+NIGHTLY_RUST_DATE=2021-11-29
+
 cd "$(dirname "$0")/.."
 
 if [[ $# -lt 2 ]]
@@ -24,8 +26,8 @@ to build, test, and deploy the code in this repository.
 
 Commands:
     run         run a command in the ci-builder image
-    build       build and tag new version of the ci-builder image
-    push        push a new version of the ci-builder image to Docker Hub
+    build       build the ci-builder image locally
+    exists      reports via the exit code whether the ci-builder image exists
     root-shell  open a root shell to the most recently started ci-builder container
 
 For details, consult ci/builder/README.md."
@@ -38,10 +40,9 @@ channel=$1 && shift
 rust_date=
 case "$channel" in
     stable) rust_version=$(grep -oE "[0-9]+\.[0-9]+\.[0-9]+" rust-toolchain.toml) ;;
-    nightly) rust_version=nightly ;;
-    nightly-*)
-        rust_date=/${channel#nightly-}
+    nightly)
         rust_version=nightly
+        rust_date=/$NIGHTLY_RUST_DATE
         ;;
     *)
         printf "unknown rust channel %q\n" "$channel"
@@ -49,7 +50,6 @@ case "$channel" in
         ;;
 esac
 
-tag_file=ci/builder/${channel%%-*}.stamp
 cid_file=ci/builder/.${channel%%-*}.cidfile
 
 rust_components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
@@ -66,24 +66,42 @@ gid=$(id -g)
 
 build() {
     cp misc/python/requirements{,-dev}.txt ci/builder
-    docker build --pull \
+    docker buildx build --pull \
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
         --build-arg "RUST_COMPONENTS=$rust_components" \
-        --tag materialize/ci-builder \
+        --tag materialize/ci-builder:"$tag" \
         "$@" ci/builder
 }
 
-tag=$rust_version-$(date +%Y%m%d-%H%M%S)
+# The tag is the base32 encoded hash of the ci/builder directory. This logic is
+# similar to what mzbuild uses. Unfortunately we can't use mzbuild itself due to
+# a chicken-and-egg problem: mzbuild depends on the Python packages that are
+# *inside* this image. See materialize.git.expand_globs in the Python code for
+# details on this computation.
+files=$(cat \
+        <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder) \
+        <(git ls-files --others --exclude-standard -z ci/builder) \
+    | sort -z \
+    | xargs -0 sha1sum)
+files+="$rust_date"
+tag=$(echo "$files" | python3 -c '
+import base64
+import hashlib
+import sys
+
+input = sys.stdin.buffer.read()
+hash = base64.b32encode(hashlib.sha1(input).digest())
+print(hash.decode())
+')
+
+
 case "$cmd" in
     build)
-        build --tag materialize/ci-builder:"$tag"
-        echo "$tag" > "$tag_file"
+        build "$@"
         ;;
-    push)
-        build --tag materialize/ci-builder:"$tag"
-        docker push materialize/ci-builder:"$tag"
-        echo "$tag" > "$tag_file"
+    exists)
+        docker manifest inspect materialize/ci-builder:"$tag"
         ;;
     run)
         args=(
@@ -152,7 +170,7 @@ case "$cmd" in
             args+=(--user "$(id -u):1001")
         fi
         rm -f "$cid_file"
-        docker run "${args[@]}" "materialize/ci-builder:$(<"$tag_file")" "$@"
+        docker run "${args[@]}" "materialize/ci-builder:$tag" "$@"
         ;;
     root-shell)
         docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" ci/builder/root-shell.sh
