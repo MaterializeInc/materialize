@@ -17,9 +17,11 @@ NIGHTLY_RUST_DATE=2021-11-29
 
 cd "$(dirname "$0")/.."
 
+. misc/shlib/shlib.bash
+
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <build|push|run> <stable|nightly> [<args>...]
+    echo "usage: $0 <command> <stable|nightly> [<args>...]
 
 Manages the ci-builder Docker image, which contains the dependencies required
 to build, test, and deploy the code in this repository.
@@ -50,9 +52,12 @@ case "$channel" in
         ;;
 esac
 
+arch_gcc=${MZ_DEV_CI_BUILDER_ARCH:-$(arch_gcc)}
+arch_go=$(arch_go "$arch_gcc")
+
 cid_file=ci/builder/.${channel%%-*}.cidfile
 
-rust_components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
+rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu
 if [[ $rust_version = nightly ]]; then
     rust_components+=,miri-preview
 else
@@ -66,7 +71,9 @@ gid=$(id -g)
 
 build() {
     cp misc/python/requirements{,-dev}.txt ci/builder
-    docker buildx build --pull \
+    docker build --pull \
+        --build-arg "ARCH_GCC=$arch_gcc" \
+        --build-arg "ARCH_GO=$arch_go" \
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
         --build-arg "RUST_COMPONENTS=$rust_components" \
@@ -84,7 +91,8 @@ files=$(cat \
         <(git ls-files --others --exclude-standard -z ci/builder) \
     | sort -z \
     | xargs -0 sha1sum)
-files+="$rust_date"
+files+=$rust_date
+files+=$arch_gcc
 tag=$(echo "$files" | python3 -c '
 import base64
 import hashlib
@@ -101,7 +109,11 @@ case "$cmd" in
         build "$@"
         ;;
     exists)
-        docker manifest inspect materialize/ci-builder:"$tag"
+        docker manifest inspect materialize/ci-builder:"$tag" &> /dev/null
+        ;;
+    push)
+        build "$@"
+        docker push materialize/ci-builder:"$tag"
         ;;
     run)
         args=(
