@@ -103,6 +103,10 @@ List new features before bug fixes.
 
 {{% version-header v0.10.1 %}}
 
+- Queries that are too big to fit the limits of our intermediate representations
+  no longer panic and will now cause query-level failure with a an internal error
+  and a message of the form "exceeded recursion limit of {X}".
+
 - Support `generate_series` for [`timestamp`] data.
 
 - Prevent overflow on operations combining [`timestamp`] and [`interval`].
