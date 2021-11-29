@@ -16,13 +16,17 @@
 
 target:
   type: materialize
-  host: materialized
+  host: "{{ env_var('DBT_HOST') }}"
   user: materialize
   pass: password
   database: materialize
   schema: "dbt_test_{{ var('_dbt_random_suffix') }}"
   port: 6875
   threads: 1
+  sslmode: "{{ env_var('DBT_SSLMODE', '') }}"
+  sslcert: "{{ env_var('DBT_SSLCERT', '') }}"
+  sslkey: "{{ env_var('DBT_SSLKEY', '') }}"
+  sslrootcert: "{{ env_var('DBT_SSLROOTCERT', '') }}"
 sequences:
   test_dbt_empty: empty
   # Custom base test that removes the last incremental portion.
