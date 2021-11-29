@@ -15,7 +15,6 @@ use anyhow::bail;
 use reqwest::{Method, Url};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 use crate::config::Auth;
 
@@ -72,7 +71,7 @@ impl Client {
         self.get_subject(subject).await.map(|s| s.schema)
     }
 
-    /// Gets the latest schema for the specified subject.
+    /// Gets the latest version of the specified subject.
     pub async fn get_subject(&self, subject: &str) -> Result<Subject, GetBySubjectError> {
         let req = self.make_request(Method::GET, &["subjects", subject, "versions", "latest"]);
         let res: GetBySubjectResponse = send_request(req).await?;
@@ -86,11 +85,11 @@ impl Client {
         })
     }
 
-    /// Gets the latest schema for the specified subject as well as all other subjects referenced
-    /// by that subject (recursively).
+    /// Gets the latest version of the specified subject as well as all other
+    /// subjects referenced by that subject (recursively).
     ///
     /// The dependencies are returned in alphabetical order by subject name.
-    pub async fn get_all_subjects(
+    pub async fn get_subject_and_references(
         &self,
         subject: &str,
     ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
@@ -109,13 +108,12 @@ impl Client {
                 name: res.subject.clone(),
             });
             seen.insert(res.subject);
-            if let Some(r) = res.references {
-                subjects_queue.extend(
-                    r.into_iter()
-                        .filter(|r| !seen.contains(&r.subject))
-                        .map(|r| (r.subject, r.version.to_string())),
-                );
-            }
+            subjects_queue.extend(
+                res.references
+                    .into_iter()
+                    .filter(|r| !seen.contains(&r.subject))
+                    .map(|r| (r.subject, r.version.to_string())),
+            );
         }
         assert!(subjects.len() > 0, "Request should error if no subjects");
 
@@ -138,33 +136,13 @@ impl Client {
         references: &[SchemaReference],
     ) -> Result<i32, PublishError> {
         let req = self.make_request(Method::POST, &["subjects", subject, "versions"]);
-        let req = req.json(&self.build_publish_schema_body(schema, schema_type, references));
+        let req = req.json(&PublishRequest {
+            schema,
+            schema_type,
+            references,
+        });
         let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
-    }
-
-    /// Builds the minimal body for a `publish_schema` request to try to support
-    /// older CSR versions.
-    pub fn build_publish_schema_body(
-        &self,
-        schema: &str,
-        schema_type: SchemaType,
-        references: &[SchemaReference],
-    ) -> Value {
-        // Old versions of CSR default to Avro, and don't accept `schemaType` (erroring when they see it).
-        let is_avro = matches!(schema_type, SchemaType::Avro);
-        // `references` param was added in CSR version 5.4.0. Skip adding to body if empty.
-        let has_references = !references.is_empty();
-
-        if is_avro && !has_references {
-            json!({ "schema": schema })
-        } else if is_avro && has_references {
-            json!({ "schema": schema, "references": references })
-        } else if !is_avro && !has_references {
-            json!({ "schema": schema, "schemaType":  &schema_type })
-        } else {
-            json!({ "schema": schema, "schemaType":  &schema_type, "references": references })
-        }
     }
 
     /// Lists the names of all subjects that the schema registry is aware of.
@@ -208,12 +186,22 @@ where
     }
 }
 
+/// The type of a schema stored by a schema registry.
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum SchemaType {
+    /// An Avro schema.
     Avro,
+    /// A Protobuf schema.
     Protobuf,
+    /// A JSON schema.
     Json,
+}
+
+impl SchemaType {
+    fn is_default(&self) -> bool {
+        matches!(self, SchemaType::Avro)
+    }
 }
 
 /// A schema stored by a schema registry.
@@ -236,14 +224,15 @@ pub struct Subject {
     pub schema: Schema,
 }
 
-/// Required for publishing schemas that contain references.
-///
-/// For more information, check out:
-/// <https://docs.confluent.io/platform/current/schema-registry/serdes-develop/index.html#referenced-schemas>
+/// A reference from one schema in a schema registry to another.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SchemaReference {
+    /// The name of the reference.
     pub name: String,
+    /// The subject under which the referenced schema is registered.
     pub subject: String,
+    /// The version of the referenced schema.
     pub version: i32,
 }
 
@@ -297,12 +286,14 @@ impl fmt::Display for GetByIdError {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GetBySubjectResponse {
     id: i32,
     schema: String,
     version: i32,
     subject: String,
-    references: Option<Vec<SchemaReference>>,
+    #[serde(default)]
+    references: Vec<SchemaReference>,
 }
 
 /// Errors for schema lookups by subject.
@@ -349,7 +340,21 @@ impl fmt::Display for GetBySubjectError {
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishRequest<'a> {
+    schema: &'a str,
+    // Omitting the following fields when they're set to their defaults provides
+    // compatibility with old versions of the schema registry that don't
+    // understand these fields.
+    #[serde(skip_serializing_if = "SchemaType::is_default")]
+    schema_type: SchemaType,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    references: &'a [SchemaReference],
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PublishResponse {
     id: i32,
 }
