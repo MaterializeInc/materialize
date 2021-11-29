@@ -237,7 +237,7 @@ fn test_hir_generator() {
                         Err(e) => return format!("unable to plan query: {}: {}", s.input, e),
                     };
 
-                    let model = query_model::Model::from(&planned_query.expr);
+                    let model = query_model::Model::from(planned_query.expr);
 
                     let mut output = String::new();
 

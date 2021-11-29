@@ -19,8 +19,8 @@ use crate::query_model::{
 
 use crate::plan::expr::HirRelationExpr;
 
-impl From<&HirRelationExpr> for Model {
-    fn from(expr: &HirRelationExpr) -> Model {
+impl From<HirRelationExpr> for Model {
+    fn from(expr: HirRelationExpr) -> Model {
         FromHir::generate(expr)
     }
 }
@@ -33,7 +33,7 @@ struct FromHir {
 
 impl FromHir {
     /// Generates a Query Graph Model for representing the given query.
-    fn generate(expr: &HirRelationExpr) -> Model {
+    fn generate(expr: HirRelationExpr) -> Model {
         let mut generator = FromHir {
             model: Model::new(),
             context_stack: Vec::new(),
@@ -44,7 +44,7 @@ impl FromHir {
 
     /// Generates a sub-graph representing the given expression, ensuring
     /// that the resulting graph starts with a Select box.
-    fn generate_select(&mut self, expr: &HirRelationExpr) -> BoxId {
+    fn generate_select(&mut self, expr: HirRelationExpr) -> BoxId {
         let mut box_id = self.generate_internal(expr);
         if !self.model.get_box(box_id).borrow().is_select() {
             box_id = self.wrap_within_select(box_id);
@@ -53,7 +53,7 @@ impl FromHir {
     }
 
     /// Generates a sub-graph representing the given expression.
-    fn generate_internal(&mut self, expr: &HirRelationExpr) -> BoxId {
+    fn generate_internal(&mut self, expr: HirRelationExpr) -> BoxId {
         match expr {
             // HirRelationExpr::Get { id, typ } => {
             //     self.model.make_box(BoxType::BaseTable(BaseTable {}))
@@ -64,10 +64,8 @@ impl FromHir {
                     rows: rows.iter().map(|_| Vec::new()).collect_vec(),
                 }))
             }
-            HirRelationExpr::Map { input, scalars } => {
-                let mut box_id = self.generate_select(input);
-                let mut start_idx = 0;
-                let mut scalars = scalars.clone();
+            HirRelationExpr::Map { input, mut scalars } => {
+                let mut box_id = self.generate_select(*input);
                 loop {
                     let old_arity = self.model.get_box(box_id).borrow().columns.len();
 
@@ -83,13 +81,12 @@ impl FromHir {
                             requires_nonexistent_column
                         })
                         .unwrap_or(scalars.len());
-                    for scalar in scalars[start_idx..end_idx].iter() {
-                        let expr = self.generate_expr(&scalar, box_id);
+                    for scalar in scalars.drain(0..end_idx) {
+                        let expr = self.generate_expr(scalar, box_id);
                         let b = self.model.get_box(box_id);
                         b.borrow_mut().columns.push(Column { expr, alias: None });
                     }
-                    start_idx = end_idx;
-                    if end_idx == scalars.len() {
+                    if scalars.is_empty() {
                         break;
                     }
                     box_id = self.wrap_within_select(box_id);
@@ -97,7 +94,7 @@ impl FromHir {
                 box_id
             }
             HirRelationExpr::Filter { input, predicates } => {
-                let input_box = self.generate_internal(input);
+                let input_box = self.generate_internal(*input);
                 // We could install the predicates in `input_box` if it happened
                 // to be a `Select` box. However, that would require pushing down
                 // the predicates through its projection, since the predicates are
@@ -113,7 +110,7 @@ impl FromHir {
             }
 
             HirRelationExpr::Project { input, outputs } => {
-                let input_box_id = self.generate_internal(input);
+                let input_box_id = self.generate_internal(*input);
                 let select_id = self.model.make_select_box();
                 let quantifier_id =
                     self.model
@@ -123,7 +120,7 @@ impl FromHir {
                     select_box.columns.push(Column {
                         expr: BoxScalarExpr::ColumnReference(ColumnReference {
                             quantifier_id,
-                            position: *position,
+                            position: position,
                         }),
                         alias: None,
                     });
@@ -132,7 +129,7 @@ impl FromHir {
             }
             HirRelationExpr::Join {
                 left,
-                right,
+                mut right,
                 on,
                 kind,
             } => {
@@ -161,16 +158,17 @@ impl FromHir {
                 let join_box = self.model.make_box(box_type);
 
                 // Left box
-                let left_box = self.generate_internal(left);
+                let left_box = self.generate_internal(*left);
                 self.model.make_quantifier(left_q_type, left_box, join_box);
 
                 // Right box
                 let right_box = if kind.is_lateral() {
                     self.within_context(join_box, &mut |generator| -> BoxId {
+                        let right = right.take();
                         generator.generate_internal(right)
                     })
                 } else {
-                    self.generate_internal(right)
+                    self.generate_internal(*right)
                 };
                 self.model
                     .make_quantifier(right_q_type, right_box, join_box);
@@ -207,11 +205,9 @@ impl FromHir {
     ///
     /// Note that this method may add new quantifiers to the box for subquery
     /// expressions.
-    fn generate_expr(&mut self, expr: &HirScalarExpr, context_box: BoxId) -> BoxScalarExpr {
+    fn generate_expr(&mut self, expr: HirScalarExpr, context_box: BoxId) -> BoxScalarExpr {
         match expr {
-            HirScalarExpr::Literal(row, col_type) => {
-                BoxScalarExpr::Literal(row.clone(), col_type.clone())
-            }
+            HirScalarExpr::Literal(row, col_type) => BoxScalarExpr::Literal(row, col_type),
             HirScalarExpr::Column(c) => {
                 let context_box = match c.level {
                     0 => context_box,
@@ -219,27 +215,27 @@ impl FromHir {
                 };
                 BoxScalarExpr::ColumnReference(self.find_column_within_box(context_box, c.column))
             }
-            HirScalarExpr::CallNullary(func) => BoxScalarExpr::CallNullary(func.clone()),
+            HirScalarExpr::CallNullary(func) => BoxScalarExpr::CallNullary(func),
             HirScalarExpr::CallUnary { func, expr } => BoxScalarExpr::CallUnary {
-                func: func.clone(),
-                expr: Box::new(self.generate_expr(expr, context_box)),
+                func,
+                expr: Box::new(self.generate_expr(*expr, context_box)),
             },
             HirScalarExpr::CallBinary { func, expr1, expr2 } => BoxScalarExpr::CallBinary {
-                func: func.clone(),
-                expr1: Box::new(self.generate_expr(expr1, context_box)),
-                expr2: Box::new(self.generate_expr(expr2, context_box)),
+                func,
+                expr1: Box::new(self.generate_expr(*expr1, context_box)),
+                expr2: Box::new(self.generate_expr(*expr2, context_box)),
             },
             HirScalarExpr::CallVariadic { func, exprs } => BoxScalarExpr::CallVariadic {
-                func: func.clone(),
+                func,
                 exprs: exprs
                     .into_iter()
                     .map(|expr| self.generate_expr(expr, context_box))
                     .collect::<Vec<_>>(),
             },
             HirScalarExpr::If { cond, then, els } => BoxScalarExpr::If {
-                cond: Box::new(self.generate_expr(cond, context_box)),
-                then: Box::new(self.generate_expr(then, context_box)),
-                els: Box::new(self.generate_expr(els, context_box)),
+                cond: Box::new(self.generate_expr(*cond, context_box)),
+                then: Box::new(self.generate_expr(*then, context_box)),
+                els: Box::new(self.generate_expr(*els, context_box)),
             },
             _ => panic!("unsupported expression type {:?}", expr),
         }
