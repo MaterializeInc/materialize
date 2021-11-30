@@ -506,7 +506,7 @@ where
                                 index_id,
                                 description,
                             );
-                            self.ship_dataflow(df).await;
+                            self.ship_dataflow(df).await?;
                         }
                     }
                 }
@@ -1724,7 +1724,7 @@ where
             let sink_writes = SinkWrites::new(tokens);
             self.sink_writes.insert(id, sink_writes);
         }
-        Ok(self.ship_dataflow(df).await)
+        self.ship_dataflow(df).await
     }
 
     async fn sequence_plan(
@@ -2121,7 +2121,7 @@ where
         match df {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(df).await;
+                    self.ship_dataflow(df).await?;
                 }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
@@ -2187,7 +2187,7 @@ where
                         self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
                     self.sources.insert(source_id, frontiers);
                 }
-                self.ship_dataflows(dfs).await;
+                self.ship_dataflows(dfs).await?;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2448,7 +2448,7 @@ where
         {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(df).await;
+                    self.ship_dataflow(df).await?;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2493,7 +2493,7 @@ where
             .await
         {
             Ok(dfs) => {
-                self.ship_dataflows(dfs).await;
+                self.ship_dataflows(dfs).await?;
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
@@ -2544,7 +2544,7 @@ where
         {
             Ok(df) => {
                 if let Some(df) = df {
-                    self.ship_dataflow(df).await;
+                    self.ship_dataflow(df).await?;
                     self.set_index_options(id, options).expect("index enabled");
                 }
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
@@ -3026,7 +3026,7 @@ where
             typ,
         );
         // Finalization optimizes the dataflow as much as possible.
-        let dataflow_plan = self.finalize_dataflow(dataflow);
+        let dataflow_plan = self.finalize_dataflow(dataflow)?;
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -3107,7 +3107,7 @@ where
         let df = self
             .dataflow_builder()
             .build_sink_dataflow(sink_name, sink_id, sink_description);
-        self.ship_dataflow(df).await;
+        self.ship_dataflow(df).await?;
 
         let resp = ExecuteResponse::Tailing { rx };
 
@@ -3821,7 +3821,7 @@ where
                     Ok(df)
                 })
                 .await?;
-            self.ship_dataflow(df).await;
+            self.ship_dataflow(df).await?;
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
@@ -4119,20 +4119,21 @@ where
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
     /// Utility method for the more general [Self::ship_dataflows]
-    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
+    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) -> Result<(), CoordError> {
         self.ship_dataflows(vec![dataflow]).await
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
+    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) -> Result<(), CoordError> {
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
-            dataflow_plans.push(self.finalize_dataflow(dataflow));
+            dataflow_plans.push(self.finalize_dataflow(dataflow)?);
         }
         self.broadcast(dataflow_types::client::Command::CreateDataflows(
             dataflow_plans,
         ))
         .await;
+        Ok(())
     }
 
     /// Finalizes a dataflow.
@@ -4153,7 +4154,7 @@ where
     fn finalize_dataflow(
         &mut self,
         mut dataflow: DataflowDesc,
-    ) -> dataflow_types::DataflowDescription<dataflow_types::Plan> {
+    ) -> Result<dataflow_types::DataflowDescription<dataflow_types::Plan>, CoordError> {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
@@ -4215,10 +4216,9 @@ where
         }
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())
-            .expect("Dataflow planning failed; unrecoverable error"); // FIXME
-        dataflow_types::Plan::finalize_dataflow(dataflow)
-            .expect("Dataflow planning failed; unrecoverable error")
+        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())?;
+        Ok(dataflow_types::Plan::finalize_dataflow(dataflow)
+            .expect("Dataflow planning failed; unrecoverable error"))
     }
 
     async fn broadcast(&mut self, cmd: dataflow_types::client::Command) {
