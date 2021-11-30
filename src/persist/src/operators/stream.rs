@@ -454,7 +454,7 @@ where
                         let future = condition_write.seal(*frontier_element);
 
                         pending_futures.push_back(PendingSealFuture::ConditionSeal(SealFuture {
-                            cap: cap_set.delayed(frontier_element),
+                            time: *frontier_element,
                             future,
                         }));
                     }
@@ -474,40 +474,20 @@ where
                                     log::trace!(
                                         "In {}, finished sealing condition collection up to {}",
                                         &operator_name,
-                                        pending_future.cap.time(),
+                                        pending_future.time,
                                     );
-
-                                    // Drop any previous seal futures that are superseded by this
-                                    // successful seal. This will clean out seals that might have
-                                    // errored but are still holding back the frontier by holding
-                                    // on to a capability.
-                                    let seal_ts = pending_future.cap.time();
-                                    pending_futures.retain(|seal_future| match seal_future {
-                                        PendingSealFuture::ConditionSeal(seal_future) => {
-
-                                            if seal_future.cap.time() <= seal_ts {
-                                                log::trace!("Dropping seal (condition) {} because it is superseded by {}.", seal_future.cap.time(), seal_ts);
-                                                false
-                                            } else {
-                                                log::trace!("Retaining seal (condition) {} because it is NOT superseded by {}.", seal_future.cap.time(), seal_ts);
-                                                true
-                                            }
-                                        }
-                                        // Conditional seals don't supersede primary seals.
-                                        PendingSealFuture::PrimarySeal(_) => true,
-                                    });
 
                                     log::trace!(
                                         "In {}, sealing primary collection up to {}...",
                                         &operator_name,
-                                        pending_future.cap.time(),
+                                        pending_future.time,
                                     );
 
-                                    let future = primary_write.seal(*pending_future.cap.time());
+                                    let future = primary_write.seal(pending_future.time);
 
                                     pending_futures.push_back(PendingSealFuture::PrimarySeal(
                                         SealFuture {
-                                            cap: pending_future.cap,
+                                            time: pending_future.time,
                                             future,
                                         },
                                     ));
@@ -515,25 +495,44 @@ where
                                 std::task::Poll::Ready(Err(e)) => {
                                     let error = format!(
                                         "Error sealing {} (condition) up to {}: {}",
-                                        &operator_name,
-                                        pending_future.cap.time(),
-                                        e
+                                        &operator_name, pending_future.time, e
                                     );
                                     log::trace!("{}", error);
 
-                                    log::trace!(
-                                        "Adding seal (condition) to queue again: {}",
-                                        pending_future.cap.time()
-                                    );
+                                    // Only retry this seal if there is no other pending conditional
+                                    // seal at a time >= this seal's time.
+                                    let retry = {
+                                        let mut retry = true;
+                                        let seal_ts = pending_future.time;
+                                        for seal_future in pending_futures.iter() {
+                                            match seal_future {
+                                                PendingSealFuture::ConditionSeal(seal_future) => {
+                                                    if seal_future.time >= seal_ts {
+                                                        retry = false;
+                                                        break;
+                                                    }
+                                                }
+                                                PendingSealFuture::PrimarySeal(_) => (),
+                                            };
+                                        }
 
-                                    // We push to the back, because we assume that this future will
-                                    // be superseded by a later (successful) seal, and thus be
-                                    // dropped from the queue.
-                                    let future = condition_write.seal(*pending_future.cap.time());
-                                    pending_futures.push_back(PendingSealFuture::ConditionSeal(SealFuture {
-                                        cap: pending_future.cap,
-                                        future,
-                                    }));
+                                        retry
+                                    };
+
+                                    if retry {
+                                        log::trace!(
+                                            "Adding seal (condition) to queue again: {}",
+                                            pending_future.time
+                                        );
+
+                                        let future = condition_write.seal(pending_future.time);
+                                        pending_futures.push_front(
+                                            PendingSealFuture::ConditionSeal(SealFuture {
+                                                time: pending_future.time,
+                                                future,
+                                            }),
+                                        );
+                                    }
                                 }
                                 std::task::Poll::Pending => {
                                     // We assume that seal requests are worked off in order and stop
@@ -556,51 +555,53 @@ where
                                     log::trace!(
                                         "In {}, finished sealing primary collection up to {}",
                                         &operator_name,
-                                        pending_future.cap.time(),
+                                        pending_future.time,
                                     );
 
-                                    // Drop any previous seal futures that are superseded by this
-                                    // successful seal. This will clean out seals that might have
-                                    // errored but are still holding back the frontier by holding
-                                    // on to a capability.
-                                    let seal_ts = pending_future.cap.time();
-                                    pending_futures.retain(|seal_future| match seal_future {
-                                        PendingSealFuture::PrimarySeal(seal_future) => {
-
-                                            if seal_future.cap.time() <= seal_ts {
-                                                log::trace!("Dropping seal (primary) {} because it is superseded by {}.", seal_future.cap.time(), seal_ts);
-                                                false
-                                            } else {
-                                                log::trace!("Retaining seal (primary) {} because it is NOT superseded by {}.", seal_future.cap.time(), seal_ts);
-                                                true
-                                            }
-                                        }
-                                        // Primary seals don't supersede condition seals.
-                                        PendingSealFuture::ConditionSeal(_) => true,
-                                    });
+                                    // Explicitly downgrade the capability to the new time.
+                                    cap_set.downgrade(Some(pending_future.time));
                                 }
                                 std::task::Poll::Ready(Err(e)) => {
                                     let error = format!(
                                         "Error sealing {} (primary) up to {}: {}",
-                                        &operator_name,
-                                        pending_future.cap.time(),
-                                        e
+                                        &operator_name, pending_future.time, e
                                     );
                                     log::trace!("{}", error);
 
-                                    log::trace!(
-                                        "Adding seal (primary) to queue again: {}",
-                                        pending_future.cap.time()
-                                    );
+                                    // Only retry this seal if there is no other pending primary
+                                    // seal at a time >= this seal's time.
+                                    let retry = {
+                                        let mut retry = true;
+                                        let seal_ts = pending_future.time;
+                                        for seal_future in pending_futures.iter() {
+                                            match seal_future {
+                                                PendingSealFuture::ConditionSeal(_) => (),
+                                                PendingSealFuture::PrimarySeal(seal_future) => {
+                                                    if seal_future.time >= seal_ts {
+                                                        retry = false;
+                                                        break;
+                                                    }
+                                                }
+                                            };
+                                        }
 
-                                    // We push to the back, because we assume that this future will
-                                    // be superseded by a later (successful) seal, and thus be
-                                    // dropped from the queue.
-                                    let future = primary_write.seal(*pending_future.cap.time());
-                                    pending_futures.push_back(PendingSealFuture::PrimarySeal(SealFuture {
-                                        cap: pending_future.cap,
-                                        future,
-                                    }));
+                                        retry
+                                    };
+
+                                    if retry {
+                                        log::trace!(
+                                            "Adding seal (primary) to queue again: {}",
+                                            pending_future.time
+                                        );
+
+                                        let future = primary_write.seal(pending_future.time);
+                                        pending_futures.push_front(PendingSealFuture::PrimarySeal(
+                                            SealFuture {
+                                                time: pending_future.time,
+                                                future,
+                                            },
+                                        ));
+                                    }
                                 }
                                 std::task::Poll::Pending => {
                                     // We assume that seal requests are worked off in order and stop
@@ -620,7 +621,12 @@ where
                 }
 
                 input_frontier.clone_from(&mut new_input_frontier);
-                cap_set.downgrade(input_frontier.iter());
+                // We need to downgrade when the input frontier is empty. This basically releases
+                // all the capabilities so that downstream operators and eventually the worker can
+                // shut down.
+                if input_frontier.is_empty() {
+                    cap_set.downgrade(input_frontier.iter());
+                }
             }
         });
 
@@ -638,7 +644,7 @@ enum PendingSealFuture<F: Future<Output = Result<SeqNo, Error>>> {
 }
 
 struct SealFuture<F: Future<Output = Result<SeqNo, Error>>> {
-    cap: Capability<u64>,
+    time: u64,
     future: F,
 }
 
