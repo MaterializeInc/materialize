@@ -275,15 +275,6 @@ impl CommandKind {
     }
 }
 
-/// Information from timely dataflow workers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Response {
-    /// Identifies the worker by its identifier.
-    pub worker_id: usize,
-    /// The feedback itself.
-    pub message: WorkerFeedback,
-}
-
 /// Data about timestamp bindings that dataflow workers send to the coordinator
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampBindingFeedback {
@@ -295,7 +286,7 @@ pub struct TimestampBindingFeedback {
 
 /// Responses the worker can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WorkerFeedback {
+pub enum Response {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
     /// Timestamp bindings and prior and new frontiers for those bindings for all
@@ -391,7 +382,7 @@ pub mod partitioned {
     use repr::Timestamp;
 
     use super::Client;
-    use super::{ClientAsStream, Command, PeekResponse, Response, WorkerFeedback};
+    use super::{ClientAsStream, Command, PeekResponse, Response};
 
     /// A client whose implementation is sharded across a number of other clients.
     ///
@@ -423,18 +414,13 @@ pub mod partitioned {
 
         async fn recv(&mut self) -> Option<Response> {
             use futures::StreamExt;
-            let mut stream = futures::stream::select_all(
-                self.shards
-                    .iter_mut()
-                    .map(|client| ClientAsStream { client }),
-            );
-            while let Some(response) = stream.next().await {
-                let message = self.state.absorb_response(response);
+            let mut stream = futures::stream::select_all(self.shards.iter_mut().enumerate().map(
+                |(index, client)| ClientAsStream { client }.map(move |response| (index, response)),
+            ));
+            while let Some((index, response)) = stream.next().await {
+                let message = self.state.absorb_response(index, response);
                 if let Some(message) = message {
-                    return Some(Response {
-                        worker_id: 0,
-                        message,
-                    });
+                    return Some(message);
                 }
             }
             // Indicate completion of the communication.
@@ -492,12 +478,9 @@ pub mod partitioned {
         }
 
         /// Absorbs a response, and produces response that should be emitted.
-        pub fn absorb_response(
-            &mut self,
-            Response { worker_id, message }: Response,
-        ) -> Option<WorkerFeedback> {
+        pub fn absorb_response(&mut self, shard_id: usize, message: Response) -> Option<Response> {
             match message {
-                WorkerFeedback::FrontierUppers(mut list) => {
+                Response::FrontierUppers(mut list) => {
                     // Fold updates into the maintained antichain, and report
                     // any net changes to the minimal antichain itself.
                     let mut reactions = ChangeBatch::new();
@@ -516,18 +499,18 @@ pub mod partitioned {
                     // TODO: The following line would be great, but is not permitted by `list.retain()`.
                     // list.retain_mut(|(_, changes)| !changes.is_empty());
                     if !list.is_empty() {
-                        Some(WorkerFeedback::FrontierUppers(list))
+                        Some(Response::FrontierUppers(list))
                     } else {
                         None
                     }
                 }
-                WorkerFeedback::PeekResponse(connection, response) => {
+                Response::PeekResponse(connection, response) => {
                     // Incorporate new peek responses; awaiting all responses.
                     let entry = self
                         .peek_responses
                         .entry(connection)
                         .or_insert_with(|| Default::default());
-                    let novel = entry.insert(worker_id, response);
+                    let novel = entry.insert(shard_id, response);
                     assert!(novel.is_none(), "Duplicate peek response");
                     // We may be ready to respond.
                     if entry.len() == self.parts {
@@ -545,7 +528,7 @@ pub mod partitioned {
                             };
                         }
                         self.peek_responses.remove(&connection);
-                        Some(WorkerFeedback::PeekResponse(connection, response))
+                        Some(Response::PeekResponse(connection, response))
                     } else {
                         None
                     }

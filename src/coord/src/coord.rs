@@ -108,7 +108,7 @@ use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use build_info::BuildInfo;
-use dataflow_types::client::{TimestampBindingFeedback, WorkerFeedback};
+use dataflow_types::client::TimestampBindingFeedback;
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, DataflowDescription, ExternalSourceConnector, IndexDesc, PeekResponse,
@@ -724,15 +724,9 @@ where
         }
     }
 
-    async fn message_worker(
-        &mut self,
-        dataflow_types::client::Response {
-            worker_id: _,
-            message,
-        }: dataflow_types::client::Response,
-    ) {
+    async fn message_worker(&mut self, message: dataflow_types::client::Response) {
         match message {
-            WorkerFeedback::PeekResponse(conn_id, response) => {
+            dataflow_types::client::Response::PeekResponse(conn_id, response) => {
                 // We expect exactly one peek response, which we forward.
                 self.pending_peeks
                     .remove(&conn_id)
@@ -740,7 +734,7 @@ where
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
             }
-            WorkerFeedback::TailResponse(sink_id, response) => {
+            dataflow_types::client::Response::TailResponse(sink_id, response) => {
                 // We use an `if let` here because the peek could have been cancelled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
@@ -766,13 +760,16 @@ where
                     }
                 }
             }
-            WorkerFeedback::FrontierUppers(updates) => {
+            dataflow_types::client::Response::FrontierUppers(updates) => {
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
             }
-            WorkerFeedback::TimestampBindings(TimestampBindingFeedback { bindings, changes }) => {
+            dataflow_types::client::Response::TimestampBindings(TimestampBindingFeedback {
+                bindings,
+                changes,
+            }) => {
                 self.catalog
                     .insert_timestamp_bindings(
                         bindings

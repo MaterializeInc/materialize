@@ -31,9 +31,7 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use dataflow_types::client::{
-    Command, LocalClient, Response, TimestampBindingFeedback, WorkerFeedback,
-};
+use dataflow_types::client::{Command, LocalClient, Response, TimestampBindingFeedback};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     Consistency, DataflowError, ExternalSourceConnector, PeekResponse, SourceConnector,
@@ -577,10 +575,7 @@ where
         }
 
         if !progress.is_empty() {
-            self.send_response(Response {
-                worker_id: self.timely_worker.index(),
-                message: WorkerFeedback::FrontierUppers(progress),
-            });
+            self.send_response(Response::FrontierUppers(progress));
         }
     }
 
@@ -639,13 +634,10 @@ where
         }
 
         if !changes.is_empty() || !bindings.is_empty() {
-            self.send_response(Response {
-                worker_id: self.timely_worker.index(),
-                message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
-                    changes,
-                    bindings,
-                }),
-            });
+            self.send_response(Response::TimestampBindings(TimestampBindingFeedback {
+                changes,
+                bindings,
+            }));
         }
         self.last_bindings_feedback = Instant::now();
     }
@@ -1006,10 +998,7 @@ where
     /// meant to prevent multiple responses to the same peek.
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         // Respond with the response.
-        self.send_response(Response {
-            worker_id: self.timely_worker.index(),
-            message: WorkerFeedback::PeekResponse(peek.conn_id, response),
-        });
+        self.send_response(Response::PeekResponse(peek.conn_id, response));
 
         // Log responding to the peek request.
         if let Some(logger) = self.materialized_logger.as_mut() {
@@ -1021,10 +1010,7 @@ where
     fn process_tails(&mut self) {
         let mut tail_responses = self.render_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
-            self.send_response(Response {
-                worker_id: self.timely_worker.index(),
-                message: WorkerFeedback::TailResponse(sink_id, response),
-            });
+            self.send_response(Response::TailResponse(sink_id, response));
         }
     }
 
