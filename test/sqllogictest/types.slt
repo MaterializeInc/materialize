@@ -996,23 +996,18 @@ SELECT 'mz_tables'::regclass::text
 ----
 mz_tables
 
-query T
-SELECT 'mz_tables'::regclass
+query B
+SELECT 'mz_tables'::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
 ----
-20162
+true
 
-query T
-SELECT 'mz_tables'::regclass::oid
+query B
+SELECT 'mz_tables'::regclass::oid = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
 ----
-20162
+true
 
 query error object "nonexistent" does not exist
 SELECT 'nonexistent'::regclass
-
-query B
-SELECT 20162 = 'mz_tables'::regclass
-----
-true
 
 statement ok
 CREATE TABLE text_to_regclass (a text);
@@ -1020,17 +1015,17 @@ CREATE TABLE text_to_regclass (a text);
 statement ok
 INSERT INTO text_to_regclass VALUES (NULL), ('mz_tables');
 
-query I
-SELECT a::regclass FROM text_to_regclass ORDER BY a
+query T
+SELECT a::regclass::text FROM text_to_regclass ORDER BY a
 ----
-20162
+mz_tables
 NULL
 
 # Regression for 9194
-query I
-select 'mz_tables'::regclass::oid::text::regclass
+query B
+select 'mz_tables'::regclass::oid::text::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
 ----
-20162
+true
 
 # Make sure that there are no classes with duplicate OIDs
 query I
@@ -1045,3 +1040,24 @@ NULL
 # ensure that all existing types can be cast to their respective names
 statement OK
 select oid, oid::regclass::text from (select oid from pg_catalog.pg_class)
+
+# multiple tables with the same name cause a lookup collision
+statement OK
+create schema test
+
+statement OK
+create schema test2
+
+statement ok
+CREATE TABLE test.table_with_id(i int);
+
+statement ok
+CREATE TABLE test2.table_with_id(i int);
+
+# unqualified duplicate names will lead to an error
+statement error more than one record produced in subquery
+SELECT 'table_with_id'::regclass
+
+# fully qualified names are not yet supported
+statement error object "test.table_with_id" does not exist
+SELECT 'test.table_with_id'::regclass
