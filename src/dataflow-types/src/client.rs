@@ -13,7 +13,6 @@
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
-use async_trait::async_trait;
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
 use num_enum::IntoPrimitive;
@@ -210,6 +209,47 @@ impl Command {
             }
         }
     }
+
+    /// Indicates which global ids should start and cease frontier tracking.
+    ///
+    /// Identifiers added to `start` will install frontier tracking, and indentifiers
+    /// added to `cease` will uninstall frontier tracking.
+    pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
+        match self {
+            Command::CreateDataflows(dataflows) => {
+                for dataflow in dataflows.iter() {
+                    for (sink_id, _) in dataflow.sink_exports.iter() {
+                        start.push(*sink_id)
+                    }
+                    for (index_id, _, _) in dataflow.index_exports.iter() {
+                        start.push(*index_id);
+                    }
+                }
+            }
+            Command::DropIndexes(index_ids) => {
+                for id in index_ids.iter() {
+                    cease.push(*id);
+                }
+            }
+            Command::DropSinks(sink_ids) => {
+                for id in sink_ids.iter() {
+                    cease.push(*id);
+                }
+            }
+            Command::AddSourceTimestamping { id, .. } => {
+                start.push(*id);
+            }
+            Command::DropSourceTimestamping { id } => {
+                cease.push(*id);
+            }
+            Command::EnableLogging(logging_config) => {
+                start.extend(logging_config.log_identifiers());
+            }
+            _ => {
+                // Other commands have no known impact on frontier tracking.
+            }
+        }
+    }
 }
 
 impl CommandKind {
@@ -268,10 +308,16 @@ pub enum WorkerFeedback {
 }
 
 /// A client to a running dataflow server.
-#[async_trait]
+#[async_trait::async_trait]
 pub trait Client: Send {
     /// Reports the number of dataflow workers.
-    fn num_workers(&self) -> usize;
+    ///
+    /// By default, this is one. Clients who wrap multiple workers without performing
+    /// the work of reducing their responses down to those of a single worker should
+    /// communicate that number here.
+    fn num_workers(&self) -> usize {
+        1
+    }
 
     /// Sends a command to the dataflow server.
     async fn send(&mut self, cmd: Command);
@@ -283,57 +329,295 @@ pub trait Client: Send {
     async fn recv(&mut self) -> Option<Response>;
 }
 
-/// A client to a dataflow server running in the current process.
-pub struct LocalClient {
-    feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response>,
-    worker_txs: Vec<crossbeam_channel::Sender<Command>>,
-    worker_threads: Vec<std::thread::Thread>,
+#[async_trait::async_trait]
+impl Client for Box<dyn Client> {
+    async fn send(&mut self, cmd: Command) {
+        self.send(cmd).await
+    }
+    async fn recv(&mut self) -> Option<Response> {
+        self.recv().await
+    }
 }
 
-#[async_trait]
-impl Client for LocalClient {
-    fn num_workers(&self) -> usize {
-        self.worker_txs.len()
-    }
+/// A helper struct which allows us to interpret a `Client` as a `Stream` of `Response`.
+pub struct ClientAsStream<'a, C: Client + 'a> {
+    client: &'a mut C,
+}
 
-    async fn send(&mut self, cmd: Command) {
-        log::trace!("Broadcasting dataflow command: {:?}", cmd);
-        let cmd_parts = cmd.partition_among(self.num_workers());
-        for (tx, cmd_part) in self.worker_txs.iter().zip(cmd_parts) {
-            tx.send(cmd_part)
-                .expect("worker command receiver should not drop first")
-        }
-        for thread in &self.worker_threads {
-            thread.unpark()
-        }
+use std::pin::Pin;
+use std::task::{Context, Poll};
+impl<'a, C: Client + 'a> futures::stream::Stream for ClientAsStream<'a, C> {
+    type Item = Response;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        use futures::Future;
+        Pin::new(&mut self.client.recv()).poll(cx)
     }
+}
 
-    async fn recv(&mut self) -> Option<Response> {
-        return self.feedback_rx.recv().await;
-    }
+/// A convenience type for compatibility.
+pub struct LocalClient {
+    client: partitioned::Partitioned<process_local::ProcessLocal>,
 }
 
 impl LocalClient {
-    /// Create a new instance of [LocalClient] from its parts.
     pub fn new(
-        feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response>,
+        feedback_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<Response>>,
         worker_txs: Vec<crossbeam_channel::Sender<Command>>,
         worker_threads: Vec<std::thread::Thread>,
     ) -> Self {
-        Self {
-            feedback_rx,
-            worker_txs,
-            worker_threads,
+        assert_eq!(feedback_rxs.len(), worker_threads.len());
+        assert_eq!(worker_txs.len(), worker_threads.len());
+        // assemble a list of process-local clients.
+        let mut locals = Vec::with_capacity(worker_txs.len());
+        for ((rx, tx), thread) in feedback_rxs.into_iter().zip(worker_txs).zip(worker_threads) {
+            locals.push(process_local::ProcessLocal::new(rx, tx, thread));
+        }
+        LocalClient {
+            client: partitioned::Partitioned::new(locals),
         }
     }
 }
 
-// We implement `Drop` so that we can wake each of the workers and have them notice the drop.
-impl Drop for LocalClient {
-    fn drop(&mut self) {
-        self.worker_txs.clear();
-        for thread in &self.worker_threads {
-            thread.unpark()
+#[async_trait::async_trait]
+impl Client for LocalClient {
+    async fn send(&mut self, cmd: Command) {
+        log::trace!("SEND dataflow command: {:?}", cmd);
+        self.client.send(cmd).await
+    }
+    async fn recv(&mut self) -> Option<Response> {
+        let response = self.client.recv().await;
+        log::trace!("RECV dataflow response: {:?}", response);
+        response
+    }
+}
+
+/// Clients whose implementation is partitioned across a set of subclients (e.g. timely workers).
+pub mod partitioned {
+
+    use std::collections::HashMap;
+
+    use expr::GlobalId;
+    use repr::Timestamp;
+
+    use super::Client;
+    use super::{ClientAsStream, Command, PeekResponse, Response, WorkerFeedback};
+
+    /// A client whose implementation is sharded across a number of other clients.
+    ///
+    /// Such a client needs to broadcast (partitioned) commands to all of its clients,
+    /// and await responses from each of the client shards before it can respond.
+    pub struct Partitioned<C: Client> {
+        shards: Vec<C>,
+        state: PartitionedClientState,
+    }
+
+    impl<C: Client> Partitioned<C> {
+        /// Create a client partitioned across multiple client shards.
+        pub fn new(shards: Vec<C>) -> Self {
+            Self {
+                state: PartitionedClientState::new(shards.len()),
+                shards,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl<C: Client> Client for Partitioned<C> {
+        async fn send(&mut self, cmd: Command) {
+            let cmd_parts = cmd.partition_among(self.shards.len());
+            for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
+                shard.send(cmd_part).await;
+            }
+        }
+
+        async fn recv(&mut self) -> Option<Response> {
+            use futures::StreamExt;
+            let mut stream = futures::stream::select_all(
+                self.shards
+                    .iter_mut()
+                    .map(|client| ClientAsStream { client }),
+            );
+            while let Some(response) = stream.next().await {
+                let message = self.state.absorb_response(response);
+                if let Some(message) = message {
+                    return Some(Response {
+                        worker_id: 0,
+                        message,
+                    });
+                }
+            }
+            // Indicate completion of the communication.
+            None
+        }
+    }
+
+    use timely::progress::{frontier::MutableAntichain, ChangeBatch};
+
+    /// Maintained state for sharded dataflow clients.
+    ///
+    /// This helper type unifies the responses of multiple partitioned
+    /// workers in order to present as a single worker.
+    pub struct PartitionedClientState {
+        /// Upper frontiers for sources and indexes.
+        uppers: HashMap<GlobalId, MutableAntichain<Timestamp>>,
+        /// Pending responses for a peek; returnable once all are available.
+        peek_responses: HashMap<u32, HashMap<usize, PeekResponse>>,
+        /// Number of parts the state machine represents.
+        parts: usize,
+    }
+
+    impl PartitionedClientState {
+        /// Instantiates a new client state machine wrapping a number of parts.
+        pub fn new(parts: usize) -> Self {
+            Self {
+                uppers: Default::default(),
+                peek_responses: Default::default(),
+                parts,
+            }
+        }
+
+        /// Observes commands that move past, and prepares state for responses.
+        ///
+        /// In particular, this method installs and removes upper frontier maintenance.
+        pub fn observe_command(&mut self, command: Command) {
+            // Temporary storage for identifiers to add to and remove from frontier tracking.
+            let mut start = Vec::new();
+            let mut cease = Vec::new();
+            command.frontier_tracking(&mut start, &mut cease);
+            // Apply the determined effects of the command to `self.uppers`.
+            for id in start.into_iter() {
+                let mut frontier = timely::progress::frontier::MutableAntichain::new();
+                frontier.update_iter(Some((
+                    <Timestamp as timely::progress::Timestamp>::minimum(),
+                    self.parts as i64,
+                )));
+                let previous = self.uppers.insert(id, frontier);
+                assert!(previous.is_none());
+            }
+            for id in cease.into_iter() {
+                let previous = self.uppers.remove(&id);
+                assert!(previous.is_some());
+            }
+        }
+
+        /// Absorbs a response, and produces response that should be emitted.
+        pub fn absorb_response(
+            &mut self,
+            Response { worker_id, message }: Response,
+        ) -> Option<WorkerFeedback> {
+            match message {
+                WorkerFeedback::FrontierUppers(mut list) => {
+                    // Fold updates into the maintained antichain, and report
+                    // any net changes to the minimal antichain itself.
+                    let mut reactions = ChangeBatch::new();
+                    for (id, changes) in list.iter_mut() {
+                        // We may receive changes to identifiers that are no longer tracked;
+                        // do not worry about them in that case (a benign race condition).
+                        if let Some(frontier) = self.uppers.get_mut(id) {
+                            for (time, diff) in frontier.update_iter(changes.drain()) {
+                                reactions.update(time, diff);
+                            }
+                            std::mem::swap(changes, &mut reactions);
+                        } else {
+                            changes.clear();
+                        }
+                    }
+                    // TODO: The following line would be great, but is not permitted by `list.retain()`.
+                    // list.retain_mut(|(_, changes)| !changes.is_empty());
+                    if !list.is_empty() {
+                        Some(WorkerFeedback::FrontierUppers(list))
+                    } else {
+                        None
+                    }
+                }
+                WorkerFeedback::PeekResponse(connection, response) => {
+                    // Incorporate new peek responses; awaiting all responses.
+                    let entry = self
+                        .peek_responses
+                        .entry(connection)
+                        .or_insert_with(|| Default::default());
+                    let novel = entry.insert(worker_id, response);
+                    assert!(novel.is_none(), "Duplicate peek response");
+                    // We may be ready to respond.
+                    if entry.len() == self.parts {
+                        let mut response = PeekResponse::Rows(Vec::new());
+                        for (_part, r) in std::mem::take(entry).into_iter() {
+                            response = match (response, r) {
+                                (_, PeekResponse::Canceled) => PeekResponse::Canceled,
+                                (PeekResponse::Canceled, _) => PeekResponse::Canceled,
+                                (_, PeekResponse::Error(e)) => PeekResponse::Error(e),
+                                (PeekResponse::Error(e), _) => PeekResponse::Error(e),
+                                (PeekResponse::Rows(mut rows), PeekResponse::Rows(r)) => {
+                                    rows.extend(r.into_iter());
+                                    PeekResponse::Rows(rows)
+                                }
+                            };
+                        }
+                        self.peek_responses.remove(&connection);
+                        Some(WorkerFeedback::PeekResponse(connection, response))
+                    } else {
+                        None
+                    }
+                }
+                message => {
+                    // TimestampBindings and TailResponses are mirrored out,
+                    // as they do not seem to contain worker-specific information.
+                    Some(message)
+                }
+            }
+        }
+    }
+}
+
+/// A client backed by a process-local timely worker thread.
+pub mod process_local {
+
+    use super::{Client, Command, Response};
+
+    /// A client to a dataflow server running in the current process.
+    pub struct ProcessLocal {
+        feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response>,
+        worker_tx: crossbeam_channel::Sender<Command>,
+        worker_thread: std::thread::Thread,
+    }
+
+    #[async_trait::async_trait]
+    impl Client for ProcessLocal {
+        async fn send(&mut self, cmd: Command) {
+            self.worker_tx
+                .send(cmd)
+                .expect("worker command receiver should not drop first");
+            self.worker_thread.unpark();
+        }
+
+        async fn recv(&mut self) -> Option<Response> {
+            self.feedback_rx.recv().await
+        }
+    }
+
+    impl ProcessLocal {
+        /// Create a new instance of [ProcessLocal] from its parts.
+        pub fn new(
+            feedback_rx: tokio::sync::mpsc::UnboundedReceiver<Response>,
+            worker_tx: crossbeam_channel::Sender<Command>,
+            worker_thread: std::thread::Thread,
+        ) -> Self {
+            Self {
+                feedback_rx,
+                worker_tx,
+                worker_thread,
+            }
+        }
+    }
+
+    // We implement `Drop` so that we can wake each of the workers and have them notice the drop.
+    impl Drop for ProcessLocal {
+        fn drop(&mut self) {
+            // Drop the worker handle.
+            let (tx, _rx) = crossbeam_channel::unbounded();
+            self.worker_tx = tx;
+            // Unpark the thread once the handle is dropped, so that it can observe the emptiness.
+            self.worker_thread.unpark();
         }
     }
 }
