@@ -208,7 +208,8 @@ ENV LDFLAGS=-fuse-ld=lld
 ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
 ENV PATH=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
-ENV CARGO_TARGET_$ARCH_GCC_UNKNOWN_LINUX_GNU_LINKER=$ARCH_GCC-unknown-linux-gnu-cc
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
 
 # Set a environment variable that tools can check to see if they're in the
 # builder or not.
