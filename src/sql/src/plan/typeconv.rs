@@ -177,10 +177,10 @@ lazy_static! {
             // REGCLASS
             (RegClass, Oid) => Implicit: CastRegClassToOid(func::CastRegClassToOid),
             (RegClass, String) => Explicit: sql_impl_cast("(
-                SELECT COALESCE(t.relname, v.x::pg_catalog.text)
+                SELECT COALESCE(t.name, v.x::pg_catalog.text)
                 FROM (
                     VALUES ($1::pg_catalog.oid)) AS v(x)
-                    LEFT JOIN pg_catalog.pg_class AS t
+                    LEFT JOIN mz_catalog.mz_objects AS t
                     ON t.oid = v.x
             )"),
 
@@ -258,6 +258,19 @@ lazy_static! {
             (String, Int32) => Explicit: CastStringToInt32,
             (String, Int64) => Explicit: CastStringToInt64,
             (String, Oid) => Explicit: CastStringToInt32,
+
+            // STRING to REG*
+            // A reg* type represents a specific type of object by oid.
+            // Converting from string to reg* does a lookup of the object name
+            // in the corresponding mz_catalog table and expects exactly one object to match it.
+            // You can also specify (in postgres) a string that's a valid
+            // int4 and it'll happily cast it (without verifying that the int4 matches
+            // an object oid). To support this, use a SQL expression that checks if
+            // the input might be a valid int4 with a regex, otherwise try to lookup in
+            // the table. CASE will return NULL if the subquery returns zero results,
+            // so use mz_error_if_null to coerce that into an error. This is hacky and
+            // incomplete in a few ways, but gets us close enough to making drivers happy.
+            // TODO: Support the correct error code for does not exist (42883).
             (String, RegClass) => Explicit: sql_impl_cast("(
                 SELECT
                     CASE
@@ -265,22 +278,12 @@ lazy_static! {
                     WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regclass
                     ELSE (
                         mz_internal.mz_error_if_null(
-                            (SELECT oid::pg_catalog.regclass FROM pg_catalog.pg_class WHERE relname = $1),
+                            (SELECT oid::pg_catalog.regclass FROM mz_catalog.mz_objects WHERE name = $1),
                             'object \"' || $1 || '\" does not exist'
                         )
                     )
                     END
             )"),
-            // A regproc represents a function by oid. Converting from string to regproc
-            // does a lookup of the function name and expects exactly one function to
-            // match it. You can also specify (in postgres) a string that's a valid
-            // int4 and it'll happily cast it (without verifying that the int4 matches
-            // a function oid). To support this, use a SQL expression that checks if
-            // the input might be a valid int4 with a regex, otherwise try to lookup in
-            // mz_functions. CASE will return NULL if the subquery returns zero results,
-            // so use mz_error_if_null to coerce that into an error. This is hacky and
-            // incomplete in a few ways, but gets us close enough to making drivers happy.
-            // TODO: Support the correct error code for does not exist (42883).
             (String, RegProc) => Explicit: sql_impl_cast("(
                 SELECT
                     CASE
@@ -294,16 +297,6 @@ lazy_static! {
                     )
                     END
             )"),
-            // A regtype represents a type by oid. Converting from string to regtype
-            // does a lookup of the function name and expects exactly one type to
-            // match it. You can also specify (in postgres) a string that's a valid
-            // int4 and it'll happily cast it (without verifying that the int4 matches
-            // a type oid). To support this, use a SQL expression that checks if
-            // the input might be a valid int4 with a regex, otherwise try to lookup in
-            // mz_types. CASE will return NULL if the subquery returns zero results,
-            // so use mz_error_if_null to coerce that into an error. This is hacky and
-            // incomplete in a few ways, but gets us close enough to making drivers happy.
-            // TODO: Support the correct error code for does not exist (42883).
             (String, RegType) => Explicit: sql_impl_cast("(
                 SELECT
                     CASE
