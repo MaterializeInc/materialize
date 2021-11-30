@@ -27,14 +27,13 @@ impl crate::Transform for ReduceElision {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_post(&mut |e| self.action(e));
-        Ok(())
+        relation.try_visit_mut_post(&mut |e| self.action(e))
     }
 }
 
 impl ReduceElision {
     /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::Reduce {
             input,
             group_key,
@@ -68,5 +67,6 @@ impl ReduceElision {
                 *relation = result;
             }
         }
+        Ok(())
     }
 }

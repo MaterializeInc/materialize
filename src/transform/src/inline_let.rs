@@ -15,7 +15,8 @@
 //! harming planning.
 
 use crate::TransformArgs;
-use expr::{Id, LocalId, MirRelationExpr};
+use expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Install replace certain `Get` operators with their `Let` value.
 #[derive(Debug)]
@@ -30,6 +31,25 @@ pub struct InlineLet {
     /// Generally, though, we prefer to be more conservative in our inlining in
     /// order to be able to better detect CSEs.
     pub inline_mfp: bool,
+    /// A [`RecursionGuard`] to be used by the [`CheckedRecursion`] implementation.
+    recursion_guard: RecursionGuard,
+}
+
+impl InlineLet {
+    /// Construct a new [`InlineLet`] instance with the given `inline_mfp`
+    /// where `recursion_guard` is initialized with [`RECURSION_LIMIT`] as limit.
+    pub fn new(inline_mfp: bool) -> InlineLet {
+        InlineLet {
+            inline_mfp,
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for InlineLet {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
 }
 
 impl crate::Transform for InlineLet {
@@ -39,7 +59,7 @@ impl crate::Transform for InlineLet {
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut lets = vec![];
-        self.action(relation, &mut lets);
+        self.action(relation, &mut lets)?;
         for (id, value) in lets.into_iter().rev() {
             *relation = MirRelationExpr::Let {
                 id,
@@ -63,46 +83,56 @@ impl InlineLet {
         &self,
         relation: &mut MirRelationExpr,
         lets: &mut Vec<(LocalId, MirRelationExpr)>,
-    ) {
-        if let MirRelationExpr::Let { id, value, body } = relation {
-            self.action(value, lets);
+    ) -> Result<(), crate::TransformError> {
+        self.checked_recur(|_| {
+            if let MirRelationExpr::Let { id, value, body } = relation {
+                self.action(value, lets)?;
 
-            let mut num_gets = 0;
-            body.visit_mut_pre(&mut |relation| match relation {
-                MirRelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
-                    num_gets += 1;
+                let mut num_gets = 0;
+                body.try_visit_mut_pre::<_, crate::TransformError>(
+                    &mut |relation| match relation {
+                        MirRelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
+                            num_gets += 1;
+                            Ok(())
+                        }
+                        _ => Ok(()),
+                    },
+                )?;
+
+                let stripped_value = if self.inline_mfp {
+                    expr::MapFilterProject::extract_non_errors_from_expr(&**value).1
+                } else {
+                    &**value
+                };
+                let inlinable = match stripped_value {
+                    MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
+                    _ => num_gets <= 1,
+                };
+
+                if inlinable {
+                    // if only used once, just inline it
+                    body.try_visit_mut_pre::<_, crate::TransformError>(&mut |relation| {
+                        match relation {
+                            MirRelationExpr::Get { id: get_id, .. }
+                                if Id::Local(*id) == *get_id =>
+                            {
+                                *relation = (**value).clone();
+                                Ok(())
+                            }
+                            _ => Ok(()),
+                        }
+                    })?;
+                } else {
+                    // otherwise lift it to the top so it's out of the way
+                    lets.push((*id, value.take_dangerous()));
                 }
-                _ => (),
-            });
 
-            let stripped_value = if self.inline_mfp {
-                expr::MapFilterProject::extract_non_errors_from_expr(&**value).1
+                *relation = body.take_dangerous();
+                // might be another Let in the body so have to recur here
+                self.action(relation, lets)
             } else {
-                &**value
-            };
-            let inlinable = match stripped_value {
-                MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
-                _ => num_gets <= 1,
-            };
-
-            if inlinable {
-                // if only used once, just inline it
-                body.visit_mut_pre(&mut |relation| match relation {
-                    MirRelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
-                        *relation = (**value).clone();
-                    }
-                    _ => (),
-                });
-            } else {
-                // otherwise lift it to the top so it's out of the way
-                lets.push((*id, value.take_dangerous()));
+                relation.try_visit_mut_children(|child| self.action(child, lets))
             }
-
-            *relation = body.take_dangerous();
-            // might be another Let in the body so have to recur here
-            self.action(relation, lets);
-        } else {
-            relation.visit_mut_children(|child| self.action(child, lets));
-        }
+        })
     }
 }

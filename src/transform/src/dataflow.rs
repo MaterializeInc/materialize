@@ -14,12 +14,12 @@
 //! pushdown can be applied across views once we understand the context
 //! in which the views will be executed.
 
-use dataflow_types::{DataflowDesc, LinearOperator};
+use dataflow_types::{DataflowDesc, LinearOperator, SourceConnector, SourceEnvelope};
 use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use ore::id_gen::IdGen;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::Optimizer;
+use crate::{monotonic::MonotonicFlag, Optimizer, TransformError};
 
 /// Optimizes the implementation of each dataflow.
 ///
@@ -29,34 +29,36 @@ use crate::Optimizer;
 pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
-) {
+) -> Result<(), TransformError> {
     // Inline views that are used in only one other view.
-    inline_views(dataflow);
+    inline_views(dataflow)?;
 
     // Logical optimization pass after view inlining
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer());
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer())?;
 
-    optimize_dataflow_filters(dataflow);
+    optimize_dataflow_filters(dataflow)?;
     // TODO: when the linear operator contract ensures that propagated
     // predicates are always applied, projections and filters can be removed
     // from where they come from. Once projections and filters can be removed,
     // TODO: it would be useful for demand to be optimized after filters
     // that way demand only includes the columns that are still necessary after
     // the filters are applied.
-    optimize_dataflow_demand(dataflow);
+    optimize_dataflow_demand(dataflow)?;
 
     // A smaller logical optimization pass after projections and filters are
     // pushed down across views.
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_cleanup_pass());
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_cleanup_pass())?;
 
     // Physical optimization pass
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer());
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer())?;
 
-    monotonic::optimize_dataflow_monotonic(dataflow);
+    optimize_dataflow_monotonic(dataflow)?;
+
+    Ok(())
 }
 
 /// Inline views used in one other view, and in no exported objects.
-fn inline_views(dataflow: &mut DataflowDesc) {
+fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // We cannot inline anything whose `BuildDesc::id` appears in either the
     // `index_exports` or `sink_exports` of `dataflow`, because we lose our
     // ability to name it.
@@ -105,7 +107,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             // identifiers for the Let's `body` and `value`, as well as a new
             // identifier for the binding itself. Following `UpdateLet`, we
             // go with the binding first, then the value, then the body.
-            let update_let = crate::update_let::UpdateLet;
+            let update_let = crate::update_let::UpdateLet::default();
             let mut id_gen = crate::IdGen::default();
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
@@ -113,13 +115,13 @@ fn inline_views(dataflow: &mut DataflowDesc) {
                 dataflow.objects_to_build[index].view.as_inner_mut(),
                 &mut HashMap::new(),
                 &mut id_gen,
-            );
+            )?;
             // Assign new identifiers to the other relation.
             update_let.action(
                 dataflow.objects_to_build[other].view.as_inner_mut(),
                 &mut HashMap::new(),
                 &mut id_gen,
-            );
+            )?;
             // Install the `new_local` name wherever `global_id` was used.
             dataflow.objects_to_build[other]
                 .view
@@ -151,6 +153,8 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             dataflow.objects_to_build.remove(index);
         }
     }
+
+    Ok(())
 }
 
 /// Performs either the logical or the physical optimization pass on the
@@ -159,7 +163,7 @@ fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
     indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     optimizer: &Optimizer,
-) {
+) -> Result<(), TransformError> {
     // Re-optimize each dataflow
     // TODO(mcsherry): we should determine indexes from the optimized representation
     // just before we plan to install the dataflow. This would also allow us to not
@@ -168,10 +172,10 @@ fn optimize_dataflow_relations(
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.
         // Re-run all optimizations on the composite views.
-        optimizer
-            .transform(object.view.as_inner_mut(), &indexes)
-            .unwrap();
+        optimizer.transform(object.view.as_inner_mut(), &indexes)?;
     }
+
+    Ok(())
 }
 
 /// Pushes demand information from published outputs to dataflow inputs,
@@ -180,7 +184,7 @@ fn optimize_dataflow_relations(
 /// Dataflows that exist for the sake of generating plan explanations do not
 /// have published outputs. In this case, we push demand information from views
 /// not depended on by other views to dataflow inputs.
-fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
+fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // Maps id -> union of known columns demanded from the source/view with the
     // corresponding id.
     let mut demand = HashMap::new();
@@ -210,7 +214,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
             .rev()
             .map(|build_desc| (Id::Global(build_desc.id), build_desc.view.as_inner_mut())),
         &mut demand,
-    );
+    )?;
 
     // Push demand information into the SourceDesc.
     for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
@@ -228,6 +232,8 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
             }
         }
     }
+
+    Ok(())
 }
 
 /// Pushes demand through views in `view_sequence` in order, removing
@@ -238,7 +244,8 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
 pub fn optimize_dataflow_demand_inner<'a, I>(
     view_sequence: I,
     demand: &mut HashMap<Id, BTreeSet<usize>>,
-) where
+) -> Result<(), TransformError>
+where
     I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
 {
     // Maps id -> The projection that was pushed down on the view with the
@@ -265,18 +272,20 @@ pub fn optimize_dataflow_demand_inner<'a, I>(
         view_refs.push(view);
     }
 
-    let typ_update = crate::update_let::UpdateLet;
+    let typ_update = crate::update_let::UpdateLet::default();
     for view in view_refs {
         // Update column references to views where projections were pushed down.
         projection_pushdown.update_projection_around_get(view, &applied_projection);
         // Types need to be updated after ProjectionPushdown
         // because the width of each view may have changed.
-        typ_update.action(view, &mut HashMap::new(), &mut IdGen::default());
+        typ_update.action(view, &mut HashMap::new(), &mut IdGen::default())?;
     }
+
+    Ok(())
 }
 
 /// Pushes predicate to dataflow inputs.
-fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
+fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
     let mut predicates = HashMap::<Id, HashSet<expr::MirScalarExpr>>::new();
@@ -289,7 +298,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
             .rev()
             .map(|build_desc| (Id::Global(build_desc.id), build_desc.view.as_inner_mut())),
         &mut predicates,
-    );
+    )?;
 
     // Push predicate information into the SourceDesc.
     for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
@@ -308,6 +317,8 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
             }
         }
     }
+
+    Ok(())
 }
 
 /// Pushes filters down through views in `view_sequence` in order.
@@ -317,138 +328,45 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
 pub fn optimize_dataflow_filters_inner<'a, I>(
     view_iter: I,
     predicates: &mut HashMap<Id, HashSet<expr::MirScalarExpr>>,
-) where
+) -> Result<(), TransformError>
+where
     I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
 {
-    let transform = crate::predicate_pushdown::PredicatePushdown;
+    let transform = crate::predicate_pushdown::PredicatePushdown::default();
     for (id, view) in view_iter {
         if let Some(list) = predicates.get(&id).clone() {
             if !list.is_empty() {
                 *view = view.take_dangerous().filter(list.iter().cloned());
             }
         }
-        transform.action(view, predicates);
+        transform.action(view, predicates)?;
     }
+    Ok(())
 }
 
-/// Analysis to identify monotonic collections, especially TopK inputs.
-pub mod monotonic {
-
-    use dataflow_types::{DataflowDesc, SourceConnector, SourceEnvelope};
-    use expr::MirRelationExpr;
-    use expr::{GlobalId, Id, LocalId};
-    use std::collections::HashSet;
-
-    // Determines if a relation is monotonic, and applies any optimizations along the way.
-    fn is_monotonic(
-        expr: &mut MirRelationExpr,
-        sources: &HashSet<GlobalId>,
-        locals: &mut HashSet<LocalId>,
-    ) -> bool {
-        match expr {
-            MirRelationExpr::Get { id, .. } => match id {
-                Id::Global(id) => sources.contains(id),
-                Id::Local(id) => locals.contains(id),
-                _ => false,
-            },
-            MirRelationExpr::Project { input, .. } => is_monotonic(input, sources, locals),
-            MirRelationExpr::Filter { input, predicates } => {
-                let is_monotonic = is_monotonic(input, sources, locals);
-                // Non-temporal predicates can introduce non-monotonicity, as they
-                // can result in the future removal of records.
-                // TODO: this could be improved to only restrict if upper bounds
-                // are present, as temporal lower bounds only delay introduction.
-                is_monotonic && !predicates.iter().any(|p| p.contains_temporal())
-            }
-            MirRelationExpr::Map { input, .. } => is_monotonic(input, sources, locals),
-            MirRelationExpr::TopK {
-                input, monotonic, ..
-            } => {
-                *monotonic = is_monotonic(input, sources, locals);
-                false
-            }
-            MirRelationExpr::Reduce {
-                input,
-                aggregates,
-                monotonic,
-                ..
-            } => {
-                *monotonic = is_monotonic(input, sources, locals);
-                // Reduce is monotonic iff its input is and it is a "distinct",
-                // with no aggregate values; otherwise it may need to retract.
-                *monotonic && aggregates.is_empty()
-            }
-            MirRelationExpr::Union { base, inputs } => {
-                let mut monotonic = is_monotonic(base, sources, locals);
-                for input in inputs.iter_mut() {
-                    let monotonic_i = is_monotonic(input, sources, locals);
-                    monotonic = monotonic && monotonic_i;
-                }
-                monotonic
-            }
-            MirRelationExpr::ArrangeBy { input, .. }
-            | MirRelationExpr::DeclareKeys { input, .. } => is_monotonic(input, sources, locals),
-            MirRelationExpr::FlatMap { input, func, .. } => {
-                let is_monotonic = is_monotonic(input, sources, locals);
-                is_monotonic && func.preserves_monotonicity()
-            }
-            MirRelationExpr::Join { inputs, .. } => {
-                // If all inputs to the join are monotonic then so is the join.
-                let mut monotonic = true;
-                for input in inputs.iter_mut() {
-                    let monotonic_i = is_monotonic(input, sources, locals);
-                    monotonic = monotonic && monotonic_i;
-                }
-                monotonic
-            }
-            MirRelationExpr::Constant { rows: Ok(rows), .. } => {
-                rows.iter().all(|(_, diff)| diff > &0)
-            }
-            MirRelationExpr::Threshold { input } => is_monotonic(input, sources, locals),
-            MirRelationExpr::Let { id, value, body } => {
-                let prior = locals.remove(id);
-                if is_monotonic(value, sources, locals) {
-                    locals.insert(*id);
-                }
-                let result = is_monotonic(body, sources, locals);
-                if prior {
-                    locals.insert(*id);
-                } else {
-                    locals.remove(id);
-                }
-                result
-            }
-            // The default behavior.
-            // TODO: check that this is the behavior we want.
-            MirRelationExpr::Negate { .. } | MirRelationExpr::Constant { rows: Err(_), .. } => {
-                expr.visit_mut_children(|e| {
-                    is_monotonic(e, sources, locals);
-                });
-                false
-            }
+/// Propagates information about monotonic inputs through views.
+pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+    let mut monotonic = std::collections::HashSet::new();
+    for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
+        if let SourceConnector::External {
+            envelope: SourceEnvelope::None(_),
+            ..
+        } = source_desc.connector
+        {
+            monotonic.insert(source_id.clone());
         }
     }
 
-    /// Propagates information about monotonic inputs through views.
-    pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) {
-        let mut monotonic = std::collections::HashSet::new();
-        for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
-            if let SourceConnector::External {
-                envelope: SourceEnvelope::None(_),
-                ..
-            } = source_desc.connector
-            {
-                monotonic.insert(source_id.clone());
-            }
-        }
+    let monotonic_flag = MonotonicFlag::default();
 
-        // Propagate predicate information from outputs to inputs.
-        for build_desc in dataflow.objects_to_build.iter_mut() {
-            is_monotonic(
-                build_desc.view.as_inner_mut(),
-                &monotonic,
-                &mut HashSet::new(),
-            );
-        }
+    // Propagate predicate information from outputs to inputs.
+    for build_desc in dataflow.objects_to_build.iter_mut() {
+        monotonic_flag.apply(
+            build_desc.view.as_inner_mut(),
+            &monotonic,
+            &mut HashSet::new(),
+        )?;
     }
+
+    Ok(())
 }

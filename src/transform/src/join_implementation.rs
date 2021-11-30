@@ -19,11 +19,32 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr};
+use expr::{
+    Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
-pub struct JoinImplementation;
+pub struct JoinImplementation {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for JoinImplementation {
+    /// Construct a new [`JoinImplementation`] where `recursion_guard`
+    /// is initialized with [`RECURSION_LIMIT`] as limit.
+    fn default() -> JoinImplementation {
+        JoinImplementation {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for JoinImplementation {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for JoinImplementation {
     fn transform(
@@ -36,8 +57,7 @@ impl crate::Transform for JoinImplementation {
             let keys = idxs.iter().map(|(_id, keys)| keys.clone()).collect();
             arranged.insert(Id::Global(*on_id), keys);
         }
-        self.action_recursive(relation, &mut arranged);
-        Ok(())
+        self.action_recursive(relation, &mut arranged)
     }
 }
 
@@ -50,9 +70,9 @@ impl JoinImplementation {
         &self,
         relation: &mut MirRelationExpr,
         arranged: &mut HashMap<Id, Vec<Vec<MirScalarExpr>>>,
-    ) {
+    ) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::Let { id, value, body } = relation {
-            self.action_recursive(value, arranged);
+            self.action_recursive(value, arranged)?;
             match &**value {
                 MirRelationExpr::ArrangeBy { keys, .. } => {
                     arranged.insert(Id::Local(*id), keys.clone());
@@ -65,11 +85,13 @@ impl JoinImplementation {
                 }
                 _ => {}
             }
-            self.action_recursive(body, arranged);
+            self.action_recursive(body, arranged)?;
             arranged.remove(&Id::Local(*id));
+            Ok(())
         } else {
-            relation.visit_mut_children(|e| self.action_recursive(e, arranged));
+            relation.try_visit_mut_children(|e| self.action_recursive(e, arranged))?;
             self.action(relation, arranged);
+            Ok(())
         }
     }
 

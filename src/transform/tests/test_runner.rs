@@ -47,7 +47,7 @@ mod tests {
                         as Box<dyn Transform>,
                 ))
                 .chain(std::iter::once(
-                    Box::new(transform::update_let::UpdateLet) as Box<dyn Transform>
+                    Box::new(transform::update_let::UpdateLet::default()) as Box<dyn Transform>
                 ))
                 .chain(Optimizer::logical_cleanup_pass().transforms.into_iter())
                 .chain(Optimizer::physical_optimizer().transforms.into_iter())
@@ -227,22 +227,28 @@ mod tests {
         // transforms?
         match name {
             "CanonicalizeMfp" => Ok(Box::new(transform::canonicalize_mfp::CanonicalizeMfp)),
-            "ColumnKnowledge" => Ok(Box::new(transform::column_knowledge::ColumnKnowledge)),
-            "Demand" => Ok(Box::new(transform::demand::Demand)),
+            "ColumnKnowledge" => Ok(Box::new(
+                transform::column_knowledge::ColumnKnowledge::default(),
+            )),
+            "Demand" => Ok(Box::new(transform::demand::Demand::default())),
             "FilterFusion" => Ok(Box::new(transform::fusion::filter::Filter)),
             "FoldConstants" => Ok(Box::new(transform::reduction::FoldConstants {
                 limit: None,
             })),
             "JoinFusion" => Ok(Box::new(transform::fusion::join::Join)),
-            "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting)),
+            "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting::default())),
             "NonNullRequirements" => Ok(Box::new(
-                transform::nonnull_requirements::NonNullRequirements,
+                transform::nonnull_requirements::NonNullRequirements::default(),
             )),
-            "PredicatePushdown" => Ok(Box::new(transform::predicate_pushdown::PredicatePushdown)),
+            "PredicatePushdown" => Ok(Box::new(
+                transform::predicate_pushdown::PredicatePushdown::default(),
+            )),
             "ProjectionExtraction" => Ok(Box::new(
                 transform::projection_extraction::ProjectionExtraction,
             )),
-            "ProjectionLifting" => Ok(Box::new(transform::projection_lifting::ProjectionLifting)),
+            "ProjectionLifting" => Ok(Box::new(
+                transform::projection_lifting::ProjectionLifting::default(),
+            )),
             "ProjectionPushdown" => {
                 Ok(Box::new(transform::projection_pushdown::ProjectionPushdown))
             }
@@ -355,26 +361,29 @@ mod tests {
         dataflow: &mut Vec<(GlobalId, MirRelationExpr)>,
         cat: &TestCatalog,
     ) -> Result<String, String> {
-        let result = match transform {
+        match transform {
             "filter" => {
                 let mut predicates = HashMap::new();
-                optimize_dataflow_filters_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut predicates);
-                format!("Pushed-down predicates:\n{}", log_pushed_outside_of_dataflow(predicates, cat))
+                match optimize_dataflow_filters_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut predicates) {
+                    Ok(()) => Ok(format!("Pushed-down predicates:\n{}", log_pushed_outside_of_dataflow(predicates, cat))),
+                    Err(e) => Err(e.to_string()),
+                }
             }
             "project" => {
                 let mut demand = HashMap::new();
                 if let Some((id, rel)) = dataflow.last() {
                     demand.insert(Id::Global(*id), (0..rel.arity()).collect());
                 }
-                optimize_dataflow_demand_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut demand);
-                format!("Pushed-down demand:\n{}", log_pushed_outside_of_dataflow(demand, cat))
+                match optimize_dataflow_demand_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut demand) {
+                    Ok(()) => Ok(format!("Pushed-down demand:\n{}", log_pushed_outside_of_dataflow(demand, cat))),
+                    Err(e) => Err(e.to_string()),
+                }
             }
             _ => return Err(format!(
                 "no cross-view transform named {} (you might have to add it to apply_cross_view_transform)",
                 transform
             ))
-        };
-        Ok(result)
+        }
     }
 
     /// Converts a map of (source) -> (information pushed to source) into a string.

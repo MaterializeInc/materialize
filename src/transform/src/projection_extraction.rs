@@ -23,16 +23,13 @@ impl crate::Transform for ProjectionExtraction {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_post(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
+        relation.try_visit_mut_post(&mut |e| self.action(e))
     }
 }
 
 impl ProjectionExtraction {
     /// Transform column references in a `Map` into a `Project`.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::Map { input, scalars } = relation {
             if scalars
                 .iter()
@@ -104,5 +101,6 @@ impl ProjectionExtraction {
                 *relation = relation.take_dangerous().project(projection);
             }
         }
+        Ok(())
     }
 }

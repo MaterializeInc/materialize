@@ -24,16 +24,13 @@ impl crate::Transform for ReductionPushdown {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_post(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
+        relation.try_visit_mut_post(&mut |e| self.action(e))
     }
 }
 
 impl ReductionPushdown {
     /// Pushes Reduce operators toward sources.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::Reduce {
             input,
             group_key,
@@ -84,5 +81,6 @@ impl ReductionPushdown {
                 **input = inner.take_dangerous()
             }
         }
+        Ok(())
     }
 }

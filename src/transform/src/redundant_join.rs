@@ -24,13 +24,30 @@
 
 use std::collections::HashMap;
 
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformArgs;
 
 /// Remove redundant collections of distinct elements from joins.
 #[derive(Debug)]
-pub struct RedundantJoin;
+pub struct RedundantJoin {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for RedundantJoin {
+    fn default() -> RedundantJoin {
+        RedundantJoin {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for RedundantJoin {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for RedundantJoin {
     fn transform(
@@ -38,8 +55,7 @@ impl crate::Transform for RedundantJoin {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation, &mut HashMap::new());
-        Ok(())
+        self.action(relation, &mut HashMap::new()).map(|_| ())
     }
 }
 
@@ -61,269 +77,271 @@ impl RedundantJoin {
         &self,
         relation: &mut MirRelationExpr,
         lets: &mut HashMap<Id, Vec<ProvInfo>>,
-    ) -> Vec<ProvInfo> {
-        match relation {
-            MirRelationExpr::Let { id, value, body } => {
-                // Recursively determine provenance of the value.
-                let value_prov = self.action(value, lets);
-                let old = lets.insert(Id::Local(*id), value_prov);
-                let result = self.action(body, lets);
-                if let Some(old) = old {
-                    lets.insert(Id::Local(*id), old);
-                } else {
-                    lets.remove(&Id::Local(*id));
+    ) -> Result<Vec<ProvInfo>, crate::TransformError> {
+        self.checked_recur(|_| {
+            match relation {
+                MirRelationExpr::Let { id, value, body } => {
+                    // Recursively determine provenance of the value.
+                    let value_prov = self.action(value, lets)?;
+                    let old = lets.insert(Id::Local(*id), value_prov);
+                    let result = self.action(body, lets)?;
+                    if let Some(old) = old {
+                        lets.insert(Id::Local(*id), old);
+                    } else {
+                        lets.remove(&Id::Local(*id));
+                    }
+                    Ok(result)
                 }
-                result
-            }
-            MirRelationExpr::Get { id, typ } => {
-                // Extract the value provenance, or an empty list if unavailable.
-                let mut val_info = lets.get(id).cloned().unwrap_or_default();
-                // Add information about being exactly this let binding too.
-                val_info.push(ProvInfo {
-                    id: *id,
-                    binding: (0..typ.arity()).map(|c| (c, c)).collect::<Vec<_>>(),
-                    exact: true,
-                });
-                val_info
-            }
+                MirRelationExpr::Get { id, typ } => {
+                    // Extract the value provenance, or an empty list if unavailable.
+                    let mut val_info = lets.get(id).cloned().unwrap_or_default();
+                    // Add information about being exactly this let binding too.
+                    val_info.push(ProvInfo {
+                        id: *id,
+                        binding: (0..typ.arity()).map(|c| (c, c)).collect::<Vec<_>>(),
+                        exact: true,
+                    });
+                    Ok(val_info)
+                }
 
-            MirRelationExpr::Join {
-                inputs,
-                equivalences,
-                implementation,
-            } => {
-                // This logic first applies what it has learned about its input provenance,
-                // and if it finds a redundant join input it removes it. In that case, it
-                // also fails to produce exciting provenance information, partly out of
-                // laziness and the challenge of ensuring it is correct. Instead, if it is
-                // unable to find a rendundant join it produces meaningful provenance information.
+                MirRelationExpr::Join {
+                    inputs,
+                    equivalences,
+                    implementation,
+                } => {
+                    // This logic first applies what it has learned about its input provenance,
+                    // and if it finds a redundant join input it removes it. In that case, it
+                    // also fails to produce exciting provenance information, partly out of
+                    // laziness and the challenge of ensuring it is correct. Instead, if it is
+                    // unable to find a rendundant join it produces meaningful provenance information.
 
-                // Recursively apply transformation, and determine the provenance of inputs.
-                let input_prov = inputs
-                    .iter_mut()
-                    .map(|i| self.action(i, lets))
-                    .collect::<Vec<_>>();
+                    // Recursively apply transformation, and determine the provenance of inputs.
+                    let mut input_prov = Vec::new();
+                    for i in inputs.iter_mut() {
+                        input_prov.push(self.action(i, lets)?);
+                    }
 
-                // Determine useful information about the structure of the inputs.
-                let mut input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                let old_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+                    // Determine useful information about the structure of the inputs.
+                    let mut input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+                    let old_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
-                // If we find an input that can be removed, we should do so!
-                // We only do this once per invocation to keep our sanity, but we could
-                // rewrite it to iterate. We can avoid looking for any relation that
-                // does not have keys, as it cannot be redundant in that case.
-                if let Some((input, bindings)) = (0..input_types.len())
-                    .rev()
-                    .filter(|i| !input_types[*i].keys.is_empty())
-                    .flat_map(|i| {
-                        find_redundancy(
-                            i,
-                            &input_types[i].keys,
-                            &old_input_mapper,
-                            equivalences,
-                            &input_prov[..],
-                        )
-                        .map(|b| (i, b))
-                    })
-                    .next()
-                {
-                    inputs.remove(input);
-                    input_types.remove(input);
+                    // If we find an input that can be removed, we should do so!
+                    // We only do this once per invocation to keep our sanity, but we could
+                    // rewrite it to iterate. We can avoid looking for any relation that
+                    // does not have keys, as it cannot be redundant in that case.
+                    if let Some((input, bindings)) = (0..input_types.len())
+                        .rev()
+                        .filter(|i| !input_types[*i].keys.is_empty())
+                        .flat_map(|i| {
+                            find_redundancy(
+                                i,
+                                &input_types[i].keys,
+                                &old_input_mapper,
+                                equivalences,
+                                &input_prov[..],
+                            )
+                            .map(|b| (i, b))
+                        })
+                        .next()
+                    {
+                        inputs.remove(input);
+                        input_types.remove(input);
 
-                    let new_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
-                    // From `binding`, we produce the projection we will apply to the join
-                    // once `input` is removed. This is valuable also to rewrite expressions
-                    // in the join constraints.
-                    let mut projection = Vec::new();
-                    for i in 0..old_input_mapper.total_inputs() {
-                        if i != input {
-                            projection.extend(new_input_mapper.global_columns(if i < input {
-                                i
+                        let new_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+                        // From `binding`, we produce the projection we will apply to the join
+                        // once `input` is removed. This is valuable also to rewrite expressions
+                        // in the join constraints.
+                        let mut projection = Vec::new();
+                        for i in 0..old_input_mapper.total_inputs() {
+                            if i != input {
+                                projection.extend(new_input_mapper.global_columns(if i < input {
+                                    i
+                                } else {
+                                    i - 1
+                                }));
                             } else {
-                                i - 1
-                            }));
-                        } else {
-                            // When we reach the removed relation, we should introduce
-                            // references to the columns that are meant to replace these.
-                            // This should happen only once, and `.drain(..)` would be correct.
-                            projection.extend(bindings.clone());
-                        }
-                    }
-                    // The references introduced from `bindings` need to be refreshed, now that we
-                    // know where each target column will be. This is important because they could
-                    // have been to columns *after* `input`, and our original take on where they
-                    // would be is no longer correct. References before `input` should stay as they
-                    // are, and references afterwards will likely be decreased.
-                    for c in old_input_mapper.global_columns(input) {
-                        projection[c] = projection[projection[c]];
-                    }
-
-                    // Tidy up equivalences rewriting column references with `projection` and
-                    // removing any equivalence classes that are now redundant (e.g. those that
-                    // related the columns of `input` with the relation that showed its redundancy)
-                    for equivalence in equivalences.iter_mut() {
-                        for expr in equivalence.iter_mut() {
-                            expr.permute(&projection[..]);
-                        }
-                    }
-                    expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
-
-                    // Unset implementation, as irrevocably hosed by this transformation.
-                    *implementation = expr::JoinImplementation::Unimplemented;
-
-                    *relation = relation.take_dangerous().project(projection);
-                    // The projection will gum up provenance reasoning anyhow, so don't work hard.
-                    // We will return to this expression again with the same analysis.
-                    Vec::new()
-                } else {
-                    // Provenance information should be the union of input provenance information,
-                    // with columns updated. Because rows may be dropped in the join, all `exact`
-                    // bits should be un-set.
-                    let mut results = Vec::new();
-                    for (input, input_prov) in input_prov.into_iter().enumerate() {
-                        for mut prov in input_prov {
-                            prov.exact = false;
-                            for (_src, inp) in prov.binding.iter_mut() {
-                                *inp = old_input_mapper.map_column_to_global(*inp, input);
+                                // When we reach the removed relation, we should introduce
+                                // references to the columns that are meant to replace these.
+                                // This should happen only once, and `.drain(..)` would be correct.
+                                projection.extend(bindings.clone());
                             }
-                            results.push(prov);
                         }
-                    }
-                    results
-                }
-            }
+                        // The references introduced from `bindings` need to be refreshed, now that we
+                        // know where each target column will be. This is important because they could
+                        // have been to columns *after* `input`, and our original take on where they
+                        // would be is no longer correct. References before `input` should stay as they
+                        // are, and references afterwards will likely be decreased.
+                        for c in old_input_mapper.global_columns(input) {
+                            projection[c] = projection[projection[c]];
+                        }
 
-            MirRelationExpr::Filter { input, .. } => {
-                // Filter may drop records, and so we unset `exact`.
-                let mut result = self.action(input, lets);
-                for prov in result.iter_mut() {
-                    prov.exact = false;
-                }
-                result
-            }
-
-            MirRelationExpr::Map { input, .. } => self.action(input, lets),
-            MirRelationExpr::DeclareKeys { input, .. } => self.action(input, lets),
-
-            MirRelationExpr::Union { base, inputs } => {
-                let mut prov = self.action(base, lets);
-                for input in inputs {
-                    let input_prov = self.action(input, lets);
-                    // To merge a new list of provenances, we look at the cross
-                    // produce of things we might know about each source.
-                    // TODO(mcsherry): this can be optimized to use datastructures
-                    // keyed by the source identifier.
-                    let mut new_prov = Vec::new();
-                    for l in prov {
-                        new_prov.extend(input_prov.iter().flat_map(|r| l.meet(r)))
-                    }
-                    prov = new_prov;
-                }
-                prov
-            }
-
-            MirRelationExpr::Constant { .. } => Vec::new(),
-
-            MirRelationExpr::Reduce {
-                input, group_key, ..
-            } => {
-                // Reduce yields its first few columns as a key, and produces
-                // all key tuples that were present in its input.
-                let mut result = self.action(input, lets);
-                for prov in result.iter_mut() {
-                    // update the bindings. no need to update `exact`.
-                    let new_bindings = group_key
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, e)| {
-                            if let MirScalarExpr::Column(c) = e {
-                                Some((i, c))
-                            } else {
-                                None
+                        // Tidy up equivalences rewriting column references with `projection` and
+                        // removing any equivalence classes that are now redundant (e.g. those that
+                        // related the columns of `input` with the relation that showed its redundancy)
+                        for equivalence in equivalences.iter_mut() {
+                            for expr in equivalence.iter_mut() {
+                                expr.permute(&projection[..]);
                             }
-                        })
-                        .filter_map(|(i, c)| {
-                            // output column `i` corresponds to input column `c`.
-                            prov.binding
-                                .iter()
-                                .find(|(_src, inp)| inp == c)
-                                .map(|(src, _inp)| (*src, i))
-                        })
-                        .collect::<Vec<_>>();
-                    prov.binding = new_bindings;
+                        }
+                        expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
+
+                        // Unset implementation, as irrevocably hosed by this transformation.
+                        *implementation = expr::JoinImplementation::Unimplemented;
+
+                        *relation = relation.take_dangerous().project(projection);
+                        // The projection will gum up provenance reasoning anyhow, so don't work hard.
+                        // We will return to this expression again with the same analysis.
+                        Ok(Vec::new())
+                    } else {
+                        // Provenance information should be the union of input provenance information,
+                        // with columns updated. Because rows may be dropped in the join, all `exact`
+                        // bits should be un-set.
+                        let mut results = Vec::new();
+                        for (input, input_prov) in input_prov.into_iter().enumerate() {
+                            for mut prov in input_prov {
+                                prov.exact = false;
+                                for (_src, inp) in prov.binding.iter_mut() {
+                                    *inp = old_input_mapper.map_column_to_global(*inp, input);
+                                }
+                                results.push(prov);
+                            }
+                        }
+                        Ok(results)
+                    }
                 }
-                result.retain(|p| !p.binding.is_empty());
-                // TODO: For min, max aggregates, we could preserve provenance
-                // if the expression references a column. We would need to un-set
-                // the `exact` bit in that case, and so we would want to keep both
-                // sets of provenance information.
-                result
-            }
 
-            MirRelationExpr::Threshold { input } => {
-                // Threshold may drop records, and so we unset `exact`.
-                let mut result = self.action(input, lets);
-                for prov in result.iter_mut() {
-                    prov.exact = false;
+                MirRelationExpr::Filter { input, .. } => {
+                    // Filter may drop records, and so we unset `exact`.
+                    let mut result = self.action(input, lets)?;
+                    for prov in result.iter_mut() {
+                        prov.exact = false;
+                    }
+                    Ok(result)
                 }
-                result
-            }
 
-            MirRelationExpr::TopK { input, .. } => {
-                // TopK may drop records, and so we unset `exact`.
-                let mut result = self.action(input, lets);
-                for prov in result.iter_mut() {
-                    prov.exact = false;
+                MirRelationExpr::Map { input, .. } => self.action(input, lets),
+                MirRelationExpr::DeclareKeys { input, .. } => self.action(input, lets),
+
+                MirRelationExpr::Union { base, inputs } => {
+                    let mut prov = self.action(base, lets)?;
+                    for input in inputs {
+                        let input_prov = self.action(input, lets)?;
+                        // To merge a new list of provenances, we look at the cross
+                        // produce of things we might know about each source.
+                        // TODO(mcsherry): this can be optimized to use datastructures
+                        // keyed by the source identifier.
+                        let mut new_prov = Vec::new();
+                        for l in prov {
+                            new_prov.extend(input_prov.iter().flat_map(|r| l.meet(r)))
+                        }
+                        prov = new_prov;
+                    }
+                    Ok(prov)
                 }
-                result
-            }
 
-            MirRelationExpr::Project { input, outputs } => {
-                // Projections re-order, drop, and duplicate columns,
-                // but they neither drop rows nor invent values.
-                let mut result = self.action(input, lets);
-                for provenance in result.iter_mut() {
-                    let new_binding = outputs
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(i, c)| {
-                            provenance
-                                .binding
-                                .iter()
-                                .find(|(_, l)| l == c)
-                                .map(|(s, _)| (*s, i))
-                        })
-                        .collect::<Vec<_>>();
+                MirRelationExpr::Constant { .. } => Ok(Vec::new()),
 
-                    provenance.binding = new_binding;
+                MirRelationExpr::Reduce {
+                    input, group_key, ..
+                } => {
+                    // Reduce yields its first few columns as a key, and produces
+                    // all key tuples that were present in its input.
+                    let mut result = self.action(input, lets)?;
+                    for prov in result.iter_mut() {
+                        // update the bindings. no need to update `exact`.
+                        let new_bindings = group_key
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, e)| {
+                                if let MirScalarExpr::Column(c) = e {
+                                    Some((i, c))
+                                } else {
+                                    None
+                                }
+                            })
+                            .filter_map(|(i, c)| {
+                                // output column `i` corresponds to input column `c`.
+                                prov.binding
+                                    .iter()
+                                    .find(|(_src, inp)| inp == c)
+                                    .map(|(src, _inp)| (*src, i))
+                            })
+                            .collect::<Vec<_>>();
+                        prov.binding = new_bindings;
+                    }
+                    result.retain(|p| !p.binding.is_empty());
+                    // TODO: For min, max aggregates, we could preserve provenance
+                    // if the expression references a column. We would need to un-set
+                    // the `exact` bit in that case, and so we would want to keep both
+                    // sets of provenance information.
+                    Ok(result)
                 }
-                result
-            }
 
-            MirRelationExpr::FlatMap { input, .. } => {
-                // FlatMap may drop records, and so we unset `exact`.
-                let mut result = self.action(input, lets);
-                for prov in result.iter_mut() {
-                    prov.exact = false;
+                MirRelationExpr::Threshold { input } => {
+                    // Threshold may drop records, and so we unset `exact`.
+                    let mut result = self.action(input, lets)?;
+                    for prov in result.iter_mut() {
+                        prov.exact = false;
+                    }
+                    Ok(result)
                 }
-                result
-            }
 
-            MirRelationExpr::Negate { input } => {
-                // Negate does not guarantee that the multiplicity of
-                // each source record it at least one. This could have
-                // been a problem in `Union`, where we might report
-                // that the union of positive and negative records is
-                // "exact": cancellations would make this false.
-                let mut result = self.action(input, lets);
-                for prov in result.iter_mut() {
-                    prov.exact = false;
+                MirRelationExpr::TopK { input, .. } => {
+                    // TopK may drop records, and so we unset `exact`.
+                    let mut result = self.action(input, lets)?;
+                    for prov in result.iter_mut() {
+                        prov.exact = false;
+                    }
+                    Ok(result)
                 }
-                result
-            }
 
-            MirRelationExpr::ArrangeBy { input, .. } => self.action(input, lets),
-        }
+                MirRelationExpr::Project { input, outputs } => {
+                    // Projections re-order, drop, and duplicate columns,
+                    // but they neither drop rows nor invent values.
+                    let mut result = self.action(input, lets)?;
+                    for provenance in result.iter_mut() {
+                        let new_binding = outputs
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(i, c)| {
+                                provenance
+                                    .binding
+                                    .iter()
+                                    .find(|(_, l)| l == c)
+                                    .map(|(s, _)| (*s, i))
+                            })
+                            .collect::<Vec<_>>();
+
+                        provenance.binding = new_binding;
+                    }
+                    Ok(result)
+                }
+
+                MirRelationExpr::FlatMap { input, .. } => {
+                    // FlatMap may drop records, and so we unset `exact`.
+                    let mut result = self.action(input, lets)?;
+                    for prov in result.iter_mut() {
+                        prov.exact = false;
+                    }
+                    Ok(result)
+                }
+
+                MirRelationExpr::Negate { input } => {
+                    // Negate does not guarantee that the multiplicity of
+                    // each source record it at least one. This could have
+                    // been a problem in `Union`, where we might report
+                    // that the union of positive and negative records is
+                    // "exact": cancellations would make this false.
+                    let mut result = self.action(input, lets)?;
+                    for prov in result.iter_mut() {
+                        prov.exact = false;
+                    }
+                    Ok(result)
+                }
+
+                MirRelationExpr::ArrangeBy { input, .. } => self.action(input, lets),
+            }
+        })
     }
 }
 

@@ -3404,7 +3404,7 @@ where
                     &optimized_plan,
                     &mut dataflow,
                 );
-                transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes());
+                transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes())?;
                 timings.optimization = Some(start.elapsed());
                 Ok(dataflow)
             };
@@ -4237,7 +4237,8 @@ where
         }
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
+        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes())
+            .expect("Dataflow planning failed; unrecoverable error"); // FIXME
         dataflow_types::Plan::finalize_dataflow(dataflow)
             .expect("Dataflow planning failed; unrecoverable error")
     }

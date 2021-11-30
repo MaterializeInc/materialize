@@ -38,6 +38,7 @@ pub mod fusion;
 pub mod inline_let;
 pub mod join_implementation;
 pub mod map_lifting;
+pub mod monotonic;
 pub mod nonnull_requirements;
 pub mod nonnullable;
 pub mod predicate_pushdown;
@@ -127,7 +128,7 @@ impl Transform for Fixpoint {
         // stable shape.
         loop {
             let mut original_count = 0;
-            relation.visit_post(&mut |_| original_count += 1);
+            relation.try_visit_post::<_, TransformError>(&mut |_| Ok(original_count += 1))?;
             for _ in 0..self.limit {
                 let original = relation.clone();
                 for transform in self.transforms.iter() {
@@ -144,7 +145,7 @@ impl Transform for Fixpoint {
                 }
             }
             let mut final_count = 0;
-            relation.visit_post(&mut |_| final_count += 1);
+            relation.try_visit_post::<_, TransformError>(&mut |_| Ok(final_count += 1))?;
             if final_count >= original_count {
                 break;
             }
@@ -184,14 +185,14 @@ impl Default for FuseAndCollapse {
             // transforms.
             transforms: vec![
                 Box::new(crate::projection_extraction::ProjectionExtraction),
-                Box::new(crate::projection_lifting::ProjectionLifting),
+                Box::new(crate::projection_lifting::ProjectionLifting::default()),
                 Box::new(crate::fusion::map::Map),
                 Box::new(crate::fusion::negate::Negate),
                 Box::new(crate::fusion::filter::Filter),
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::fusion::top_k::TopK),
-                Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
+                Box::new(crate::inline_let::InlineLet::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),
                 // This goes after union fusion so we can cancel out
@@ -199,7 +200,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::union_cancel::UnionBranchCancellation),
                 // This should run before redundant join to ensure that key info
                 // is correct.
-                Box::new(crate::update_let::UpdateLet),
+                Box::new(crate::update_let::UpdateLet::default()),
                 // Removes redundant inputs from joins.
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
@@ -208,7 +209,7 @@ impl Default for FuseAndCollapse {
                 // redundant joins from being removed. When predicate pushdown
                 // no longer works against redundant join, check if it is still
                 // necessary to run RedundantJoin here.
-                Box::new(crate::redundant_join::RedundantJoin),
+                Box::new(crate::redundant_join::RedundantJoin::default()),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
@@ -256,7 +257,7 @@ impl Optimizer {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             // 1. Structure-agnostic cleanup
             Box::new(crate::topk_elision::TopKElision),
-            Box::new(crate::nonnull_requirements::NonNullRequirements),
+            Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
@@ -270,16 +271,16 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
-                    Box::new(crate::predicate_pushdown::PredicatePushdown),
+                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
                     // Lifts the information `!isnull(col)`
                     Box::new(crate::nonnullable::NonNullable),
                     // Lifts the information `col = literal`
                     // TODO (#6613): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate
                     // redundancy between the two transforms.
-                    Box::new(crate::column_knowledge::ColumnKnowledge),
+                    Box::new(crate::column_knowledge::ColumnKnowledge::default()),
                     // Lifts the information `col1 = col2`
-                    Box::new(crate::demand::Demand),
+                    Box::new(crate::demand::Demand::default()),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
@@ -295,12 +296,12 @@ impl Optimizer {
                     // Converts `Cross Join {Constant(Literal) + Input}` to
                     // `Map {Cross Join (Input, Constant()), Literal}`.
                     // Join fusion will clean this up to `Map{Input, Literal}`
-                    Box::new(crate::map_lifting::LiteralLifting),
+                    Box::new(crate::map_lifting::LiteralLifting::default()),
                     // Identifies common relation subexpressions.
                     // Must be followed by let inlining, to keep under control.
                     Box::new(crate::cse::relation_cse::RelationCSE),
-                    Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
-                    Box::new(crate::update_let::UpdateLet),
+                    Box::new(crate::inline_let::InlineLet::new(false)),
+                    Box::new(crate::update_let::UpdateLet::default()),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
@@ -320,11 +321,11 @@ impl Optimizer {
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::join_implementation::JoinImplementation),
-                    Box::new(crate::column_knowledge::ColumnKnowledge),
+                    Box::new(crate::join_implementation::JoinImplementation::default()),
+                    Box::new(crate::column_knowledge::ColumnKnowledge::default()),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
-                    Box::new(crate::demand::Demand),
-                    Box::new(crate::map_lifting::LiteralLifting),
+                    Box::new(crate::demand::Demand::default()),
+                    Box::new(crate::map_lifting::LiteralLifting::default()),
                 ],
             }),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
@@ -332,8 +333,8 @@ impl Optimizer {
             // Identifies common relation subexpressions.
             // Must be followed by let inlining, to keep under control.
             Box::new(crate::cse::relation_cse::RelationCSE),
-            Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
-            Box::new(crate::update_let::UpdateLet),
+            Box::new(crate::inline_let::InlineLet::new(false)),
+            Box::new(crate::update_let::UpdateLet::default()),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
         Self { transforms }
@@ -350,7 +351,7 @@ impl Optimizer {
                 transforms: vec![
                     // Projection pushdown may unblock fusing joins and unions.
                     Box::new(crate::fusion::join::Join),
-                    Box::new(crate::redundant_join::RedundantJoin),
+                    Box::new(crate::redundant_join::RedundantJoin::default()),
                     // Redundant join produces projects that need to be fused.
                     Box::new(crate::fusion::project::Project),
                     Box::new(crate::fusion::union::Union),
@@ -358,7 +359,7 @@ impl Optimizer {
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),
                     Box::new(crate::cse::relation_cse::RelationCSE),
-                    Box::new(crate::inline_let::InlineLet { inline_mfp: true }),
+                    Box::new(crate::inline_let::InlineLet::new(true)),
                 ],
             }),
         ];

@@ -13,7 +13,8 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc};
+use expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use repr::{ColumnType, RelationType, ScalarType};
 use repr::{Datum, Row};
 
@@ -21,285 +22,300 @@ use crate::TransformArgs;
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
-pub struct ColumnKnowledge;
+pub struct ColumnKnowledge {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for ColumnKnowledge {
+    fn default() -> ColumnKnowledge {
+        ColumnKnowledge {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for ColumnKnowledge {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for ColumnKnowledge {
+    /// Transforms an expression through accumulated knowledge.
     fn transform(
         &self,
         expr: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.transform(expr)
+        let mut knowledge_stack = Vec::<DatumKnowledge>::new();
+        self.harvest(expr, &mut HashMap::new(), &mut knowledge_stack)
+            .map(|_| ())
     }
 }
 
 impl ColumnKnowledge {
-    /// Transforms an expression through accumulated knowledge.
-    pub fn transform(&self, expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-        let mut knowledge_stack = Vec::<DatumKnowledge>::new();
-        ColumnKnowledge::harvest(expr, &mut HashMap::new(), &mut knowledge_stack)?;
-        Ok(())
-    }
-
     /// Harvest per-column knowledge.
     ///
     /// `knowledge_stack` is a pre-allocated vector but is expected not to contain any elements.
     fn harvest(
+        &self,
         expr: &mut MirRelationExpr,
         knowledge: &mut HashMap<expr::Id, Vec<DatumKnowledge>>,
         knowledge_stack: &mut Vec<DatumKnowledge>,
     ) -> Result<Vec<DatumKnowledge>, crate::TransformError> {
-        Ok(match expr {
-            MirRelationExpr::ArrangeBy { input, .. } => {
-                ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?
-            }
-            MirRelationExpr::Get { id, typ } => knowledge
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| typ.column_types.iter().map(DatumKnowledge::from).collect()),
-            MirRelationExpr::Constant { rows, typ } => {
-                if let Ok([(row, _diff)]) = rows.as_deref() {
-                    row.iter()
-                        .zip(typ.column_types.iter())
-                        .map(|(datum, typ)| DatumKnowledge {
-                            value: Some((Ok(Row::pack_slice(&[datum.clone()])), typ.clone())),
-                            nullable: datum == Datum::Null,
-                        })
-                        .collect()
-                } else {
-                    typ.column_types.iter().map(DatumKnowledge::from).collect()
+        self.checked_recur(|_| {
+            match expr {
+                MirRelationExpr::ArrangeBy { input, .. } => {
+                    self.harvest(input, knowledge, knowledge_stack)
                 }
-            }
-            MirRelationExpr::Let { id, value, body } => {
-                let value_knowledge = ColumnKnowledge::harvest(value, knowledge, knowledge_stack)?;
-                let prior_knowledge =
-                    knowledge.insert(expr::Id::Local(id.clone()), value_knowledge);
-                let body_knowledge = ColumnKnowledge::harvest(body, knowledge, knowledge_stack)?;
-                knowledge.remove(&expr::Id::Local(id.clone()));
-                if let Some(prior_knowledge) = prior_knowledge {
-                    knowledge.insert(expr::Id::Local(id.clone()), prior_knowledge);
+                MirRelationExpr::Get { id, typ } => {
+                    Ok(knowledge.get(id).cloned().unwrap_or_else(|| {
+                        typ.column_types.iter().map(DatumKnowledge::from).collect()
+                    }))
                 }
-                body_knowledge
-            }
-            MirRelationExpr::Project { input, outputs } => {
-                let input_knowledge = ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?;
-                outputs
-                    .iter()
-                    .map(|i| input_knowledge[*i].clone())
-                    .collect()
-            }
-            MirRelationExpr::Map { input, scalars } => {
-                let mut input_knowledge =
-                    ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?;
-                let input_typ = input.typ();
-                for scalar in scalars.iter_mut() {
-                    let know = optimize(scalar, &input_typ, &input_knowledge[..], knowledge_stack);
-                    input_knowledge.push(know);
+                MirRelationExpr::Constant { rows, typ } => {
+                    if let Ok([(row, _diff)]) = rows.as_deref() {
+                        let knowledge = row
+                            .iter()
+                            .zip(typ.column_types.iter())
+                            .map(|(datum, typ)| DatumKnowledge {
+                                value: Some((Ok(Row::pack_slice(&[datum.clone()])), typ.clone())),
+                                nullable: datum == Datum::Null,
+                            })
+                            .collect();
+                        Ok(knowledge)
+                    } else {
+                        Ok(typ.column_types.iter().map(DatumKnowledge::from).collect())
+                    }
                 }
-                input_knowledge
-            }
-            MirRelationExpr::FlatMap { input, func, exprs } => {
-                let mut input_knowledge =
-                    ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?;
-                let input_typ = input.typ();
-                for expr in exprs {
-                    optimize(expr, &input_typ, &input_knowledge[..], knowledge_stack);
+                MirRelationExpr::Let { id, value, body } => {
+                    let value_knowledge = self.harvest(value, knowledge, knowledge_stack)?;
+                    let prior_knowledge =
+                        knowledge.insert(expr::Id::Local(id.clone()), value_knowledge);
+                    let body_knowledge = self.harvest(body, knowledge, knowledge_stack)?;
+                    knowledge.remove(&expr::Id::Local(id.clone()));
+                    if let Some(prior_knowledge) = prior_knowledge {
+                        knowledge.insert(expr::Id::Local(id.clone()), prior_knowledge);
+                    }
+                    Ok(body_knowledge)
                 }
-                let func_typ = func.output_type();
-                input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
-                input_knowledge
-            }
-            MirRelationExpr::Filter { input, predicates } => {
-                let mut input_knowledge =
-                    ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?;
-                let input_typ = input.typ();
-                for predicate in predicates.iter_mut() {
-                    optimize(predicate, &input_typ, &input_knowledge[..], knowledge_stack);
+                MirRelationExpr::Project { input, outputs } => {
+                    let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
+                    Ok(outputs
+                        .iter()
+                        .map(|i| input_knowledge[*i].clone())
+                        .collect())
                 }
-                // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
-                for predicate in predicates.iter() {
-                    // Equality tests allow us to unify the column knowledge of each input.
-                    if let MirScalarExpr::CallBinary { func, expr1, expr2 } = predicate {
-                        if func == &expr::BinaryFunc::Eq {
-                            // Collect knowledge about the inputs (for columns and literals).
-                            let mut knowledge = DatumKnowledge::default();
-                            if let MirScalarExpr::Column(c) = &**expr1 {
-                                knowledge.absorb(&input_knowledge[*c]);
-                            }
-                            if let MirScalarExpr::Column(c) = &**expr2 {
-                                knowledge.absorb(&input_knowledge[*c]);
-                            }
-                            // Absorb literal knowledge about columns.
-                            knowledge.absorb(&DatumKnowledge::from(&**expr1));
-                            knowledge.absorb(&DatumKnowledge::from(&**expr2));
+                MirRelationExpr::Map { input, scalars } => {
+                    let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
+                    let input_typ = input.typ();
+                    for scalar in scalars.iter_mut() {
+                        let know =
+                            optimize(scalar, &input_typ, &input_knowledge[..], knowledge_stack);
+                        input_knowledge.push(know);
+                    }
+                    Ok(input_knowledge)
+                }
+                MirRelationExpr::FlatMap { input, func, exprs } => {
+                    let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
+                    let input_typ = input.typ();
+                    for expr in exprs {
+                        optimize(expr, &input_typ, &input_knowledge[..], knowledge_stack);
+                    }
+                    let func_typ = func.output_type();
+                    input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
+                    Ok(input_knowledge)
+                }
+                MirRelationExpr::Filter { input, predicates } => {
+                    let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
+                    let input_typ = input.typ();
+                    for predicate in predicates.iter_mut() {
+                        optimize(predicate, &input_typ, &input_knowledge[..], knowledge_stack);
+                    }
+                    // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
+                    for predicate in predicates.iter() {
+                        // Equality tests allow us to unify the column knowledge of each input.
+                        if let MirScalarExpr::CallBinary { func, expr1, expr2 } = predicate {
+                            if func == &expr::BinaryFunc::Eq {
+                                // Collect knowledge about the inputs (for columns and literals).
+                                let mut knowledge = DatumKnowledge::default();
+                                if let MirScalarExpr::Column(c) = &**expr1 {
+                                    knowledge.absorb(&input_knowledge[*c]);
+                                }
+                                if let MirScalarExpr::Column(c) = &**expr2 {
+                                    knowledge.absorb(&input_knowledge[*c]);
+                                }
+                                // Absorb literal knowledge about columns.
+                                knowledge.absorb(&DatumKnowledge::from(&**expr1));
+                                knowledge.absorb(&DatumKnowledge::from(&**expr2));
 
-                            // Write back unified knowledge to each column.
-                            if let MirScalarExpr::Column(c) = &**expr1 {
-                                input_knowledge[*c].absorb(&knowledge);
-                            }
-                            if let MirScalarExpr::Column(c) = &**expr2 {
-                                input_knowledge[*c].absorb(&knowledge);
+                                // Write back unified knowledge to each column.
+                                if let MirScalarExpr::Column(c) = &**expr1 {
+                                    input_knowledge[*c].absorb(&knowledge);
+                                }
+                                if let MirScalarExpr::Column(c) = &**expr2 {
+                                    input_knowledge[*c].absorb(&knowledge);
+                                }
                             }
                         }
-                    }
-                    if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::Not(func::Not),
-                        expr,
-                    } = predicate
-                    {
                         if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull(func::IsNull),
+                            func: UnaryFunc::Not(func::Not),
                             expr,
-                        } = &**expr
+                        } = predicate
                         {
-                            if let MirScalarExpr::Column(c) = &**expr {
-                                input_knowledge[*c].nullable = false;
+                            if let MirScalarExpr::CallUnary {
+                                func: UnaryFunc::IsNull(func::IsNull),
+                                expr,
+                            } = &**expr
+                            {
+                                if let MirScalarExpr::Column(c) = &**expr {
+                                    input_knowledge[*c].nullable = false;
+                                }
                             }
                         }
                     }
+
+                    Ok(input_knowledge)
                 }
-
-                input_knowledge
-            }
-            MirRelationExpr::Join {
-                inputs,
-                equivalences,
-                ..
-            } => {
-                // Aggregate column knowledge from each input into one `Vec`.
-                let mut knowledges = Vec::new();
-                for input in inputs.iter_mut() {
-                    for mut knowledge in
-                        ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?
-                    {
-                        // Do not propagate error literals beyond join inputs, since that may result
-                        // in them being propagated to other inputs of the join and evaluated when
-                        // they should not.
-                        if let Some((Err(_), _)) = knowledge.value {
-                            knowledge.value = None;
-                        }
-                        knowledges.push(knowledge);
-                    }
-                }
-
-                // This only aggregates the column types of each input, not the
-                // keys of the inputs. It is unnecessary to aggregate the keys
-                // of the inputs since input keys are unnecessary for reducing
-                // `MirScalarExpr`s.
-                let folded_inputs_typ = inputs.iter().fold(RelationType::empty(), |mut typ, i| {
-                    typ.column_types.append(&mut i.typ().column_types);
-                    typ
-                });
-
-                for equivalence in equivalences.iter_mut() {
-                    let mut knowledge = DatumKnowledge::default();
-
-                    // We can produce composite knowledge for everything in the equivalence class.
-                    for expr in equivalence.iter_mut() {
-                        optimize(expr, &folded_inputs_typ, &knowledges, knowledge_stack);
-                        if let MirScalarExpr::Column(c) = expr {
-                            knowledge.absorb(&knowledges[*c]);
-                        }
-                        knowledge.absorb(&DatumKnowledge::from(&*expr));
-                    }
-                    for expr in equivalence.iter_mut() {
-                        if let MirScalarExpr::Column(c) = expr {
-                            knowledges[*c] = knowledge.clone();
+                MirRelationExpr::Join {
+                    inputs,
+                    equivalences,
+                    ..
+                } => {
+                    // Aggregate column knowledge from each input into one `Vec`.
+                    let mut knowledges = Vec::new();
+                    for input in inputs.iter_mut() {
+                        for mut knowledge in self.harvest(input, knowledge, knowledge_stack)? {
+                            // Do not propagate error literals beyond join inputs, since that may result
+                            // in them being propagated to other inputs of the join and evaluated when
+                            // they should not.
+                            if let Some((Err(_), _)) = knowledge.value {
+                                knowledge.value = None;
+                            }
+                            knowledges.push(knowledge);
                         }
                     }
-                }
 
-                knowledges
-            }
-            MirRelationExpr::Reduce {
-                input,
-                group_key,
-                aggregates,
-                monotonic: _,
-                expected_group_size: _,
-            } => {
-                let input_knowledge = ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?;
-                let input_typ = input.typ();
-                let mut output = group_key
-                    .iter_mut()
-                    .map(|k| optimize(k, &input_typ, &input_knowledge[..], knowledge_stack))
-                    .collect::<Vec<_>>();
-                for aggregate in aggregates.iter_mut() {
-                    use expr::AggregateFunc;
-                    let knowledge = optimize(
-                        &mut aggregate.expr,
-                        &input_typ,
-                        &input_knowledge[..],
-                        knowledge_stack,
-                    );
-                    // This could be improved.
-                    let knowledge = match aggregate.func {
-                        AggregateFunc::MaxInt16
-                        | AggregateFunc::MaxInt32
-                        | AggregateFunc::MaxInt64
-                        | AggregateFunc::MaxFloat32
-                        | AggregateFunc::MaxFloat64
-                        | AggregateFunc::MaxBool
-                        | AggregateFunc::MaxString
-                        | AggregateFunc::MaxDate
-                        | AggregateFunc::MaxTimestamp
-                        | AggregateFunc::MaxTimestampTz
-                        | AggregateFunc::MinInt16
-                        | AggregateFunc::MinInt32
-                        | AggregateFunc::MinInt64
-                        | AggregateFunc::MinFloat32
-                        | AggregateFunc::MinFloat64
-                        | AggregateFunc::MinBool
-                        | AggregateFunc::MinString
-                        | AggregateFunc::MinDate
-                        | AggregateFunc::MinTimestamp
-                        | AggregateFunc::MinTimestampTz
-                        | AggregateFunc::Any
-                        | AggregateFunc::All => {
-                            // These methods propagate constant values exactly.
-                            knowledge
+                    // This only aggregates the column types of each input, not the
+                    // keys of the inputs. It is unnecessary to aggregate the keys
+                    // of the inputs since input keys are unnecessary for reducing
+                    // `MirScalarExpr`s.
+                    let folded_inputs_typ =
+                        inputs.iter().fold(RelationType::empty(), |mut typ, i| {
+                            typ.column_types.append(&mut i.typ().column_types);
+                            typ
+                        });
+
+                    for equivalence in equivalences.iter_mut() {
+                        let mut knowledge = DatumKnowledge::default();
+
+                        // We can produce composite knowledge for everything in the equivalence class.
+                        for expr in equivalence.iter_mut() {
+                            optimize(expr, &folded_inputs_typ, &knowledges, knowledge_stack);
+                            if let MirScalarExpr::Column(c) = expr {
+                                knowledge.absorb(&knowledges[*c]);
+                            }
+                            knowledge.absorb(&DatumKnowledge::from(&*expr));
                         }
-                        AggregateFunc::Count => DatumKnowledge {
-                            value: None,
-                            nullable: false,
-                        },
-                        _ => {
-                            // The remaining aggregates are non-null if their inputs are non-null.
-                            DatumKnowledge {
+                        for expr in equivalence.iter_mut() {
+                            if let MirScalarExpr::Column(c) = expr {
+                                knowledges[*c] = knowledge.clone();
+                            }
+                        }
+                    }
+
+                    Ok(knowledges)
+                }
+                MirRelationExpr::Reduce {
+                    input,
+                    group_key,
+                    aggregates,
+                    monotonic: _,
+                    expected_group_size: _,
+                } => {
+                    let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
+                    let input_typ = input.typ();
+                    let mut output = group_key
+                        .iter_mut()
+                        .map(|k| optimize(k, &input_typ, &input_knowledge[..], knowledge_stack))
+                        .collect::<Vec<_>>();
+                    for aggregate in aggregates.iter_mut() {
+                        use expr::AggregateFunc;
+                        let knowledge = optimize(
+                            &mut aggregate.expr,
+                            &input_typ,
+                            &input_knowledge[..],
+                            knowledge_stack,
+                        );
+                        // This could be improved.
+                        let knowledge = match aggregate.func {
+                            AggregateFunc::MaxInt16
+                            | AggregateFunc::MaxInt32
+                            | AggregateFunc::MaxInt64
+                            | AggregateFunc::MaxFloat32
+                            | AggregateFunc::MaxFloat64
+                            | AggregateFunc::MaxBool
+                            | AggregateFunc::MaxString
+                            | AggregateFunc::MaxDate
+                            | AggregateFunc::MaxTimestamp
+                            | AggregateFunc::MaxTimestampTz
+                            | AggregateFunc::MinInt16
+                            | AggregateFunc::MinInt32
+                            | AggregateFunc::MinInt64
+                            | AggregateFunc::MinFloat32
+                            | AggregateFunc::MinFloat64
+                            | AggregateFunc::MinBool
+                            | AggregateFunc::MinString
+                            | AggregateFunc::MinDate
+                            | AggregateFunc::MinTimestamp
+                            | AggregateFunc::MinTimestampTz
+                            | AggregateFunc::Any
+                            | AggregateFunc::All => {
+                                // These methods propagate constant values exactly.
+                                knowledge
+                            }
+                            AggregateFunc::Count => DatumKnowledge {
                                 value: None,
-                                nullable: knowledge.nullable,
+                                nullable: false,
+                            },
+                            _ => {
+                                // The remaining aggregates are non-null if their inputs are non-null.
+                                DatumKnowledge {
+                                    value: None,
+                                    nullable: knowledge.nullable,
+                                }
                             }
-                        }
-                    };
-                    output.push(knowledge);
+                        };
+                        output.push(knowledge);
+                    }
+                    Ok(output)
                 }
-                output
-            }
-            MirRelationExpr::TopK { input, .. } => {
-                ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?
-            }
-            MirRelationExpr::Negate { input } => {
-                ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?
-            }
-            MirRelationExpr::Threshold { input } => {
-                ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?
-            }
-            MirRelationExpr::DeclareKeys { input, .. } => {
-                ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?
-            }
-            MirRelationExpr::Union { base, inputs } => {
-                let mut know = ColumnKnowledge::harvest(base, knowledge, knowledge_stack)?;
-                for input in inputs {
-                    know = know
-                        .into_iter()
-                        .zip_eq(ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?)
-                        .map(|(mut k1, k2)| {
-                            k1.union(&k2);
-                            k1
-                        })
-                        .collect();
+                MirRelationExpr::TopK { input, .. } => {
+                    self.harvest(input, knowledge, knowledge_stack)
                 }
-                know
+                MirRelationExpr::Negate { input } => {
+                    self.harvest(input, knowledge, knowledge_stack)
+                }
+                MirRelationExpr::Threshold { input } => {
+                    self.harvest(input, knowledge, knowledge_stack)
+                }
+                MirRelationExpr::DeclareKeys { input, .. } => {
+                    self.harvest(input, knowledge, knowledge_stack)
+                }
+                MirRelationExpr::Union { base, inputs } => {
+                    let mut know = self.harvest(base, knowledge, knowledge_stack)?;
+                    for input in inputs {
+                        know = know
+                            .into_iter()
+                            .zip_eq(self.harvest(input, knowledge, knowledge_stack)?)
+                            .map(|(mut k1, k2)| {
+                                k1.union(&k2);
+                                k1
+                            })
+                            .collect();
+                    }
+                    Ok(know)
+                }
             }
         })
     }

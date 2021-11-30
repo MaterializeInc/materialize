@@ -21,10 +21,7 @@ impl crate::Transform for Reduce {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
+        relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)))
     }
 }
 
