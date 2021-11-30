@@ -25,6 +25,9 @@ prerequisites = [Zookeeper(), Kafka(), SchemaRegistry()]
 mz_default = Materialized(name="mz_default", hostname="materialized")
 mz_workers_1 = Materialized(name="mz_workers_1", hostname="materialized", workers=1)
 mz_workers_32 = Materialized(name="mz_workers_32", hostname="materialized", workers=32)
+mz_persistence = Materialized(
+    name="mz_persistence", hostname="materialized", options="--persistent-user-tables"
+)
 
 services = [
     *prerequisites,
@@ -32,6 +35,7 @@ services = [
     mz_default,
     mz_workers_1,
     mz_workers_32,
+    mz_persistence,
     Testdrive(),
 ]
 
@@ -56,6 +60,10 @@ def workflow_testdrive_ci_workers_1(w: Workflow):
 
 def workflow_testdrive_ci_workers_32(w: Workflow):
     test_testdrive(w, mz_workers_32, aws_amazon, tests_ci)
+
+
+def workflow_persistence_testdrive(w: Workflow):
+    test_testdrive(w, mz_persistence, aws_amazon, tests_ci)
 
 
 def test_testdrive(w: Workflow, mz: Materialized, aws: str, tests: str):
