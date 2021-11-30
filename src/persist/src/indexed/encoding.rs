@@ -117,17 +117,10 @@ pub struct StreamRegistration {
 /// - The compaction level of trace_batches is weakly decreasing when iterating
 ///   from oldest to most recent time intervals.
 /// - Every trace_batch's upper is <= the overall trace's seal frontier.
-/// - TODO: key uniqueness invariants?
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArrangementMeta {
     /// The stream this unsealed belongs to.
     pub id: Id,
-    /// A lower bound of data contained by this Unsealed. Data before this may
-    /// be present in the batches, but has been logically moved into the trace
-    /// and should be ignored.
-    //
-    // TODO: This is redundant, remove it.
-    pub unsealed_ts_lower: Antichain<u64>,
     /// Frontier this trace has been sealed up to.
     pub seal: Antichain<u64>,
     /// Compaction frontier for the batches contained in this trace.
@@ -331,7 +324,7 @@ impl Codec for BlobMeta {
 
 impl BlobMeta {
     const MAGIC: &'static [u8] = b"mz";
-    const CURRENT_VERSION: u8 = 4;
+    const CURRENT_VERSION: u8 = 5;
 
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
@@ -419,13 +412,6 @@ impl BlobMeta {
                     id, unsealed_seqno_upper, self.seqno,
                 )));
             }
-            let trace_ts_upper = arrangement.trace_ts_upper();
-            if !PartialOrder::less_equal(&arrangement.unsealed_ts_lower, &trace_ts_upper) {
-                return Err(Error::from(format!(
-                    "id {:?} trace ts_upper {:?} is not at or in advance of unsealed ts_lower {:?}",
-                    id, trace_ts_upper, arrangement.unsealed_ts_lower,
-                )));
-            }
         }
 
         let mut batch_keys = HashSet::new();
@@ -481,7 +467,6 @@ impl Default for ArrangementMeta {
     fn default() -> Self {
         ArrangementMeta {
             id: Id(0),
-            unsealed_ts_lower: Antichain::from_elem(Timestamp::minimum()),
             since: Antichain::from_elem(Timestamp::minimum()),
             seal: Antichain::from_elem(Timestamp::minimum()),
             unsealed_batches: Vec::new(),
@@ -1119,7 +1104,6 @@ mod tests {
         // Empty
         let b = ArrangementMeta {
             id: Id(0),
-            unsealed_ts_lower: Antichain::from_elem(0),
             unsealed_batches: vec![],
             ..Default::default()
         };
@@ -1128,7 +1112,6 @@ mod tests {
         // Normal case
         let b = ArrangementMeta {
             id: Id(0),
-            unsealed_ts_lower: Antichain::from_elem(0),
             unsealed_batches: vec![unsealed_batch_meta(0, 1), unsealed_batch_meta(1, 2)],
             ..Default::default()
         };
@@ -1137,7 +1120,6 @@ mod tests {
         // Normal case: gap between sequence number ranges.
         let b = ArrangementMeta {
             id: Id(0),
-            unsealed_ts_lower: Antichain::from_elem(0),
             unsealed_batches: vec![unsealed_batch_meta(0, 1), unsealed_batch_meta(2, 3)],
             ..Default::default()
         };
@@ -1146,7 +1128,6 @@ mod tests {
         // Overlapping
         let b = ArrangementMeta {
             id: Id(0),
-            unsealed_ts_lower: Antichain::from_elem(0),
             unsealed_batches: vec![unsealed_batch_meta(0, 2), unsealed_batch_meta(1, 3)],
             ..Default::default()
         };
@@ -1236,7 +1217,6 @@ mod tests {
             id_mapping: vec![("0", Id(0)).into()],
             arrangements: vec![ArrangementMeta {
                 id: Id(0),
-                unsealed_ts_lower: vec![0].into(),
                 unsealed_batches: vec![],
                 trace_batches: vec![batch_meta(0, 1)],
                 since: Antichain::from_elem(0),
@@ -1251,7 +1231,6 @@ mod tests {
             id_mapping: vec![("0", Id(0)).into()],
             arrangements: vec![ArrangementMeta {
                 id: Id(0),
-                unsealed_ts_lower: vec![1].into(),
                 unsealed_batches: vec![],
                 trace_batches: vec![batch_meta(0, 1)],
                 since: Antichain::from_elem(0),
@@ -1261,26 +1240,6 @@ mod tests {
         };
         assert_eq!(b.validate(), Ok(()),);
 
-        // Unsealed ts_lower in advance of ts_upper
-        let b = BlobMeta {
-            id_mapping: vec![("0", Id(0)).into()],
-            arrangements: vec![ArrangementMeta {
-                id: Id(0),
-                unsealed_ts_lower: vec![2].into(),
-                unsealed_batches: vec![],
-                trace_batches: vec![batch_meta(0, 1)],
-                since: Antichain::from_elem(0),
-                seal: Antichain::from_elem(1),
-            }],
-            ..Default::default()
-        };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from(
-                "id Id(0) trace ts_upper Antichain { elements: [1] } is not at or in advance of unsealed ts_lower Antichain { elements: [2] }"
-            ))
-        );
-
         // seqno less than one of the unsealed seqno uppers
         let b = BlobMeta {
             id_mapping: vec![("0", Id(0)).into()],
@@ -1288,7 +1247,6 @@ mod tests {
             arrangements: vec![ArrangementMeta {
                 id: Id(0),
                 unsealed_batches: vec![unsealed_batch_meta(0, 3)],
-                unsealed_ts_lower: vec![0].into(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -1371,13 +1329,11 @@ mod tests {
             arrangements: vec![
                 ArrangementMeta {
                     id: Id(0),
-                    unsealed_ts_lower: vec![0].into(),
                     unsealed_batches: vec![unsealed_batch_meta(0, 1)],
                     ..Default::default()
                 },
                 ArrangementMeta {
                     id: Id(1),
-                    unsealed_ts_lower: vec![0].into(),
                     unsealed_batches: vec![unsealed_batch_meta(0, 1)],
                     ..Default::default()
                 },
