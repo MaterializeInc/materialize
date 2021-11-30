@@ -32,8 +32,8 @@ $ protobuf-compile-descriptors inputs=recursive.proto output=recursive.pb
 
 ! CREATE SOURCE recursive FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'recursive'
   FORMAT PROTOBUF MESSAGE '.Self' USING SCHEMA FILE '${testdrive.temp-dir}/recursive.pb'
-Recursive types are not supported: .Self
+Recursive types are not supported: Self
 
 ! CREATE SOURCE recursive FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'recursive'
   FORMAT PROTOBUF MESSAGE '.Mutual1' USING SCHEMA FILE '${testdrive.temp-dir}/recursive.pb'
-Recursive types are not supported: .Mutual1
+Recursive types are not supported: Mutual1

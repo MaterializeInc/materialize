@@ -24,8 +24,7 @@ message Basic {
         int64 int64 = 3;
         float float = 4;
         double double = 5;
-# TODO(benesch): why are nested byte fields unsupported?
-#       bytes bytes = 6;
+        bytes bytes = 6;
         string string = 7;
         Enum enum = 8;
     }
@@ -46,32 +45,33 @@ $ protobuf-compile-descriptors inputs=basic.proto output=basic.pb
 $ kafka-create-topic topic=basic partitions=1
 
 $ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=.Basic
-{"bool": true, "int32": 1, "int64": 2, "float": 1.2, "double": 3.2, "bytes": "YWFh", "string": "bbb", "enum": "ENUM1", "message": {"bool": true, "int32": 1, "int64": 2, "float": 1.2, "double": 3.2, "string": "bbb", "enum": "ENUM1"}}
+{"bool": true, "int32": 1, "int64": 2, "float": 1.2, "double": 3.2, "bytes": "YWFh", "string": "bbb", "enum": "ENUM1", "message": {"bool": true, "int32": 1, "int64": 2, "float": 1.2, "double": 3.2, "bytes": "YWFh", "string": "bbb", "enum": "ENUM1"}}
 {}
-# TODO(benesch): this input crashes Materialize (#8930).
-# {"message": {}}
+# Test the case where the nested message is explicitly set to all default
+# values. This previously crashed Materialize (see #8930).
+{"message": {}}
 
 > CREATE MATERIALIZED SOURCE basic FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-basic-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Basic' USING SCHEMA FILE '${testdrive.temp-dir}/basic.pb'
 
-# TODO(benesch): all of the non-message columns should be non-nullable.
 > SHOW COLUMNS FROM basic
 name       nullable  type
 ---------------------------------------
-bool       true      boolean
-int32      true      integer
-int64      true      bigint
-float      true      real
-double     true      "double precision"
-bytes      true      bytea
-string     true      text
-enum       true      text
+bool       false     boolean
+int32      false     integer
+int64      false     bigint
+float      false     real
+double     false     "double precision"
+bytes      false     bytea
+string     false     text
+enum       false     text
 message    true      record
 mz_offset  false     bigint
 
 > SELECT bool, int32, int64, float, double, bytes, string, enum, message::text, mz_offset FROM basic
-bool  int32  int64  float  double  bytes  string enum  message                    mz_offset
+bool  int32  int64  float  double  bytes  string enum  message                             mz_offset
 ----
-true  1      2      1.2    3.2     aaa    bbb    ENUM1 (t,1,2,1.2,3.2,bbb,ENUM1)  1
-false 0      0      0      0       ""     ""     ENUM0 <null>                     2
+true  1      2      1.2    3.2     aaa    bbb    ENUM1 (t,1,2,1.2,3.2,\x616161,bbb,ENUM1)  1
+false 0      0      0      0       ""     ""     ENUM0 <null>                              2
+false 0      0      0      0       ""     ""     ENUM0 "(f,0,0,0,0,\\x,\"\",ENUM0)"        3

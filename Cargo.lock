@@ -2434,8 +2434,6 @@ dependencies = [
  "protobuf",
  "repr",
  "serde",
- "serde-protobuf",
- "serde-value",
  "serde_json",
  "sha2",
  "smallvec",
@@ -4502,28 +4500,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f12d06de37cf59146fbdecab66aa99f9fe4f78722e3607577a5375d66bd0c913"
 dependencies = [
  "serde_derive",
-]
-
-[[package]]
-name = "serde-protobuf"
-version = "0.8.3-alpha.0"
-source = "git+https://github.com/MaterializeInc/serde-protobuf.git#6c460d7aa5b8cc5a67744e4e5b9978aa429480f7"
-dependencies = [
- "linked-hash-map",
- "log",
- "protobuf",
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "serde-value"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
-dependencies = [
- "ordered-float",
- "serde",
 ]
 
 [[package]]

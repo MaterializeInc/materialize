@@ -33,16 +33,16 @@ $ protobuf-compile-descriptors inputs=unsigned.proto output=unsigned.pb
 
 ! CREATE SOURCE unsigned FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unsigned'
   FORMAT PROTOBUF MESSAGE '.UInt32' USING SCHEMA FILE '${testdrive.temp-dir}/unsigned.pb'
-Protobuf type "uint32" is not supported
+Protobuf unsigned integer types are not supported
 
 ! CREATE SOURCE unsigned FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unsigned'
   FORMAT PROTOBUF MESSAGE '.UInt64' USING SCHEMA FILE '${testdrive.temp-dir}/unsigned.pb'
-Protobuf type "uint64" is not supported
+Protobuf unsigned integer types are not supported
 
 ! CREATE SOURCE unsigned FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unsigned'
   FORMAT PROTOBUF MESSAGE '.Fixed32' USING SCHEMA FILE '${testdrive.temp-dir}/unsigned.pb'
-Protobuf type "fixed32" is not supported
+Protobuf unsigned integer types are not supported
 
 ! CREATE SOURCE unsigned FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unsigned'
   FORMAT PROTOBUF MESSAGE '.Fixed64' USING SCHEMA FILE '${testdrive.temp-dir}/unsigned.pb'
-Protobuf type "fixed64" is not supported
+Protobuf unsigned integer types are not supported

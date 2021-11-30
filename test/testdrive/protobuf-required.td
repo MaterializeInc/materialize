@@ -18,6 +18,22 @@ message Required {
 
 $ protobuf-compile-descriptors inputs=required.proto output=required.pb
 
-! CREATE SOURCE unsigned FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'required'
+$ kafka-create-topic topic=required partitions=1
+
+$ kafka-ingest topic=required format=protobuf descriptor-file=required.pb message=.Required
+{"f": 42}
+
+> CREATE MATERIALIZED SOURCE required FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-required-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Required' USING SCHEMA FILE '${testdrive.temp-dir}/required.pb'
-Required field f not supported
+
+> SELECT * FROM required
+f   mz_offset
+-------------
+42  1
+
+$ kafka-ingest topic=required format=protobuf descriptor-file=required.pb message=.Required
+{}
+
+! SELECT * FROM required
+protobuf message missing required field f

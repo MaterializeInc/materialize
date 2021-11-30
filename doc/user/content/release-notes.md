@@ -119,6 +119,9 @@ List new features before bug fixes.
   Together these changes enable the `\dt <pattern>` command
   in the [psql terminal](/connect/cli).
 
+- Fix a crash when decoding certain messages from Protobuf-formatted Kafka
+  topics {{% gh 8930 %}}.
+
 {{% version-header v0.10.0 %}}
 
 - Allow ingesting avro schemas whose top node is not a record type.
