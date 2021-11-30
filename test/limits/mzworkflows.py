@@ -203,7 +203,7 @@ class KafkaPartitions(Generator):
 
 
 class KafkaRecordsEnvelopeNone(Generator):
-    COUNT = Generator.COUNT * 1_000
+    COUNT = Generator.COUNT * 10_000
 
     @classmethod
     def body(cls):
@@ -228,7 +228,7 @@ class KafkaRecordsEnvelopeNone(Generator):
 
 
 class KafkaRecordsEnvelopeUpsertSameValue(Generator):
-    COUNT = Generator.COUNT * 1_000
+    COUNT = Generator.COUNT * 10_000
 
     @classmethod
     def body(cls):
