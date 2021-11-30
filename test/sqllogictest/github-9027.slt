@@ -134,23 +134,65 @@ WHERE
                     ],
                     "input_arity": 16
                   },
-                  "key_val": null
+                  "key_val": [
+                    [
+                      {
+                        "Column": 0
+                      },
+                      {
+                        "Column": 1
+                      },
+                      {
+                        "Column": 2
+                      },
+                      {
+                        "Column": 3
+                      },
+                      {
+                        "Column": 4
+                      },
+                      {
+                        "Column": 5
+                      },
+                      {
+                        "Column": 6
+                      },
+                      {
+                        "Column": 7
+                      },
+                      {
+                        "Column": 8
+                      },
+                      {
+                        "Column": 9
+                      },
+                      {
+                        "Column": 10
+                      },
+                      {
+                        "Column": 11
+                      },
+                      {
+                        "Column": 12
+                      },
+                      {
+                        "Column": 13
+                      },
+                      {
+                        "Column": 14
+                      },
+                      {
+                        "Column": 15
+                      }
+                    ],
+                    null
+                  ]
                 }
               },
-              "ensure_arrangements": [
-                [
-                  [],
-                  {
-                    "key_arity": 0,
-                    "permutation": [
-                      0
-                    ]
-                  },
-                  [
-                    0
-                  ]
-                ]
-              ]
+              "keys": [
+                []
+              ],
+              "arity": 1
             }
           },
           {
@@ -197,33 +239,53 @@ WHERE
                 "projection": [],
                 "input_arity": 9
               },
-              "key_val": null
+              "key_val": [
+                [
+                  {
+                    "Column": 0
+                  },
+                  {
+                    "Column": 1
+                  },
+                  {
+                    "Column": 2
+                  },
+                  {
+                    "Column": 3
+                  },
+                  {
+                    "Column": 4
+                  },
+                  {
+                    "Column": 5
+                  },
+                  {
+                    "Column": 6
+                  },
+                  {
+                    "Column": 7
+                  },
+                  {
+                    "Column": 8
+                  }
+                ],
+                null
+              ]
             }
           }
         ],
         "plan": {
           "Linear": {
             "source_relation": 1,
+            "source_key": null,
             "initial_closure": null,
             "stage_plans": [
               {
                 "lookup_relation": 0,
                 "stream_key": [],
-                "stream_permutation": {
-                  "key_arity": 0,
-                  "permutation": []
-                },
-                "stream_thinning": [],
+                "unthinned_stream_arity": 0,
                 "lookup_key": [],
-                "lookup_permutation": {
-                  "key_arity": 0,
-                  "permutation": [
-                    0
-                  ]
-                },
-                "lookup_thinning": [
-                  0
-                ],
+                "unthinned_lookup_arity": 1,
                 "closure": {
                   "ready_equivalences": [],
                   "before": {
@@ -341,25 +403,65 @@ WHERE
                                   ],
                                   "input_arity": 16
                                 },
-                                "key_val": null
+                                "key_val": [
+                                  [
+                                    {
+                                      "Column": 0
+                                    },
+                                    {
+                                      "Column": 1
+                                    },
+                                    {
+                                      "Column": 2
+                                    },
+                                    {
+                                      "Column": 3
+                                    },
+                                    {
+                                      "Column": 4
+                                    },
+                                    {
+                                      "Column": 5
+                                    },
+                                    {
+                                      "Column": 6
+                                    },
+                                    {
+                                      "Column": 7
+                                    },
+                                    {
+                                      "Column": 8
+                                    },
+                                    {
+                                      "Column": 9
+                                    },
+                                    {
+                                      "Column": 10
+                                    },
+                                    {
+                                      "Column": 11
+                                    },
+                                    {
+                                      "Column": 12
+                                    },
+                                    {
+                                      "Column": 13
+                                    },
+                                    {
+                                      "Column": 14
+                                    },
+                                    {
+                                      "Column": 15
+                                    }
+                                  ],
+                                  null
+                                ]
                               }
                             },
-                            "ensure_arrangements": [
-                              [
-                                [],
-                                {
-                                  "key_arity": 0,
-                                  "permutation": [
-                                    0,
-                                    1
-                                  ]
-                                },
-                                [
-                                  0,
-                                  1
-                                ]
-                              ]
-                            ]
+                            "keys": [
+                              []
+                            ],
+                            "arity": 2
                           }
                         },
                         {
@@ -404,30 +506,17 @@ WHERE
                                   }
                                 },
                                 "plan": "Distinct",
-                                "permutation": {
-                                  "key_arity": 1,
-                                  "permutation": [
-                                    0
-                                  ]
-                                }
+                                "input_key": null
                               }
                             },
-                            "ensure_arrangements": [
+                            "keys": [
                               [
-                                [
-                                  {
-                                    "Column": 0
-                                  }
-                                ],
                                 {
-                                  "key_arity": 1,
-                                  "permutation": [
-                                    0
-                                  ]
-                                },
-                                []
+                                  "Column": 0
+                                }
                               ]
-                            ]
+                            ],
+                            "arity": 1
                           }
                         },
                         {
@@ -500,35 +589,72 @@ WHERE
                                   ],
                                   "input_arity": 9
                                 },
-                                "key_val": null
+                                "key_val": [
+                                  [
+                                    {
+                                      "Column": 0
+                                    },
+                                    {
+                                      "Column": 1
+                                    },
+                                    {
+                                      "Column": 2
+                                    },
+                                    {
+                                      "Column": 3
+                                    },
+                                    {
+                                      "Column": 4
+                                    },
+                                    {
+                                      "Column": 5
+                                    },
+                                    {
+                                      "Column": 6
+                                    },
+                                    {
+                                      "Column": 7
+                                    },
+                                    {
+                                      "Column": 8
+                                    }
+                                  ],
+                                  null
+                                ]
                               }
                             },
-                            "ensure_arrangements": [
+                            "keys": [
                               [
-                                [
-                                  {
-                                    "Column": 0
-                                  }
-                                ],
                                 {
-                                  "key_arity": 1,
-                                  "permutation": [
-                                    0,
-                                    1
-                                  ]
-                                },
-                                [
-                                  1
-                                ]
+                                  "Column": 0
+                                }
                               ]
-                            ]
+                            ],
+                            "arity": 2
                           }
                         }
                       ],
                       "plan": {
                         "Linear": {
                           "source_relation": 1,
-                          "initial_closure": null,
+                          "source_key": [
+                            {
+                              "Column": 0
+                            }
+                          ],
+                          "initial_closure": {
+                            "ready_equivalences": [],
+                            "before": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0
+                                ],
+                                "input_arity": 1
+                              }
+                            }
+                          },
                           "stage_plans": [
                             {
                               "lookup_relation": 2,
@@ -537,28 +663,13 @@ WHERE
                                   "Column": 0
                                 }
                               ],
-                              "stream_permutation": {
-                                "key_arity": 1,
-                                "permutation": [
-                                  0
-                                ]
-                              },
-                              "stream_thinning": [],
+                              "unthinned_stream_arity": 1,
                               "lookup_key": [
                                 {
                                   "Column": 0
                                 }
                               ],
-                              "lookup_permutation": {
-                                "key_arity": 1,
-                                "permutation": [
-                                  0,
-                                  1
-                                ]
-                              },
-                              "lookup_thinning": [
-                                1
-                              ],
+                              "unthinned_lookup_arity": 2,
                               "closure": {
                                 "ready_equivalences": [],
                                 "before": {
@@ -567,9 +678,9 @@ WHERE
                                     "predicates": [],
                                     "projection": [
                                       0,
-                                      2
+                                      1
                                     ],
-                                    "input_arity": 3
+                                    "input_arity": 2
                                   }
                                 }
                               }
@@ -577,29 +688,9 @@ WHERE
                             {
                               "lookup_relation": 0,
                               "stream_key": [],
-                              "stream_permutation": {
-                                "key_arity": 0,
-                                "permutation": [
-                                  0,
-                                  1
-                                ]
-                              },
-                              "stream_thinning": [
-                                0,
-                                1
-                              ],
+                              "unthinned_stream_arity": 2,
                               "lookup_key": [],
-                              "lookup_permutation": {
-                                "key_arity": 0,
-                                "permutation": [
-                                  0,
-                                  1
-                                ]
-                              },
-                              "lookup_thinning": [
-                                0,
-                                1
-                              ],
+                              "unthinned_lookup_arity": 2,
                               "closure": {
                                 "ready_equivalences": [],
                                 "before": {
@@ -739,36 +830,24 @@ WHERE
                     }
                   },
                   "plan": "Distinct",
-                  "permutation": {
-                    "key_arity": 1,
-                    "permutation": [
-                      0
-                    ]
-                  }
+                  "input_key": null
                 }
               },
-              "ensure_arrangements": [
+              "keys": [
                 [
-                  [
-                    {
-                      "Column": 0
-                    }
-                  ],
                   {
-                    "key_arity": 1,
-                    "permutation": [
-                      0
-                    ]
-                  },
-                  []
+                    "Column": 0
+                  }
                 ]
-              ]
+              ],
+              "arity": 1
             }
           }
         ],
         "plan": {
           "Linear": {
             "source_relation": 0,
+            "source_key": null,
             "initial_closure": null,
             "stage_plans": [
               {
@@ -778,25 +857,13 @@ WHERE
                     "Column": 0
                   }
                 ],
-                "stream_permutation": {
-                  "key_arity": 1,
-                  "permutation": [
-                    0
-                  ]
-                },
-                "stream_thinning": [],
+                "unthinned_stream_arity": 1,
                 "lookup_key": [
                   {
                     "Column": 0
                   }
                 ],
-                "lookup_permutation": {
-                  "key_arity": 1,
-                  "permutation": [
-                    0
-                  ]
-                },
-                "lookup_thinning": [],
+                "unthinned_lookup_arity": 1,
                 "closure": {
                   "ready_equivalences": [],
                   "before": {
@@ -804,7 +871,7 @@ WHERE
                       "expressions": [],
                       "predicates": [],
                       "projection": [],
-                      "input_arity": 2
+                      "input_arity": 1
                     }
                   }
                 }

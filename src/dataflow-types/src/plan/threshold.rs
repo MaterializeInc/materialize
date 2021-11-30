@@ -23,8 +23,7 @@
 //!     is beneficial to use this operator if the number of retractions is expected to be small, and
 //!     if a potential downstream operator does not expect its input to be arranged.
 
-use crate::plan::EnsureArrangement;
-use crate::plan::Permutation;
+use expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 
 /// A plan describing how to compute a threshold operation.
@@ -42,16 +41,15 @@ impl ThresholdPlan {
     /// This is likely either an empty vector, for no arrangement,
     /// or a singleton vector containing the list of expressions
     /// that key a single arrangement.
-    pub fn keys(&self) -> Vec<Vec<expr::MirScalarExpr>> {
-        // Accumulate keys into this vector, and return it.
-        let mut keys = Vec::new();
+    pub fn keys(&self) -> Vec<Vec<MirScalarExpr>> {
         match self {
             ThresholdPlan::Basic(plan) => {
-                keys.push(plan.ensure_arrangement.0.clone());
+                vec![plan.ensure_arrangement.clone()]
             }
-            ThresholdPlan::Retractions(_plan) => {}
+            ThresholdPlan::Retractions(_plan) => {
+                vec![]
+            }
         }
-        keys
     }
 }
 
@@ -59,7 +57,7 @@ impl ThresholdPlan {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BasicThresholdPlan {
     /// Description of how to arrange the output
-    pub ensure_arrangement: EnsureArrangement,
+    pub ensure_arrangement: Vec<MirScalarExpr>,
 }
 
 /// A plan to maintain all inputs with negative counts, which are subtracted from the output
@@ -67,7 +65,7 @@ pub struct BasicThresholdPlan {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RetractionsThresholdPlan {
     /// Description of how to arrange the output
-    pub ensure_arrangement: EnsureArrangement,
+    pub ensure_arrangement: Vec<MirScalarExpr>,
 }
 
 impl ThresholdPlan {
@@ -80,12 +78,14 @@ impl ThresholdPlan {
         for column in 0..arity {
             all_columns.push(expr::MirScalarExpr::Column(column));
         }
-        let (permutation, thinning) = Permutation::construct_from_expr(&all_columns, arity);
-        let ensure_arrangement = (all_columns, permutation, thinning);
         if maintain_retractions {
-            ThresholdPlan::Retractions(RetractionsThresholdPlan { ensure_arrangement })
+            ThresholdPlan::Retractions(RetractionsThresholdPlan {
+                ensure_arrangement: all_columns,
+            })
         } else {
-            ThresholdPlan::Basic(BasicThresholdPlan { ensure_arrangement })
+            ThresholdPlan::Basic(BasicThresholdPlan {
+                ensure_arrangement: all_columns,
+            })
         }
     }
 }
