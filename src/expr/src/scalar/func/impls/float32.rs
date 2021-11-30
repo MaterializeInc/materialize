@@ -7,8 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+use lowertest::MzStructReflect;
+use repr::adt::numeric::{self, Numeric};
+use repr::{strconv, ColumnType, ScalarType};
+
+use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
-use repr::strconv;
 
 sqlfunc!(
     #[sqlname = "-"]
@@ -110,3 +118,39 @@ sqlfunc!(
         s
     }
 );
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
+)]
+pub struct CastFloat32ToNumeric(pub Option<u8>);
+
+impl<'a> EagerUnaryFunc<'a> for CastFloat32ToNumeric {
+    type Input = f32;
+    type Output = Result<Numeric, EvalError>;
+
+    fn call(&self, a: f32) -> Result<Numeric, EvalError> {
+        if a.is_infinite() {
+            return Err(EvalError::InfinityOutOfDomain(
+                "casting real to numeric".to_owned(),
+            ));
+        }
+        let mut a = Numeric::from(a);
+        if let Some(scale) = self.0 {
+            if numeric::rescale(&mut a, scale).is_err() {
+                return Err(EvalError::NumericFieldOverflow);
+            }
+        }
+        numeric::munge_numeric(&mut a).unwrap();
+        Ok(a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { scale: self.0 }.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for CastFloat32ToNumeric {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("f32tonumeric")
+    }
+}

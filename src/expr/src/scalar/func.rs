@@ -113,120 +113,6 @@ pub fn or<'a>(
     }
 }
 
-fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a.unwrap_bool() {
-        true => Datum::from("true"),
-        false => Datum::from("false"),
-    }
-}
-
-fn cast_bool_to_string_nonstandard<'a>(a: Datum<'a>) -> Datum<'a> {
-    // N.B. this function differs from `cast_bool_to_string_implicit` because
-    // the SQL specification requires `true` and `false` to be spelled out in
-    // explicit casts, while PostgreSQL prefers its more concise `t` and `f`
-    // representation in some contexts, for historical reasons.
-    Datum::String(strconv::format_bool_static(a.unwrap_bool()))
-}
-
-fn cast_bool_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a.unwrap_bool() {
-        true => Datum::Int32(1),
-        false => Datum::Int32(0),
-    }
-}
-
-fn cast_int32_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_int32();
-    let mut a = Numeric::from(a);
-    if let Some(scale) = scale {
-        if numeric::rescale(&mut a, scale).is_err() {
-            return Err(EvalError::NumericFieldOverflow);
-        }
-    }
-    // Besides `rescale`, cast is infallible.
-    Ok(Datum::from(a))
-}
-
-fn cast_int64_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64() != 0)
-}
-
-fn cast_int64_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match i16::try_from(a.unwrap_int64()) {
-        Ok(n) => Ok(Datum::from(n)),
-        Err(_) => Err(EvalError::Int16OutOfRange),
-    }
-}
-
-fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match i32::try_from(a.unwrap_int64()) {
-        Ok(n) => Ok(Datum::from(n)),
-        Err(_) => Err(EvalError::Int32OutOfRange),
-    }
-}
-
-fn cast_int64_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_int64();
-    let mut a = Numeric::from(a);
-    if let Some(scale) = scale {
-        if numeric::rescale(&mut a, scale).is_err() {
-            return Err(EvalError::NumericFieldOverflow);
-        }
-    }
-    // Besides `rescale`, cast is infallible.
-    Ok(Datum::from(a))
-}
-
-fn cast_int64_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64() as f32)
-}
-
-fn cast_int64_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64() as f64)
-}
-
-fn cast_int64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_int64(&mut buf, a.unwrap_int64());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_float32_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float32();
-    if a.is_infinite() {
-        return Err(EvalError::InfinityOutOfDomain(
-            "casting real to numeric".to_owned(),
-        ));
-    }
-    let mut a = Numeric::from(a);
-    if let Some(scale) = scale {
-        if numeric::rescale(&mut a, scale).is_err() {
-            return Err(EvalError::NumericFieldOverflow);
-        }
-    }
-    numeric::munge_numeric(&mut a).unwrap();
-    Ok(Datum::from(a))
-}
-
-fn cast_float64_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float64();
-    if a.is_infinite() {
-        return Err(EvalError::InfinityOutOfDomain(
-            "casting double precision to numeric".to_owned(),
-        ));
-    }
-    let mut a = Numeric::from(a);
-    if let Some(scale) = scale {
-        if numeric::rescale(&mut a, scale).is_err() {
-            return Err(EvalError::NumericFieldOverflow);
-        }
-    }
-    match numeric::munge_numeric(&mut a) {
-        Ok(_) => Ok(Datum::from(a)),
-        Err(_) => Err(EvalError::NumericFieldOverflow),
-    }
-}
-
 fn cast_numeric_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let mut cx = numeric::cx_datum();
@@ -633,8 +519,8 @@ fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
 
 fn cast_jsonb_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(_) => cast_int64_to_int16(a),
-        Datum::Float64(_) => cast_int64_to_int16(a),
+        Datum::Int64(a) => cast_int64_to_int16(a).map(|d| d.into()),
+        Datum::Float64(f) => cast_float64_to_int16(*f).map(|d| d.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "smallint".into(),
@@ -644,7 +530,7 @@ fn cast_jsonb_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_jsonb_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(_) => cast_int64_to_int32(a),
+        Datum::Int64(a) => cast_int64_to_int32(a).map(|d| d.into()),
         Datum::Float64(f) => cast_float64_to_int32(*f).map(|f| f.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
@@ -666,7 +552,7 @@ fn cast_jsonb_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_jsonb_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(_) => Ok(cast_int64_to_float32(a)),
+        Datum::Int64(a) => Ok(cast_int64_to_float32(a).into()),
         Datum::Float64(f) => cast_float64_to_float32(*f).map(|f| f.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
@@ -677,7 +563,7 @@ fn cast_jsonb_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(_) => Ok(cast_int64_to_float64(a)),
+        Datum::Int64(a) => Ok(cast_int64_to_float64(a).into()),
         Datum::Float64(_) => Ok(a),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
@@ -688,8 +574,8 @@ fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_jsonb_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(_) => cast_int64_to_numeric(a, scale),
-        Datum::Float64(_) => cast_float64_to_numeric(a, scale),
+        Datum::Int64(a) => CastInt64ToNumeric(scale).call(a).map(|d| d.into()),
+        Datum::Float64(f) => CastFloat64ToNumeric(scale).call(*f).map(|d| d.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "numeric".into(),
@@ -3487,9 +3373,9 @@ pub enum UnaryFunc {
     AbsFloat32(AbsFloat32),
     AbsFloat64(AbsFloat64),
     AbsNumeric(AbsNumeric),
-    CastBoolToString,
-    CastBoolToStringNonstandard,
-    CastBoolToInt32,
+    CastBoolToString(CastBoolToString),
+    CastBoolToStringNonstandard(CastBoolToStringNonstandard),
+    CastBoolToInt32(CastBoolToInt32),
     CastInt16ToFloat32(CastInt16ToFloat32),
     CastInt16ToFloat64(CastInt16ToFloat64),
     CastInt16ToInt32(CastInt16ToInt32),
@@ -3509,22 +3395,22 @@ pub enum UnaryFunc {
     CastRegProcToOid(CastRegProcToOid),
     CastOidToRegType(CastOidToRegType),
     CastRegTypeToOid(CastRegTypeToOid),
-    CastInt64ToInt16,
-    CastInt64ToInt32,
+    CastInt64ToInt16(CastInt64ToInt16),
+    CastInt64ToInt32(CastInt64ToInt32),
     CastInt16ToNumeric(CastInt16ToNumeric),
-    CastInt32ToNumeric(Option<u8>),
-    CastInt64ToBool,
-    CastInt64ToNumeric(Option<u8>),
-    CastInt64ToFloat32,
-    CastInt64ToFloat64,
-    CastInt64ToString,
+    CastInt32ToNumeric(CastInt32ToNumeric),
+    CastInt64ToBool(CastInt64ToBool),
+    CastInt64ToNumeric(CastInt64ToNumeric),
+    CastInt64ToFloat32(CastInt64ToFloat32),
+    CastInt64ToFloat64(CastInt64ToFloat64),
+    CastInt64ToString(CastInt64ToString),
     CastFloat32ToInt16(CastFloat32ToInt16),
     CastFloat32ToInt32(CastFloat32ToInt32),
     CastFloat32ToInt64(CastFloat32ToInt64),
     CastFloat32ToFloat64(CastFloat32ToFloat64),
     CastFloat32ToString(CastFloat32ToString),
-    CastFloat32ToNumeric(Option<u8>),
-    CastFloat64ToNumeric(Option<u8>),
+    CastFloat32ToNumeric(CastFloat32ToNumeric),
+    CastFloat64ToNumeric(CastFloat64ToNumeric),
     CastFloat64ToInt16(CastFloat64ToInt16),
     CastFloat64ToInt32(CastFloat64ToInt32),
     CastFloat64ToInt64(CastFloat64ToInt64),
@@ -3737,6 +3623,16 @@ derive_unary!(
     CastInt32ToOid,
     CastInt32ToRegProc,
     CastInt32ToRegType,
+    CastInt64ToInt16,
+    CastInt64ToInt32,
+    CastInt64ToBool,
+    CastInt64ToNumeric,
+    CastInt64ToFloat32,
+    CastInt64ToFloat64,
+    CastInt64ToString,
+    CastFloat32ToNumeric,
+    CastFloat64ToNumeric,
+    CastInt32ToNumeric,
     CastOidToInt32,
     CastOidToRegProc,
     CastRegProcToOid,
@@ -3757,6 +3653,9 @@ derive_unary!(
     Log10Numeric,
     RoundNumeric,
     SqrtNumeric,
+    CastBoolToString,
+    CastBoolToStringNonstandard,
+    CastBoolToInt32,
     ToTimestamp,
     CastFloat64ToString,
     Cos,
@@ -3864,21 +3763,21 @@ impl UnaryFunc {
             | Log10Numeric(_)
             | RoundNumeric(_)
             | SqrtNumeric(_)
+            | CastBoolToString(_)
+            | CastBoolToStringNonstandard(_)
+            | CastBoolToInt32(_)
+            | CastInt64ToInt16(_)
+            | CastInt64ToInt32(_)
+            | CastInt64ToBool(_)
+            | CastInt64ToNumeric(_)
+            | CastInt64ToFloat32(_)
+            | CastInt64ToFloat64(_)
+            | CastInt64ToString(_)
+            | CastFloat32ToNumeric(_)
+            | CastFloat64ToNumeric(_)
+            | CastInt32ToNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInterval => Ok(neg_interval(a)),
-            CastBoolToString => Ok(cast_bool_to_string(a)),
-            CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
-            CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
-            CastFloat32ToNumeric(scale) => cast_float32_to_numeric(a, *scale),
-            CastFloat64ToNumeric(scale) => cast_float64_to_numeric(a, *scale),
-            CastInt32ToNumeric(scale) => cast_int32_to_numeric(a, *scale),
-            CastInt64ToInt16 => cast_int64_to_int16(a),
-            CastInt64ToInt32 => cast_int64_to_int32(a),
-            CastInt64ToBool => Ok(cast_int64_to_bool(a)),
-            CastInt64ToNumeric(scale) => cast_int64_to_numeric(a, *scale),
-            CastInt64ToFloat32 => Ok(cast_int64_to_float32(a)),
-            CastInt64ToFloat64 => Ok(cast_int64_to_float64(a)),
-            CastInt64ToString => Ok(cast_int64_to_string(a, temp_storage)),
             CastStringToBool => cast_string_to_bool(a),
             CastStringToBytes => cast_string_to_bytes(a, temp_storage),
             CastStringToInt16 => cast_string_to_int16(a),
@@ -4069,25 +3968,33 @@ impl UnaryFunc {
             | Log10Numeric(_)
             | RoundNumeric(_)
             | SqrtNumeric(_)
+            | CastBoolToString(_)
+            | CastBoolToStringNonstandard(_)
+            | CastBoolToInt32(_)
+            | CastInt64ToInt16(_)
+            | CastInt64ToInt32(_)
+            | CastInt64ToBool(_)
+            | CastInt64ToNumeric(_)
+            | CastInt64ToFloat32(_)
+            | CastInt64ToFloat64(_)
+            | CastInt64ToString(_)
+            | CastFloat32ToNumeric(_)
+            | CastFloat64ToNumeric(_)
+            | CastInt32ToNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(nullable),
 
-            IsRegexpMatch(_) | CastInt64ToBool | CastStringToBool => {
-                ScalarType::Bool.nullable(nullable)
-            }
+            IsRegexpMatch(_) | CastStringToBool => ScalarType::Bool.nullable(nullable),
 
             CastStringToBytes => ScalarType::Bytes.nullable(nullable),
             CastStringToInterval | CastTimeToInterval => ScalarType::Interval.nullable(nullable),
             CastStringToUuid => ScalarType::Uuid.nullable(nullable),
             CastStringToJsonb => ScalarType::Jsonb.nullable(nullable),
 
-            CastBoolToString
-            | CastBoolToStringNonstandard
-            | CastCharToString
+            CastCharToString
             | CastVarCharToString
-            | CastInt64ToString
             | CastNumericToString
             | CastDateToString
             | CastTimeToString
@@ -4106,30 +4013,19 @@ impl UnaryFunc {
             | Upper
             | Lower => ScalarType::String.nullable(nullable),
 
-            CastStringToFloat32 | CastInt64ToFloat32 | CastNumericToFloat32 => {
-                ScalarType::Float32.nullable(nullable)
-            }
+            CastStringToFloat32 | CastNumericToFloat32 => ScalarType::Float32.nullable(nullable),
 
-            CastStringToFloat64 | CastInt64ToFloat64 | CastNumericToFloat64 => {
-                ScalarType::Float64.nullable(nullable)
-            }
+            CastStringToFloat64 | CastNumericToFloat64 => ScalarType::Float64.nullable(nullable),
 
-            CastStringToInt16 | CastInt64ToInt16 | CastNumericToInt16 => {
-                ScalarType::Int16.nullable(nullable)
-            }
+            CastStringToInt16 | CastNumericToInt16 => ScalarType::Int16.nullable(nullable),
 
-            CastBoolToInt32 | CastStringToInt32 | CastInt64ToInt32 | CastNumericToInt32 => {
-                ScalarType::Int32.nullable(nullable)
-            }
+            CastStringToInt32 | CastNumericToInt32 => ScalarType::Int32.nullable(nullable),
 
             CastStringToInt64 | CastNumericToInt64 => ScalarType::Int64.nullable(nullable),
 
-            CastStringToNumeric(scale)
-            | CastInt32ToNumeric(scale)
-            | CastInt64ToNumeric(scale)
-            | CastFloat32ToNumeric(scale)
-            | CastFloat64ToNumeric(scale)
-            | CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
+            CastStringToNumeric(scale) | CastJsonbToNumeric(scale) => {
+                ScalarType::Numeric { scale: *scale }.nullable(nullable)
+            }
 
             CastStringToDate | CastTimestampToDate | CastTimestampTzToDate => {
                 ScalarType::Date.nullable(nullable)
@@ -4302,6 +4198,19 @@ impl UnaryFunc {
             | Log10Numeric(_)
             | RoundNumeric(_)
             | SqrtNumeric(_)
+            | CastBoolToString(_)
+            | CastBoolToStringNonstandard(_)
+            | CastBoolToInt32(_)
+            | CastInt64ToInt16(_)
+            | CastInt64ToInt32(_)
+            | CastInt64ToBool(_)
+            | CastInt64ToNumeric(_)
+            | CastInt64ToFloat32(_)
+            | CastInt64ToFloat64(_)
+            | CastInt64ToString(_)
+            | CastFloat32ToNumeric(_)
+            | CastFloat64ToNumeric(_)
+            | CastInt32ToNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4316,15 +4225,12 @@ impl UnaryFunc {
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => false,
-            IsRegexpMatch(_) | CastInt64ToBool | CastStringToBool | CastJsonbOrNullToJsonb => false,
+            IsRegexpMatch(_) | CastStringToBool | CastJsonbOrNullToJsonb => false,
             CastStringToBytes | CastStringToInterval | CastTimeToInterval | CastStringToJsonb => {
                 false
             }
-            CastBoolToString
-            | CastBoolToStringNonstandard
-            | CastCharToString
+            CastCharToString
             | CastVarCharToString
-            | CastInt64ToString
             | CastNumericToString
             | CastDateToString
             | CastTimeToString
@@ -4342,17 +4248,12 @@ impl UnaryFunc {
             | TrimTrailingWhitespace
             | Upper
             | Lower => false,
-            CastStringToFloat32 | CastInt64ToFloat32 | CastNumericToFloat32 => false,
-            CastStringToFloat64 | CastInt64ToFloat64 | CastNumericToFloat64 => false,
-            CastStringToInt16 | CastInt64ToInt16 | CastNumericToInt16 => false,
-            CastBoolToInt32 | CastStringToInt32 | CastInt64ToInt32 | CastNumericToInt32 => false,
+            CastStringToFloat32 | CastNumericToFloat32 => false,
+            CastStringToFloat64 | CastNumericToFloat64 => false,
+            CastStringToInt16 | CastNumericToInt16 => false,
+            CastStringToInt32 | CastNumericToInt32 => false,
             CastStringToInt64 | CastNumericToInt64 => false,
-            CastStringToNumeric(_)
-            | CastInt32ToNumeric(_)
-            | CastInt64ToNumeric(_)
-            | CastFloat32ToNumeric(_)
-            | CastFloat64ToNumeric(_)
-            | CastJsonbToNumeric(_) => false,
+            CastStringToNumeric(_) | CastJsonbToNumeric(_) => false,
             CastStringToDate | CastTimestampToDate | CastTimestampTzToDate => false,
             CastStringToTime | CastIntervalToTime | TimezoneTime { .. } => false,
             CastStringToTimestamp
@@ -4432,11 +4333,8 @@ impl UnaryFunc {
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            CastBoolToString
-            | CastBoolToStringNonstandard
-            | CastCharToString
+            CastCharToString
             | CastVarCharToString
-            | CastInt64ToString
             | CastStringToBytes
             | CastDateToTimestamp
             | CastDateToTimestampTz
@@ -4527,21 +4425,21 @@ impl UnaryFunc {
             | Log10Numeric(_)
             | RoundNumeric(_)
             | SqrtNumeric(_)
+            | CastBoolToString(_)
+            | CastBoolToStringNonstandard(_)
+            | CastBoolToInt32(_)
+            | CastInt64ToInt16(_)
+            | CastInt64ToInt32(_)
+            | CastInt64ToBool(_)
+            | CastInt64ToNumeric(_)
+            | CastInt64ToFloat32(_)
+            | CastInt64ToFloat64(_)
+            | CastInt64ToString(_)
+            | CastFloat32ToNumeric(_)
+            | CastFloat64ToNumeric(_)
+            | CastInt32ToNumeric(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInterval => f.write_str("-"),
-            CastBoolToString => f.write_str("booltostr"),
-            CastBoolToStringNonstandard => f.write_str("booltostrns"),
-            CastBoolToInt32 => f.write_str("booltoi32"),
-            CastInt32ToNumeric(..) => f.write_str("i32tonumeric"),
-            CastInt64ToInt16 => f.write_str("i64toi16"),
-            CastInt64ToInt32 => f.write_str("i64toi32"),
-            CastInt64ToBool => f.write_str("i64tobool"),
-            CastInt64ToNumeric(..) => f.write_str("i64tonumeric"),
-            CastInt64ToFloat32 => f.write_str("i64tof32"),
-            CastInt64ToFloat64 => f.write_str("i64tof64"),
-            CastInt64ToString => f.write_str("i64tostr"),
-            CastFloat32ToNumeric(_) => f.write_str("f32tonumeric"),
-            CastFloat64ToNumeric(_) => f.write_str("f32tonumeric"),
             CastNumericToInt16 => f.write_str("numerictoi16"),
             CastNumericToInt32 => f.write_str("numerictoi32"),
             CastNumericToInt64 => f.write_str("numerictoi64"),
