@@ -142,6 +142,8 @@ List new features before bug fixes.
 
 - Improve support for table functions in `SELECT` lists.
 
+- Support PgJDBC's `getPrimaryKeys()` API.
+
 {{% version-header v0.10.0 %}}
 
 - Allow ingesting avro schemas whose top node is not a record type.
