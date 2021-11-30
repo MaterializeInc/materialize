@@ -67,6 +67,8 @@ pub enum Type {
     RegProc,
     /// A type name.
     RegType,
+    /// A class name.
+    RegClass,
 }
 
 lazy_static! {
@@ -116,6 +118,7 @@ impl Type {
             postgres_types::Type::TIMESTAMP => Some(Type::Timestamp),
             postgres_types::Type::TIMESTAMPTZ => Some(Type::TimestampTz),
             postgres_types::Type::UUID => Some(Type::Uuid),
+            postgres_types::Type::REGCLASS => Some(Type::RegClass),
             postgres_types::Type::REGPROC => Some(Type::RegProc),
             postgres_types::Type::REGTYPE => Some(Type::RegType),
             _ => None,
@@ -148,6 +151,7 @@ impl Type {
                 Type::Timestamp => &postgres_types::Type::TIMESTAMP_ARRAY,
                 Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
                 Type::Uuid => &postgres_types::Type::UUID_ARRAY,
+                Type::RegClass => &postgres_types::Type::REGCLASS_ARRAY,
                 Type::RegProc => &postgres_types::Type::REGPROC_ARRAY,
                 Type::RegType => &postgres_types::Type::REGTYPE_ARRAY,
             },
@@ -173,6 +177,7 @@ impl Type {
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
             Type::Uuid => &postgres_types::Type::UUID,
+            Type::RegClass => &postgres_types::Type::REGCLASS,
             Type::RegProc => &postgres_types::Type::REGPROC,
             Type::RegType => &postgres_types::Type::REGTYPE,
         }
@@ -211,6 +216,7 @@ impl Type {
             &postgres_types::Type::INT8 => "bigint",
             &postgres_types::Type::TIMESTAMPTZ => "timestamp with time zone",
             &postgres_types::Type::VARCHAR => "character varying",
+            &postgres_types::Type::REGCLASS_ARRAY => "regclass[]",
             &postgres_types::Type::REGPROC_ARRAY => "regproc[]",
             &postgres_types::Type::REGTYPE_ARRAY => "regtype[]",
             other => other.name(),
@@ -251,6 +257,7 @@ impl Type {
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
             Type::Uuid => 16,
+            Type::RegClass => 4,
             Type::RegProc => 4,
             Type::RegType => 4,
         }
@@ -296,6 +303,7 @@ impl Type {
             Type::Timestamp => ScalarType::Timestamp,
             Type::TimestampTz => ScalarType::TimestampTz,
             Type::Uuid => ScalarType::Uuid,
+            Type::RegClass => ScalarType::RegClass,
             Type::RegProc => ScalarType::RegProc,
             Type::RegType => ScalarType::RegType,
         }
@@ -337,6 +345,7 @@ impl From<&ScalarType> for Type {
             ScalarType::TimestampTz => Type::TimestampTz,
             ScalarType::Uuid => Type::Uuid,
             ScalarType::Numeric { .. } => Type::Numeric,
+            ScalarType::RegClass => Type::RegClass,
             ScalarType::RegProc => Type::RegProc,
             ScalarType::RegType => Type::RegType,
         }

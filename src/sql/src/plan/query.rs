@@ -4072,6 +4072,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
             bail!("internal error: can't convert from pg record to materialize record")
         }
         pgrepr::Type::Oid => Ok(ScalarType::Oid),
+        pgrepr::Type::RegClass => Ok(ScalarType::RegClass),
         pgrepr::Type::RegProc => Ok(ScalarType::RegProc),
         pgrepr::Type::RegType => Ok(ScalarType::RegType),
         pgrepr::Type::Map { value_type } => Ok(ScalarType::Map {

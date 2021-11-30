@@ -7,7 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use repr::adt::system::{Oid, RegProc, RegType};
+use repr::adt::system::{Oid, RegClass, RegProc, RegType};
+
+sqlfunc!(
+    #[sqlname = "regclasstooid"]
+    #[preserves_uniqueness = true]
+    fn cast_reg_class_to_oid(a: RegClass) -> Oid {
+        Oid(a.0)
+    }
+);
 
 sqlfunc!(
     #[sqlname = "regproctooid"]

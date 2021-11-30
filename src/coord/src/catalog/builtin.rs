@@ -442,6 +442,18 @@ pub const TYPE_BPCHAR_ARRAY: BuiltinType = BuiltinType {
     pgtype: &postgres_types::Type::BPCHAR_ARRAY,
 };
 
+pub const TYPE_REGCLASS: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1048),
+    pgtype: &postgres_types::Type::REGCLASS,
+};
+
+pub const TYPE_REGCLASS_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1049),
+    pgtype: &postgres_types::Type::REGCLASS_ARRAY,
+};
+
 pub const TYPE_REGPROC: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1046),
@@ -1632,6 +1644,8 @@ lazy_static! {
             Builtin::Type(&TYPE_OID_ARRAY),
             Builtin::Type(&TYPE_RECORD),
             Builtin::Type(&TYPE_RECORD_ARRAY),
+            Builtin::Type(&TYPE_REGCLASS),
+            Builtin::Type(&TYPE_REGCLASS_ARRAY),
             Builtin::Type(&TYPE_REGPROC),
             Builtin::Type(&TYPE_REGPROC_ARRAY),
             Builtin::Type(&TYPE_REGTYPE),

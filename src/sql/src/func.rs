@@ -100,6 +100,7 @@ impl TypeCategory {
             | ScalarType::Int32
             | ScalarType::Int64
             | ScalarType::Oid
+            | ScalarType::RegClass
             | ScalarType::RegProc
             | ScalarType::RegType
             | ScalarType::Numeric { .. } => Self::Numeric,
@@ -884,6 +885,7 @@ impl From<ScalarBaseType> for ParamType {
             Jsonb => ScalarType::Jsonb,
             Uuid => ScalarType::Uuid,
             Oid => ScalarType::Oid,
+            RegClass => ScalarType::RegClass,
             RegProc => ScalarType::RegProc,
             RegType => ScalarType::RegType,
             Array | List | Record | Map => {

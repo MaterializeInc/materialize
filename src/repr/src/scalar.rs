@@ -24,7 +24,7 @@ use lowertest::MzEnumReflect;
 use crate::adt::array::Array;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
-use crate::adt::system::{Oid, RegProc, RegType};
+use crate::adt::system::{Oid, RegClass, RegProc, RegType};
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
 
@@ -523,6 +523,7 @@ impl<'a> Datum<'a> {
                     (Datum::Int16(_), _) => false,
                     (Datum::Int32(_), ScalarType::Int32) => true,
                     (Datum::Int32(_), ScalarType::Oid) => true,
+                    (Datum::Int32(_), ScalarType::RegClass) => true,
                     (Datum::Int32(_), ScalarType::RegProc) => true,
                     (Datum::Int32(_), ScalarType::RegType) => true,
                     (Datum::Int32(_), _) => false,
@@ -917,6 +918,8 @@ pub enum ScalarType {
     RegProc,
     /// A PostgreSQL type name.
     RegType,
+    /// A PostgreSQL class name.
+    RegClass,
 }
 
 /// Types that implement this trait can be stored in an SQL column with the specified ColumnType
@@ -1183,6 +1186,29 @@ impl<'a, E> DatumType<'a, E> for Oid {
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Int32(a)) => Ok(Oid(a)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::Int32(self.0))
+    }
+}
+
+impl AsColumnType for RegClass {
+    fn as_column_type() -> ColumnType {
+        ScalarType::RegClass.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for RegClass {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Int32(a)) => Ok(RegClass(a)),
             _ => Err(res),
         }
     }
