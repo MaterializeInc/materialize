@@ -19,6 +19,7 @@ use ore::cast::CastFrom;
 use persist_types::Codec;
 
 use crate::error::Error;
+use crate::gen::persist::ProtoMeta;
 use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, TraceBatchMeta, UnsealedBatchMeta,
 };
@@ -296,9 +297,10 @@ impl<B: Blob> BlobCache<B> {
             Some(bytes) => bytes,
             None => return Ok(None),
         };
-        let meta = BlobMeta::decode(&bytes).map_err(|err| {
+        let meta = ProtoMeta::decode(&bytes).map_err(|err| {
             Error::from(format!("invalid meta at key {}: {}", Self::META_KEY, err))
         })?;
+        let meta = BlobMeta::from(meta);
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
         Ok(Some(meta))
     }
@@ -306,6 +308,7 @@ impl<B: Blob> BlobCache<B> {
     /// Overwrites metadata about what batches are in [Blob] storage.
     pub fn set_meta(&mut self, meta: &BlobMeta) -> Result<(), Error> {
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
+        let meta = ProtoMeta::from(meta);
 
         let mut val = Vec::new();
         meta.encode(&mut val);
