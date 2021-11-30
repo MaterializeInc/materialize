@@ -8,7 +8,7 @@ mypy==0.910
 pdoc3==0.10.0
 prettytable==2.2.1
 psutil==5.8.0
-psycopg2-binary==2.9.1
+psycopg2==2.9.1
 types-psycopg2==2.9.1
 pytest==6.2.5
 requests==2.23.0

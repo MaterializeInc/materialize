@@ -11,6 +11,8 @@
 # that we support.
 
 FROM ubuntu:focal-20211006 AS crosstool
+ARG ARCH_GCC
+ARG ARCH_GO
 
 WORKDIR /scratch
 
@@ -42,25 +44,24 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
 # official releases support GCC 9.0.
 
 RUN mkdir crosstool \
-    && curl -fsSL https://github.com/crosstool-ng/crosstool-ng/archive/5b0e0127e189c08e433ae25dbceead63da5ef2d7.tar.gz > crosstool.tar.gz \
+    && curl -fsSL https://github.com/crosstool-ng/crosstool-ng/archive/4dc9d643f94720bb11a7b4fa0c39729a684be5bb.tar.gz > crosstool.tar.gz \
     && tar -xf crosstool.tar.gz -C crosstool --strip-components=1 \
     && rm crosstool.tar.gz \
     && (cd crosstool && ./bootstrap && ./configure && make install) \
     && rm -rf crosstool
 
-COPY crosstool.defconfig ./
+COPY crosstool-$ARCH_GCC.defconfig ./
 
-# The sed command below works around
-# https://github.com/crosstool-ng/crosstool-ng/issues/1609.
-RUN DEFCONFIG=crosstool.defconfig ct-ng defconfig \
-    && rm crosstool.defconfig \
-    && sed -i 's,http://isl.gforge.inria.fr,https://mirror.sobukus.de/files/src/isl/,' .config \
+RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
+    && rm crosstool-$ARCH_GCC.defconfig \
     && ct-ng build
 
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
 FROM ubuntu:focal-20211006
+ARG ARCH_GCC
+ARG ARCH_GO
 
 WORKDIR /workdir
 
@@ -81,6 +82,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     git \
     gnupg2 \
     jq \
+    libpq-dev \
     make \
     openssh-client \
     pkg-config \
@@ -94,14 +96,12 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.2.0/autouseradd-1.2.0-amd64.tar.gz \
+RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
     | tar xz -C / --strip-components 1 \
-    && curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.7.0/shellcheck-v0.7.0.linux.x86_64.tar.xz > shellcheck.tar.xz \
-    && echo '39c501aaca6aae3f3c7fc125b3c3af779ddbe4e67e4ebdc44c2ae5cba76c847f  shellcheck.tar.xz' | sha256sum --check \
-    && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.7.0/shellcheck \
+    && curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.8.0/shellcheck-v0.8.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
+    && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.8.0/shellcheck \
     && rm shellcheck.tar.xz \
-    && curl -fsSL "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-Linux-x86_64" > /usr/local/bin/docker-compose \
-    && chmod +x /usr/local/bin/docker-compose
+    && pip install docker-compose==1.29.2
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
@@ -120,8 +120,8 @@ ARG RUST_VERSION
 ARG RUST_COMPONENTS
 
 RUN mkdir rust \
-    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz > rust.tar.gz \
-    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz.asc > rust.asc \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-$ARCH_GCC-unknown-linux-gnu.tar.gz > rust.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-$ARCH_GCC-unknown-linux-gnu.tar.gz.asc > rust.asc \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C rust --strip-components=1 \
     && rm -f rust.asc rust.tar.gz \
@@ -145,8 +145,8 @@ RUN mkdir rust \
 # Link Rust's internal lld into the cross-compiling sysroot. This avoids
 # bringing in an extra copy of LLVM via `apt install lld`.
 
-RUN ln -s /usr/local/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld /opt/x-tools/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-ld.lld \
-    && ln -s /usr/local/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld /opt/x-tools/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-lld
+RUN ln -s /usr/local/lib/rustlib/$ARCH_GCC-unknown-linux-gnu/bin/rust-lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
+    && ln -s /usr/local/lib/rustlib/$ARCH_GCC-unknown-linux-gnu/bin/rust-lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
 
 # Install the Antithesis stub instrumentation library.
 
@@ -170,22 +170,25 @@ RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.3/deb-s3-
 
 # Install the AWS CLI.
 
-RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" > awscli.zip \
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC.zip" > awscli.zip \
     && unzip awscli.zip \
     && ./aws/install \
     && rm -rf aws
 
 # Install docs site dependencies. These are towards the end for the same reason
-# as the Python dependencies.
+# as the Python dependencies. These are only supported on x86_64 at the moment.
+# See: https://discourse.gohugo.io/t/how-to-install-hugo-extended-on-linux-arm/28098/4
 
-RUN curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.12.1/htmltest_0.12.1_linux_amd64.tar.gz > htmltest.tar.gz \
+RUN if [ $ARCH_GCC = x86_64 ]; then \
+    curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.12.1/htmltest_0.12.1_linux_amd64.tar.gz > htmltest.tar.gz \
     && echo '04d4be5097b98cd28de469f8856b3fbe82669f57b482a4cf3092a55e9e8e9e0d  htmltest.tar.gz' | sha256sum --check \
     && tar -xzf htmltest.tar.gz -C /usr/local/bin htmltest \
     && rm htmltest.tar.gz \
     && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.87.0/hugo_extended_0.87.0_Linux-64bit.tar.gz > hugo.tar.gz \
     && echo 'f216af92c06809c03981296f513ce54d3d690715d3c9fdfaff802d4a6759a260  hugo.tar.gz' | sha256sum --check \
     && tar -xzf hugo.tar.gz -C /usr/local/bin hugo \
-    && rm hugo.tar.gz
+    && rm hugo.tar.gz; \
+    fi
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
@@ -195,19 +198,17 @@ COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 # Set the necessary environment variables to point Cargo and C/C++ build systems
 # at our cross-compiling toolchain.
 
-ENV AR=x86_64-unknown-linux-gnu-ar
-ENV LD=x86_64-unknown-linux-gnu-lld
-ENV RANLIB=x86_64-unknown-linux-gnu-ranlib
-ENV CPP=x86_64-unknown-linux-gnu-cpp
-ENV CC=x86_64-unknown-linux-gnu-cc
-ENV CXX=x86_64-unknown-linux-gnu-c++
+ENV AR=$ARCH_GCC-unknown-linux-gnu-ar
+ENV LD=$ARCH_GCC-unknown-linux-gnu-lld
+ENV RANLIB=$ARCH_GCC-unknown-linux-gnu-ranlib
+ENV CPP=$ARCH_GCC-unknown-linux-gnu-cpp
+ENV CC=$ARCH_GCC-unknown-linux-gnu-cc
+ENV CXX=$ARCH_GCC-unknown-linux-gnu-c++
 ENV LDFLAGS=-fuse-ld=lld
 ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
-ENV PATH=/opt/x-tools/x86_64-unknown-linux-gnu/bin:$PATH
-ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
-# https://github.com/rust-lang/cargo/issues/7529
-ENV RUSTDOCFLAGS="-C linker=x86_64-unknown-linux-gnu-cc"
+ENV PATH=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
+ENV CARGO_TARGET_$ARCH_GCC_UNKNOWN_LINUX_GNU_LINKER=$ARCH_GCC-unknown-linux-gnu-cc
 
 # Set a environment variable that tools can check to see if they're in the
 # builder or not.
