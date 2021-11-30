@@ -24,7 +24,7 @@ daemons = [
     Toxiproxy(),
 ]
 
-services = [*daemons, Testdrive()]
+services = [*daemons, Testdrive(default_timeout=600)]
 
 #
 # Test the S3 resumption logic by first instructing Toxiproxy to drop a connection
@@ -69,7 +69,7 @@ def workflow_s3_resumption(w: Workflow):
                 service="testdrive-svc",
                 command=" ".join(
                     [
-                        f"--no-reset --max-errors=1 --default-timeout 600 --seed {toxiproxy_bytes_allowed} --aws-endpoint=http://toxiproxy:4566",
+                        f"--no-reset --max-errors=1 --seed {toxiproxy_bytes_allowed} --aws-endpoint=http://toxiproxy:4566",
                         "configure-toxiproxy.td",
                         "s3-create.td s3-insert-long.td s3-insert-long-gzip.td",
                         #
