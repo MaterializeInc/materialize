@@ -11,8 +11,8 @@
 
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
-use crate::plan::Permutation;
 use expr::MapFilterProject;
+
 use expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +24,8 @@ use serde::{Deserialize, Serialize};
 pub struct LinearJoinPlan {
     /// The source relation from which we start the join.
     pub source_relation: usize,
+    /// The arrangement to use for the source relation, if any
+    pub source_key: Option<Vec<MirScalarExpr>>,
     /// An initial closure to apply before any stages.
     ///
     /// Values of `None` indicate the identity closure.
@@ -51,16 +53,12 @@ pub struct LinearStagePlan {
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
     pub stream_key: Vec<MirScalarExpr>,
-    /// The permutation of the stream
-    pub stream_permutation: Permutation,
-    /// The thinning expression to apply on the value part of the stream
-    pub stream_thinning: Vec<usize>,
+    /// The input arity of the stream
+    pub unthinned_stream_arity: usize,
     /// The key expressions to use for the lookup relation.
     pub lookup_key: Vec<MirScalarExpr>,
-    /// The lookup key permutation
-    pub lookup_permutation: Permutation,
-    /// The thinning expression to apply on the lookup relation
-    pub lookup_thinning: Vec<usize>,
+    /// The input arity of the lookup relation
+    pub unthinned_lookup_arity: usize,
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     pub closure: JoinClosure,
@@ -70,33 +68,45 @@ impl LinearJoinPlan {
     /// Create a new join plan from the required arguments.
     pub fn create_from(
         source_relation: usize,
+        source_key: Option<Vec<MirScalarExpr>>,
         equivalences: &[Vec<MirScalarExpr>],
         join_order: &[(usize, Vec<MirScalarExpr>)],
         input_mapper: expr::JoinInputMapper,
-        map_filter_project: &mut MapFilterProject,
+        mfp_above: &mut MapFilterProject,
     ) -> Self {
-        let temporal_mfp = map_filter_project.extract_temporal();
+        let temporal_mfp = mfp_above.extract_temporal();
 
         // Construct initial join build state.
         // This state will evolves as we build the join dataflow.
         let mut join_build_state = JoinBuildState::new(
             input_mapper.global_columns(source_relation),
             &equivalences,
-            &map_filter_project,
+            &mfp_above,
         );
 
-        // We would prefer to extract a closure here, but we do not know if
-        // the input will be arranged or not.
-        let initial_closure = None;
-
+        let unthinned_source_arity = input_mapper.input_arity(source_relation);
+        let initial_closure = source_key.as_ref().map(|k| {
+            let mfp = MapFilterProject::new(unthinned_source_arity)
+                .permute_for_arrangement(k)
+                .into_plan()
+                .unwrap()
+                .into_nontemporal()
+                .unwrap();
+            JoinClosure {
+                ready_equivalences: vec![],
+                before: mfp,
+            }
+        });
+        let mut unthinned_stream_arity = initial_closure
+            .as_ref()
+            .map(|closure| closure.before.projection.len())
+            .unwrap_or(unthinned_source_arity);
         // Sequence of steps to apply.
         let mut stage_plans = Vec::with_capacity(join_order.len());
 
         // Track the set of bound input relations, for equivalence resolution.
         let mut bound_inputs = vec![source_relation];
 
-        // The arity of the stream of updates, to be modified for each lookup relation
-        let mut stream_arity = input_mapper.input_arity(source_relation);
         // Iterate through the join order instructions, assembling keys and
         // closures to use.
         for (lookup_relation, lookup_key) in join_order.iter() {
@@ -122,19 +132,21 @@ impl LinearJoinPlan {
                     bound_expr
                 })
                 .collect::<Vec<_>>();
-
+            let thinned_stream_arity = unthinned_stream_arity
+                - stream_key
+                    .iter()
+                    .filter_map(|kcol| kcol.as_column())
+                    .count();
             // Introduce new columns and expressions they enable. Form a new closure.
             let closure = join_build_state.add_columns(
                 input_mapper.global_columns(*lookup_relation),
                 &lookup_key_rebased,
-            );
-            let (stream_permutation, stream_thinning) =
-                Permutation::construct_from_expr(&stream_key, stream_arity);
-            let (lookup_permutation, lookup_thinning) = Permutation::construct_from_expr(
+                Some((&stream_key, thinned_stream_arity)),
                 &lookup_key,
-                input_mapper.input_arity(*lookup_relation),
             );
-            stream_arity = closure.before.projection.len();
+            let new_unthinned_stream_arity = closure.before.projection.len();
+
+            let unthinned_lookup_arity = input_mapper.input_arity(*lookup_relation);
 
             bound_inputs.push(*lookup_relation);
 
@@ -142,13 +154,12 @@ impl LinearJoinPlan {
             stage_plans.push(LinearStagePlan {
                 lookup_relation: *lookup_relation,
                 stream_key,
-                stream_permutation,
-                stream_thinning,
+                unthinned_stream_arity,
                 lookup_key: lookup_key.clone(),
-                lookup_permutation,
-                lookup_thinning,
+                unthinned_lookup_arity,
                 closure,
             });
+            unthinned_stream_arity = new_unthinned_stream_arity;
         }
 
         // determine a final closure, and complete the path plan.
@@ -161,11 +172,12 @@ impl LinearJoinPlan {
 
         // Now that `map_filter_project` has been captured in the state builder,
         // assign the remaining temporal predicates to it, for the caller's use.
-        *map_filter_project = temporal_mfp;
+        *mfp_above = temporal_mfp;
 
         // Form and return the complete join plan.
         LinearJoinPlan {
             source_relation,
+            source_key,
             initial_closure,
             stage_plans,
             final_closure,

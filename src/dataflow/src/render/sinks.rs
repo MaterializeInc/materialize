@@ -57,10 +57,11 @@ where
             }
         }
 
+        let arity = sink.from_desc.arity();
         let (collection, _err_collection) = self
             .lookup_id(expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded")
-            .as_collection();
+            .as_unthinned_collection(arity);
 
         let collection = apply_sink_envelope(sink, &sink_render, collection);
 

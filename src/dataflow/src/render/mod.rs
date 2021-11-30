@@ -335,12 +335,11 @@ where
             );
             let ok_arranged = ok_arranged.enter(region);
             let err_arranged = err_arranged.enter(region);
-            let permutation = traces.permutation().clone();
             self.update_id(
                 Id::Global(idx.on_id),
                 CollectionBundle::from_expressions(
                     idx.keys.clone(),
-                    ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged, permutation),
+                    ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
                 ),
             );
             tokens
@@ -397,13 +396,13 @@ where
             )
         });
         match bundle.arrangement(&idx.keys) {
-            Some(ArrangementFlavor::Local(oks, errs, permutation)) => {
+            Some(ArrangementFlavor::Local(oks, errs)) => {
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace, permutation).with_drop(tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(tokens),
                 );
             }
-            Some(ArrangementFlavor::Trace(gid, _, _, _)) => {
+            Some(ArrangementFlavor::Trace(gid, _, _)) => {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
@@ -500,14 +499,14 @@ where
             Plan::Mfp {
                 input,
                 mfp,
-                key_val,
+                input_key_val,
             } => {
                 // If `mfp` is non-trivial, we should apply it and produce a collection.
                 let input = self.render_plan(*input, scope, worker_index);
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) = input.as_collection_core(mfp, key_val);
+                    let (oks, errs) = input.as_collection_core(mfp, input_key_val);
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
@@ -516,9 +515,10 @@ where
                 func,
                 exprs,
                 mfp,
+                input_key,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_flat_map(input, func, exprs, mfp)
+                self.render_flat_map(input, func, exprs, mfp, input_key)
             }
             Plan::Join { inputs, plan } => {
                 let inputs = inputs
@@ -538,10 +538,10 @@ where
                 input,
                 key_val_plan,
                 plan,
-                permutation,
+                input_key,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_reduce(input, key_val_plan, plan, permutation)
+                self.render_reduce(input, key_val_plan, plan, input_key)
             }
             Plan::TopK { input, top_k_plan } => {
                 let input = self.render_plan(*input, scope, worker_index);
@@ -549,7 +549,7 @@ where
             }
             Plan::Negate { input } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                let (oks, errs) = input.as_collection();
+                let (oks, errs) = input.as_specific_collection(None);
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
             Plan::Threshold {
@@ -563,7 +563,9 @@ where
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
-                    let (os, es) = self.render_plan(input, scope, worker_index).as_collection();
+                    let (os, es) = self
+                        .render_plan(input, scope, worker_index)
+                        .as_specific_collection(None);
                     oks.push(os);
                     errs.push(es);
                 }
@@ -573,10 +575,11 @@ where
             }
             Plan::ArrangeBy {
                 input,
-                ensure_arrangements,
+                keys: ensure_arrangements,
+                arity,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                input.ensure_arrangements(ensure_arrangements)
+                input.ensure_arrangements(ensure_arrangements, arity)
             }
         }
     }

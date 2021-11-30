@@ -337,7 +337,17 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
       ],
       "input_arity": 2
     },
-    "key_val": null
+    "key_val": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ],
+      null
+    ]
   }
 }
 
@@ -372,7 +382,17 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
       ],
       "input_arity": 2
     },
-    "key_val": null
+    "key_val": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ],
+      null
+    ]
   }
 }
 
@@ -384,22 +404,46 @@ EXPLAIN PHYSICAL PLAN FOR VIEW ordered_view
 {
   "TopK": {
     "input": {
-      "Get": {
-        "id": {
-          "Global": {
-            "User": 2
+      "Mfp": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                "User": 2
+              }
+            },
+            "keys": [
+              [
+                {
+                  "Column": 0
+                },
+                {
+                  "Column": 1
+                }
+              ]
+            ],
+            "mfp": {
+              "expressions": [],
+              "predicates": [],
+              "projection": [
+                0,
+                1
+              ],
+              "input_arity": 2
+            },
+            "key_val": [
+              [
+                {
+                  "Column": 0
+                },
+                {
+                  "Column": 1
+                }
+              ],
+              null
+            ]
           }
         },
-        "keys": [
-          [
-            {
-              "Column": 0
-            },
-            {
-              "Column": 1
-            }
-          ]
-        ],
         "mfp": {
           "expressions": [],
           "predicates": [],
@@ -409,7 +453,17 @@ EXPLAIN PHYSICAL PLAN FOR VIEW ordered_view
           ],
           "input_arity": 2
         },
-        "key_val": null
+        "input_key_val": [
+          [
+            {
+              "Column": 0
+            },
+            {
+              "Column": 1
+            }
+          ],
+          null
+        ]
       }
     },
     "top_k_plan": {
@@ -441,22 +495,46 @@ EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
 {
   "TopK": {
     "input": {
-      "Get": {
-        "id": {
-          "Global": {
-            "User": 2
+      "Mfp": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                "User": 2
+              }
+            },
+            "keys": [
+              [
+                {
+                  "Column": 0
+                },
+                {
+                  "Column": 1
+                }
+              ]
+            ],
+            "mfp": {
+              "expressions": [],
+              "predicates": [],
+              "projection": [
+                0,
+                1
+              ],
+              "input_arity": 2
+            },
+            "key_val": [
+              [
+                {
+                  "Column": 0
+                },
+                {
+                  "Column": 1
+                }
+              ],
+              null
+            ]
           }
         },
-        "keys": [
-          [
-            {
-              "Column": 0
-            },
-            {
-              "Column": 1
-            }
-          ]
-        ],
         "mfp": {
           "expressions": [],
           "predicates": [],
@@ -466,7 +544,17 @@ EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
           ],
           "input_arity": 2
         },
-        "key_val": null
+        "input_key_val": [
+          [
+            {
+              "Column": 0
+            },
+            {
+              "Column": 1
+            }
+          ],
+          null
+        ]
       }
     },
     "top_k_plan": {
@@ -521,7 +609,17 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
       ],
       "input_arity": 2
     },
-    "key_val": null
+    "key_val": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ],
+      null
+    ]
   }
 }
 
@@ -558,7 +656,17 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIM
       ],
       "input_arity": 2
     },
-    "key_val": null
+    "key_val": [
+      [
+        {
+          "Column": 0
+        },
+        {
+          "Column": 1
+        }
+      ],
+      null
+    ]
   }
 }
 

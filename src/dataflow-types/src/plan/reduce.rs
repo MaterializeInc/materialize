@@ -62,6 +62,7 @@
 
 use expr::AggregateExpr;
 use expr::AggregateFunc;
+use expr::MirScalarExpr;
 use ore::soft_assert_or_log;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -454,18 +455,25 @@ impl KeyValPlan {
     /// Create a new [KeyValPlan] from aggregation arguments.
     pub fn new(
         input_arity: usize,
-        group_key: &[expr::MirScalarExpr],
+        group_key: &[MirScalarExpr],
         aggregates: &[AggregateExpr],
+        input_key: Option<&[MirScalarExpr]>,
     ) -> Self {
         // Form an operator for evaluating key expressions.
         let mut key_mfp = expr::MapFilterProject::new(input_arity)
             .map(group_key.iter().cloned())
             .project(input_arity..(input_arity + group_key.len()));
+        if let Some(input_key) = input_key {
+            key_mfp = key_mfp.permute_for_arrangement(input_key);
+        }
 
         // Form an operator for evaluating value expressions.
         let mut val_mfp = expr::MapFilterProject::new(input_arity)
             .map(aggregates.iter().map(|a| a.expr.clone()))
             .project(input_arity..(input_arity + aggregates.len()));
+        if let Some(input_key) = input_key {
+            val_mfp = val_mfp.permute_for_arrangement(input_key);
+        }
 
         key_mfp.optimize();
         let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();

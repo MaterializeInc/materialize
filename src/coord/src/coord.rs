@@ -3172,7 +3172,7 @@ where
             index_id,
             IndexDesc {
                 on_id: view_id,
-                keys: key,
+                keys: key.clone(),
             },
             typ,
         );
@@ -3181,7 +3181,7 @@ where
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
-        let fast_path = fast_path_peek::create_plan(dataflow_plan, view_id, index_id)?;
+        let fast_path = fast_path_peek::create_plan(dataflow_plan, view_id, index_id, key)?;
 
         // Implement the peek, and capture the response.
         let resp = self
@@ -4841,7 +4841,7 @@ pub mod fast_path_peek {
     use dataflow_types::client::{ComputeClient, StorageClient};
 
     use crate::CoordError;
-    use expr::{EvalError, GlobalId, Id};
+    use expr::{EvalError, GlobalId, Id, MirScalarExpr};
     use repr::{Diff, Row};
 
     /// Possible ways in which the coordinator could produce the result for a goal view.
@@ -4855,6 +4855,7 @@ pub mod fast_path_peek {
         PeekDataflow(
             dataflow_types::DataflowDescription<dataflow_types::Plan>,
             GlobalId,
+            Vec<MirScalarExpr>,
         ),
     }
 
@@ -4867,6 +4868,7 @@ pub mod fast_path_peek {
         dataflow_plan: dataflow_types::DataflowDescription<dataflow_types::Plan>,
         view_id: GlobalId,
         index_id: GlobalId,
+        index_key: Vec<MirScalarExpr>,
     ) -> Result<Plan, CoordError> {
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -4908,7 +4910,7 @@ pub mod fast_path_peek {
                                 // Indicate an early exit with a specific index and key_val.
                                 return Ok(Plan::PeekExisting(
                                     *index_id,
-                                    Some(val.clone()),
+                                    val.clone(),
                                     map_filter_project,
                                 ));
                             }
@@ -4922,7 +4924,7 @@ pub mod fast_path_peek {
                 _ => {}
             }
         }
-        return Ok(Plan::PeekDataflow(dataflow_plan, index_id));
+        return Ok(Plan::PeekDataflow(dataflow_plan, index_id, index_key));
     }
 
     impl<C> crate::coord::Coordinator<C>
@@ -4993,12 +4995,13 @@ pub mod fast_path_peek {
                     ),
                     None,
                 ),
-                Plan::PeekDataflow(dataflow, index_id) => {
+                Plan::PeekDataflow(dataflow, index_id, index_key) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
                     self.dataflow_client.create_dataflows(vec![dataflow]).await;
 
                     // Create an identity MFP operator.
                     let map_filter_project = expr::MapFilterProject::new(source_arity)
+                        .permute_for_arrangement(&index_key)
                         .into_plan()
                         .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
                         .into_nontemporal()
