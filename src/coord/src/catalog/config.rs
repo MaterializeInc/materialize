@@ -28,8 +28,6 @@ pub struct Config<'a> {
     pub enable_logging: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// The number of workers in use by the server.
-    pub num_workers: usize,
     /// Timestamp frequency to use for CREATE SOURCE
     pub timestamp_frequency: Duration,
     /// Function to generate wall clock now; can be mocked.

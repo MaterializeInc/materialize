@@ -2155,9 +2155,6 @@ lazy_static! {
                     Ok(HirScalarExpr::literal(Datum::String(&version), ScalarType::String))
                 }), oid::FUNC_MZ_VERSION_OID;
             },
-            "mz_workers" => Scalar {
-                params!() => Operation::nullary(mz_workers), oid::FUNC_MZ_WORKERS_OID;
-            },
             "regexp_extract" => Table {
                 params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
                     let regex = match regex.into_literal_string() {
@@ -2296,13 +2293,6 @@ fn mz_session_id(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
     Ok(HirScalarExpr::literal(
         Datum::from(ecx.catalog().config().session_id),
         ScalarType::Uuid,
-    ))
-}
-
-fn mz_workers(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
-    Ok(HirScalarExpr::literal(
-        Datum::from(i64::try_from(ecx.catalog().config().num_workers)?),
-        ScalarType::Int64,
     ))
 }
 

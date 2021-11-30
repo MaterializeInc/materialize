@@ -551,8 +551,6 @@
     description: Returns the length of time that the materialized process has been running.
   - signature: 'mz_version() -> text'
     description: Returns the server's version information as a human-readable string.
-  - signature: 'mz_workers() -> bigint'
-    description: Returns the number of workers in use by the server.
   - signature: 'format_type(oid: int, typemod: int) -> text'
     description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
   - signature: 'current_database() -> text'

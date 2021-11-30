@@ -4428,7 +4428,6 @@ where
         safe_mode,
         enable_logging: logging.is_some(),
         build_info,
-        num_workers: dataflow_client.num_workers(),
         timestamp_frequency,
         now: now.clone(),
         persist,

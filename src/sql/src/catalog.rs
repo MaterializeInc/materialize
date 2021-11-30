@@ -176,8 +176,6 @@ pub struct CatalogConfig {
     pub safe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// The number of worker in use by the server.
-    pub num_workers: usize,
     /// Default timestamp frequency for CREATE SOURCE
     pub timestamp_frequency: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
@@ -375,7 +373,6 @@ lazy_static! {
         experimental_mode: false,
         safe_mode: false,
         build_info: &DUMMY_BUILD_INFO,
-        num_workers: 0,
         timestamp_frequency: Duration::from_secs(1),
         now: NOW_ZERO.clone(),
         disable_user_indexes: false,

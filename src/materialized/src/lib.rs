@@ -308,6 +308,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             domain: telemetry.domain,
             interval: telemetry.interval,
             cluster_id: coord_handle.cluster_id(),
+            workers,
             coord_client,
         };
         tokio::spawn(async move { telemetry::report_loop(config).await });
