@@ -565,10 +565,6 @@ impl<C> dataflow_types::client::Client for InterceptingDataflowClient<C>
 where
     C: dataflow_types::client::Client,
 {
-    fn num_workers(&self) -> usize {
-        1
-    }
-
     async fn send(&mut self, cmd: dataflow_types::client::Command) {
         self.inner.lock().await.send(cmd).await
     }

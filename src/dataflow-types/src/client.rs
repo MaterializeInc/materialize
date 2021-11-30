@@ -310,15 +310,6 @@ pub enum WorkerFeedback {
 /// A client to a running dataflow server.
 #[async_trait::async_trait]
 pub trait Client: Send {
-    /// Reports the number of dataflow workers.
-    ///
-    /// By default, this is one. Clients who wrap multiple workers without performing
-    /// the work of reducing their responses down to those of a single worker should
-    /// communicate that number here.
-    fn num_workers(&self) -> usize {
-        1
-    }
-
     /// Sends a command to the dataflow server.
     async fn send(&mut self, cmd: Command);
 
