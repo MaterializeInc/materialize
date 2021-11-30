@@ -90,7 +90,6 @@ def main(argv: List[str]) -> int:
     output = spawn.capture(
         ["docker-compose", "version", "--short"], unicode=True
     ).strip()
-
     version = tuple(int(i) for i in output.split("."))
     if version < MIN_COMPOSE_VERSION:
         msg = f"Unsupported docker-compose version: {version}, min required: {MIN_COMPOSE_VERSION}"

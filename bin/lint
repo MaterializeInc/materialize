@@ -53,7 +53,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)requirements.*\.txt$' \
     -e '\.(md|json|asc|png|jpe?g|svg|avro|avsc|pb|ico|html|so)$' \
     -e '^doc/user/.*(\.scss|\.bnf|\.toml|\.yml)$' \
-    -e '^ci/builder/(ssh_known_hosts|stable.stamp|nightly.stamp|crosstool-.+\.defconfig)$' \
+    -e '^ci/builder/(ssh_known_hosts|stable.stamp|nightly.stamp|crosstool.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
     -e 'demo/chbench/chbench' \
     -e 'src/pid-file/libbsd' \

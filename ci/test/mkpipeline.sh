@@ -21,27 +21,20 @@ set -euo pipefail
 
 bootstrap_steps=
 
-for arch in x86_64 aarch64; do
-    for toolchain in stable nightly; do
-        if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $toolchain; then
-            queue=builder
-            if [[ $arch = aarch64 ]]; then
-                queue=builder-aarch64
-            fi
-            bootstrap_steps+="
-  - label: bootstrap $toolchain $arch
-    command: bin/ci-builder push $toolchain
+for toolchain in stable nightly; do
+  if ! bin/ci-builder exists $toolchain; then
+    bootstrap_steps+="
+  - label: bootstrap $toolchain
+    command: bin/ci-builder build $toolchain --push
     agents:
-      queue: $queue
+      queue: builder
 "
-        fi
-    done
+  fi
 done
 
 exec buildkite-agent pipeline upload <<EOF
 steps:
   $bootstrap_steps
   - wait
-  - label: mkpipeline
-    command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.mkpipeline
+  - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.mkpipeline
 EOF
