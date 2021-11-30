@@ -13,9 +13,6 @@ true
 > SELECT mz_version() != '';
 true
 
-> SELECT mz_workers() > 0 AND mz_workers() < 256;
-true
-
 > SELECT current_user = current_role AND current_user != '';
 true
 

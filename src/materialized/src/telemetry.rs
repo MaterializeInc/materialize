@@ -29,6 +29,8 @@ pub struct Config {
     pub interval: Duration,
     /// The ID of the Materialize cluster.
     pub cluster_id: Uuid,
+    /// The number of workers the dataflow server is hosting.
+    pub workers: usize,
     /// A client for the coordinator to introspect.
     pub coord_client: coord::Client,
 }
@@ -71,29 +73,34 @@ pub async fn report_loop(config: Config) {
     }
 }
 
-/// The query used to gather telemetry data.
+/// Generates the query used to gather telemetry data.
 //
 // If you add additional data to this query, please be sure to update the
 // telemetry docs in doc/user/cli/_index.md#telemetry accordingly, and be sure
 // the data is not identifiable.
-const TELEMETRY_QUERY: &str = "SELECT jsonb_build_object(
-    'version', mz_version(),
-    'status', jsonb_build_object(
-        'session_id', mz_internal.mz_session_id(),
-        'uptime_seconds', extract(epoch FROM mz_uptime()),
-        'num_workers', mz_workers(),
-        'sources', (
-            SELECT jsonb_object_agg(connector_type, jsonb_build_object('count', count))
-            FROM (SELECT connector_type, count(*) FROM mz_sources WHERE id LIKE 'u%' GROUP BY connector_type)
-        ),
-        'tables', jsonb_build_object('count', (SELECT count(*) FROM mz_tables WHERE id LIKE 'u%')),
-        'views', jsonb_build_object('count', (SELECT count(*) FROM mz_views WHERE id LIKE 'u%')),
-        'sinks', (
-            SELECT jsonb_object_agg(connector_type, jsonb_build_object('count', count))
-            FROM (SELECT connector_type, count(*) FROM mz_sinks WHERE id LIKE 'u%' GROUP BY connector_type)
-        )
+fn make_telemetry_query(config: &Config) -> String {
+    format!("
+        SELECT jsonb_build_object(
+            'version', mz_version(),
+            'status', jsonb_build_object(
+                'session_id', mz_internal.mz_session_id(),
+                'uptime_seconds', extract(epoch FROM mz_uptime()),
+                'num_workers', {workers},
+                'sources', (
+                    SELECT jsonb_object_agg(connector_type, jsonb_build_object('count', count))
+                    FROM (SELECT connector_type, count(*) FROM mz_sources WHERE id LIKE 'u%' GROUP BY connector_type)
+                ),
+                'tables', jsonb_build_object('count', (SELECT count(*) FROM mz_tables WHERE id LIKE 'u%')),
+                'views', jsonb_build_object('count', (SELECT count(*) FROM mz_views WHERE id LIKE 'u%')),
+                'sinks', (
+                    SELECT jsonb_object_agg(connector_type, jsonb_build_object('count', count))
+                    FROM (SELECT connector_type, count(*) FROM mz_sinks WHERE id LIKE 'u%' GROUP BY connector_type)
+                )
+            )
+        )",
+        workers = config.workers
     )
-)";
+}
 
 /// The response returned by the telemetry server.
 #[derive(Deserialize)]
@@ -108,7 +115,7 @@ async fn report_one(config: &Config) -> Result<semver::Version, anyhow::Error> {
         .retry(|_state| async {
             let query_result = config
                 .coord_client
-                .system_execute_one(&TELEMETRY_QUERY)
+                .system_execute_one(&make_telemetry_query(config))
                 .await?;
             let response = mz_http_proxy::reqwest::client()
                 .post(format!(

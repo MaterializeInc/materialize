@@ -107,6 +107,8 @@ List new features before bug fixes.
   no longer panic and will now cause query-level failure with an internal error
   and a message of the form "exceeded recursion limit of {X}".
 
+- **Breaking change.** Remove the `mz_workers` function.
+
 - Support `generate_series` for [`timestamp`] data.
 
 - Prevent overflow on operations combining [`timestamp`] and [`interval`].
