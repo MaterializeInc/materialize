@@ -253,7 +253,7 @@ impl PredicateKnowledge {
                 }
 
                 knowledge.extend(new_predicates);
-                normalize_predicates(&mut knowledge);
+                normalize_predicates(&mut knowledge, &self_type);
                 knowledge
             }
             MirRelationExpr::Reduce {
@@ -361,7 +361,7 @@ impl PredicateKnowledge {
             }
         };
 
-        normalize_predicates(&mut predicates);
+        normalize_predicates(&mut predicates, &self_type);
         if predicates
             .iter()
             .any(|p| p.is_literal_false() || p.is_literal_null())
@@ -376,7 +376,7 @@ impl PredicateKnowledge {
 ///
 /// The method extracts equality statements, chooses representatives for each equivalence relation,
 /// and substitutes the representatives.
-fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
+fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: &repr::RelationType) {
     // Remove duplicates
     predicates.sort();
     predicates.dedup();
@@ -388,77 +388,92 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
     // an expression with substitutions performed.
 
     let mut classes = Vec::new();
-    for predicate in predicates.iter() {
+    let mut other_predicates = Vec::new();
+    for mut predicate in predicates.drain(..) {
         if let MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::Eq,
         } = predicate
         {
+            // Note: Eq is used in this transform to express class equivalence, rather
+            // than SQL equality, so a predicate like `#0 = null` cannot be reduced as
+            // `false`.
             let mut class = Vec::new();
             class.extend(
                 classes
                     .iter()
-                    .position(|c: &Vec<MirScalarExpr>| c.contains(&**expr1))
+                    .position(|c: &Vec<MirScalarExpr>| c.contains(&*expr1))
                     .map(|p| classes.remove(p))
-                    .unwrap_or_else(|| vec![(**expr1).clone()]),
+                    .unwrap_or_else(|| vec![*expr1]),
             );
             class.extend(
                 classes
                     .iter()
-                    .position(|c: &Vec<MirScalarExpr>| c.contains(&**expr2))
+                    .position(|c: &Vec<MirScalarExpr>| c.contains(&*expr2))
                     .map(|p| classes.remove(p))
-                    .unwrap_or_else(|| vec![(**expr2).clone()]),
+                    .unwrap_or_else(|| vec![*expr2]),
             );
             classes.push(class);
+        } else {
+            predicate.reduce(input_type);
+            other_predicates.push(predicate);
         }
     }
 
-    // Order each class so that literals come first, then column references, then weird things.
-    for class in classes.iter_mut() {
-        use std::cmp::Ordering;
-        class.sort_by(|x, y| match (x, y) {
-            (MirScalarExpr::Literal { .. }, MirScalarExpr::Literal { .. }) => x.cmp(y),
-            (MirScalarExpr::Literal { .. }, _) => Ordering::Less,
-            (_, MirScalarExpr::Literal { .. }) => Ordering::Greater,
-            (MirScalarExpr::Column(_), MirScalarExpr::Column(_)) => x.cmp(y),
-            (MirScalarExpr::Column(_), _) => Ordering::Less,
-            (_, MirScalarExpr::Column(_)) => Ordering::Greater,
-            // This last class could be problematic if a complex expression sorts lower than
-            // expressions it contains (e.g. in x + y = x, if x + y comes before x then x would
-            // repeatedly be replaced by x + y).
-            _ => (nodes(x), x).cmp(&(nodes(y), y)),
-        });
-        class.dedup();
-        // If we have a second literal, not equal to the first, we have a contradiction and can
-        // just replace everything with false.
-        if let Some(second) = class.get(1) {
-            if second.is_literal_ok() {
-                predicates.push(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
+    *predicates = other_predicates;
+
+    'retry_loop: loop {
+        // Order each class so that literals come first, then column references, then weird things.
+        for class in classes.iter_mut() {
+            // Reduce the expressions within the class
+            for expr in class.iter_mut() {
+                expr.reduce(input_type);
+            }
+            class.sort_by(cmp_expr);
+            class.dedup();
+            // If we have a second literal, not equal to the first, we have a contradiction and can
+            // just replace everything with false.
+            if let Some(second) = class.get(1) {
+                if second.is_literal_ok() {
+                    predicates.clear();
+                    predicates.push(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
+                    return;
+                }
             }
         }
-    }
-    // TODO: Sort by complexity of representative, and perform substitutions within predicates.
-    classes.sort();
+        // Sort by complexity of representative, and perform substitutions within predicates.
+        classes.sort_by(|x, y| cmp_expr(&x[0], &y[0]));
 
-    // let mut normalization = HashMap::<&MirScalarExpr, &MirScalarExpr>::new();
-    let mut structured = PredicateStructure::default();
-    for class in classes.iter() {
-        let mut iter = class.iter();
-        if let Some(representative) = iter.next() {
-            for other in iter {
-                structured.replacements.insert(other, representative);
+        let mut structured = PredicateStructure::default();
+        for class in classes.iter_mut() {
+            if class
+                .iter_mut()
+                .map(|expr| optimize(expr, &structured))
+                .fold(false, |acc, v| acc || v)
+            {
+                // Optimizing a member of the current class may result in a change in the
+                // order of the equivalente expression within the class and among the classes.
+                continue 'retry_loop;
+            }
+            let mut iter = class.iter();
+            if let Some(representative) = iter.next() {
+                for other in iter {
+                    structured.replacements.insert(other, representative);
+                }
             }
         }
+
+        // Visit each predicate and rewrite using the representative from each class.
+        for predicate in predicates.iter_mut() {
+            optimize(predicate, &structured);
+            // Add the optimized predicate to the knowledge base
+            structured.add_predicate(predicate);
+        }
+
+        break;
     }
 
-    // Visit each predicate and rewrite using the representative from each class.
-    // Feel welcome to remove all equality tests and re-introduce canonical tests.
-    for predicate in predicates.iter_mut() {
-        optimize(predicate, &structured);
-        // Add the optimized predicate to the knowledge base
-        structured.add_predicate(predicate);
-    }
     // Re-introduce equality constraints using the representative.
     for class in classes.iter() {
         for expr in class[1..].iter() {
@@ -469,6 +484,23 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
     predicates.sort();
     predicates.dedup();
     predicates.retain(|p| !p.is_literal_true());
+
+    use std::cmp::Ordering;
+    // Compares two expressions. Literals come first, then column references, then weird things.
+    fn cmp_expr(x: &MirScalarExpr, y: &MirScalarExpr) -> Ordering {
+        match (x, y) {
+            (MirScalarExpr::Literal { .. }, MirScalarExpr::Literal { .. }) => x.cmp(y),
+            (MirScalarExpr::Literal { .. }, _) => Ordering::Less,
+            (_, MirScalarExpr::Literal { .. }) => Ordering::Greater,
+            (MirScalarExpr::Column(_), MirScalarExpr::Column(_)) => x.cmp(y),
+            (MirScalarExpr::Column(_), _) => Ordering::Less,
+            (_, MirScalarExpr::Column(_)) => Ordering::Greater,
+            // This last class could be problematic if a complex expression sorts lower than
+            // expressions it contains (e.g. in x + y = x, if x + y comes before x then x would
+            // repeatedly be replaced by x + y).
+            _ => (nodes(x), x).cmp(&(nodes(y), y)),
+        }
+    }
 }
 
 /// Attempts to perform substitutions via `map` and returns `false` if an unreplaced column reference is reached.
@@ -497,7 +529,10 @@ fn substitute(expression: &mut MirScalarExpr, map: &HashMap<MirScalarExpr, MirSc
 
 /// Replaces subexpressions of `expr` that have a value in `map` with the value, not including
 /// the `If { cond, .. }` field.
-fn optimize(expr: &mut MirScalarExpr, predicates: &PredicateStructure) {
+///
+/// Returns whether any replacement was performed.
+fn optimize(expr: &mut MirScalarExpr, predicates: &PredicateStructure) -> bool {
+    let mut any_replacement = false;
     expr.visit_mut_pre_post(
         &mut |e| {
             // The `cond` of an if statement is not visited to prevent `then`
@@ -512,13 +547,18 @@ fn optimize(expr: &mut MirScalarExpr, predicates: &PredicateStructure) {
         &mut |e| {
             if let Some(replacement) = predicates.replacements.get(e) {
                 *e = (*replacement).clone();
+                any_replacement = true;
             } else if predicates.known_true.contains(e) {
                 *e = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
+                any_replacement = true;
             } else if predicates.known_false.contains(e) {
                 *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
+                any_replacement = true;
             }
         },
     );
+
+    any_replacement
 }
 
 /// The number of nodes in the expression.
