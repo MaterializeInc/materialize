@@ -798,6 +798,7 @@ mod tests {
     use crate::error::Error;
     use crate::indexed::{ListenEvent, ListenFn, SnapshotExt};
     use crate::mem::MemRegistry;
+    use crate::unreliable::UnreliableHandle;
 
     use super::*;
 
@@ -1057,6 +1058,66 @@ mod tests {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn conditional_seal_frontier_advance_only_on_success() -> Result<(), Error> {
+        ore::test::init_logging_default("trace");
+        let mut registry = MemRegistry::new();
+        let mut unreliable = UnreliableHandle::default();
+        let p = registry.runtime_unreliable(unreliable.clone())?;
+
+        timely::execute_directly(move |worker| {
+            let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
+                let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
+                let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
+                let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
+                let mut condition_input = Handle::new();
+                let primary_stream = primary_input.to_stream(scope);
+                let condition_stream = condition_input.to_stream(scope);
+
+                let (sealed_stream, _) = primary_stream.conditional_seal(
+                    "test",
+                    &condition_stream,
+                    primary_write,
+                    condition_write,
+                );
+
+                let seal_probe = sealed_stream.probe();
+
+                (primary_input, condition_input, seal_probe)
+            });
+
+            condition_input.send((((), ()), 0, 1));
+
+            primary_input.advance_to(1);
+            condition_input.advance_to(1);
+            while seal_probe.less_than(&1) {
+                worker.step();
+            }
+
+            unreliable.make_unavailable();
+
+            primary_input.advance_to(2);
+            condition_input.advance_to(2);
+
+            // This is the best we can do. Wait for a bit, and verify that the frontier didn't
+            // advance. Of course, we cannot rule out that the frontier might advance on the 11th
+            // step, but tests without the fix showed the test to be very unstable on this
+            for _i in 0..10 {
+                worker.step();
+            }
+            assert!(seal_probe.less_than(&2));
+
+            // After we make the runtime available again, sealing will work and the frontier will
+            // advance.
+            unreliable.make_available();
+            while seal_probe.less_than(&2) {
+                worker.step();
+            }
+        });
 
         Ok(())
     }
