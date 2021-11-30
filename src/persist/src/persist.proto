@@ -1,0 +1,75 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+// See https://developers.google.com/protocol-buffers for what's going on here.
+
+syntax = "proto3";
+
+package gen;
+
+message ProtoMeta {
+    uint64 seqno = 2;
+    // TODO: Should these all be protobuf maps?
+    map<uint64, ProtoStreamRegistration> id_mapping = 3;
+    map<uint64, ProtoStreamRegistration> graveyard = 4;
+    map<uint64, ProtoArrangement> arrangements = 5;
+
+    // TODO: For data written by some vX.Y.Z of Materialize, we'll support
+    // reading it back in by later versions (backward compatibility, so users
+    // can upgrade) and earlier versions (forward compatiblity, so users can
+    // roll back an upgrade). The specific policy is yet to be determined, but
+    // each of these is likely to be bounded, especially forward
+    // compatatibility.
+    //
+    // For us to reason about this (e.g. to prevent startup if a binary is
+    // pointed at data it can't handle), we'll want to store the version that
+    // wrote data alongside the data itself. Figure out whether this should be
+    // the version triple (and how to plumb that down to persist) or something
+    // else.
+    reserved 1;
+}
+
+message ProtoStreamRegistration {
+    string name = 1;
+    string key_codec_name = 2;
+    string val_codec_name = 3;
+}
+
+message ProtoArrangement {
+    ProtoU64Antichain since = 1;
+    ProtoU64Antichain seal = 2;
+    repeated ProtoUnsealedBatchMeta unsealed_batches = 3;
+    repeated ProtoTraceBatchMeta trace_batches = 4;
+}
+
+message ProtoUnsealedBatchMeta {
+    string key = 1;
+    uint64 seqno_lower = 2;
+    uint64 seqno_upper = 3;
+    uint64 ts_lower = 4;
+    uint64 ts_upper = 5;
+    uint64 size_bytes = 6;
+}
+
+message ProtoTraceBatchMeta {
+    string key = 1;
+    ProtoU64Description desc = 2;
+    uint64 size_bytes = 3;
+    uint64 level = 4;
+}
+
+message ProtoU64Antichain {
+    repeated uint64 elements = 1;
+}
+
+message ProtoU64Description {
+    ProtoU64Antichain lower = 1;
+    ProtoU64Antichain upper = 2;
+    ProtoU64Antichain since = 3;
+}
