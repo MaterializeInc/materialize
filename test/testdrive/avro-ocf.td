@@ -201,3 +201,90 @@ $ avro-ocf-verify sink=materialize.public.basic_sink_${testdrive.seed}
 $ avro-ocf-verify sink=materialize.public.date_sink_${testdrive.seed}
 {"before": null, "after": {"row": {"d": 10957}}}
 {"before": null, "after": {"row": {"d": 10988}}}
+
+# Test that Postgres-style sources can be ingested.
+$ set pg-dbz-schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] },
+      {
+        "name": "source",
+        "type": {
+          "type": "record",
+          "name": "Source",
+          "namespace": "whatever",
+          "fields": [
+            {
+              "name": "snapshot",
+              "type": [
+                {
+                  "type": "string",
+                  "connect.version": 1,
+                  "connect.parameters": {
+                    "allowed": "true,last,false"
+                  },
+                  "connect.default": "false",
+                  "connect.name": "io.debezium.data.Enum"
+                },
+                "null"
+              ],
+              "default": "false"
+            },
+            {
+              "name": "lsn",
+              "type": ["long", "null"]
+            }
+          ]
+        }
+      },
+      {
+        "name": "transaction",
+        "type": {
+          "type": "record",
+          "name": "TransactionMetadata",
+          "fields": [
+            {
+              "name": "total_order",
+              "type": "long"
+            }
+          ]
+        }
+      }
+    ]
+  }
+
+# The third and fourth records will be skipped, since `(lsn, total_order)` has gone backwards.
+$ avro-ocf-write path=pg-dbz.ocf schema=${pg-dbz-schema}
+{"before": null, "after": {"row":{"a": 1, "b": 1}}, "source": {"lsn": {"long": 1}, "snapshot": {"string": "false"}}, "transaction": {"total_order": 0}}
+{"before": null, "after": {"row":{"a": 2, "b": 3}}, "source": {"lsn": {"long": 2}, "snapshot": {"string": "false"}}, "transaction": {"total_order": 1}}
+
+> CREATE MATERIALIZED SOURCE dbz
+  FROM AVRO OCF '${testdrive.temp-dir}/pg-dbz.ocf'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM dbz
+a  b
+----
+1  1
+2  3
+
+! CREATE SOURCE dbz_invalid_metadata
+  FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
+  INCLUDE OFFSET
+  ENVELOPE DEBEZIUM
+INCLUDE metadata with non-Kafka sources not yet supported
