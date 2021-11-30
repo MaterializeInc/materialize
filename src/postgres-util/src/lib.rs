@@ -34,12 +34,22 @@ const PG_HEADER_SIZE: i32 = 4;
 
 pub enum PgScalarType {
     Simple(PgType),
+    /// Represents a `numeric` type with optional scale and presicion
     Numeric(Option<PgNumericMod>),
+    /// Represents a `numeric` array type with optional scale and presicion
     NumericArray(Option<PgNumericMod>),
-    BPChar { length: i32 },
-    BPCharArray { length: i32 },
-    VarChar { length: i32 },
-    VarCharArray { length: i32 },
+    BPChar {
+        length: i32,
+    },
+    BPCharArray {
+        length: i32,
+    },
+    VarChar {
+        length: i32,
+    },
+    VarCharArray {
+        length: i32,
+    },
 }
 
 impl AstDisplay for PgScalarType {
