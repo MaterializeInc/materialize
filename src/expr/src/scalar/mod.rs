@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use lowertest::MzEnumReflect;
 use ore::collections::CollectionExt;
+use ore::stack::maybe_grow;
 use ore::str::separated;
 use repr::adt::array::InvalidArrayError;
 use repr::adt::datetime::DateTimeUnits;
@@ -173,21 +174,29 @@ impl MirScalarExpr {
     }
 
     /// Post-order immutable infallible `MirScalarExpr` visitor.
+    ///
+    /// Grows the recursion stack if needed in order to avoid stack overflow errors.
     pub fn visit_post<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
     {
-        self.visit_children(|e| e.visit_post(f));
-        f(self);
+        maybe_grow(|| {
+            self.visit_children(|e| e.visit_post(f));
+            f(self);
+        })
     }
 
     /// Post-order mutable infallible `MirScalarExpr` visitor.
+    ///
+    /// Grows the recursion stack if needed in order to avoid stack overflow errors.
     pub fn visit_mut_post<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
-        self.visit_mut_children(|e| e.visit_mut_post(f));
-        f(self);
+        maybe_grow(|| {
+            self.visit_mut_children(|e| e.visit_mut_post(f));
+            f(self);
+        })
     }
 
     /// A generalization of `visit_mut`. The function `pre` runs on a
@@ -195,20 +204,24 @@ impl MirScalarExpr {
     /// The function `post` runs on child `MirScalarExpr`s first before the
     /// parent. Optionally, `pre` can return which child `MirScalarExpr`s, if
     /// any, should be visited (default is to visit all children).
+    ///
+    /// Grows the recursion stack if needed in order to avoid stack overflow errors.
     pub fn visit_mut_pre_post<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&mut Self) -> Option<Vec<&mut MirScalarExpr>>,
         F2: FnMut(&mut Self),
     {
-        let to_visit = pre(self);
-        if let Some(to_visit) = to_visit {
-            for e in to_visit {
-                e.visit_mut_pre_post(pre, post);
+        maybe_grow(|| {
+            let to_visit = pre(self);
+            if let Some(to_visit) = to_visit {
+                for e in to_visit {
+                    e.visit_mut_pre_post(pre, post);
+                }
+            } else {
+                self.visit_mut_children(|e| e.visit_mut_pre_post(pre, post));
             }
-        } else {
-            self.visit_mut_children(|e| e.visit_mut_pre_post(pre, post));
-        }
-        post(self);
+            post(self);
+        })
     }
 
     /// Rewrites column indices with their value in `permutation`.
