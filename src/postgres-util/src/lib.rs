@@ -28,6 +28,10 @@ pub struct PgNumericMod {
     scale: u16,
 }
 
+/// Mirror of PostgreSQL's
+/// [`VARHDRSZ`](https://github.com/postgres/postgres/blob/REL_14_0/src/include/c.h#L627) constant
+const PG_HEADER_SIZE: i32 = 4;
+
 pub enum PgScalarType {
     Simple(PgType),
     Numeric(Option<PgNumericMod>),
@@ -247,10 +251,10 @@ pub async fn publication_info(
                     PgType::NUMERIC | PgType::NUMERIC_ARRAY => {
                         let modifier: i32 = row.get("modifier");
                         // https://github.com/postgres/postgres/blob/REL_13_3/src/backend/utils/adt/numeric.c#L967-L983
-                        let typ_mod = if modifier < 4 {
+                        let typ_mod = if modifier < PG_HEADER_SIZE {
                             None
                         } else {
-                            let tmp_mod = modifier - 4;
+                            let tmp_mod = modifier - PG_HEADER_SIZE;
                             let scale = (tmp_mod & 0xffff) as u16;
                             let precision = ((tmp_mod >> 16) & 0xffff) as u16;
                             Some(PgNumericMod { scale, precision })
@@ -265,10 +269,10 @@ pub async fn publication_info(
                     PgType::BPCHAR | PgType::BPCHAR_ARRAY => {
                         let modifier: i32 = row.get("modifier");
                         // https://github.com/postgres/postgres/blob/REL_14_0/src/backend/utils/adt/varchar.c#L282-L286
-                        let length = if modifier < 4 {
+                        let length = if modifier < PG_HEADER_SIZE {
                             adt::char::MAX_LENGTH
                         } else {
-                            modifier - 4
+                            modifier - PG_HEADER_SIZE
                         };
 
                         match pg_type {
@@ -280,10 +284,10 @@ pub async fn publication_info(
                     PgType::VARCHAR | PgType::VARCHAR_ARRAY => {
                         let modifier: i32 = row.get("modifier");
                         // https://github.com/postgres/postgres/blob/REL_14_0/src/backend/utils/adt/varchar.c#L617
-                        let length = if modifier < 4 {
+                        let length = if modifier < PG_HEADER_SIZE {
                             adt::varchar::MAX_LENGTH
                         } else {
-                            modifier - 4
+                            modifier - PG_HEADER_SIZE
                         };
 
                         match pg_type {
