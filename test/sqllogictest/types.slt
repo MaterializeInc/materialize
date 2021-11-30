@@ -458,16 +458,6 @@ select 'now'::regproc::oid::text::regproc
 statement OK
 select oid, oid::regproc::text from (select oid from mz_catalog.mz_functions)
 
-# 🔬🔬🔬 oid alias
-
-query T
-SELECT '1'::regclass
-----
-1
-
-query error unknown catalog item 'pg_catalog.regclass'
-SELECT '1'::pg_catalog.regclass
-
 # 🔬🔬 record
 
 query error type "pg_catalog.record" does not exist
@@ -963,3 +953,95 @@ NULL
 # ensure that all existing types can be cast to their respective names
 statement OK
 select oid, oid::regtype::text from (select oid from mz_catalog.mz_types)
+
+# 🔬🔬 regclass
+
+query T
+SELECT 1::regclass
+----
+1
+
+query T
+SELECT 1::int4::regclass
+----
+1
+
+query T
+SELECT 1::oid::regclass
+----
+1
+
+query T
+SELECT 1::oid::regclass::oid
+----
+1
+
+query T
+SELECT '1'::regclass
+----
+1
+
+query T
+SELECT '1'::pg_catalog.regclass
+----
+1
+
+query T
+SELECT '1'::regclass::text
+----
+1
+
+query T
+SELECT 'mz_tables'::regclass::text
+----
+mz_tables
+
+query T
+SELECT 'mz_tables'::regclass
+----
+20162
+
+query T
+SELECT 'mz_tables'::regclass::oid
+----
+20162
+
+query error object "nonexistent" does not exist
+SELECT 'nonexistent'::regclass
+
+query B
+SELECT 20162 = 'mz_tables'::regclass
+----
+true
+
+statement ok
+CREATE TABLE text_to_regclass (a text);
+
+statement ok
+INSERT INTO text_to_regclass VALUES (NULL), ('mz_tables');
+
+query I
+SELECT a::regclass FROM text_to_regclass ORDER BY a
+----
+20162
+NULL
+
+# Regression for 9194
+query I
+select 'mz_tables'::regclass::oid::text::regclass
+----
+20162
+
+# Make sure that there are no classes with duplicate OIDs
+query I
+select oid from (select count(*) as cnt, oid from pg_catalog.pg_class group by oid) where cnt>1
+----
+
+query T
+SELECT NULL::regclass::text
+----
+NULL
+
+# ensure that all existing types can be cast to their respective names
+statement OK
+select oid, oid::regclass::text from (select oid from pg_catalog.pg_class)

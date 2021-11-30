@@ -177,10 +177,10 @@ lazy_static! {
             // REGCLASS
             (RegClass, Oid) => Implicit: CastRegClassToOid(func::CastRegClassToOid),
             (RegClass, String) => Explicit: sql_impl_cast("(
-                SELECT COALESCE(t.name, v.x::pg_catalog.text)
+                SELECT COALESCE(t.relname, v.x::pg_catalog.text)
                 FROM (
                     VALUES ($1::pg_catalog.oid)) AS v(x)
-                    LEFT JOIN mz_catalog.mz_objects AS t
+                    LEFT JOIN pg_catalog.pg_class AS t
                     ON t.oid = v.x
             )"),
 
@@ -265,7 +265,7 @@ lazy_static! {
                     WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regclass
                     ELSE (
                         mz_internal.mz_error_if_null(
-                            (SELECT oid::pg_catalog.regclass FROM mz_catalog.mz_objects WHERE name = $1),
+                            (SELECT oid::pg_catalog.regclass FROM pg_catalog.pg_class WHERE relname = $1),
                             'object \"' || $1 || '\" does not exist'
                         )
                     )

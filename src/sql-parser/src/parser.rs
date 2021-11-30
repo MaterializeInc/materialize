@@ -3077,8 +3077,6 @@ impl<'a> Parser<'a> {
                 BOOLEAN => other("bool"),
                 BYTES => other("bytea"),
                 JSON => other("jsonb"),
-                REGCLASS => other("oid"),
-
                 _ => {
                     self.prev_token();
                     DataType::Other {
