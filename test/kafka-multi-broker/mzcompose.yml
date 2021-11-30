@@ -60,7 +60,7 @@ services:
         testdrive
         --seed=1
         --kafka-option acks=all
-        --default-timeout=300
+        --default-timeout=300s
         --schema-registry-url=http://schema-registry:8081
         --materialized-url=postgres://materialize@materialized:6875
         $$*

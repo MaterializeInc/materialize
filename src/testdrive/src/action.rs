@@ -86,6 +86,13 @@ pub struct Config {
     pub ci_output: bool,
     /// The default timeout to use for any operation that is retried.
     pub default_timeout: Duration,
+
+    /// Starting backoff value to use when retrying
+    pub initial_backoff: Duration,
+
+    /// Backoff factor to use when retrying
+    pub backoff_factor: f64,
+
     /// A random number to distinguish each run of a testdrive script.
     pub seed: Option<u32>,
     /// Force the use of a specific temporary directory
@@ -117,6 +124,8 @@ pub struct State {
     sqs_client: SqsClient,
     sqs_queues_created: BTreeSet<String>,
     default_timeout: Duration,
+    initial_backoff: Duration,
+    backoff_factor: f64,
     postgres_clients: HashMap<String, tokio_postgres::Client>,
     sql_server_clients:
         HashMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
@@ -125,6 +134,8 @@ pub struct State {
 #[derive(Clone)]
 pub struct Context {
     timeout: Duration,
+    initial_backoff: Duration,
+    backoff_factor: f64,
     regex: Option<Regex>,
     regex_replacement: String,
 }
@@ -327,6 +338,8 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
 
     let mut context = Context {
         timeout: state.default_timeout,
+        initial_backoff: state.initial_backoff,
+        backoff_factor: state.backoff_factor,
         regex: None,
         regex_replacement: DEFAULT_REGEX_REPLACEMENT.to_string(),
     };
@@ -750,6 +763,8 @@ pub async fn create_state(
         sqs_client,
         sqs_queues_created: BTreeSet::new(),
         default_timeout: config.default_timeout,
+        initial_backoff: config.initial_backoff,
+        backoff_factor: config.backoff_factor,
         postgres_clients: HashMap::new(),
         sql_server_clients: HashMap::new(),
     };

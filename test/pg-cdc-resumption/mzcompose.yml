@@ -182,7 +182,7 @@ services:
         testdrive
         --materialized-url=postgres://materialize@materialized:6875
         --max-errors=1
-        --default-timeout=60
+        --default-timeout=60s
         $$*
       - bash
     volumes:

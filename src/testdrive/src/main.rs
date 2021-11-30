@@ -83,8 +83,16 @@ struct Args {
     ci_output: bool,
 
     /// Default timeout in seconds.
-    #[structopt(long, default_value = "10")]
-    default_timeout: f64,
+    #[structopt(long, parse(try_from_str = repr::util::parse_duration), default_value = "10s")]
+    default_timeout: Duration,
+
+    /// Initial backoff interval. Set to 0 to retry immediately on failure
+    #[structopt(long, parse(try_from_str = repr::util::parse_duration), default_value = "50ms")]
+    initial_backoff: Duration,
+
+    /// Backoff factor when retrying. Set to 1 to retry at a steady pace
+    #[structopt(long, default_value = "1.5")]
+    backoff_factor: f64,
 
     /// A random number to distinguish each TestDrive run.
     #[structopt(long)]
@@ -115,7 +123,6 @@ struct Args {
 async fn main() {
     let args: Args = ore::cli::parse_args();
     let mut files = args.files;
-    let default_timeout = Duration::from_secs_f64(args.default_timeout);
 
     let (aws_config, aws_account) = match args.aws_region {
         Some(region) => {
@@ -187,7 +194,9 @@ async fn main() {
         materialized_catalog_path: args.validate_catalog,
         reset: !args.no_reset,
         ci_output: args.ci_output,
-        default_timeout,
+        default_timeout: args.default_timeout,
+        initial_backoff: args.initial_backoff,
+        backoff_factor: args.backoff_factor,
         seed: args.seed,
         temp_dir: args.temp_dir,
     };
