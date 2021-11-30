@@ -28,9 +28,10 @@ where
         func: TableFunc,
         exprs: Vec<MirScalarExpr>,
         mfp: MapFilterProject,
+        input_key: Option<Vec<MirScalarExpr>>,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
-        let (ok_collection, err_collection) = input.as_collection();
+        let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
         let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
             let mut datums = DatumVec::new();
             let mut row_builder = Row::default();

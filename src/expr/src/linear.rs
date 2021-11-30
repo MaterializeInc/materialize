@@ -65,6 +65,80 @@ impl MapFilterProject {
         }
     }
 
+    pub fn permute_for_joined_arrangements(
+        &mut self,
+        stream_key: &[MirScalarExpr],
+        thinned_stream_arity: usize,
+        lookup_key: &[MirScalarExpr],
+    ) {
+        let total_stream_arity = stream_key
+            .iter()
+            .filter_map(|kcol| kcol.as_column())
+            .count()
+            + thinned_stream_arity;
+        assert!(stream_key.len() == lookup_key.len());
+        let columns_in_stream_key: HashMap<_, _> = stream_key
+            .iter()
+            .enumerate()
+            .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c, i)))
+            .collect();
+        let columns_in_lookup_key: HashMap<_, _> = lookup_key
+            .iter()
+            .enumerate()
+            .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c + total_stream_arity, i)))
+            .collect();
+        let mut input_cursor = stream_key.len();
+        let permutation = (0..self.input_arity)
+            .map(|c| {
+                if let Some(c) = columns_in_stream_key.get(&c) {
+                    *c
+                } else if let Some(c) = columns_in_lookup_key.get(&c) {
+                    *c
+                } else {
+                    input_cursor += 1;
+                    input_cursor - 1
+                }
+            })
+            .enumerate()
+            .collect();
+        let input_arity = input_cursor;
+        self.permute(permutation, input_arity);
+    }
+
+    /// Given an mfp for an un-arranged collection,
+    /// make one that has the same effect on a collection
+    /// arranged by `key`.
+    ///
+    /// When arranging data, we remove columns from the value
+    /// that are duplicate of columns in the key.
+    /// The point of this function is to reverse that
+    /// transformation.
+    pub fn permute_for_arrangement(mut self, key: &[MirScalarExpr]) -> Self {
+        let columns_in_key: HashMap<_, _> = key
+            .iter()
+            .enumerate()
+            .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c, i)))
+            .collect();
+        let mut input_cursor = key.len();
+        let permutation = (0..self.input_arity)
+            .map(|c| {
+                if let Some(c) = columns_in_key.get(&c) {
+                    // Column is in key (and thus gone from the value
+                    // of the thinned representation)
+                    *c
+                } else {
+                    // Column remains in value of the thinned representation
+                    input_cursor += 1;
+                    input_cursor - 1
+                }
+            })
+            .enumerate()
+            .collect();
+        let input_arity = input_cursor;
+        self.permute(permutation, input_arity);
+        self
+    }
+
     /// True if the operator describes the identity transformation.
     pub fn is_identity(&self) -> bool {
         self.expressions.is_empty()
