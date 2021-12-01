@@ -22,6 +22,7 @@ from semver.version import Version
 from materialize import errors, git, spawn, ui
 
 BIN_CARGO_TOML = "src/materialized/Cargo.toml"
+PERSIST_CARGO_TOML = "src/persist/Cargo.toml"
 LICENSE = "LICENSE"
 USER_DOC_CONFIG = "doc/user/config.toml"
 
@@ -261,6 +262,7 @@ def release(
     confirm_on_latest_rc(affect_remote)
 
     change_line(BIN_CARGO_TOML, "version", f'version = "{version}"')
+    change_line(PERSIST_CARGO_TOML, "version", f'version = "{version}"')
     change_line(
         LICENSE,
         "Licensed Work:",

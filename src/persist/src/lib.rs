@@ -46,6 +46,10 @@ pub mod nemesis;
 // - Failure while draining from log into unsealed.
 // - Equality edge cases around all the various timestamp/frontier checks.
 
+/// The current version of this crate, advanced in lockstep with the
+/// materialized binary itself.
+pub const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
 /// A type usable as a persisted key or value.
 pub trait Data: Clone + persist_types::Codec + fmt::Debug + Ord {}
 impl<T: Clone + persist_types::Codec + fmt::Debug + Ord> Data for T {}

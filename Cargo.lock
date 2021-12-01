@@ -3409,7 +3409,7 @@ dependencies = [
 
 [[package]]
 name = "persist"
-version = "0.0.0"
+version = "0.10.1-dev"
 dependencies = [
  "async-trait",
  "aws-sdk-s3",

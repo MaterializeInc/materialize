@@ -1,7 +1,7 @@
 [package]
 name = "persist"
 description = "Abstraction for Materialize dataplane persistence."
-version = "0.0.0"
+version = "0.10.1-dev"
 edition = "2021"
 publish = false
 
