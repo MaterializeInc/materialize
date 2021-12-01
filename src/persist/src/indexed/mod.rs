@@ -852,12 +852,6 @@ impl AppliedState {
         desc: &Range<SeqNo>,
         blob: &mut BlobCache<B>,
     ) -> Result<(), Error> {
-        let updates: Vec<_> = updates
-            .iter()
-            .flat_map(|update| update.iter())
-            .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
-            .collect();
-
         if updates.is_empty() {
             return Ok(());
         }
