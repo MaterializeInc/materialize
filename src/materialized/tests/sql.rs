@@ -306,10 +306,17 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         assert_eq!(rows[i].get::<_, String>("data"), format!("line {}", i + 1));
     }
 
-    let err = client_reads
-        .batch_execute("TAIL v AS OF 1")
-        .unwrap_db_error();
+    // Wait until compaction kicks in and we get an error on trying to read from the cursor.
+    let err = loop {
+        client_reads.batch_execute("COMMIT; BEGIN; DECLARE c CURSOR FOR TAIL v AS OF 1")?;
+
+        if let Err(err) = client_reads.query("FETCH ALL c", &[]) {
+            break err;
+        }
+    };
+
     assert!(err
+        .unwrap_db_error()
         .message()
         .starts_with("Timestamp (1) is not valid for all inputs"));
 
@@ -491,7 +498,7 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
             }
 
             let ts: MzTimestamp = row.get("mz_timestamp");
-            assert!(last_ts < ts);
+            assert!(last_ts <= ts);
             last_ts = ts;
         }
 

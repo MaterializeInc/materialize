@@ -83,7 +83,6 @@
 //!
 
 use std::cell::RefCell;
-use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::Path;
@@ -299,14 +298,23 @@ where
     /// located after `ts_tx`.
     _timestamper_thread_handle: JoinOnDropHandle<()>,
     metric_scraper: Scraper,
-    /// The last timestamp we assigned to a read.
-    read_lower_bound: Timestamp,
-    /// The timestamp that all local inputs have been advanced up to.
-    closed_up_to: Timestamp,
-    /// Whether or not the most recent operation was a read.
-    last_op_was_read: bool,
-    /// Whether we need to advance local inputs (i.e., did someone observe a timestamp).
-    need_advance: bool,
+
+    /// The last known timestamp that was considered "open" (i.e. where writes
+    /// may occur). However, this timestamp is _not_ open when
+    /// `read_writes_at_open_ts == true`; in this case, reads will occur at
+    /// `last_open_local_ts`, and the Coordinator must open a new timestamp
+    /// for writes.
+    ///
+    /// Indirectly, this value aims to represent the Coordinator's desired value
+    /// for `upper` for table frontiers, as long as we know it is open.
+    last_open_local_ts: Timestamp,
+    /// Whether or not we have written at the open timestamp.
+    writes_at_open_ts: bool,
+    /// Whether or not we have read the writes that have occurred at the open
+    /// timestamp. When this is `true`, it signals we need to open a new
+    /// timestamp to support future writes.
+    read_writes_at_open_ts: bool,
+
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
@@ -389,41 +397,67 @@ impl<C> Coordinator<C>
 where
     C: dataflow_types::client::Client + 'static,
 {
-    /// Assign a timestamp for a read.
-    fn get_read_ts(&mut self) -> Timestamp {
-        let ts = self.get_ts();
-        self.last_op_was_read = true;
-        self.read_lower_bound = ts;
-        ts
-    }
-
-    /// Assign a timestamp for a write. Writes following reads must ensure that they are assigned a
-    /// strictly larger timestamp to ensure they are not visible to any real-time earlier reads.
-    fn get_write_ts(&mut self) -> Timestamp {
-        let ts = if self.last_op_was_read {
-            self.last_op_was_read = false;
-            cmp::max(self.get_ts(), self.read_lower_bound + 1)
+    /// Assign a timestamp for a read from a local input. Reads following writes
+    /// must be at a time >= the write's timestamp; we choose "equal to" for
+    /// simplicity's sake and to open as few new timestamps as possible.
+    fn get_local_read_ts(&mut self) -> Timestamp {
+        if self.writes_at_open_ts {
+            // If you have pending writes, you will need to read those writes,
+            // which happened at the last known open time. This also means you
+            // will need to advance to those writes, i.e. close over
+            // `last_open_local_ts`.
+            self.read_writes_at_open_ts = true;
+            self.last_open_local_ts
         } else {
-            self.get_ts()
-        };
-        self.read_lower_bound = cmp::max(ts, self.closed_up_to);
-        self.read_lower_bound
+            // If there are no writes at the open timestamp, we know we can read
+            // at one unit of time less than the open time (which will always be
+            // closed).
+            self.last_open_local_ts - 1
+        }
     }
 
-    /// Fetch a new timestamp.
-    fn get_ts(&mut self) -> Timestamp {
-        // Next time we have a chance, we will force all local inputs forward.
-        self.need_advance = true;
+    /// Assign a timestamp for a write to a local input. Writes following reads
+    /// must ensure that they are assigned a strictly larger timestamp to ensure
+    /// they are not visible to any real-time earlier reads.
+    fn get_local_write_ts(&mut self) -> Timestamp {
+        // This assert is valid because:
+        // - Whenever a write precedes a read, the read sets
+        //   `read_writes_at_open_ts = true`, which will advance the
+        //   `last_open_local_ts`.
+        // - The Coordinator always has the opportunity to check the state of
+        //   `read_writes_at_open_ts` after a read, even in the case of
+        //   `ReadThenWrite` plans, which dictates when we advance the
+        //   timestamp.
+        // - Advancing the timestamp sets `read_writes_at_open_ts = false`.
+        assert!(
+            !self.read_writes_at_open_ts,
+            "do not perform writes at time where tables want to read"
+        );
+
+        self.writes_at_open_ts = true;
+
+        self.last_open_local_ts
+    }
+
+    /// Opens a new timestamp for local inputs at which writes may occur, and
+    /// where reads should return quickly at a value 1 less.
+    fn open_new_local_ts(&mut self) {
         // This is a hack. In a perfect world we would represent time as having a "real" dimension
         // and a "coordinator" dimension so that clients always observed linearizability from
         // things the coordinator did without being related to the real dimension.
         let ts = (self.catalog.config().now)();
 
-        if ts < self.read_lower_bound {
-            self.read_lower_bound
-        } else {
-            ts
-        }
+        // We cannot depend on `self.catalog.config().now`'s value to increase
+        // (in addition to the normal considerations around clocks in computers,
+        // this feature enables us to drive the Coordinator's time when using a
+        // test harness). Instead, we must manually increment
+        // `last_open_local_ts` if `now` appears non-increasing.
+        self.last_open_local_ts = std::cmp::max(ts, self.last_open_local_ts + 1);
+
+        // Opening a new timestamp means that there cannot be new writes at the
+        // open timestamp.
+        self.writes_at_open_ts = false;
+        self.read_writes_at_open_ts = false;
     }
 
     fn now_datetime(&self) -> DateTime<Utc> {
@@ -667,11 +701,13 @@ where
                 }
                 Message::ScrapeMetrics => self.message_scrape_metrics().await,
                 Message::AdvanceLocalInputs => {
-                    self.need_advance = true;
+                    // Convince the coordinator it needs to open a new timestamp
+                    // and advance inputs.
+                    self.read_writes_at_open_ts = true;
                 }
             }
 
-            if self.need_advance {
+            if self.read_writes_at_open_ts {
                 self.advance_local_inputs().await;
             }
         }
@@ -682,42 +718,40 @@ where
     // backward). This downgrades the capabilities of all tables, which means that
     // all tables can no longer produce new data before this timestamp.
     async fn advance_local_inputs(&mut self) {
-        let mut next_ts = self.get_ts();
-        self.need_advance = false;
-        if next_ts <= self.read_lower_bound {
-            next_ts = self.read_lower_bound + 1;
-        }
-        // These can occasionally be equal, so ignore the update in that case.
-        if next_ts > self.closed_up_to {
-            if let Some(persist_multi) = self.catalog.persist_multi_details() {
-                // Close out the timestamp for persisted tables.
-                //
-                // NB: Keep this method call outside the tokio::spawn. We're
-                // guaranteed by persist that writes and seals happen in order,
-                // but only if we synchronously wait for the (fast) registration
-                // of that work to return.
-                let seal_fut = persist_multi
-                    .write_handle
-                    .seal(&persist_multi.all_table_ids, next_ts);
-                let _ = tokio::spawn(async move {
-                    if let Err(err) = seal_fut.await {
-                        // TODO: Linearizability relies on this, bubble up the
-                        // error instead.
-                        //
-                        // EDIT: On further consideration, I think it doesn't
-                        // affect correctness if this fails, just availability
-                        // of the table.
-                        log::error!("failed to seal persisted stream to ts {}: {}", next_ts, err);
-                    }
-                });
-            }
+        self.open_new_local_ts();
 
-            self.broadcast(dataflow_types::client::Command::AdvanceAllLocalInputs {
-                advance_to: next_ts,
-            })
-            .await;
-            self.closed_up_to = next_ts;
+        // Close the stream up to the newly opened timestamp.
+        let advance_to = self.last_open_local_ts;
+
+        if let Some(persist_multi) = self.catalog.persist_multi_details() {
+            // Close out the timestamp for persisted tables.
+            //
+            // NB: Keep this method call outside the tokio::spawn. We're
+            // guaranteed by persist that writes and seals happen in order,
+            // but only if we synchronously wait for the (fast) registration
+            // of that work to return.
+            let seal_fut = persist_multi
+                .write_handle
+                .seal(&persist_multi.all_table_ids, advance_to);
+            let _ = tokio::spawn(async move {
+                if let Err(err) = seal_fut.await {
+                    // TODO: Linearizability relies on this, bubble up the
+                    // error instead.
+                    //
+                    // EDIT: On further consideration, I think it doesn't
+                    // affect correctness if this fails, just availability
+                    // of the table.
+                    log::error!(
+                        "failed to seal persisted stream to ts {}: {}",
+                        advance_to,
+                        err
+                    );
+                }
+            });
         }
+
+        self.broadcast(dataflow_types::client::Command::AdvanceAllLocalInputs { advance_to })
+            .await;
     }
 
     async fn message_worker(&mut self, message: dataflow_types::client::Response) {
@@ -2678,7 +2712,7 @@ where
                         // Although the transaction has a wall_time in its pcx, we use a new
                         // coordinator timestamp here to provide linearizability. The wall_time does
                         // not have to relate to the write time.
-                        let timestamp = self.get_write_ts();
+                        let timestamp = self.get_local_write_ts();
 
                         // Separate out which updates were to tables we are
                         // persisting. In practice, we don't enable/disable this
@@ -3123,7 +3157,7 @@ where
                 let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
                     // If the view depends on any tables, we enforce
                     // linearizability by choosing the latest input time.
-                    self.get_read_ts()
+                    self.get_local_read_ts()
                 } else {
                     let upper = self.indexes.greatest_open_upper(index_ids.iter().copied());
                     // We peek at the largest element not in advance of `upper`, which
@@ -3226,7 +3260,7 @@ where
         let mut candidate = if index_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
             // If the sink depends on any tables, we enforce linearizability by choosing
             // the latest input time.
-            self.get_read_ts()
+            self.get_local_read_ts()
         } else if unmaterialized_source_ids.is_empty() && !index_ids.is_empty() {
             // If the sink does not need to create any indexes and requires at least 1
             // index, use the upper. For something like a static view, the indexes are
@@ -3606,7 +3640,7 @@ where
             }
         }
 
-        let ts = self.get_read_ts();
+        let ts = self.get_local_read_ts();
         let peek_response = match self
             .sequence_peek(
                 &mut session,
@@ -3871,7 +3905,7 @@ where
         // message so we can persist a record and its future retraction
         // atomically. Otherwise, we may end up with permanent orphans if a
         // restart/crash happens at the wrong time.
-        let timestamp_base = self.get_write_ts();
+        let timestamp_base = self.get_local_write_ts();
         let mut updates_by_id = HashMap::<GlobalId, Vec<Update>>::new();
         for tu in updates.into_iter() {
             let timestamp = timestamp_base + tu.timestamp_offset;
@@ -4377,10 +4411,9 @@ where
                 ts_tx,
                 _timestamper_thread_handle: timestamper_thread_handle,
                 metric_scraper,
-                closed_up_to: 1,
-                read_lower_bound: 1,
-                last_op_was_read: false,
-                need_advance: true,
+                last_open_local_ts: 1,
+                writes_at_open_ts: false,
+                read_writes_at_open_ts: false,
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 txn_reads: HashMap::new(),
