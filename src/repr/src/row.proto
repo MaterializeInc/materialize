@@ -1,0 +1,135 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package gen;
+
+message ProtoRow {
+    repeated ProtoDatum datums = 1;
+}
+
+message ProtoDatum {
+    // NB: Proto oneof ids `1..=15` get encoded in 1 byte and so we should
+    // reserve them for the datum types we expect to be most popular.
+    oneof datum_type {
+        ProtoDatumOther other = 1;
+        int32 int16 = 2;
+        int32 int32 = 3;
+        int64 int64 = 4;
+        float float32 = 5;
+        double float64 = 6;
+        bytes bytes = 7;
+        string string = 8;
+
+        // These get encoded with 2 bytes for the oneof id. It's a pretty easy
+        // and low-debt migration to "bless" one of these into having a 1-byte
+        // id (fill in the new field on write, but check if either field is set
+        // on read). However, once a 1-byte id is used, it's gone forever, so
+        // we're convervative in handing them out.
+        //
+        // Of these, I'd guess Timestamp and UUID are probably the first ones
+        // we'd bless followed by Date and Time.
+        ProtoDate date = 16;
+        ProtoTime time = 17;
+        ProtoTimestamp timestamp = 18;
+        ProtoInterval interval = 19;
+        ProtoArray array = 20;
+        ProtoRow list = 21;
+        ProtoDict dict = 22;
+        ProtoNumeric numeric = 23;
+        bytes uuid = 24;
+    }
+}
+
+enum ProtoDatumOther {
+    // It's generally good practice to make id 0 (the default if the field is
+    // unset) in proto enums be an Unknown sentinel. This allows for
+    // distinguishing between unset and any of the enum variants.
+    //
+    // This enum is initially used only in a oneof, which means we can
+    // distinguish unset without this sentinel. But stick one in here anyway,
+    // in case this enum gets used somewhere else in the future.
+    Unknown = 0;
+    Null = 1;
+    False = 2;
+    True = 3;
+    JsonNull = 4;
+    Dummy = 5;
+}
+
+message ProtoDate {
+    // Year
+    int32 year = 1;
+    // Day-of-year (0..365)
+    uint32 ordinal = 2;
+}
+
+message ProtoTime {
+    // The number of seconds since midnight
+    uint32 secs = 1;
+    // Additional fractional seconds since midnight in nanosecond granularity.
+    // This can can exceed 1,000,000,000 in order to represent the leap second.
+    uint32 nanos = 2;
+}
+
+message ProtoTimestamp {
+    // Year
+    int32 year = 1;
+    // Day-of-year (0..365)
+    uint32 ordinal = 2;
+    // The number of seconds since midnight
+    uint32 secs = 3;
+    // Additional fractional seconds since midnight in nanosecond granularity.
+    // This can can exceed 1,000,000,000 in order to represent the leap second.
+    uint32 nanos = 4;
+    // If true, this timestamp is in UTC. If false, this timestamp is zoneless.
+    bool is_tz = 5;
+}
+
+message ProtoInterval {
+    // A possibly negative number of months.
+    int32 months = 1;
+    // A 128-bit nanosecond count, represented as a 64-bit lo and hi.
+    //
+    // TODO: Why do our in-mem intervals use this representation? I've seen
+    // month/day/nanos in the past becuase a day is not always the same number
+    // of nanos.
+    int64 duration_lo = 2;
+    int64 duration_hi = 3;
+}
+
+message ProtoArray {
+    // All array elements flattened into 1 dimension, encoded in row-major
+    // order.
+    ProtoRow elements = 1;
+    // TODO: This is a direct translation of our in-mem representation of array
+    // dimensions. Does anyone understand it well enough to document it?
+    repeated ProtoArrayDimension dims = 2;
+}
+
+message ProtoArrayDimension {
+    uint64 lower_bound = 1;
+    uint64 length = 2;
+}
+
+message ProtoDict {
+    map<string, ProtoDatum> elements = 1;
+}
+
+// TODO: These are difficult to define, but are passed directly from and into
+// the decimal library we use. It hasn't changed these in WIP years and so we
+// hope it continues to remain unchanged. A slower but perhaps safer alternative
+// might be a string representation.
+message ProtoNumeric {
+    uint32 digits = 1;
+    int32 exponent = 2;
+    uint32 bits = 3;
+    bytes lsu = 4;
+}

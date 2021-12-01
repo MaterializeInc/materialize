@@ -9,61 +9,33 @@
 
 //! A permanent storage encoding for rows.
 //!
-//! To minimize cycles spent encoding/decoding, we use Row's internal storage
-//! format, with a prefix to allow for migrations if the internal format
-//! changes.
-//!
-//! The following is an EBNF-ish spec for the format:
-//!
-//! ```none
-//! |   alternation
-//! {}  repetition (any number of times)
-//!
-//! row = 0u8 v0_encoding
-//!
-//! v0_encoding = len_bytes row_data
-//! row_data = { tagged_datum }
-//!
-//! tagged_datum =
-//!   null |
-//!   false |
-//!   true |
-//!   3u8 int32 |
-//!   4u8 int64 |
-//!   5u8 float32 |
-//!   6u8 float64 |
-//!   7u8 date |
-//!   TODO: Finish this once 7092 lands and it's not all lies.
-//!
-//!   null = 0u8
-//! false = 1u8
-//! true = 2u8
-//! int32 = u8 u8 u8 u8 (little endian)
-//! uint32 = u8 u8 u8 u8 (little endian)
-//! int64 = u8 u8 u8 u8 u8 u8 u8 u8 (little endian)
-//! float32 = u8 u8 u8 u8 (little endian)
-//! float64 = u8 u8 u8 u8 u8 u8 u8 u8 (little endian)
-//! date = date_year date_ordinal
-//! date_year = int32
-//! date_ordinal = uint32
-//! ```
+//! See row.proto for details.
 
-use std::io::Read;
-
+use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
+use dec::Decimal;
 use ore::cast::CastFrom;
 use persist_types::Codec;
+use protobuf::{Message, MessageField};
+use uuid::Uuid;
 
-use crate::Row;
-
-const CURRENT_VERSION: u8 = 0u8;
+use crate::adt::array::ArrayDimension;
+use crate::adt::interval::Interval;
+use crate::gen::row::proto_datum::Datum_type;
+use crate::gen::row::{
+    ProtoArray, ProtoArrayDimension, ProtoDate, ProtoDatum, ProtoDatumOther, ProtoDict,
+    ProtoInterval, ProtoNumeric, ProtoRow, ProtoTime, ProtoTimestamp,
+};
+use crate::{Datum, Row};
 
 impl Codec for Row {
     fn codec_name() -> &'static str {
-        "RowExperimental"
+        "protobuf[Row]"
     }
 
     fn size_hint(&self) -> usize {
-        1 + 8 + self.data.len()
+        // The row's internal encoding isn't a perfect proxy for the proto
+        // equivalent, but it's probably good enough and this is fast.
+        self.data.len()
     }
 
     /// Encodes a row into the permanent storage format.
@@ -72,11 +44,10 @@ impl Codec for Row {
     /// readable by future versions of Materialize through v(TODO: Figure out
     /// our policy).
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-        buf.extend(&[CURRENT_VERSION]);
-        // TODO: Storing the length here will be pretty wasteful. Revisit.
-        let len: u64 = u64::cast_from(self.data.len());
-        buf.extend(&len.to_le_bytes());
-        buf.extend(&self.data[..]);
+        let temp = ProtoRow::from(self)
+            .write_to_bytes()
+            .expect("no required fields means no initialization errors");
+        buf.extend(&temp);
     }
 
     /// Decodes a row from the permanent storage format.
@@ -84,61 +55,324 @@ impl Codec for Row {
     /// This perfectly round-trips through [Row::encode]. It can read rows
     /// encoded by historical versions of Materialize back to v(TODO: Figure out
     /// our policy).
-    //
-    // TODO: Return a RowRef instead?
     fn decode(buf: &[u8]) -> Result<Row, String> {
-        let mut buf = buf;
+        let proto_row = ProtoRow::parse_from_bytes(buf).map_err(|err| err.to_string())?;
+        Row::try_from(&proto_row)
+    }
+}
 
-        let mut version_raw = [0u8; 1];
-        buf.read_exact(&mut version_raw[..])
-            .map_err(|_| "missing version")?;
-        // Only one version supported at the moment. This will get more
-        // complicated once we change the format and have to migrate old formats
-        // to the current one.
-        if version_raw[0] != CURRENT_VERSION {
-            return Err("unknown version".into());
+impl<'a> From<Datum<'a>> for ProtoDatum {
+    fn from(x: Datum<'a>) -> Self {
+        let datum_type = match x {
+            Datum::False => Datum_type::other(ProtoDatumOther::False.into()),
+            Datum::True => Datum_type::other(ProtoDatumOther::True.into()),
+            Datum::Int16(x) => Datum_type::int16(x.into()),
+            Datum::Int32(x) => Datum_type::int32(x),
+            Datum::Int64(x) => Datum_type::int64(x),
+            Datum::Float32(x) => Datum_type::float32(x.into_inner()),
+            Datum::Float64(x) => Datum_type::float64(x.into_inner()),
+            Datum::Date(x) => Datum_type::date(ProtoDate {
+                year: x.year(),
+                ordinal: x.ordinal(),
+                unknown_fields: Default::default(),
+                cached_size: Default::default(),
+            }),
+            Datum::Time(x) => Datum_type::time(ProtoTime {
+                secs: x.num_seconds_from_midnight(),
+                nanos: x.nanosecond(),
+                unknown_fields: Default::default(),
+                cached_size: Default::default(),
+            }),
+            Datum::Timestamp(x) => Datum_type::timestamp(ProtoTimestamp {
+                year: x.date().year(),
+                ordinal: x.date().ordinal(),
+                secs: x.time().num_seconds_from_midnight(),
+                nanos: x.time().nanosecond(),
+                is_tz: false,
+                unknown_fields: Default::default(),
+                cached_size: Default::default(),
+            }),
+            Datum::TimestampTz(x) => {
+                let date = x.date().naive_utc();
+                Datum_type::timestamp(ProtoTimestamp {
+                    year: date.year(),
+                    ordinal: date.ordinal(),
+                    secs: x.time().num_seconds_from_midnight(),
+                    nanos: x.time().nanosecond(),
+                    is_tz: true,
+                    unknown_fields: Default::default(),
+                    cached_size: Default::default(),
+                })
+            }
+            Datum::Interval(x) => {
+                let duration = x.duration.to_le_bytes();
+                let (mut duration_lo, mut duration_hi) = ([0u8; 8], [0u8; 8]);
+                duration_lo.copy_from_slice(&duration[..8]);
+                duration_hi.copy_from_slice(&duration[8..]);
+                Datum_type::interval(ProtoInterval {
+                    months: x.months,
+                    duration_lo: i64::from_le_bytes(duration_lo),
+                    duration_hi: i64::from_le_bytes(duration_hi),
+                    unknown_fields: Default::default(),
+                    cached_size: Default::default(),
+                })
+            }
+            Datum::Bytes(x) => Datum_type::bytes(x.to_vec()),
+            Datum::String(x) => Datum_type::string(x.to_owned()),
+            Datum::Array(x) => Datum_type::array(ProtoArray {
+                elements: MessageField::some(ProtoRow {
+                    datums: x.elements().iter().map(|x| x.into()).collect(),
+                    unknown_fields: Default::default(),
+                    cached_size: Default::default(),
+                }),
+                dims: x
+                    .dims()
+                    .into_iter()
+                    .map(|x| ProtoArrayDimension {
+                        lower_bound: u64::cast_from(x.lower_bound),
+                        length: u64::cast_from(x.length),
+                        unknown_fields: Default::default(),
+                        cached_size: Default::default(),
+                    })
+                    .collect(),
+                unknown_fields: Default::default(),
+                cached_size: Default::default(),
+            }),
+            Datum::List(x) => Datum_type::list(ProtoRow {
+                datums: x.iter().map(|x| x.into()).collect(),
+                unknown_fields: Default::default(),
+                cached_size: Default::default(),
+            }),
+            Datum::Map(x) => Datum_type::dict(ProtoDict {
+                elements: x.iter().map(|(k, v)| (k.to_owned(), v.into())).collect(),
+                unknown_fields: Default::default(),
+                cached_size: Default::default(),
+            }),
+            Datum::Numeric(x) => {
+                // WIP should we do the same reduce that pack_numeric does?
+                let (digits, exponent, bits, lsu) = x.0.to_raw_parts();
+                Datum_type::numeric(ProtoNumeric {
+                    digits,
+                    exponent,
+                    bits: u32::from(bits),
+                    lsu: lsu.to_vec(),
+                    unknown_fields: Default::default(),
+                    cached_size: Default::default(),
+                })
+            }
+            Datum::JsonNull => Datum_type::other(ProtoDatumOther::JsonNull.into()),
+            Datum::Uuid(x) => Datum_type::uuid(x.as_bytes().to_vec()),
+            Datum::Dummy => Datum_type::other(ProtoDatumOther::Dummy.into()),
+            Datum::Null => Datum_type::other(ProtoDatumOther::Null.into()),
+        };
+        ProtoDatum {
+            datum_type: Some(datum_type),
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
         }
+    }
+}
 
-        let mut len_raw = [0u8; 8];
-        buf.read_exact(&mut len_raw[..])
-            .map_err(|_| "missing len")?;
-        let len = usize::cast_from(u64::from_le_bytes(len_raw));
+impl From<&Row> for ProtoRow {
+    fn from(x: &Row) -> Self {
+        let datums = x.iter().map(|x| x.into()).collect();
+        ProtoRow {
+            datums,
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        }
+    }
+}
 
-        // NB: The read calls modify buf to truncate off what they read, so
-        // index 0 now corresponds to the part of the original buf immediately
-        // after the encoded len.
-        let row_data = buf
-            .get(0..len)
-            .ok_or_else(|| format!("wanted {} row data bytes but had {}", len, buf.len()))?;
+impl Row {
+    fn try_push_proto(&mut self, x: &ProtoDatum) -> Result<(), String> {
+        match &x.datum_type {
+            Some(Datum_type::other(o)) => match o.enum_value() {
+                Ok(ProtoDatumOther::Unknown) => return Err("unknown datum type".into()),
+                Ok(ProtoDatumOther::Null) => self.push(Datum::Null),
+                Ok(ProtoDatumOther::False) => self.push(Datum::False),
+                Ok(ProtoDatumOther::True) => self.push(Datum::True),
+                Ok(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
+                Ok(ProtoDatumOther::Dummy) => self.push(Datum::Dummy),
+                Err(id) => return Err(format!("unknown datum type: {}", id)),
+            },
+            Some(Datum_type::int16(x)) => {
+                let x = i16::try_from(*x)
+                    .map_err(|_| format!("int16 field stored with out of range value: {}", *x))?;
+                self.push(Datum::Int16(x))
+            }
+            Some(Datum_type::int32(x)) => self.push(Datum::Int32(*x)),
+            Some(Datum_type::int64(x)) => self.push(Datum::Int64(*x)),
+            Some(Datum_type::float32(x)) => self.push(Datum::Float32((*x).into())),
+            Some(Datum_type::float64(x)) => self.push(Datum::Float64((*x).into())),
+            Some(Datum_type::bytes(x)) => self.push(Datum::Bytes(x)),
+            Some(Datum_type::string(x)) => self.push(Datum::String(x)),
+            Some(Datum_type::uuid(x)) => {
+                // Uuid internally has a [u8; 16] so we'll have to do at least
+                // one copy, but there's currently an additional one when the
+                // Vec is created. Perhaps the protobuf Bytes support will let
+                // us fix one of them.
+                let u = Uuid::from_slice(&x).map_err(|err| err.to_string())?;
+                self.push(Datum::Uuid(u));
+            }
+            Some(Datum_type::date(x)) => {
+                self.push(Datum::Date(NaiveDate::from_yo(x.year, x.ordinal)))
+            }
+            Some(Datum_type::time(x)) => self.push(Datum::Time(
+                NaiveTime::from_num_seconds_from_midnight(x.secs, x.nanos),
+            )),
+            Some(Datum_type::timestamp(x)) => {
+                let date = NaiveDate::from_yo(x.year, x.ordinal);
+                let time = NaiveTime::from_num_seconds_from_midnight(x.secs, x.nanos);
+                let datetime = date.and_time(time);
+                if x.is_tz {
+                    self.push(Datum::TimestampTz(DateTime::from_utc(datetime, Utc)));
+                } else {
+                    self.push(Datum::Timestamp(datetime));
+                }
+            }
+            Some(Datum_type::interval(x)) => {
+                let mut duration = [0u8; 16];
+                duration[..8].copy_from_slice(&x.duration_lo.to_le_bytes());
+                duration[8..].copy_from_slice(&x.duration_hi.to_le_bytes());
+                let duration = i128::from_le_bytes(duration);
+                self.push(Datum::Interval(Interval {
+                    months: x.months,
+                    duration,
+                }))
+            }
+            Some(Datum_type::list(x)) => self.push_list_with(|row| -> Result<(), String> {
+                for d in x.datums.iter() {
+                    row.try_push_proto(d)?;
+                }
+                Ok(())
+            })?,
+            Some(Datum_type::array(x)) => {
+                let dims = x
+                    .dims
+                    .iter()
+                    .map(|x| ArrayDimension {
+                        lower_bound: usize::cast_from(x.lower_bound),
+                        length: usize::cast_from(x.length),
+                    })
+                    .collect::<Vec<_>>();
+                match x.elements.as_ref() {
+                    None => self.push_array(&dims, vec![].iter()),
+                    Some(elements) => {
+                        // TODO: Could we avoid this Row alloc if we made a
+                        // push_array_with?
+                        let elements_row = Row::try_from(elements)?;
+                        self.push_array(&dims, elements_row.iter())
+                    }
+                }
+                .map_err(|err| err.to_string())?
+            }
+            Some(Datum_type::dict(x)) => self.push_dict_with(|row| -> Result<(), String> {
+                for (k, v) in x.elements.iter() {
+                    row.push(Datum::from(k.as_str()));
+                    row.try_push_proto(v)?;
+                }
+                Ok(())
+            })?,
+            Some(Datum_type::numeric(x)) => {
+                let bits = u8::try_from(x.bits).map_err(|err| err.to_string())?;
+                // SAFETY: The parts are always derived from a previous call to
+                // to_raw_parts and faithfully roundtrip them.
+                //
+                // TODO: Add a version of from_raw_parts to the Decimal library
+                // that validates and returns an Option instead of panic'ing and
+                // unsafe.
+                let n = unsafe { Decimal::from_raw_parts(x.digits, x.exponent, bits, &x.lsu) };
+                self.push(Datum::from(n))
+            }
+            None => return Err("unknown datum type".into()),
+        };
+        Ok(())
+    }
+}
 
-        // SAFETY: This was serialized with Row::encode at the same version.
-        let row = unsafe { Row::from_bytes_unchecked(row_data.to_owned()) };
+impl TryFrom<&ProtoRow> for Row {
+    type Error = String;
+
+    fn try_from(x: &ProtoRow) -> Result<Self, Self::Error> {
+        // TODO: Try to pre-size this.
+        let mut row = Row::default();
+        for d in x.datums.iter() {
+            row.try_push_proto(d)?;
+        }
         Ok(row)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
     use persist_types::Codec;
+    use uuid::Uuid;
 
+    use crate::adt::array::ArrayDimension;
+    use crate::adt::interval::Interval;
+    use crate::adt::numeric::Numeric;
     use crate::{Datum, Row};
 
     // TODO: datadriven golden tests for various interesting Datums and Rows to
     // catch any changes in the encoding.
 
     #[test]
-    fn decode_errors() {
-        let row = Row::pack(vec![Datum::Int64(7)]);
+    fn roundtrip() {
+        let mut row = Row::pack(vec![
+            Datum::False,
+            Datum::True,
+            Datum::Int16(1),
+            Datum::Int32(2),
+            Datum::Int64(3),
+            Datum::Float32(4f32.into()),
+            Datum::Float64(5f64.into()),
+            Datum::Date(NaiveDate::from_ymd(6, 7, 8)),
+            Datum::Time(NaiveTime::from_hms(9, 10, 11)),
+            Datum::Timestamp(
+                NaiveDate::from_ymd(12, 13 % 12, 14).and_time(NaiveTime::from_hms(15, 16, 17)),
+            ),
+            Datum::TimestampTz(DateTime::from_utc(
+                NaiveDate::from_ymd(18, 19 % 12, 20).and_time(NaiveTime::from_hms(21, 22, 23)),
+                Utc,
+            )),
+            Datum::Interval(Interval {
+                months: 24,
+                duration: 25,
+            }),
+            Datum::Bytes(&[26, 27]),
+            Datum::String("28".into()),
+            Datum::from(Numeric::from(29)),
+            Datum::JsonNull,
+            Datum::Uuid(Uuid::from_u128(30)),
+            Datum::Dummy,
+            Datum::Null,
+        ]);
+        row.push_array(
+            &[ArrayDimension {
+                lower_bound: 2,
+                length: 2,
+            }],
+            vec![Datum::Int32(31), Datum::Int32(32)],
+        )
+        .expect("valid array");
+        row.push_dict_with(|row| {
+            row.push(Datum::String("33"));
+            row.push(Datum::Int32(34));
+        });
+        row.push_list_with(|row| {
+            row.push(Datum::String("35"));
+            row.push_list_with(|row| {
+                row.push(Datum::String("36"));
+                row.push(Datum::String("37"));
+            });
+            row.push(Datum::String("38"));
+            row.push(Datum::String("39"));
+        });
+
         let mut encoded = Vec::new();
         row.encode(&mut encoded);
-
-        // Every subset that's missing at least one byte should error, not panic
-        // or succeed.
-        for i in 0..encoded.len() - 1 {
-            assert!(Row::decode(&encoded[..i]).is_err());
-        }
-
-        // Sanity check that we don't just always return errors.
         assert_eq!(Row::decode(&encoded), Ok(row));
     }
 }
