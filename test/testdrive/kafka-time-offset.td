@@ -304,3 +304,39 @@ cherry    3
 text      mz_offset
 -------------------
 cherry    3
+
+# Make sure that we don't fetch any messages that we don't want to fetch
+
+$ kafka-create-topic topic=t4 partitions=1
+
+$ kafka-ingest format=bytes topic=t4 timestamp=1
+apple
+pie
+
+# A time offset of -1 specifies that we want to start from the end of the topic
+# (negative offsets are relative from the end).
+> CREATE MATERIALIZED SOURCE verify_no_fetch
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t4-${testdrive.seed}'
+  WITH (kafka_time_offset = -1)
+  FORMAT TEXT
+
+
+> SELECT * FROM verify_no_fetch
+text      mz_offset
+-------------------
+
+> SELECT SUM((statistics->'topics'->'testdrive-t4-${testdrive.seed}'->'partitions'->'0'->'msgs')::int) from mz_kafka_source_statistics;
+0
+
+$ kafka-ingest format=bytes topic=t4 timestamp=2
+mud
+pie
+
+> SELECT * FROM verify_no_fetch
+text      mz_offset
+-------------------
+mud       3
+pie       4
+
+> SELECT SUM((statistics->'topics'->'testdrive-t4-${testdrive.seed}'->'partitions'->'0'->'msgs')::int) from mz_kafka_source_statistics;
+2
