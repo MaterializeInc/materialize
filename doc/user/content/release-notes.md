@@ -103,6 +103,9 @@ List new features before bug fixes.
 
 {{% version-header v0.10.1 %}}
 
+- Accept message names in [Protobuf sources] that do not start with a leading
+  dot. This fixes a regression introduced in v0.9.12.
+
 - Queries that are too big to fit the limits of our intermediate representations
   no longer panic and will now cause query-level failure with an internal error
   and a message of the form "exceeded recursion limit of {X}".
@@ -170,6 +173,10 @@ List new features before bug fixes.
   columns.
 
 {{% version-header v0.9.12 %}}
+
+- **Known issue.** Message names in [Protobuf sources] that do not start with a
+  leading dot are erroneously rejected. As a workaround, add a leading dot to
+  the message name. This regression is corrected in v0.11.0.
 
 - **Breaking change**: Disallow ambiguous table references in queries. For
   example:
@@ -1583,3 +1590,4 @@ a problem with PostgreSQL JDBC 42.3.0.
 [pgwire-simple]: https://www.postgresql.org/docs/current/protocol-flow.html#id-1.10.5.7.4
 [pgwire-extended]: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
 [PgJDBC]: https://jdbc.postgresql.org
+[Protobuf sources]: /sql/create-source/protobuf-kinesis/#protobuf-format-details
