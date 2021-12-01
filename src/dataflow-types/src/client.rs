@@ -336,6 +336,50 @@ impl<'a, C: Client + 'a> futures::stream::Stream for ClientAsStream<'a, C> {
     }
 }
 
+/// A wrapper for enumerating any available result from a client.
+///
+/// Maintains an internal counter, and round robins through clients for fairness.
+pub struct SelectStream<'a, C: Client + 'a> {
+    clients: &'a mut [C],
+    cursor: usize,
+}
+
+impl<'a, C: Client + 'a> SelectStream<'a, C> {
+    /// Create a new [SelectStream], starting from the client at position `cursor`.
+    pub fn new(clients: &'a mut [C], cursor: usize) -> Self {
+        Self { clients, cursor }
+    }
+}
+
+impl<'a, C: Client + 'a> futures::stream::Stream for SelectStream<'a, C> {
+    type Item = (usize, Response);
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut done = true;
+        for _ in 0..self.clients.len() {
+            let cursor = self.cursor;
+            let result = {
+                use futures::Future;
+                Pin::new(&mut self.clients[cursor].recv()).poll(cx)
+            };
+            self.cursor = (self.cursor + 1) % self.clients.len();
+            match result {
+                Poll::Pending => {
+                    done = false;
+                }
+                Poll::Ready(None) => {}
+                Poll::Ready(Some(response)) => {
+                    return Poll::Ready(Some((self.cursor, response)));
+                }
+            }
+        }
+        if done {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
 /// A convenience type for compatibility.
 pub struct LocalClient {
     client: partitioned::Partitioned<process_local::ProcessLocal>,
@@ -382,7 +426,7 @@ pub mod partitioned {
     use repr::Timestamp;
 
     use super::Client;
-    use super::{ClientAsStream, Command, PeekResponse, Response};
+    use super::{Command, PeekResponse, Response};
 
     /// A client whose implementation is sharded across a number of other clients.
     ///
@@ -390,6 +434,7 @@ pub mod partitioned {
     /// and await responses from each of the client shards before it can respond.
     pub struct Partitioned<C: Client> {
         shards: Vec<C>,
+        cursor: usize,
         state: PartitionedClientState,
     }
 
@@ -398,6 +443,7 @@ pub mod partitioned {
         pub fn new(shards: Vec<C>) -> Self {
             Self {
                 state: PartitionedClientState::new(shards.len()),
+                cursor: 0,
                 shards,
             }
         }
@@ -414,9 +460,8 @@ pub mod partitioned {
 
         async fn recv(&mut self) -> Option<Response> {
             use futures::StreamExt;
-            let mut stream = futures::stream::select_all(self.shards.iter_mut().enumerate().map(
-                |(index, client)| ClientAsStream { client }.map(move |response| (index, response)),
-            ));
+            self.cursor = (self.cursor + 1) % self.shards.len();
+            let mut stream = super::SelectStream::new(&mut self.shards[..], self.cursor);
             while let Some((index, response)) = stream.next().await {
                 let message = self.state.absorb_response(index, response);
                 if let Some(message) = message {
