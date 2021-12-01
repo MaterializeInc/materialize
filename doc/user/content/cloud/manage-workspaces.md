@@ -42,7 +42,8 @@ Setting | Description
 You must configure the SSO settings before you can enable single sign-on. Currently, Materialize Cloud supports the following IDPs:
 
 - OpenID Connect
--   ???
+- Google SSO
+- Github SSO
 
 ## API Tokens
 
