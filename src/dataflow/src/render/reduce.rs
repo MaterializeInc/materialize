@@ -267,7 +267,7 @@ where
         let (ok, mut err) = key_val_input
             .as_collection()
             .consolidate_stream()
-            .flat_map_fallible("OkErrDemux", |x| Some(x));
+            .flat_map_fallible("OkErrDemux", Some);
 
         err = err.concat(&err_input);
 

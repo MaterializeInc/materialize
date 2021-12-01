@@ -710,10 +710,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                         for _ in 0..diff {
                                             rows.push(format!(
                                                 "[{}]",
-                                                separated(
-                                                    " ",
-                                                    row.iter().map(|d| datum_to_test_spec(d))
-                                                )
+                                                separated(" ", row.iter().map(datum_to_test_spec))
                                             ))
                                         }
                                     }

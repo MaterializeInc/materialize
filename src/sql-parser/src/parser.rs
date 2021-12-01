@@ -1142,18 +1142,16 @@ impl<'a> Parser<'a> {
                 // 'string' FROM 'int' FOR 'int'
                 exprs.push(self.parse_expr()?);
             }
+        } else if self.parse_keyword(FOR) {
+            // 'string' FOR 'int'
+            exprs.push(Expr::Value(Value::Number(String::from("1"))));
+            exprs.push(self.parse_expr()?);
         } else {
-            if self.parse_keyword(FOR) {
-                // 'string' FOR 'int'
-                exprs.push(Expr::Value(Value::Number(String::from("1"))));
-                exprs.push(self.parse_expr()?);
-            } else {
-                // 'string', 'int'
-                // or
-                // 'string', 'int', 'int'
-                self.expect_token(&Token::Comma)?;
-                exprs.extend(self.parse_comma_separated(Parser::parse_expr)?);
-            }
+            // 'string', 'int'
+            // or
+            // 'string', 'int', 'int'
+            self.expect_token(&Token::Comma)?;
+            exprs.extend(self.parse_comma_separated(Parser::parse_expr)?);
         }
 
         self.expect_token(&Token::RParen)?;
@@ -2445,7 +2443,7 @@ impl<'a> Parser<'a> {
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
                     if_exists,
                     name,
-                    restrict: restrict,
+                    restrict,
                 }));
             }
             Some(INDEX) => ObjectType::Index,

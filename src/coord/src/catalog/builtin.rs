@@ -1888,12 +1888,7 @@ mod tests {
             if let Builtin::Func(func) = builtin {
                 for imp in func.inner.func_impls() {
                     // Verify that all function OIDs are unique.
-                    assert!(
-                        oids.insert(imp.oid) == true,
-                        "{} reused oid {}",
-                        func.name,
-                        imp.oid
-                    );
+                    assert!(oids.insert(imp.oid), "{} reused oid {}", func.name, imp.oid);
 
                     if imp.oid > 16_000 {
                         // High OIDS are reserved in materialize and don't have postgres counterparts.

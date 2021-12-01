@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::fmt;
 
 use anyhow::{bail, Context};
-use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 
@@ -275,8 +274,8 @@ impl<R> Operation<R> {
 pub fn sql_impl(
     expr: &'static str,
 ) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, anyhow::Error> {
-    let expr = sql_parser::parser::parse_expr(expr.into())
-        .expect("static function definition failed to parse");
+    let expr =
+        sql_parser::parser::parse_expr(expr).expect("static function definition failed to parse");
     move |qcx, types| {
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
@@ -1747,7 +1746,7 @@ lazy_static! {
                 params!(String, Time) => Operation::binary(|ecx, lhs, rhs| {
                     match ecx.qcx.lifetime {
                         QueryLifetime::OneShot(pcx) => {
-                            let wall_time = DateTime::<Utc>::from(pcx.wall_time).naive_utc();
+                            let wall_time = pcx.wall_time.naive_utc();
                             Ok(lhs.call_binary(rhs, BinaryFunc::TimezoneTime{wall_time}))
                         },
                         QueryLifetime::Static => bail!("timezone cannot be used in static queries"),

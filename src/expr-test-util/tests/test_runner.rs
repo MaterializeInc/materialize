@@ -64,7 +64,7 @@ mod test {
                             &s.input,
                             "MirScalarExpr",
                             |s| build_scalar(s),
-                            || MirScalarExprDeserializeContext::default(),
+                            MirScalarExprDeserializeContext::default,
                         ) {
                             Ok(scalar) => format!("{}\n", scalar),
                             Err(err) => format!("error: {}\n", err),

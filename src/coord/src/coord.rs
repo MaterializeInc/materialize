@@ -3491,7 +3491,7 @@ where
                 affected_rows += diff;
             }
 
-            if all_positive_diffs == false {
+            if !all_positive_diffs {
                 // Consolidate rows. This is useful e.g. for an UPDATE where the row
                 // doesn't change, and we need to reflect that in the number of
                 // affected rows.
@@ -3695,7 +3695,7 @@ where
         {
             Ok(resp) => resp,
             Err(e) => {
-                tx.send(Err(e.into()), session);
+                tx.send(Err(e), session);
                 return;
             }
         };

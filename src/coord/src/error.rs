@@ -287,8 +287,8 @@ impl fmt::Display for CoordError {
             CoordError::RelationOutsideTimeDomain { .. } => {
                 write!(
                     f,
-                    "Transactions can only reference objects in the same timedomain. See {}",
-                    "https://materialize.com/docs/sql/begin/#same-timedomain-error",
+                    "Transactions can only reference objects in the same timedomain. \
+                     See https://materialize.com/docs/sql/begin/#same-timedomain-error",
                 )
             }
             CoordError::SafeModeViolation(feature) => {

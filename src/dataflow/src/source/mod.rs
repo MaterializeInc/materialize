@@ -453,7 +453,7 @@ struct ConsInfo {
 
 impl ConsInfo {
     fn new(timestamp: Timestamp, offset: Option<MzOffset>) -> Self {
-        let offset = offset.unwrap_or_else(|| MzOffset { offset: 0 });
+        let offset = offset.unwrap_or(MzOffset { offset: 0 });
 
         Self {
             current_ts: timestamp,
@@ -779,15 +779,14 @@ impl ConsistencyInfo {
             // we already know about.
             cons_info.update_offset(offset);
             Some(cons_info.current_ts)
+        } else if let Some((timestamp, max_offset)) =
+            timestamp_bindings.get_binding(partition, offset)
+        {
+            cons_info.update_timestamp(timestamp, max_offset);
+            cons_info.update_offset(offset);
+            Some(timestamp)
         } else {
-            if let Some((timestamp, max_offset)) = timestamp_bindings.get_binding(partition, offset)
-            {
-                cons_info.update_timestamp(timestamp, max_offset);
-                cons_info.update_offset(offset);
-                Some(timestamp)
-            } else {
-                None
-            }
+            None
         }
     }
 }

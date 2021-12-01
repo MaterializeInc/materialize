@@ -1210,8 +1210,7 @@ mod tests {
 
             let mut probe = ProbeHandle::new();
             let ok_stream = worker.dataflow(|scope| {
-                let (ok_stream, _err_stream) =
-                    scope.persisted_source(read).ok_err(|x| split_ok_err(x));
+                let (ok_stream, _err_stream) = scope.persisted_source(read).ok_err(split_ok_err);
                 ok_stream.probe_with(&mut probe).capture()
             });
 

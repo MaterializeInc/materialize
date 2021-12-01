@@ -468,10 +468,8 @@ fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
                     expr.visit_mut_pre_post(
                         &mut |e| {
                             if let MirScalarExpr::Column(c) = e {
-                                if *c >= mfp.input_arity {
-                                    if *c >= mfp.input_arity {
-                                        *e = map[*c - mfp.input_arity].clone();
-                                    }
+                                if *c >= mfp.input_arity && *c >= mfp.input_arity {
+                                    *e = map[*c - mfp.input_arity].clone();
                                 }
                             }
                             None

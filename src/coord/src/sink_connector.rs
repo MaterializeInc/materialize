@@ -176,7 +176,7 @@ fn maybe_decode_consistency_end_record(
         match (status, id) {
             (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
                 if let Ok(ts) = id.parse::<u64>() {
-                    Ok(Some(Timestamp::from(ts)))
+                    Ok(Some(ts))
                 } else {
                     bail!(
                         "Malformed consistency record, failed to parse timestamp {} in topic {}",

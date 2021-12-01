@@ -192,7 +192,7 @@ impl Command {
                     }
                     dataflows_parts
                         .into_iter()
-                        .map(|dataflows| Command::CreateDataflows(dataflows))
+                        .map(Command::CreateDataflows)
                         .collect()
                 }
                 Command::Insert { id, updates } => {
@@ -557,7 +557,7 @@ pub mod partitioned {
                     let entry = self
                         .peek_responses
                         .entry(connection)
-                        .or_insert_with(|| Default::default());
+                        .or_insert_with(Default::default);
                     let novel = entry.insert(shard_id, response);
                     assert!(novel.is_none(), "Duplicate peek response");
                     // We may be ready to respond.

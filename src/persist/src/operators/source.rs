@@ -174,8 +174,7 @@ mod tests {
                 let read = p
                     .create_or_load::<String, ()>("1")
                     .map(|(_write, read)| read);
-                let (ok_stream, err_stream) =
-                    scope.persisted_source(read).ok_err(|x| split_ok_err(x));
+                let (ok_stream, err_stream) = scope.persisted_source(read).ok_err(split_ok_err);
                 (ok_stream.capture(), err_stream.capture())
             });
 
@@ -246,7 +245,7 @@ mod tests {
                 let read = p
                     .create_or_load::<String, ()>("1")
                     .map(|(_write, read)| read);
-                let (oks, _rrs) = scope.persisted_source(read).ok_err(|x| split_ok_err(x));
+                let (oks, _rrs) = scope.persisted_source(read).ok_err(split_ok_err);
 
                 oks.probe_with(&mut probe);
             });
@@ -290,7 +289,7 @@ mod tests {
         timely::execute(Config::process(2), move |worker| {
             worker.dataflow(|scope| {
                 let (write, read) = p.create_or_load("1").unwrap();
-                let (ok_stream, _) = scope.persisted_source(Ok(read)).ok_err(|x| split_ok_err(x));
+                let (ok_stream, _) = scope.persisted_source(Ok(read)).ok_err(split_ok_err);
 
                 // Write one thing from each worker again. This time at timestamp 2.
                 write
@@ -341,7 +340,7 @@ mod tests {
 
         let recv = timely::execute_directly(move |worker| {
             let recv = worker.dataflow(|scope| {
-                let (_, err_stream) = scope.persisted_source(read).ok_err(|x| split_ok_err(x));
+                let (_, err_stream) = scope.persisted_source(read).ok_err(split_ok_err);
                 err_stream.capture()
             });
             recv

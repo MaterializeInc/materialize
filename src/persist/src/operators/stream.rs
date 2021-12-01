@@ -411,7 +411,7 @@ where
                 primary_data_input.for_each(|cap, data| {
                     data.swap(&mut primary_data_buffer);
 
-                    let as_result = primary_data_buffer.drain(..).map(|update| Ok(update));
+                    let as_result = primary_data_buffer.drain(..).map(Ok);
 
                     let mut session = data_output.session(&cap);
                     session.give_iterator(as_result);

@@ -161,14 +161,14 @@ fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, PFutureHandle<T>), L: Log, B:
     f: F,
 ) -> Result<T, Error> {
     let (tx, rx) = PFuture::new();
-    f(index, tx.into());
+    f(index, tx);
     index.step()?;
     rx.recv()
 }
 
 fn block_on<T, F: FnOnce(PFutureHandle<T>)>(f: F) -> Result<T, Error> {
     let (tx, rx) = PFuture::new();
-    f(tx.into());
+    f(tx);
     rx.recv()
 }
 

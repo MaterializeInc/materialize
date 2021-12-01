@@ -247,7 +247,7 @@ impl CatalogState {
     pub fn populate_enabled_indexes(&mut self, id: GlobalId, item: &CatalogItem) {
         match item {
             CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_) => {
-                self.enabled_indexes.entry(id).or_insert_with(|| vec![]);
+                self.enabled_indexes.entry(id).or_insert_with(Vec::new);
             }
             CatalogItem::Index(index) => {
                 if index.enabled {

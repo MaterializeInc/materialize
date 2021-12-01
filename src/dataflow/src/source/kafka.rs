@@ -182,7 +182,7 @@ impl KafkaSourceReader {
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext {
                 activator: consumer_activator,
-                stats_tx: stats_tx,
+                stats_tx,
             })
             .expect("Failed to create Kafka Consumer");
 

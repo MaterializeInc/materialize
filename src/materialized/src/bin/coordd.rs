@@ -120,8 +120,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         });
         let http_server = http::Server::new(http::Config {
             tls: None,
-            coord_client: coord_client,
-            metrics_registry: metrics_registry,
+            coord_client,
+            metrics_registry,
             global_metrics: metrics,
             pgwire_metrics: pgwire_server.metrics(),
         });

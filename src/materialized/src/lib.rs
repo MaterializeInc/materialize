@@ -286,7 +286,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         let http_server = http::Server::new(http::Config {
             tls: http_tls,
             coord_client: coord_client.clone(),
-            metrics_registry: metrics_registry,
+            metrics_registry,
             global_metrics: metrics,
             pgwire_metrics: pgwire_server.metrics(),
         });

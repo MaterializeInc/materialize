@@ -3808,7 +3808,7 @@ fn plan_is_expr<'a>(
         IsExprConstruct::False => UnaryFunc::IsFalse(expr_func::IsFalse),
     };
     let expr = HirScalarExpr::CallUnary {
-        func: func,
+        func,
         expr: Box::new(expr),
     };
 

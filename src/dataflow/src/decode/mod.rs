@@ -56,7 +56,7 @@ pub fn rewrite_for_upsert(
         // often off by one, but is only tracked every N seconds so it will always be off
         metrics.set(keys.len() as u64);
 
-        let entry = keys.entry(key.into());
+        let entry = keys.entry(key);
 
         let mut rowiter = row.iter();
         let before = rowiter.next().expect("must have a before list");
