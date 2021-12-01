@@ -325,6 +325,9 @@ where
     txn_reads: HashMap<u32, TxnReads>,
     /// Tracks write frontiers for active exactly-once sinks.
     sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
+    /// The set of system indexes, cached because it does not changed but is used
+    /// for all read transactions.
+    system_indexes: Vec<GlobalId>,
 
     /// A map from pending peeks to the queue into which responses are sent, and
     /// the IDs of workers who have responded.
@@ -606,6 +609,13 @@ where
                 .await;
             }
         }
+
+        self.system_indexes.extend(
+            self.catalog
+                .enabled_indexes()
+                .keys()
+                .filter(|id| id.is_system()),
+        );
 
         Ok(())
     }
@@ -2952,6 +2962,12 @@ where
                 // referenced by the first query.
                 let mut timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
+                // Always include all system indexes. pg_catalog and mz_catalog are sometimes
+                // used by applications in followup queries. The system indexes by default are
+                // updated every 30s, so forcibly holding back their compaction is hopefully
+                // not a source of high memory use.
+                timedomain_ids.extend(&self.system_indexes);
+
                 // We want to prevent compaction of the indexes consulted by
                 // determine_timestamp, not the ones listed in the query.
                 let (timestamp, timestamp_ids) =
@@ -4491,6 +4507,7 @@ where
                 since_handles: HashMap::new(),
                 since_updates: Rc::new(RefCell::new(HashMap::new())),
                 sink_writes: HashMap::new(),
+                system_indexes: Vec::new(),
                 pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
