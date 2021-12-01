@@ -373,7 +373,7 @@ impl<'a> Desugarer<'a> {
                         args: func.args,
                     },
                     alias: Some(TableAlias {
-                        name: name,
+                        name,
                         columns: vec![],
                         strict: false,
                     }),
@@ -633,7 +633,7 @@ impl<'a> Desugarer<'a> {
 // nodes (and thus any subquery Expr) are ignored.
 struct TableFuncRewriter<'a> {
     scx: &'a StatementContext<'a>,
-    disallowed: Vec<&'static str>,
+    disallowed_context: Vec<&'static str>,
     table_func: Option<(Function<Raw>, Ident)>,
     status: Result<(), anyhow::Error>,
 }
@@ -644,7 +644,8 @@ impl<'ast> VisitMut<'ast, Raw> for TableFuncRewriter<'_> {
     }
 
     fn visit_query_mut(&mut self, _node: &'ast mut Query<Raw>) {
-        // Do not descend into Query nodes.
+        // Do not descend into Query nodes so subqueries can have their own table
+        // functions rewritten.
     }
 }
 
@@ -652,7 +653,7 @@ impl<'a> TableFuncRewriter<'a> {
     fn new(scx: &'a StatementContext<'a>) -> TableFuncRewriter<'a> {
         TableFuncRewriter {
             scx,
-            disallowed: Vec::new(),
+            disallowed_context: Vec::new(),
             table_func: None,
             status: Ok(()),
         }
@@ -676,7 +677,7 @@ impl<'a> TableFuncRewriter<'a> {
         // This block does two things:
         // - Check if expr is a context where table functions are disallowed.
         // - Check if expr is a table function, and attempt to replace if so.
-        let disallowed = match expr {
+        let disallowed_context = match expr {
             Expr::Case { .. } => Some("CASE"),
             Expr::Coalesce { .. } => Some("COALESCE"),
             Expr::Function(func) => {
@@ -684,7 +685,7 @@ impl<'a> TableFuncRewriter<'a> {
                     match item.func()? {
                         Func::Aggregate(_) => Some("aggregate function calls"),
                         Func::Set(_) | Func::Table(_) => {
-                            if let Some(context) = self.disallowed.last() {
+                            if let Some(context) = self.disallowed_context.last() {
                                 bail!("table functions are not allowed in {}", context);
                             }
                             let name = Ident::new(item.name().item.clone());
@@ -714,14 +715,14 @@ impl<'a> TableFuncRewriter<'a> {
             _ => None,
         };
 
-        if let Some(disallowed) = disallowed {
-            self.disallowed.push(disallowed);
+        if let Some(context) = disallowed_context {
+            self.disallowed_context.push(context);
         }
 
         visit_mut::visit_expr_mut(self, expr);
 
-        if disallowed.is_some() {
-            self.disallowed.pop();
+        if disallowed_context.is_some() {
+            self.disallowed_context.pop();
         }
 
         Ok(())
