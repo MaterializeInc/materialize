@@ -108,7 +108,6 @@ allow-git = [
     "https://github.com/MaterializeInc/headers.git",
 
     # Waiting on several PRs to a mostly-abandoned upstream library.
-    "https://github.com/MaterializeInc/pubnub-headers.git",
     "https://github.com/MaterializeInc/pubnub-rust.git",
 
     # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
@@ -130,4 +129,6 @@ allow-git = [
     "https://github.com/fede1024/rust-rdkafka.git",
     # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
     "https://github.com/MaterializeInc/parquet-format-rs.git",
+    # Until repr::row::{push_datum,read_datum} are updated with the new {to,from}_raw_parts
+    "https://github.com/MaterializeInc/rust-dec",
 ]

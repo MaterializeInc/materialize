@@ -82,3 +82,5 @@ debug = 1
 headers = { git = "https://github.com/MaterializeInc/headers.git" }
 # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
 parquet-format-async-temp = { git = "https://github.com/MaterializeInc/parquet-format-rs", branch = "main" }
+# Until repr::row::{push_datum,read_datum} are updated with the new {to,from}_raw_parts
+dec = { git = "https://github.com/MaterializeInc/rust-dec", branch = "bcd" }
