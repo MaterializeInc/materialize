@@ -3178,7 +3178,7 @@ pub enum UnaryFunc {
     CastStringToChar(CastStringToChar),
     PadChar(PadChar),
     CastStringToVarChar(CastStringToVarChar),
-    CastCharToString,
+    CastCharToString(CastCharToString),
     CastVarCharToString,
     CastDateToTimestamp,
     CastDateToTimestampTz,
@@ -3394,6 +3394,7 @@ derive_unary!(
     CastStringToChar,
     PadChar,
     CastStringToVarChar,
+    CastCharToString,
     Cos,
     Cosh,
     Sin,
@@ -3541,10 +3542,9 @@ impl UnaryFunc {
             | CastStringToChar(_)
             | PadChar(_)
             | CastStringToVarChar(_)
+            | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInterval => Ok(neg_interval(a)),
-            // This function simply allows the expression of changing a's type from varchar to string
-            CastCharToString => Ok(a),
             CastVarCharToString => Ok(a),
             CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
             CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
@@ -3737,6 +3737,7 @@ impl UnaryFunc {
             | CastStringToChar(_)
             | PadChar(_)
             | CastStringToVarChar(_)
+            | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -3747,8 +3748,7 @@ impl UnaryFunc {
             CastTimeToInterval => ScalarType::Interval.nullable(nullable),
             CastStringToJsonb => ScalarType::Jsonb.nullable(nullable),
 
-            CastCharToString
-            | CastVarCharToString
+            CastVarCharToString
             | CastDateToString
             | CastTimeToString
             | CastTimestampToString
@@ -3965,6 +3965,7 @@ impl UnaryFunc {
             | CastStringToChar(_)
             | PadChar(_)
             | CastStringToVarChar(_)
+            | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -3981,8 +3982,7 @@ impl UnaryFunc {
             | ByteLengthString => false,
             IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
             CastTimeToInterval | CastStringToJsonb => false,
-            CastCharToString
-            | CastVarCharToString
+            CastVarCharToString
             | CastDateToString
             | CastTimeToString
             | CastTimestampToString
@@ -4066,8 +4066,7 @@ impl UnaryFunc {
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            CastCharToString
-            | CastVarCharToString
+            CastVarCharToString
             | CastDateToTimestamp
             | CastDateToTimestampTz
             | CastDateToString
@@ -4199,9 +4198,9 @@ impl UnaryFunc {
             | CastStringToChar(_)
             | PadChar(_)
             | CastStringToVarChar(_)
+            | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInterval => f.write_str("-"),
-            CastCharToString => f.write_str("chartostr"),
             CastVarCharToString => f.write_str("varchartostr"),
             CastDateToTimestamp => f.write_str("datetots"),
             CastDateToTimestampTz => f.write_str("datetotstz"),

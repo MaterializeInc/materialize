@@ -362,7 +362,7 @@ lazy_static! {
             }),
 
             // CHAR
-            (Char, String) => Implicit: CastCharToString,
+            (Char, String) => Implicit: CastCharToString(func::CastCharToString),
             (Char, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))

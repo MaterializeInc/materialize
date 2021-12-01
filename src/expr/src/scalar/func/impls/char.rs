@@ -48,3 +48,12 @@ impl fmt::Display for PadChar {
         f.write_str("padchar")
     }
 }
+
+// This function simply allows the expression of changing a's type from varchar to string
+sqlfunc!(
+    #[sqlname = "chartostr"]
+    #[preserves_uniqueness = true]
+    fn cast_char_to_string<'a>(a: Char<&'a str>) -> &'a str {
+        a.0
+    }
+);
