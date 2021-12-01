@@ -64,20 +64,10 @@ impl PredicateKnowledge {
             MirRelationExpr::DeclareKeys { input, .. } => {
                 PredicateKnowledge::action(input, let_knowledge)?
             }
-            MirRelationExpr::Get { id, typ } => {
-                // If we fail to find bound knowledge, use the nullability of the type.
-                let_knowledge.get(id).cloned().unwrap_or_else(|| {
-                    typ.column_types
-                        .iter()
-                        .enumerate()
-                        .filter(|(_index, ct)| !ct.nullable)
-                        .map(|(index, _ct)| {
-                            MirScalarExpr::column(index)
-                                .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                                .call_unary(UnaryFunc::Not(expr::func::Not))
-                        })
-                        .collect()
-                })
+            MirRelationExpr::Get { id, typ: _ } => {
+                // If we fail to find bound knowledge, use at least the nullability of the type
+                // (added later for all expression types).
+                let_knowledge.get(id).cloned().unwrap_or_else(|| Vec::new())
             }
             MirRelationExpr::Constant { rows, typ } => {
                 // Each column could 1. be equal to a literal, 2. known to be non-null.
@@ -194,7 +184,6 @@ impl PredicateKnowledge {
                             .call_binary(scalar.clone(), expr::BinaryFunc::Eq),
                     );
                 }
-                // TODO: present literal columns (and non-null?) as predicates.
                 output_knowledge
             }
             MirRelationExpr::FlatMap {
@@ -331,13 +320,6 @@ impl PredicateKnowledge {
                             );
                         } else {
                             // TODO: Something more sophisticated using `input_knowledge` too.
-                            if !self_type.column_types[column].nullable {
-                                predicates.push(
-                                    MirScalarExpr::column(column)
-                                        .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                                        .call_unary(UnaryFunc::Not(expr::func::Not)),
-                                );
-                            }
                         }
                     }
                 }
@@ -360,6 +342,21 @@ impl PredicateKnowledge {
                 know1
             }
         };
+
+        // Propagate the nullability flags of the projected columns as predicates
+        predicates.extend(self_type.column_types.iter().enumerate().flat_map(
+            |(col_idx, col_typ)| {
+                if !col_typ.nullable {
+                    Some(
+                        MirScalarExpr::column(col_idx)
+                            .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
+                            .call_unary(UnaryFunc::Not(expr::func::Not)),
+                    )
+                } else {
+                    None
+                }
+            },
+        ));
 
         normalize_predicates(&mut predicates, &self_type);
         if predicates

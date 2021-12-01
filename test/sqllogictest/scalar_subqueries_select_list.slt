@@ -919,7 +919,6 @@ FROM t2, t3
 | | implementation = DeltaQuery
 | |   delta %4 %5.(#0)
 | |   delta %5 %4.(#0)
-| Filter !(isnull(#0))
 | Project (#0, #1)
 
 %7 =

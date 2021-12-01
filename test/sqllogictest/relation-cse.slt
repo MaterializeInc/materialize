@@ -264,7 +264,6 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND EXISTS (SELECT f1 FR
 %6 =
 | Join %1 %4 %5 (= #0 #2)
 | | implementation = Differential %4 %5.() %1.(#0)
-| Filter !(isnull(#0))
 | Project (#0, #1)
 
 EOF
@@ -1037,7 +1036,6 @@ SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
 %5 = Let l1 =
 | Join %1 %4 (= #0 #2)
 | | implementation = Differential %4 %1.(#0)
-| Filter !(isnull(#0))
 | Project (#0, #1)
 
 %6 =
