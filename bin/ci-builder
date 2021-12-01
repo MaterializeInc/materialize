@@ -89,10 +89,12 @@ build() {
 files=$(cat \
         <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder) \
         <(git ls-files --others --exclude-standard -z ci/builder) \
-    | sort -z \
+    | LC_ALL=C sort -z \
     | xargs -0 sha1sum)
-files+=$rust_date
-files+=$arch_gcc
+files+="
+date:$rust_date
+arch:$arch_gcc
+"
 tag=$(echo "$files" | python3 -c '
 import base64
 import hashlib
