@@ -109,6 +109,11 @@ List new features before bug fixes.
 
 - **Breaking change.** Remove the `mz_workers` function.
 
+- Correctly autogenerate views from Postgres sources during [`CREATE
+  VIEWS`](/sql/create-source/postgres/#creating-views) when the upstream table
+  contains numeric columns with no specified scale and precision. {{% gh 9268
+  %}}
+
 - Support `generate_series` for [`timestamp`] data.
 
 - Prevent overflow on operations combining [`timestamp`] and [`interval`].
