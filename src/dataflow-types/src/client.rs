@@ -452,6 +452,7 @@ pub mod partitioned {
     #[async_trait::async_trait]
     impl<C: Client> Client for Partitioned<C> {
         async fn send(&mut self, cmd: Command) {
+            self.state.observe_command(&cmd);
             let cmd_parts = cmd.partition_among(self.shards.len());
             for (shard, cmd_part) in self.shards.iter_mut().zip(cmd_parts) {
                 shard.send(cmd_part).await;
@@ -501,7 +502,7 @@ pub mod partitioned {
         /// Observes commands that move past, and prepares state for responses.
         ///
         /// In particular, this method installs and removes upper frontier maintenance.
-        pub fn observe_command(&mut self, command: Command) {
+        pub fn observe_command(&mut self, command: &Command) {
             // Temporary storage for identifiers to add to and remove from frontier tracking.
             let mut start = Vec::new();
             let mut cease = Vec::new();
