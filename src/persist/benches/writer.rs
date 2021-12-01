@@ -9,6 +9,7 @@
 
 //! Benchmarks for different persistent Write implementations.
 
+use std::fmt::Write;
 use std::mem::size_of;
 use std::path::Path;
 use std::sync::Arc;
@@ -28,7 +29,7 @@ use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
-use persist::indexed::columnar::ColumnarRecords;
+use persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use persist::indexed::encoding::{BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
 use persist::indexed::runtime::WriteReqBuilder;
@@ -49,21 +50,25 @@ fn new_file_blob(name: &str, parent: &Path) -> FileBlob {
         .expect("creating a FileBlob cannot fail")
 }
 
-fn generate_updates() -> Vec<((Vec<u8>, Vec<u8>), u64, isize)> {
-    let mut updates = vec![];
-    // Ensure that each value has the same number of bytes to make reasoning about
+fn generate_updates() -> ColumnarRecords {
+    let mut builder = ColumnarRecordsBuilder::default();
+    // Ensure that each key has the same number of bytes to make reasoning about
     // throughput simpler
+    let val_bytes = Vec::new();
+    let mut key = String::new();
     for x in 1_000_000..2_000_000 {
-        updates.push(((format!("{}", x).into(), "".into()), 1, 1));
+        key.clear();
+        write!(&mut key, "{}", x).expect("write cannot fail");
+        builder.push(((key.as_bytes(), &val_bytes), 1, 1));
     }
 
-    updates
+    builder.finish()
 }
 
-fn get_encoded_len(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> u64 {
+fn get_encoded_len(updates: &ColumnarRecords) -> u64 {
     let mut len = 0;
 
-    for ((key, val), _, _) in updates {
+    for ((key, val), _, _) in updates.iter() {
         len += key.len();
         len += val.len();
         len += size_of::<u64>() + size_of::<isize>();
@@ -231,10 +236,14 @@ fn bench_writes_indexed_inner<B: Blob, L: Log>(
     g: &mut BenchmarkGroup<WallTime>,
 ) -> Result<(), Error> {
     let updates = generate_updates();
+    let size = get_encoded_len(&updates);
+    let updates = updates
+        .iter()
+        .map(|((key, val), t, d)| ((key.to_vec(), val.to_vec()), t, d))
+        .collect::<Vec<_>>();
     let mut sorted_updates = updates.clone();
     sorted_updates.sort();
 
-    let size = get_encoded_len(updates.clone());
     g.throughput(Throughput::Bytes(size));
 
     let id = block_on(|res| index.register("0", "()", "()", res))?;
@@ -311,7 +320,7 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
     let mut file_blob_cache = BlobCache::new(metrics, file_blob);
 
     let updates = generate_updates();
-    let size = get_encoded_len(updates.clone());
+    let size = get_encoded_len(&updates);
     let updates = vec![updates.iter().collect::<ColumnarRecords>()];
     group.throughput(Throughput::Bytes(size));
     let batch = BlobUnsealedBatch {
