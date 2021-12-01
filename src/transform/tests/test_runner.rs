@@ -238,7 +238,7 @@ mod tests {
                 transform::nonnull_requirements::NonNullRequirements::default(),
             )),
             "PredicateKnowledge" => Ok(Box::new(
-                transform::predicate_propagation::PredicateKnowledge,
+                transform::predicate_propagation::PredicateKnowledge::default(),
             )),
             "PredicatePushdown" => Ok(Box::new(
                 transform::predicate_pushdown::PredicatePushdown::default(),
@@ -415,10 +415,8 @@ mod tests {
         args: &HashMap<String, Vec<String>>,
     ) -> Result<String, Error> {
         let mut rel = parse_relation(s, cat, args)?;
-        let predicates = transform::predicate_propagation::PredicateKnowledge::action(
-            &mut rel,
-            &mut Default::default(),
-        )?;
+        let transform = transform::predicate_propagation::PredicateKnowledge::default();
+        let predicates = transform.action(&mut rel, &mut Default::default())?;
         let mut out = String::new();
         for predicate in predicates {
             write!(out, "{}\n", predicate)?;

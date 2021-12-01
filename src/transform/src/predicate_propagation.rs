@@ -25,13 +25,32 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{BinaryFunc, JoinInputMapper, MirRelationExpr, MirScalarExpr, UnaryFunc};
+use expr::{
+    BinaryFunc, JoinInputMapper, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT,
+};
+use ore::stack::{CheckedRecursion, RecursionGuard};
 use repr::Datum;
 use repr::ScalarType;
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
-pub struct PredicateKnowledge;
+pub struct PredicateKnowledge {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for PredicateKnowledge {
+    fn default() -> PredicateKnowledge {
+        PredicateKnowledge {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for PredicateKnowledge {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for PredicateKnowledge {
     fn transform(
@@ -39,7 +58,7 @@ impl crate::Transform for PredicateKnowledge {
         expr: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let _predicates = PredicateKnowledge::action(expr, &mut HashMap::new())?;
+        let _predicates = self.action(expr, &mut HashMap::new())?;
         Ok(())
     }
 }
@@ -53,49 +72,239 @@ impl PredicateKnowledge {
     /// equivalence is expressed by a single `#col1 = #col2` and should inherit the
     /// implications of the first column's role in any predicates.
     pub fn action(
+        &self,
         expr: &mut MirRelationExpr,
         let_knowledge: &mut HashMap<expr::Id, Vec<MirScalarExpr>>,
     ) -> Result<Vec<MirScalarExpr>, crate::TransformError> {
-        let self_type = expr.typ();
-        let mut predicates = match expr {
-            MirRelationExpr::ArrangeBy { input, .. } => {
-                PredicateKnowledge::action(input, let_knowledge)?
-            }
-            MirRelationExpr::DeclareKeys { input, .. } => {
-                PredicateKnowledge::action(input, let_knowledge)?
-            }
-            MirRelationExpr::Get { id, typ: _ } => {
-                // If we fail to find bound knowledge, use at least the nullability of the type
-                // (added later for all expression types).
-                let_knowledge.get(id).cloned().unwrap_or_else(|| Vec::new())
-            }
-            MirRelationExpr::Constant { rows, typ } => {
-                // Each column could 1. be equal to a literal, 2. known to be non-null.
-                // They could be many other things too, but these are the ones we can handle.
-                if let Ok([(row, _cnt), rows @ ..]) = rows.as_deref_mut() {
-                    // An option for each column that contains a common value.
-                    let mut literal = row.iter().map(|x| Some(x)).collect::<Vec<_>>();
-                    // True for each column that is never `Datum::Null`.
-                    let mut non_null = literal
-                        .iter()
-                        .map(|x| x != &Some(Datum::Null))
-                        .collect::<Vec<_>>();
-                    for (row, _cnt) in rows.iter() {
-                        for (index, datum) in row.iter().enumerate() {
-                            if literal[index] != Some(datum) {
-                                literal[index] = None;
+        self.checked_recur(|_| {
+            let self_type = expr.typ();
+            let mut predicates = match expr {
+                MirRelationExpr::ArrangeBy { input, .. } => self.action(input, let_knowledge)?,
+                MirRelationExpr::DeclareKeys { input, .. } => self.action(input, let_knowledge)?,
+                MirRelationExpr::Get { id, typ: _ } => {
+                    // If we fail to find bound knowledge, use at least the nullability of the type
+                    // (added later for all expression types).
+                    let_knowledge.get(id).cloned().unwrap_or_else(|| Vec::new())
+                }
+                MirRelationExpr::Constant { rows, typ } => {
+                    // Each column could 1. be equal to a literal, 2. known to be non-null.
+                    // They could be many other things too, but these are the ones we can handle.
+                    if let Ok([(row, _cnt), rows @ ..]) = rows.as_deref_mut() {
+                        // An option for each column that contains a common value.
+                        let mut literal = row.iter().map(|x| Some(x)).collect::<Vec<_>>();
+                        // True for each column that is never `Datum::Null`.
+                        let mut non_null = literal
+                            .iter()
+                            .map(|x| x != &Some(Datum::Null))
+                            .collect::<Vec<_>>();
+                        for (row, _cnt) in rows.iter() {
+                            for (index, datum) in row.iter().enumerate() {
+                                if literal[index] != Some(datum) {
+                                    literal[index] = None;
+                                }
+                                if datum == Datum::Null {
+                                    non_null[index] = false;
+                                }
                             }
-                            if datum == Datum::Null {
-                                non_null[index] = false;
+                        }
+                        // Load up a return predicate list with everything we have learned.
+                        let mut predicates = Vec::new();
+                        for column in 0..literal.len() {
+                            if let Some(datum) = literal[column] {
+                                // Having found a literal, if it is Null use `IsNull` and otherwise use `Eq`.
+                                if datum == Datum::Null {
+                                    predicates.push(
+                                        MirScalarExpr::Column(column).call_unary(
+                                            expr::UnaryFunc::IsNull(expr::func::IsNull),
+                                        ),
+                                    );
+                                } else {
+                                    predicates.push(MirScalarExpr::Column(column).call_binary(
+                                        MirScalarExpr::literal(
+                                            Ok(datum),
+                                            typ.column_types[column].scalar_type.clone(),
+                                        ),
+                                        expr::BinaryFunc::Eq,
+                                    ));
+                                }
+                            }
+                            if non_null[column] {
+                                predicates.push(
+                                    MirScalarExpr::column(column)
+                                        .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
+                                        .call_unary(UnaryFunc::Not(expr::func::Not)),
+                                );
+                            }
+                        }
+                        predicates
+                    } else {
+                        // Everything is true about an empty collection, but let's have other rules
+                        // optimize them away.
+
+                        Vec::new()
+                    }
+                }
+                MirRelationExpr::Let { id, value, body } => {
+                    // This deals with shadowed let bindings, but perhaps we should just complain instead?
+                    let value_knowledge = self.action(value, let_knowledge)?;
+                    let prior_knowledge =
+                        let_knowledge.insert(expr::Id::Local(id.clone()), value_knowledge);
+                    let body_knowledge = self.action(body, let_knowledge)?;
+                    let_knowledge.remove(&expr::Id::Local(id.clone()));
+                    if let Some(prior_knowledge) = prior_knowledge {
+                        let_knowledge.insert(expr::Id::Local(id.clone()), prior_knowledge);
+                    }
+                    body_knowledge
+                }
+                MirRelationExpr::Project { input, outputs } => {
+                    let mut input_knowledge = self.action(input, let_knowledge)?;
+                    // Need to
+                    // 1. restrict to supported columns,
+                    // 2. rewrite constraints using new column identifiers,
+                    // 3. add equivalence constraints for repeated columns.
+                    let mut remap = HashMap::new();
+                    for (index, column) in outputs.iter().enumerate() {
+                        if !remap.contains_key(column) {
+                            remap.insert(*column, index);
+                        }
+                    }
+
+                    // 1. restrict to supported columns,
+                    input_knowledge
+                        .retain(|expr| expr.support().into_iter().all(|c| remap.contains_key(&c)));
+
+                    // 2. rewrite constraints using new column identifiers,
+                    for predicate in input_knowledge.iter_mut() {
+                        predicate.permute_map(&remap);
+                    }
+
+                    // 3. add equivalence constraints for repeated columns.
+                    for (index, column) in outputs.iter().enumerate() {
+                        if remap[column] != index {
+                            input_knowledge.push(
+                                MirScalarExpr::Column(remap[column]).call_binary(
+                                    MirScalarExpr::Column(index),
+                                    expr::BinaryFunc::Eq,
+                                ),
+                            );
+                        }
+                    }
+                    input_knowledge
+                }
+                MirRelationExpr::Map { input, scalars } => {
+                    let input_knowledge = self.action(input, let_knowledge)?;
+                    let input_arity = input.arity();
+                    let structured = PredicateStructure::new(&input_knowledge);
+                    let mut output_knowledge = input_knowledge.clone();
+                    // Scalars could be simplified based on known predicates.
+                    for (index, scalar) in scalars.iter_mut().enumerate() {
+                        optimize(scalar, &structured);
+                        output_knowledge.push(
+                            MirScalarExpr::Column(input_arity + index)
+                                .call_binary(scalar.clone(), expr::BinaryFunc::Eq),
+                        );
+                    }
+                    output_knowledge
+                }
+                MirRelationExpr::FlatMap {
+                    input,
+                    func: _,
+                    exprs,
+                } => {
+                    let input_knowledge = self.action(input, let_knowledge)?;
+                    let structured = PredicateStructure::new(&input_knowledge);
+                    for expr in exprs {
+                        optimize(expr, &structured);
+                    }
+                    input_knowledge
+                }
+                MirRelationExpr::Filter { input, predicates } => {
+                    let input_knowledge = self.action(input, let_knowledge)?;
+                    let structured = PredicateStructure::new(&input_knowledge);
+                    let mut output_knowledge = input_knowledge.clone();
+
+                    for predicate in predicates.iter_mut() {
+                        optimize(predicate, &structured);
+                        output_knowledge.push(predicate.clone());
+                    }
+                    output_knowledge
+                }
+                MirRelationExpr::Join {
+                    inputs,
+                    equivalences,
+                    ..
+                } => {
+                    let input_mapper = JoinInputMapper::new(inputs);
+
+                    let mut knowledge = Vec::new();
+
+                    // Collect input knowledge, but update column references.
+                    for (input_idx, input) in inputs.iter_mut().enumerate() {
+                        for predicate in self.action(input, let_knowledge)? {
+                            knowledge.push(input_mapper.map_expr_to_global(predicate, input_idx));
+                        }
+                    }
+
+                    let structured = PredicateStructure::new(&knowledge);
+                    let mut new_predicates = Vec::new();
+
+                    for equivalence in equivalences.iter_mut() {
+                        for expr in equivalence.iter_mut() {
+                            optimize(expr, &structured);
+                        }
+
+                        if let Some(first) = equivalence.get(0) {
+                            for other in equivalence[1..].iter() {
+                                new_predicates
+                                    .push(first.clone().call_binary(other.clone(), BinaryFunc::Eq));
                             }
                         }
                     }
-                    // Load up a return predicate list with everything we have learned.
+
+                    knowledge.extend(new_predicates);
+                    normalize_predicates(&mut knowledge, &self_type);
+                    knowledge
+                }
+                MirRelationExpr::Reduce {
+                    input,
+                    group_key,
+                    aggregates,
+                    ..
+                } => {
+                    let input_type = input.typ();
+                    let input_knowledge = self.action(input, let_knowledge)?;
+                    let structured = PredicateStructure::new(&input_knowledge);
+                    for key in group_key.iter_mut() {
+                        optimize(key, &structured);
+                    }
+                    for aggregate in aggregates.iter_mut() {
+                        optimize(&mut aggregate.expr, &structured);
+                    }
+
+                    // List of predicates we will return.
                     let mut predicates = Vec::new();
-                    for column in 0..literal.len() {
-                        if let Some(datum) = literal[column] {
-                            // Having found a literal, if it is Null use `IsNull` and otherwise use `Eq`.
-                            if datum == Datum::Null {
+
+                    // Predicates that depend only on group keys should remain true of those columns.
+                    // 0. Form a map from key expressions to the columns they will become.
+                    let mut key_exprs = HashMap::new();
+                    for (index, expr) in group_key.iter().enumerate() {
+                        key_exprs.insert(expr.clone(), MirScalarExpr::Column(index));
+                    }
+                    // 1. Visit each predicate, and collect those that reach no `ScalarExpr::Column` when substituting per `key_exprs`.
+                    //    They will be preserved and presented as output.
+                    for mut predicate in input_knowledge.iter().cloned() {
+                        if substitute(&mut predicate, &key_exprs) {
+                            predicates.push(predicate);
+                        }
+                    }
+
+                    // TODO: Predicates about columns that are certain aggregates can be preserved.
+                    // For example, if a column Not(IsNull) or (= 7) then Min/Max of that column
+                    // will have the same property.
+                    for (index, aggregate) in aggregates.iter_mut().enumerate() {
+                        let column = group_key.len() + index;
+                        if let Some(Ok(literal)) = aggregate.as_literal() {
+                            if literal == Datum::Null {
                                 predicates.push(
                                     MirScalarExpr::Column(column)
                                         .call_unary(expr::UnaryFunc::IsNull(expr::func::IsNull)),
@@ -103,269 +312,79 @@ impl PredicateKnowledge {
                             } else {
                                 predicates.push(MirScalarExpr::Column(column).call_binary(
                                     MirScalarExpr::literal(
-                                        Ok(datum),
-                                        typ.column_types[column].scalar_type.clone(),
+                                        Ok(literal),
+                                        self_type.column_types[column].scalar_type.clone(),
                                     ),
                                     expr::BinaryFunc::Eq,
                                 ));
+                                predicates.push(
+                                    MirScalarExpr::column(column)
+                                        .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
+                                        .call_unary(UnaryFunc::Not(expr::func::Not)),
+                                );
                             }
-                        }
-                        if non_null[column] {
-                            predicates.push(
-                                MirScalarExpr::column(column)
-                                    .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                                    .call_unary(UnaryFunc::Not(expr::func::Not)),
-                            );
-                        }
-                    }
-                    predicates
-                } else {
-                    // Everything is true about an empty collection, but let's have other rules
-                    // optimize them away.
-
-                    Vec::new()
-                }
-            }
-            MirRelationExpr::Let { id, value, body } => {
-                // This deals with shadowed let bindings, but perhaps we should just complain instead?
-                let value_knowledge = PredicateKnowledge::action(value, let_knowledge)?;
-                let prior_knowledge =
-                    let_knowledge.insert(expr::Id::Local(id.clone()), value_knowledge);
-                let body_knowledge = PredicateKnowledge::action(body, let_knowledge)?;
-                let_knowledge.remove(&expr::Id::Local(id.clone()));
-                if let Some(prior_knowledge) = prior_knowledge {
-                    let_knowledge.insert(expr::Id::Local(id.clone()), prior_knowledge);
-                }
-                body_knowledge
-            }
-            MirRelationExpr::Project { input, outputs } => {
-                let mut input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
-                // Need to
-                // 1. restrict to supported columns,
-                // 2. rewrite constraints using new column identifiers,
-                // 3. add equivalence constraints for repeated columns.
-                let mut remap = HashMap::new();
-                for (index, column) in outputs.iter().enumerate() {
-                    if !remap.contains_key(column) {
-                        remap.insert(*column, index);
-                    }
-                }
-
-                // 1. restrict to supported columns,
-                input_knowledge
-                    .retain(|expr| expr.support().into_iter().all(|c| remap.contains_key(&c)));
-
-                // 2. rewrite constraints using new column identifiers,
-                for predicate in input_knowledge.iter_mut() {
-                    predicate.permute_map(&remap);
-                }
-
-                // 3. add equivalence constraints for repeated columns.
-                for (index, column) in outputs.iter().enumerate() {
-                    if remap[column] != index {
-                        input_knowledge.push(
-                            MirScalarExpr::Column(remap[column])
-                                .call_binary(MirScalarExpr::Column(index), expr::BinaryFunc::Eq),
-                        );
-                    }
-                }
-                input_knowledge
-            }
-            MirRelationExpr::Map { input, scalars } => {
-                let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
-                let input_arity = input.arity();
-                let structured = PredicateStructure::new(&input_knowledge);
-                let mut output_knowledge = input_knowledge.clone();
-                // Scalars could be simplified based on known predicates.
-                for (index, scalar) in scalars.iter_mut().enumerate() {
-                    optimize(scalar, &structured);
-                    output_knowledge.push(
-                        MirScalarExpr::Column(input_arity + index)
-                            .call_binary(scalar.clone(), expr::BinaryFunc::Eq),
-                    );
-                }
-                output_knowledge
-            }
-            MirRelationExpr::FlatMap {
-                input,
-                func: _,
-                exprs,
-            } => {
-                let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
-                let structured = PredicateStructure::new(&input_knowledge);
-                for expr in exprs {
-                    optimize(expr, &structured);
-                }
-                input_knowledge
-            }
-            MirRelationExpr::Filter { input, predicates } => {
-                let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
-                let structured = PredicateStructure::new(&input_knowledge);
-                let mut output_knowledge = input_knowledge.clone();
-
-                for predicate in predicates.iter_mut() {
-                    optimize(predicate, &structured);
-                    output_knowledge.push(predicate.clone());
-                }
-                output_knowledge
-            }
-            MirRelationExpr::Join {
-                inputs,
-                equivalences,
-                ..
-            } => {
-                let input_mapper = JoinInputMapper::new(inputs);
-
-                let mut knowledge = Vec::new();
-
-                // Collect input knowledge, but update column references.
-                for (input_idx, input) in inputs.iter_mut().enumerate() {
-                    for predicate in PredicateKnowledge::action(input, let_knowledge)? {
-                        knowledge.push(input_mapper.map_expr_to_global(predicate, input_idx));
-                    }
-                }
-
-                let structured = PredicateStructure::new(&knowledge);
-                let mut new_predicates = Vec::new();
-
-                for equivalence in equivalences.iter_mut() {
-                    for expr in equivalence.iter_mut() {
-                        optimize(expr, &structured);
-                    }
-
-                    if let Some(first) = equivalence.get(0) {
-                        for other in equivalence[1..].iter() {
-                            new_predicates
-                                .push(first.clone().call_binary(other.clone(), BinaryFunc::Eq));
-                        }
-                    }
-                }
-
-                knowledge.extend(new_predicates);
-                normalize_predicates(&mut knowledge, &self_type);
-                knowledge
-            }
-            MirRelationExpr::Reduce {
-                input,
-                group_key,
-                aggregates,
-                ..
-            } => {
-                let input_type = input.typ();
-                let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
-                let structured = PredicateStructure::new(&input_knowledge);
-                for key in group_key.iter_mut() {
-                    optimize(key, &structured);
-                }
-                for aggregate in aggregates.iter_mut() {
-                    optimize(&mut aggregate.expr, &structured);
-                }
-
-                // List of predicates we will return.
-                let mut predicates = Vec::new();
-
-                // Predicates that depend only on group keys should remain true of those columns.
-                // 0. Form a map from key expressions to the columns they will become.
-                let mut key_exprs = HashMap::new();
-                for (index, expr) in group_key.iter().enumerate() {
-                    key_exprs.insert(expr.clone(), MirScalarExpr::Column(index));
-                }
-                // 1. Visit each predicate, and collect those that reach no `ScalarExpr::Column` when substituting per `key_exprs`.
-                //    They will be preserved and presented as output.
-                for mut predicate in input_knowledge.iter().cloned() {
-                    if substitute(&mut predicate, &key_exprs) {
-                        predicates.push(predicate);
-                    }
-                }
-
-                // TODO: Predicates about columns that are certain aggregates can be preserved.
-                // For example, if a column Not(IsNull) or (= 7) then Min/Max of that column
-                // will have the same property.
-                for (index, aggregate) in aggregates.iter_mut().enumerate() {
-                    let column = group_key.len() + index;
-                    if let Some(Ok(literal)) = aggregate.as_literal() {
-                        if literal == Datum::Null {
-                            predicates.push(
-                                MirScalarExpr::Column(column)
-                                    .call_unary(expr::UnaryFunc::IsNull(expr::func::IsNull)),
-                            );
                         } else {
-                            predicates.push(MirScalarExpr::Column(column).call_binary(
-                                MirScalarExpr::literal(
-                                    Ok(literal),
-                                    self_type.column_types[column].scalar_type.clone(),
-                                ),
-                                expr::BinaryFunc::Eq,
-                            ));
-                            predicates.push(
-                                MirScalarExpr::column(column)
-                                    .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                                    .call_unary(UnaryFunc::Not(expr::func::Not)),
-                            );
-                        }
-                    } else {
-                        // Aggregates that are non-literals may still be non-null.
-                        if let expr::AggregateFunc::Count = aggregate.func {
-                            // Replace counts of nonnull, nondistinct expressions with `true`.
-                            if let MirScalarExpr::Column(c) = aggregate.expr {
-                                if !input_type.column_types[c].nullable && !aggregate.distinct {
-                                    aggregate.expr =
-                                        MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
+                            // Aggregates that are non-literals may still be non-null.
+                            if let expr::AggregateFunc::Count = aggregate.func {
+                                // Replace counts of nonnull, nondistinct expressions with `true`.
+                                if let MirScalarExpr::Column(c) = aggregate.expr {
+                                    if !input_type.column_types[c].nullable && !aggregate.distinct {
+                                        aggregate.expr = MirScalarExpr::literal_ok(
+                                            Datum::True,
+                                            ScalarType::Bool,
+                                        );
+                                    }
                                 }
+                                predicates.push(
+                                    MirScalarExpr::column(column)
+                                        .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
+                                        .call_unary(UnaryFunc::Not(expr::func::Not)),
+                                );
+                            } else {
+                                // TODO: Something more sophisticated using `input_knowledge` too.
                             }
-                            predicates.push(
-                                MirScalarExpr::column(column)
-                                    .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                                    .call_unary(UnaryFunc::Not(expr::func::Not)),
-                            );
-                        } else {
-                            // TODO: Something more sophisticated using `input_knowledge` too.
                         }
                     }
-                }
 
-                predicates
-            }
-            MirRelationExpr::TopK { input, .. } => {
-                PredicateKnowledge::action(input, let_knowledge)?
-            }
-            MirRelationExpr::Negate { input } => PredicateKnowledge::action(input, let_knowledge)?,
-            MirRelationExpr::Threshold { input } => {
-                PredicateKnowledge::action(input, let_knowledge)?
-            }
-            MirRelationExpr::Union { base, inputs } => {
-                let mut know1 = PredicateKnowledge::action(base, let_knowledge)?;
-                for input in inputs.iter_mut() {
-                    let know2 = PredicateKnowledge::action(input, let_knowledge)?;
-                    know1.retain(|predicate| know2.contains(predicate));
+                    predicates
                 }
-                know1
-            }
-        };
-
-        // Propagate the nullability flags of the projected columns as predicates
-        predicates.extend(self_type.column_types.iter().enumerate().flat_map(
-            |(col_idx, col_typ)| {
-                if !col_typ.nullable {
-                    Some(
-                        MirScalarExpr::column(col_idx)
-                            .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                            .call_unary(UnaryFunc::Not(expr::func::Not)),
-                    )
-                } else {
-                    None
+                MirRelationExpr::TopK { input, .. } => self.action(input, let_knowledge)?,
+                MirRelationExpr::Negate { input } => self.action(input, let_knowledge)?,
+                MirRelationExpr::Threshold { input } => self.action(input, let_knowledge)?,
+                MirRelationExpr::Union { base, inputs } => {
+                    let mut know1 = self.action(base, let_knowledge)?;
+                    for input in inputs.iter_mut() {
+                        let know2 = self.action(input, let_knowledge)?;
+                        know1.retain(|predicate| know2.contains(predicate));
+                    }
+                    know1
                 }
-            },
-        ));
+            };
 
-        normalize_predicates(&mut predicates, &self_type);
-        if predicates
-            .iter()
-            .any(|p| p.is_literal_false() || p.is_literal_null())
-        {
-            expr.take_safely();
-        }
-        Ok(predicates)
+            // Propagate the nullability flags of the projected columns as predicates
+            predicates.extend(self_type.column_types.iter().enumerate().flat_map(
+                |(col_idx, col_typ)| {
+                    if !col_typ.nullable {
+                        Some(
+                            MirScalarExpr::column(col_idx)
+                                .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
+                                .call_unary(UnaryFunc::Not(expr::func::Not)),
+                        )
+                    } else {
+                        None
+                    }
+                },
+            ));
+
+            normalize_predicates(&mut predicates, &self_type);
+            if predicates
+                .iter()
+                .any(|p| p.is_literal_false() || p.is_literal_null())
+            {
+                expr.take_safely();
+            }
+            Ok(predicates)
+        })
     }
 }
 
