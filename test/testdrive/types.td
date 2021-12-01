@@ -30,6 +30,7 @@ _jsonb
 _numeric
 _oid
 _record
+_regclass
 _regproc
 _regtype
 _text
@@ -59,6 +60,7 @@ map
 numeric
 oid
 record
+regclass
 regproc
 regtype
 text
@@ -86,6 +88,7 @@ _jsonb           system
 _numeric         system
 _oid             system
 _record          system
+_regclass         system
 _regproc         system
 _regtype         system
 _text            system
@@ -114,6 +117,7 @@ list             system
 map              system
 numeric          system
 oid              system
+regclass         system
 regproc          system
 regtype          system
 record           system

@@ -3385,12 +3385,15 @@ pub enum UnaryFunc {
     CastInt32ToFloat32(CastInt32ToFloat32),
     CastInt32ToFloat64(CastInt32ToFloat64),
     CastInt32ToOid(CastInt32ToOid),
+    CastInt32ToRegClass(CastInt32ToRegClass),
     CastInt32ToRegProc(CastInt32ToRegProc),
     CastInt32ToRegType(CastInt32ToRegType),
     CastInt32ToInt16(CastInt32ToInt16),
     CastInt32ToInt64(CastInt32ToInt64),
     CastInt32ToString(CastInt32ToString),
     CastOidToInt32(CastOidToInt32),
+    CastOidToRegClass(CastOidToRegClass),
+    CastRegClassToOid(CastRegClassToOid),
     CastOidToRegProc(CastOidToRegProc),
     CastRegProcToOid(CastRegProcToOid),
     CastOidToRegType(CastOidToRegType),
@@ -3621,6 +3624,7 @@ derive_unary!(
     CastInt32ToInt64,
     CastInt32ToString,
     CastInt32ToOid,
+    CastInt32ToRegClass,
     CastInt32ToRegProc,
     CastInt32ToRegType,
     CastInt64ToInt16,
@@ -3634,6 +3638,8 @@ derive_unary!(
     CastFloat64ToNumeric,
     CastInt32ToNumeric,
     CastOidToInt32,
+    CastOidToRegClass,
+    CastRegClassToOid,
     CastOidToRegProc,
     CastRegProcToOid,
     CastOidToRegType,
@@ -3747,9 +3753,12 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToRegClass(_)
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
             | CastOidToInt32(_)
+            | CastOidToRegClass(_)
+            | CastRegClassToOid(_)
             | CastOidToRegProc(_)
             | CastRegProcToOid(_)
             | CastOidToRegType(_)
@@ -3952,9 +3961,12 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToRegClass(_)
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
             | CastOidToInt32(_)
+            | CastOidToRegClass(_)
+            | CastRegClassToOid(_)
             | CastOidToRegProc(_)
             | CastRegProcToOid(_)
             | CastOidToRegType(_)
@@ -4182,9 +4194,12 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToRegClass(_)
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
             | CastOidToInt32(_)
+            | CastOidToRegClass(_)
+            | CastRegClassToOid(_)
             | CastOidToRegProc(_)
             | CastRegProcToOid(_)
             | CastOidToRegType(_)
@@ -4409,9 +4424,12 @@ impl UnaryFunc {
             | CastInt32ToInt64(_)
             | CastInt32ToString(_)
             | CastInt32ToOid(_)
+            | CastInt32ToRegClass(_)
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
             | CastOidToInt32(_)
+            | CastOidToRegClass(_)
+            | CastRegClassToOid(_)
             | CastOidToRegProc(_)
             | CastRegProcToOid(_)
             | CastOidToRegType(_)
@@ -5022,7 +5040,7 @@ where
     match &ty {
         Bool => strconv::format_bool(buf, d.unwrap_bool()),
         Int16 => strconv::format_int16(buf, d.unwrap_int16()),
-        Int32 | Oid | RegProc | RegType => strconv::format_int32(buf, d.unwrap_int32()),
+        Int32 | Oid | RegClass | RegProc | RegType => strconv::format_int32(buf, d.unwrap_int32()),
         Int64 => strconv::format_int64(buf, d.unwrap_int64()),
         Float32 => strconv::format_float32(buf, d.unwrap_float32()),
         Float64 => strconv::format_float64(buf, d.unwrap_float64()),
