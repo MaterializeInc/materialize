@@ -3267,6 +3267,7 @@ dependencies = [
  "openssl",
  "pin-project",
  "prometheus",
+ "serde",
  "smallvec",
  "stacker",
  "structopt",

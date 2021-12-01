@@ -19,7 +19,7 @@ use protobuf::reflect::{
 };
 use protobuf::{CodedInputStream, Message, MessageDyn};
 
-use ore::str::StrExt;
+use ore::str::{NormalizedProtobufMessageName, StrExt};
 use repr::{ColumnName, ColumnType, Datum, Row, ScalarType};
 
 /// A decoded description of the schema of a Protobuf message.
@@ -33,10 +33,10 @@ impl DecodedDescriptors {
     /// Builds a `DecodedDescriptors` from an encoded [`FileDescriptorSet`]
     /// and the fully qualified name of a message inside that file descriptor
     /// set.
-    pub fn from_bytes(bytes: &[u8], mut message_name: String) -> Result<Self, anyhow::Error> {
-        if !message_name.starts_with('.') {
-            message_name = format!(".{}", message_name);
-        }
+    pub fn from_bytes(
+        bytes: &[u8],
+        message_name: NormalizedProtobufMessageName,
+    ) -> Result<Self, anyhow::Error> {
         let fds =
             FileDescriptorSet::parse_from_bytes(bytes).context("parsing file descriptor set")?;
         let fds = FileDescriptor::new_dynamic_fds(fds.file);

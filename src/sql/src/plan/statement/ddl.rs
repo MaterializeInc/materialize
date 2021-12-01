@@ -38,7 +38,7 @@ use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
-use ore::str::StrExt;
+use ore::str::{NormalizedProtobufMessageName, StrExt};
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::ast::CsrSeedCompiledOrLegacy;
 
@@ -1055,13 +1055,17 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 {
                     let value = DataEncoding::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
-                        message_name: value.message_name.clone(),
+                        message_name: NormalizedProtobufMessageName::new(
+                            value.message_name.clone(),
+                        ),
                     });
                     if let Some(key) = key {
                         return Ok(SourceDataEncoding::KeyValue {
                             key: DataEncoding::Protobuf(ProtobufEncoding {
                                 descriptors: strconv::parse_bytes(&key.schema)?,
-                                message_name: key.message_name.clone(),
+                                message_name: NormalizedProtobufMessageName::new(
+                                    key.message_name.clone(),
+                                ),
                             }),
                             value,
                         });
@@ -1084,7 +1088,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
 
                 DataEncoding::Protobuf(ProtobufEncoding {
                     descriptors,
-                    message_name: message_name.to_owned(),
+                    message_name: NormalizedProtobufMessageName::new(message_name.to_owned()),
                 })
             }
         },

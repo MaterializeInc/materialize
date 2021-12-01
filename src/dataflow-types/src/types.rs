@@ -22,6 +22,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use globset::Glob;
 use http::Uri;
+use ore::str::NormalizedProtobufMessageName;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -366,7 +367,7 @@ impl DataEncoding {
             DataEncoding::Protobuf(ProtobufEncoding {
                 descriptors,
                 message_name,
-            }) => protobuf::DecodedDescriptors::from_bytes(descriptors, message_name.into())?
+            }) => protobuf::DecodedDescriptors::from_bytes(descriptors, message_name.to_owned())?
                 .columns()
                 .iter()
                 .fold(RelationDesc::empty(), |desc, (name, ty)| {
@@ -451,7 +452,7 @@ pub struct AvroOcfEncoding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProtobufEncoding {
     pub descriptors: Vec<u8>,
-    pub message_name: String,
+    pub message_name: NormalizedProtobufMessageName,
 }
 
 /// Arguments necessary to define how to decode from CSV format
