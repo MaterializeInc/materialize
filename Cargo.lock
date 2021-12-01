@@ -1735,6 +1735,7 @@ dependencies = [
  "sha-1",
  "sha2",
  "uncased",
+ "uuid",
 ]
 
 [[package]]

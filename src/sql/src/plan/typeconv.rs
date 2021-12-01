@@ -253,11 +253,11 @@ lazy_static! {
             (Bytes, String) => Assignment: CastBytesToString,
 
             // STRING
-            (String, Bool) => Explicit: CastStringToBool,
-            (String, Int16) => Explicit: CastStringToInt16,
-            (String, Int32) => Explicit: CastStringToInt32,
-            (String, Int64) => Explicit: CastStringToInt64,
-            (String, Oid) => Explicit: CastStringToInt32,
+            (String, Bool) => Explicit: CastStringToBool(func::CastStringToBool),
+            (String, Int16) => Explicit: CastStringToInt16(func::CastStringToInt16),
+            (String, Int32) => Explicit: CastStringToInt32(func::CastStringToInt32),
+            (String, Int64) => Explicit: CastStringToInt64(func::CastStringToInt64),
+            (String, Oid) => Explicit: CastStringToInt32(func::CastStringToInt32),
 
             // STRING to REG*
             // A reg* type represents a specific type of object by oid.
@@ -311,20 +311,20 @@ lazy_static! {
                     END
             )"),
 
-            (String, Float32) => Explicit: CastStringToFloat32,
-            (String, Float64) => Explicit: CastStringToFloat64,
+            (String, Float32) => Explicit: CastStringToFloat32(func::CastStringToFloat32),
+            (String, Float64) => Explicit: CastStringToFloat64(func::CastStringToFloat64),
             (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(s)))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(func::CastStringToNumeric(s))))
             }),
-            (String, Date) => Explicit: CastStringToDate,
-            (String, Time) => Explicit: CastStringToTime,
-            (String, Timestamp) => Explicit: CastStringToTimestamp,
-            (String, TimestampTz) => Explicit: CastStringToTimestampTz,
-            (String, Interval) => Explicit: CastStringToInterval,
-            (String, Bytes) => Explicit: CastStringToBytes,
+            (String, Date) => Explicit: CastStringToDate(func::CastStringToDate),
+            (String, Time) => Explicit: CastStringToTime(func::CastStringToTime),
+            (String, Timestamp) => Explicit: CastStringToTimestamp(func::CastStringToTimestamp),
+            (String, TimestampTz) => Explicit: CastStringToTimestampTz(func::CastStringToTimestampTz),
+            (String, Interval) => Explicit: CastStringToInterval(func::CastStringToInterval),
+            (String, Bytes) => Explicit: CastStringToBytes(func::CastStringToBytes),
             (String, Jsonb) => Explicit: CastStringToJsonb,
-            (String, Uuid) => Explicit: CastStringToUuid,
+            (String, Uuid) => Explicit: CastStringToUuid(func::CastStringToUuid),
             (String, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_array_element_type();
@@ -441,12 +441,12 @@ lazy_static! {
                     Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(scale)),
                 })
             }),
-            (Numeric, Float32) => Implicit: CastNumericToFloat32,
-            (Numeric, Float64) => Implicit: CastNumericToFloat64,
-            (Numeric, Int16) => Assignment: CastNumericToInt16,
-            (Numeric, Int32) => Assignment: CastNumericToInt32,
-            (Numeric, Int64) => Assignment: CastNumericToInt64,
-            (Numeric, String) => Assignment: CastNumericToString
+            (Numeric, Float32) => Implicit: CastNumericToFloat32(func::CastNumericToFloat32),
+            (Numeric, Float64) => Implicit: CastNumericToFloat64(func::CastNumericToFloat64),
+            (Numeric, Int16) => Assignment: CastNumericToInt16(func::CastNumericToInt16),
+            (Numeric, Int32) => Assignment: CastNumericToInt32(func::CastNumericToInt32),
+            (Numeric, Int64) => Assignment: CastNumericToInt64(func::CastNumericToInt64),
+            (Numeric, String) => Assignment: CastNumericToString(func::CastNumericToString)
         }
     };
 }

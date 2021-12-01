@@ -670,20 +670,20 @@ impl MapFilterProject {
     /// along the optimization path.
     ///
     /// ```rust
-    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Demonstrate extraction of common expressions (here: parsing strings).
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,5,6]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,6,7]);
     ///
@@ -731,22 +731,22 @@ impl MapFilterProject {
     /// in inliniing.
     ///
     /// ```rust
-    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Demonstrate extraction of common expressions (here: parsing strings).
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,5,6]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
     ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
     ///         MirScalarExpr::column(7),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
     ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(9), BinaryFunc::AddInt64),
     ///         MirScalarExpr::column(10),
     ///     ])
@@ -883,15 +883,15 @@ impl MapFilterProject {
     /// pass (the `remove_undemanded` method).
     ///
     /// ```rust
-    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Use the output from first `memoize_expression` example.
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
     ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
     ///         MirScalarExpr::column(7),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
     ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(9), BinaryFunc::AddInt64),
     ///         MirScalarExpr::column(10),
     ///     ])
@@ -899,13 +899,13 @@ impl MapFilterProject {
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,8,11]);
     ///
@@ -1003,25 +1003,25 @@ impl MapFilterProject {
     /// # Example
     ///
     /// ```rust
-    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Use the output from `inline_expression` example.
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,8,11]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
-    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), BinaryFunc::AddInt64),
     ///     ])
     ///     .project(vec![3,4,6,7]);
     ///

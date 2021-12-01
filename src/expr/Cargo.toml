@@ -33,6 +33,7 @@ serde_json = "1.0.72"
 sha-1 = "0.9.8"
 sha2 = "0.9.8"
 uncased = "0.9.6"
+uuid = "0.8.2"
 paste = "1"
 
 [dev-dependencies]
