@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 mod boolean;
+mod char;
 mod datum;
 mod float32;
 mod float64;
@@ -19,6 +20,7 @@ mod oid;
 mod regproc;
 mod string;
 
+pub use self::char::*;
 pub use boolean::*;
 pub use datum::*;
 pub use float32::*;

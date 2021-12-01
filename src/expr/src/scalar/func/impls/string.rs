@@ -16,8 +16,10 @@ use uuid::Uuid;
 
 use lowertest::MzStructReflect;
 use ore::result::ResultExt;
+use repr::adt::char::{format_str_trim, Char};
 use repr::adt::interval::Interval;
 use repr::adt::numeric::{self, Numeric};
+use repr::adt::varchar::VarChar;
 use repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
 
 use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
@@ -352,5 +354,81 @@ impl LazyUnaryFunc for CastStringToMap {
 impl fmt::Display for CastStringToMap {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("strtomap")
+    }
+}
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
+)]
+pub struct CastStringToChar {
+    pub length: Option<usize>,
+    pub fail_on_len: bool,
+}
+
+impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
+    type Input = &'a str;
+    type Output = Result<Char<String>, EvalError>;
+
+    fn call(&self, a: &'a str) -> Result<Char<String>, EvalError> {
+        let s = format_str_trim(a, self.length, self.fail_on_len).map_err(|_| {
+            assert!(self.fail_on_len);
+            EvalError::StringValueTooLong {
+                target_type: "character".to_string(),
+                length: self.length.unwrap(),
+            }
+        })?;
+
+        Ok(Char(s))
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Char {
+            length: self.length,
+        }
+        .nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for CastStringToChar {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("strtochar")
+    }
+}
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
+)]
+pub struct CastStringToVarChar {
+    pub length: Option<usize>,
+    pub fail_on_len: bool,
+}
+
+impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
+    type Input = &'a str;
+    type Output = Result<VarChar<String>, EvalError>;
+
+    fn call(&self, a: &'a str) -> Result<VarChar<String>, EvalError> {
+        let s = repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
+            assert!(self.fail_on_len);
+            EvalError::StringValueTooLong {
+                target_type: "character varying".to_string(),
+                length: self.length.unwrap(),
+            }
+        })?;
+
+        Ok(VarChar(s))
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::VarChar {
+            length: self.length,
+        }
+        .nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for CastStringToVarChar {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("strtovarchar")
     }
 }

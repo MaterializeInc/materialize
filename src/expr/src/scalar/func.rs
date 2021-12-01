@@ -111,49 +111,6 @@ pub fn or<'a>(
     }
 }
 
-fn cast_str_to_char<'a>(
-    a: Datum<'a>,
-    length: Option<usize>,
-    fail_on_len: bool,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let s =
-        repr::adt::char::format_str_trim(a.unwrap_str(), length, fail_on_len).map_err(|_| {
-            assert!(fail_on_len);
-            EvalError::StringValueTooLong {
-                target_type: "character".to_string(),
-                length: length.unwrap(),
-            }
-        })?;
-
-    Ok(Datum::String(temp_storage.push_string(s)))
-}
-
-fn pad_char<'a>(
-    a: Datum<'a>,
-    length: Option<usize>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let s = repr::adt::char::format_str_pad(a.unwrap_str(), length);
-    Ok(Datum::String(temp_storage.push_string(s)))
-}
-
-fn cast_string_to_varchar<'a>(
-    a: Datum<'a>,
-    length: Option<usize>,
-    fail_on_len: bool,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let s = repr::adt::varchar::format_str(a.unwrap_str(), length, fail_on_len).map_err(|_| {
-        assert!(fail_on_len);
-        EvalError::StringValueTooLong {
-            target_type: "character varying".to_string(),
-            length: length.unwrap(),
-        }
-    })?;
-    Ok(Datum::String(temp_storage.push_string(s)))
-}
-
 fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(a.unwrap_date().and_hms(0, 0, 0))
 }
@@ -3218,20 +3175,9 @@ pub enum UnaryFunc {
     CastStringToInterval(CastStringToInterval),
     CastStringToNumeric(CastStringToNumeric),
     CastStringToUuid(CastStringToUuid),
-    CastStringToChar {
-        length: Option<usize>,
-        fail_on_len: bool,
-    },
-    /// All Char data is stored in Datum::String with its blank padding removed
-    /// (i.e. trimmed), so this function provides a means of restoring any
-    /// removed padding.
-    PadChar {
-        length: Option<usize>,
-    },
-    CastStringToVarChar {
-        length: Option<usize>,
-        fail_on_len: bool,
-    },
+    CastStringToChar(CastStringToChar),
+    PadChar(PadChar),
+    CastStringToVarChar(CastStringToVarChar),
     CastCharToString,
     CastVarCharToString,
     CastDateToTimestamp,
@@ -3445,6 +3391,9 @@ derive_unary!(
     CastStringToArray,
     CastStringToList,
     CastStringToMap,
+    CastStringToChar,
+    PadChar,
+    CastStringToVarChar,
     Cos,
     Cosh,
     Sin,
@@ -3589,17 +3538,11 @@ impl UnaryFunc {
             | CastStringToArray(_)
             | CastStringToList(_)
             | CastStringToMap(_)
+            | CastStringToChar(_)
+            | PadChar(_)
+            | CastStringToVarChar(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInterval => Ok(neg_interval(a)),
-            CastStringToChar {
-                length,
-                fail_on_len,
-            } => cast_str_to_char(a, *length, *fail_on_len, temp_storage),
-            PadChar { length } => pad_char(a, *length, temp_storage),
-            CastStringToVarChar {
-                length,
-                fail_on_len,
-            } => cast_string_to_varchar(a, *length, *fail_on_len, temp_storage),
             // This function simply allows the expression of changing a's type from varchar to string
             CastCharToString => Ok(a),
             CastVarCharToString => Ok(a),
@@ -3791,6 +3734,9 @@ impl UnaryFunc {
             | CastStringToArray(_)
             | CastStringToList(_)
             | CastStringToMap(_)
+            | CastStringToChar(_)
+            | PadChar(_)
+            | CastStringToVarChar(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -3849,14 +3795,6 @@ impl UnaryFunc {
 
             CastList1ToList2 { return_ty, .. } => {
                 return_ty.default_embedded_value().nullable(false)
-            }
-
-            CastStringToChar { length, .. } | PadChar { length } => {
-                ScalarType::Char { length: *length }.nullable(nullable)
-            }
-
-            CastStringToVarChar { length, .. } => {
-                ScalarType::VarChar { length: *length }.nullable(nullable)
             }
 
             NegInterval => input_type,
@@ -4024,6 +3962,9 @@ impl UnaryFunc {
             | CastStringToArray(_)
             | CastStringToList(_)
             | CastStringToMap(_)
+            | CastStringToChar(_)
+            | PadChar(_)
+            | CastStringToVarChar(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4064,8 +4005,6 @@ impl UnaryFunc {
             CastDateToTimestamp | CastTimestampTzToTimestamp | TimezoneTimestampTz(_) => false,
             CastDateToTimestampTz | CastTimestampToTimestampTz | TimezoneTimestamp(_) => false,
             CastList1ToList2 { .. } | CastInPlace { .. } => false,
-            CastStringToChar { .. } | PadChar { .. } => false,
-            CastStringToVarChar { .. } => false,
             JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
@@ -4257,13 +4196,13 @@ impl UnaryFunc {
             | CastStringToArray(_)
             | CastStringToList(_)
             | CastStringToMap(_)
+            | CastStringToChar(_)
+            | PadChar(_)
+            | CastStringToVarChar(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInterval => f.write_str("-"),
-            CastStringToChar { .. } => f.write_str("strtochar"),
-            PadChar { .. } => f.write_str("padchar"),
             CastCharToString => f.write_str("chartostr"),
             CastVarCharToString => f.write_str("varchartostr"),
-            CastStringToVarChar { .. } => f.write_str("strtovarchar"),
             CastDateToTimestamp => f.write_str("datetots"),
             CastDateToTimestampTz => f.write_str("datetotstz"),
             CastDateToString => f.write_str("datetostr"),
