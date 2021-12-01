@@ -27,7 +27,6 @@ predicate-propagation
 (filter (project (constant [[null]] [int64]) [#0 #0]) [(call_binary eq #0 #1)])
 ----
 false
-!(false)
 !(isnull(#0))
 (#0 = #1)
 
@@ -380,7 +379,6 @@ predicate-propagation
 (join [(get x) (get x)] [[#0 #2 (1 int32)] [(call_binary sub_int32 #2 (1 int32)) #1]])
 ----
 !(isnull(#3))
-!(isnull(0))
 (0 = #1)
 (1 = #0)
 (1 = #2)
@@ -406,7 +404,6 @@ predicate-propagation
 predicate-propagation
 (filter (get x) [(call_binary eq #0 (call_binary add_int32 #0 #1)) (call_binary eq #0 #1)])
 ----
-!(false)
 !(isnull(#0))
 (#0 = #1)
 (#0 = (#0 + #1))
@@ -414,7 +411,6 @@ predicate-propagation
 predicate-propagation
 (project (filter (get x) [(call_binary eq #0 (call_binary add_int32 #0 #1)) (call_binary eq #0 #1)]) [0 1])
 ----
-!(false)
 !(isnull(#0))
 (#0 = #1)
 (#0 = (#0 + #1))
