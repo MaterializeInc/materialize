@@ -621,8 +621,12 @@ impl MirScalarExpr {
                                 }
                                 (Some(Ok(Datum::False)), _) => {
                                     *e = cond
-                                        .take()
+                                        .clone()
                                         .call_unary(UnaryFunc::Not(func::Not))
+                                        .call_binary(
+                                            cond.take().call_unary(UnaryFunc::IsNull(func::IsNull)),
+                                            BinaryFunc::Or,
+                                        )
                                         .call_binary(els.take(), BinaryFunc::And);
                                 }
                                 (_, Some(Ok(Datum::True))) => {
