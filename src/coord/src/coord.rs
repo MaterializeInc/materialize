@@ -3866,6 +3866,7 @@ where
         F: FnOnce(DataflowBuilder) -> Result<T, CoordError>,
     {
         let mut sources_to_drop = vec![];
+        let mut tables_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut replication_slots_to_drop: HashMap<String, Vec<String>> = HashMap::new();
@@ -3874,7 +3875,7 @@ where
             if let catalog::Op::DropItem(id) = op {
                 match self.catalog.get_by_id(id).item() {
                     CatalogItem::Table(_) => {
-                        sources_to_drop.push(*id);
+                        tables_to_drop.push(*id);
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
@@ -3931,6 +3932,10 @@ where
                 sources_to_drop,
             ))
             .await;
+        }
+        if !tables_to_drop.is_empty() {
+            self.broadcast(dataflow_types::client::Command::DropSources(tables_to_drop))
+                .await;
         }
         if !sinks_to_drop.is_empty() {
             for id in sinks_to_drop.iter() {
