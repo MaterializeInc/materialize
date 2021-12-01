@@ -1024,7 +1024,7 @@ pub fn eval_as_of<'a>(
     Ok(match ex.typ(desc.typ()).scalar_type {
         ScalarType::Numeric { .. } => {
             let n = evaled.unwrap_numeric().0;
-            u64::try_from(n)?.try_into()?
+            u64::try_from(n)?
         }
         ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
         ScalarType::Int32 => evaled.unwrap_int32().try_into()?,

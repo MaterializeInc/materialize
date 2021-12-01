@@ -1448,7 +1448,6 @@ impl<'a> Parser<'a> {
     }
 
     /// Bail out if the current token is not one of the expected keywords, or consume it if it is
-    #[must_use = "must match against result to determine what keyword was parsed"]
     fn expect_one_of_keywords(&mut self, keywords: &[Keyword]) -> Result<Keyword, ParserError> {
         if let Some(keyword) = self.parse_one_of_keywords(keywords) {
             Ok(keyword)
@@ -1462,7 +1461,6 @@ impl<'a> Parser<'a> {
     }
 
     /// Bail out if the current token is not an expected keyword, or consume it if it is
-    #[must_use]
     fn expect_keyword(&mut self, expected: Keyword) -> Result<(), ParserError> {
         if self.parse_keyword(expected) {
             Ok(())

@@ -1744,10 +1744,7 @@ where
                 tx.send(self.sequence_create_role(plan).await, session);
             }
             Plan::CreateTable(plan) => {
-                tx.send(
-                    self.sequence_create_table(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_create_table(&session, plan).await, session);
             }
             Plan::CreateSource(plan) => {
                 tx.send(
@@ -1759,7 +1756,7 @@ where
                 self.sequence_create_sink(session, plan, tx).await;
             }
             Plan::CreateView(plan) => {
-                tx.send(self.sequence_create_view(&mut session, plan).await, session);
+                tx.send(self.sequence_create_view(&session, plan).await, session);
             }
             Plan::CreateViews(plan) => {
                 tx.send(

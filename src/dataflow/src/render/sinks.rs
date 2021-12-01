@@ -84,6 +84,7 @@ where
     }
 }
 
+#[allow(clippy::borrowed_box)]
 fn apply_sink_envelope<G>(
     sink: &SinkDesc,
     sink_render: &Box<dyn SinkRender<G>>,

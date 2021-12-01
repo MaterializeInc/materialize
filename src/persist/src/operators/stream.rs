@@ -620,7 +620,7 @@ where
                     }
                 }
 
-                input_frontier.clone_from(&mut new_input_frontier);
+                input_frontier.clone_from(&new_input_frontier);
                 // We need to downgrade when the input frontier is empty. This basically releases
                 // all the capabilities so that downstream operators and eventually the worker can
                 // shut down.
