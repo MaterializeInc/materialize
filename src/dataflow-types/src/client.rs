@@ -515,11 +515,13 @@ pub mod partitioned {
                     self.parts as i64,
                 )));
                 let previous = self.uppers.insert(id, frontier);
-                assert!(previous.is_none());
+                assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command);
             }
             for id in cease.into_iter() {
                 let previous = self.uppers.remove(&id);
-                assert!(previous.is_some());
+                if previous.is_none() {
+                    log::debug!("Protocol error: ceasing frontier tracking for absent identifier {:?} due to command {:?}", id, command);
+                }
             }
         }
 
