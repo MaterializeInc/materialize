@@ -361,6 +361,11 @@ struct ConnMeta {
 }
 
 struct TxnReads {
+    // True iff all statements run so far in the transaction are independent
+    // of the chosen logical timestamp (not the PlanContext walltime). This
+    // happens if both 1) there are no referenced sources or indexes and 2)
+    // `mz_logical_timestamp()` is not present.
+    timestamp_independent: bool,
     timedomain_ids: HashSet<GlobalId>,
     _handles: Vec<AntichainToken<Timestamp>>,
 }
@@ -2884,6 +2889,22 @@ where
         // worry about preventing compaction or choosing a valid timestamp for future
         // queries.
         let timestamp = if in_transaction && when == PeekWhen::Immediately {
+            // Queries are independent of the logical timestamp iff there are no referenced
+            // sources or indexes and there is no reference to `mz_logical_timestamp()`
+            // which we check by using a Static prep style.
+            let timestamp_independent = source_ids.is_empty()
+                && self
+                    .prep_relation_expr(source.clone(), ExprPrepStyle::Static)
+                    .is_ok();
+
+            // If all previous statements were timestamp-independent and the current one is
+            // not, clear the transaction ops so it can get a new timestamp and timedomain.
+            if let Some(read_txn) = self.txn_reads.get(&conn_id) {
+                if read_txn.timestamp_independent && !timestamp_independent {
+                    session.clear_transaction_ops();
+                }
+            }
+
             let timestamp = session.get_transaction_timestamp(|| {
                 // Determine a timestamp that will be valid for anything in any schema
                 // referenced by the first query.
@@ -2902,6 +2923,7 @@ where
                 self.txn_reads.insert(
                     conn_id,
                     TxnReads {
+                        timestamp_independent,
                         timedomain_ids: timedomain_ids.into_iter().collect(),
                         _handles: handles,
                     },

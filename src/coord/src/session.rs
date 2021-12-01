@@ -216,6 +216,14 @@ impl Session {
         self.drop_sinks.push(name);
     }
 
+    /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
+    /// verifying that no transaction anomolies will occur if cleared.
+    pub fn clear_transaction_ops(&mut self) {
+        if let Some(txn) = self.transaction.inner_mut() {
+            txn.ops = TransactionOps::None;
+        }
+    }
+
     /// Assumes an active transaction. Returns its read timestamp. Errors if not
     /// a read transaction. Calls get_ts to get a timestamp if the transaction
     /// doesn't have an operation yet, converting the transaction to a read.
@@ -540,6 +548,17 @@ impl TransactionStatus {
 
     /// Exposes the inner transaction.
     pub fn inner(&self) -> Option<&Transaction> {
+        match self {
+            TransactionStatus::Default => None,
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => Some(txn),
+        }
+    }
+
+    /// Exposes the inner transaction.
+    pub fn inner_mut(&mut self) -> Option<&mut Transaction> {
         match self {
             TransactionStatus::Default => None,
             TransactionStatus::Started(txn)

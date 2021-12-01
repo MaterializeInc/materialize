@@ -1,0 +1,65 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (i INT);
+
+# Transactions that don't start with sources or mz_logical_timestamp can later include sources.
+simple
+BEGIN;
+SELECT row(1, 2);
+SELECT 1 FROM mz_types LIMIT 1;
+----
+COMPLETE 0
+(1,2)
+COMPLETE 1
+1
+COMPLETE 1
+
+# But we can only change timedomains once.
+query error Transactions can only reference objects in the same timedomain.
+SELECT 3 FROM pg_type LIMIT 1;
+
+# Referring to the timestamp prevents including sources later.
+simple
+ROLLBACK;
+BEGIN;
+SELECT mz_logical_timestamp();
+----
+COMPLETE 0
+COMPLETE 0
+18446744073709551615
+COMPLETE 1
+
+query error Transactions can only reference objects in the same timedomain.
+SELECT 1 FROM mz_types LIMIT 1
+
+simple
+ROLLBACK;
+BEGIN;
+SELECT 1 FROM mz_types LIMIT 1;
+-- Use a timestamp-independent statement here, which should not allow
+-- the timedomain to change because the transaction's previous statement
+-- established a timedomain.
+SELECT 2;
+----
+COMPLETE 0
+COMPLETE 0
+1
+COMPLETE 1
+2
+COMPLETE 1
+
+query error Transactions can only reference objects in the same timedomain.
+SELECT 3 FROM pg_type LIMIT 1;
+
+statement ok
+ROLLBACK
