@@ -10,11 +10,7 @@ menu:
 {{< cloud-notice >}}
 
 
-We're working on other monitoring tools, but for now there are a few tools you can use for troubleshooting issues with Materialize Cloud:
-
-* Status check
-* Logs
-* Monitoring integrations
+We're working on other monitoring tools, but for now there are a few tools you can use for troubleshooting issues with Materialize Cloud.
 
 ## Status check
 
@@ -37,11 +33,24 @@ that must be investigated and resolved.
 
 For more information, see [Monitoring: Logging](/ops/monitoring/#logging)
 
+## Disabling user indexes
+
+{{< warning >}}
+This feature is primarily meant for advanced administrators of Materialize.
+{{< /warning >}}
+
+If your Cloud deployment unexpectedly consumes all CPU or memory, you can troubleshoot by restarting with
+[indexes][api-indexes] on user-created objects disabled.  The option appears on the Deployment Details page.
+
+{{% troubleshooting/disable-user-indexes %}}
+
 ## Third-party monitoring tools
 
-Materialize supports integrations with [Datadog](/ops/monitoring/#datadog), [Grafana](/ops/monitoring/#grafana), and [Prometheus](/ops/monitoring/#prometheus).
+Materialize supports integrations with [Grafana](/ops/monitoring/#grafana) and [Prometheus](/ops/monitoring/#prometheus). For more information, see [Monitor Cloud].
 
 ## Related topics
 
-- [Monitoring](/ops/monitoring)
+- [Monitor Cloud]
 - [System Catalog](/sql/system-catalog)
+
+[Monitor Cloud]:../../cloud/monitor-cloud

@@ -383,29 +383,7 @@ example, if you add a view that contains a cross join that causes your server to
 immediately run out of memory on boot, you can use `--disable-user-indexes` to
 boot the server and then drop the offending view.
 
-In this mode users...
-
-- Can access objects within the [system catalog][sys-cat] to help determine
-  which indexes are causing the crash.
-- Can only `SELECT` from user-created objects that do not rely on user-created
-  indexes. In essence, this means users can still `SELECT` from user-created...
-  - Tables, but they will never return any data.
-  - Views that contain only references to constant values or depend entirely on
-    system tables' indexes.
-- Cannot `INSERT` data into tables.
-- Can create new objects, but any created indexes are disabled.
-
-After troubleshooting any issues, you can [enable individual
-indexes](/sql/alter-index) or reboot Materialize _without_
-`--disable-user-indexes` to enable all indexes at once.
-
-For assistance with this mode, see:
-
-- [Architecture over: Indexes][api-indexes]
-- [System catalog][sys-cat]
-- [`SHOW INDEX`](/sql/show-index)
-- [`DROP VIEW`](/sql/drop-view)
-- [`DROP INDEX`](/sql/drop-index)
+{{% troubleshooting/disable-user-indexes %}}
 
 ## Special environment variables
 
