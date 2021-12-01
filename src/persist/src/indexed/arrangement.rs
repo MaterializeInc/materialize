@@ -385,6 +385,7 @@ impl Arrangement {
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
         // ...and atomically swapping that snapshot's data into trace.
+        let updates = updates.iter().collect::<ColumnarRecords>();
         let batch = BlobTraceBatch { desc, updates };
         self.trace_append(batch, blob)
     }
@@ -807,7 +808,9 @@ impl Iterator for TraceSnapshotIter {
                     Ok(b) => {
                         // Reverse the updates so we can pop them off the back
                         // in roughly increasing time order.
-                        self.current_batch.extend(b.updates.iter().rev().cloned());
+                        self.current_batch.extend(b.updates.iter().map(
+                            |((key, val), time, diff)| ((key.to_vec(), val.to_vec()), time, diff),
+                        ));
                         continue;
                     }
                     Err(err) => return Some(Err(err)),
@@ -1319,25 +1322,25 @@ mod tests {
 
         let batch = BlobTraceBatch {
             desc: desc_from(0, 1, 0),
-            updates: vec![
+            updates: columnar_records(vec![
                 (("k".into(), "v".into()), 0, 1),
                 (("k2".into(), "v2".into()), 0, 1),
-            ],
+            ]),
         };
 
         assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
         let batch = BlobTraceBatch {
             desc: desc_from(1, 3, 0),
-            updates: vec![
+            updates: columnar_records(vec![
                 (("k".into(), "v".into()), 2, 1),
                 (("k3".into(), "v3".into()), 2, 1),
-            ],
+            ]),
         };
         assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
 
         let batch = BlobTraceBatch {
             desc: desc_from(3, 9, 0),
-            updates: vec![(("k".into(), "v".into()), 5, 1)],
+            updates: columnar_records(vec![(("k".into(), "v".into()), 5, 1)]),
         };
         assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
 
@@ -1345,7 +1348,7 @@ mod tests {
         t.allow_compaction(Antichain::from_elem(3));
         let (written_bytes, deleted_batches) = t.trace_step(&maintainer)?;
         // Change this to a >0 check if it starts to be a maintenance burden.
-        assert_eq!(written_bytes, 162);
+        assert_eq!(written_bytes, 226);
         assert_eq!(
             deleted_batches
                 .into_iter()
@@ -1366,13 +1369,13 @@ mod tests {
                     key: "KEY".to_string(),
                     desc: desc_from(0, 3, 3),
                     level: 1,
-                    size_bytes: 162,
+                    size_bytes: 226,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
                     desc: desc_from(3, 9, 0),
                     level: 0,
-                    size_bytes: 90,
+                    size_bytes: 154,
                 },
             ]
         );
@@ -1397,13 +1400,13 @@ mod tests {
 
         let batch = BlobTraceBatch {
             desc: desc_from(9, 10, 0),
-            updates: vec![(("k".into(), "v".into()), 9, 1)],
+            updates: columnar_records(vec![(("k".into(), "v".into()), 9, 1)]),
         };
         assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
         t.validate_allow_compaction(&Antichain::from_elem(10))?;
         t.allow_compaction(Antichain::from_elem(10));
         let (written_bytes, deleted_batches) = t.trace_step(&maintainer)?;
-        assert_eq!(written_bytes, 90);
+        assert_eq!(written_bytes, 154);
         assert_eq!(
             deleted_batches
                 .into_iter()
@@ -1421,13 +1424,13 @@ mod tests {
                     key: "KEY".to_string(),
                     desc: desc_from(0, 3, 3),
                     level: 1,
-                    size_bytes: 162,
+                    size_bytes: 226,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
                     desc: desc_from(3, 10, 10),
                     level: 0,
-                    size_bytes: 90,
+                    size_bytes: 154,
                 },
             ]
         );

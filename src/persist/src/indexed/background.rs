@@ -20,6 +20,7 @@ use tokio::runtime::Runtime;
 use crate::error::Error;
 use crate::indexed::arrangement::Arrangement;
 use crate::indexed::cache::BlobCache;
+use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{BlobTraceBatch, TraceBatchMeta};
 use crate::pfuture::PFuture;
 use crate::storage::Blob;
@@ -128,14 +129,14 @@ impl<B: Blob> Maintainer<B> {
                 .recv()?
                 .updates
                 .iter()
-                .cloned(),
+                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d)),
         );
         updates.extend(
             blob.get_trace_batch_async(&second.key)
                 .recv()?
                 .updates
                 .iter()
-                .cloned(),
+                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d)),
         );
 
         for ((_, _), ts, _) in updates.iter_mut() {
@@ -144,6 +145,7 @@ impl<B: Blob> Maintainer<B> {
 
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
+        let updates = updates.iter().collect::<ColumnarRecords>();
         let new_batch = BlobTraceBatch {
             desc: desc.clone(),
             updates,
@@ -177,6 +179,7 @@ mod tests {
     use differential_dataflow::trace::Description;
     use tokio::runtime::Runtime;
 
+    use crate::indexed::columnar::ColumnarRecords;
     use crate::indexed::metrics::Metrics;
     use crate::mem::MemRegistry;
 
@@ -200,7 +203,9 @@ mod tests {
             updates: vec![
                 (("k".into(), "v".into()), 0, 1),
                 (("k2".into(), "v2".into()), 0, 1),
-            ],
+            ]
+            .iter()
+            .collect::<ColumnarRecords>(),
         };
         let b0_size_bytes = blob.set_trace_batch("b0".into(), b0.clone())?;
 
@@ -209,7 +214,9 @@ mod tests {
             updates: vec![
                 (("k".into(), "v".into()), 2, 1),
                 (("k3".into(), "v3".into()), 2, 1),
-            ],
+            ]
+            .iter()
+            .collect::<ColumnarRecords>(),
         };
         let b1_size_bytes = blob.set_trace_batch("b1".into(), b1.clone())?;
 
@@ -235,7 +242,7 @@ mod tests {
                 key: "MERGED_KEY".into(),
                 desc: desc_from(0, 3, 2),
                 level: 1,
-                size_bytes: 162,
+                size_bytes: 226,
             },
         };
         let mut res = maintainer.compact_trace(req).recv()?;
@@ -245,12 +252,12 @@ mod tests {
 
         let b2 = blob.get_trace_batch_async(&merged_key).recv()?;
         let expected_updates = vec![
-            (("k".into(), "v".into()), 2, 2),
-            (("k2".into(), "v2".into()), 2, 1),
-            (("k3".into(), "v3".into()), 2, 1),
+            (("k".as_bytes(), "v".as_bytes()), 2, 2),
+            (("k2".as_bytes(), "v2".as_bytes()), 2, 1),
+            (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
         ];
         assert_eq!(&b2.desc, &expected_res.merged.desc);
-        assert_eq!(&b2.updates, &expected_updates);
+        assert_eq!(&b2.updates.iter().collect::<Vec<_>>(), &expected_updates);
         Ok(())
     }
 
