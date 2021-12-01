@@ -162,7 +162,12 @@ extra_lints=(
 # splitting below. It's substantially clearer than doing things "properly,"
 # and the inputs to this script are trusted.
 
+flags=""
+if [[ "$*" =~ --fix ]] ; then
+    flags=--fix
+fi
+
 # shellcheck disable=SC2046
-run cargo clippy --all-targets -- \
-    $(printf -- "-D %s " "${extra_lints[@]}") \
-    $(printf -- "-A %s " "${disabled_lints[@]}")
+run cargo clippy --all-targets $flags -- \
+    $(printf -- "-A %s " "${disabled_lints[@]}") \
+    $(printf -- "-D %s " "${extra_lints[@]}")
