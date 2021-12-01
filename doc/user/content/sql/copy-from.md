@@ -26,6 +26,7 @@ Name | Permitted values| Default value | Description
 `NULL` | Single-quoted strings | Format-dependent | Specifies the string that represents a _NULL_ value.
 `QUOTE` | Single-quoted one-byte character | `"` | Specifies the character to signal a quoted string, which may contain the `DELIMITER` value (without beginning new columns). To include the `QUOTE` character itself in column, wrap the column's value in the `QUOTE` character and prefix all instance of the value you want to literally interpret with the `ESCAPE` value. _`FORMAT CSV` only_
 `ESCAPE` | Single-quoted strings | `QUOTE`'s value | Specifies the character to allow instances of the `QUOTE` character to be parsed literally as part of a column's value. _`FORMAT CSV` only_
+`HEADER`  | `boolean`   | `boolean`  | Specifies that the file contains a header line with the names of each column in the file. The first line is ignored on input.  _`FORMAT CSV` only._
 
 Note that `DELIMITER` and `QUOTE` must use distinct values.
 
