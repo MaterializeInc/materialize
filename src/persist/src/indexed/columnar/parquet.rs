@@ -26,7 +26,7 @@ use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::columnar::arrow::{
     decode_arrow_batch_kvtd, encode_arrow_batch_kvtd, SCHEMA_ARROW_KVTD,
 };
-use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVec};
+use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
     decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
     encode_unsealed_inline_meta, BlobTraceBatch, BlobUnsealedBatch,
@@ -49,16 +49,10 @@ pub fn encode_unsealed_parquet<W: Write>(
 
 /// Encodes an BlobTraceBatch into the Parquet format.
 pub fn encode_trace_parquet<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Result<(), Error> {
-    let updates = batch
-        .updates
-        .iter()
-        .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), *t, *d))
-        .collect::<ColumnarRecordsVec>()
-        .into_inner();
     encode_parquet_kvtd(
         w,
         encode_trace_inline_meta(batch, ProtoBatchFormat::ParquetKvtd),
-        &updates,
+        &batch.updates,
     )
 }
 
@@ -104,14 +98,6 @@ pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch,
         ProtoBatchFormat::ParquetKvtd => decode_parquet_file_kvtd(r)?,
     };
 
-    let updates = updates
-        .iter()
-        .flat_map(|x| {
-            x.iter()
-                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
-        })
-        .collect();
-
     let ret = BlobTraceBatch {
         desc: meta.desc.map_or_else(
             || {
@@ -132,9 +118,9 @@ pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch,
 fn encode_parquet_kvtd<W: Write>(
     w: &mut W,
     inline_base64: String,
-    batches: &[ColumnarRecords],
+    iter: &[ColumnarRecords],
 ) -> Result<(), Error> {
-    let iter = batches.iter().map(|x| Ok(encode_arrow_batch_kvtd(x)));
+    let iter = iter.into_iter().map(|x| Ok(encode_arrow_batch_kvtd(x)));
 
     let schema = SCHEMA_ARROW_KVTD.clone();
     let options = WriteOptions {

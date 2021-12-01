@@ -24,7 +24,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
 use crate::gen::persist::ProtoBatchFormat;
-use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVec};
+use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
     decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
     encode_unsealed_inline_meta, BlobTraceBatch, BlobUnsealedBatch,
@@ -104,12 +104,7 @@ pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Result
     let schema = Schema::new_from(SCHEMA_ARROW_KVTD.fields().clone(), metadata);
     let options = WriteOptions { compression: None };
     let mut writer = FileWriter::try_new(w, &schema, options)?;
-    let records = batch
-        .updates
-        .iter()
-        .collect::<ColumnarRecordsVec>()
-        .into_inner();
-    for records in records.iter() {
+    for records in batch.updates.iter() {
         writer.write(&encode_arrow_batch_kvtd(&records))?;
     }
     writer.finish()?;
@@ -157,14 +152,6 @@ pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, E
             return Err("ParquetKvtd format not supported in arrow".into())
         }
     };
-
-    let updates = updates
-        .iter()
-        .flat_map(|x| {
-            x.iter()
-                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
-        })
-        .collect();
 
     let ret = BlobTraceBatch {
         desc: meta.desc.map_or_else(

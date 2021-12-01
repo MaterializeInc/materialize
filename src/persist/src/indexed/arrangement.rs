@@ -386,6 +386,7 @@ impl Arrangement {
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
         // ...and atomically swapping that snapshot's data into trace.
+        let updates = updates.iter().collect::<ColumnarRecordsVec>().into_inner();
         let batch = BlobTraceBatch { desc, updates };
         self.trace_append(batch, blob)
     }
@@ -801,9 +802,12 @@ impl Iterator for TraceSnapshotIter {
                 };
                 match b.recv() {
                     Ok(b) => {
-                        // Reverse the updates so we can pop them off the back
-                        // in roughly increasing time order.
-                        self.current_batch.extend(b.updates.iter().rev().cloned());
+                        self.current_batch
+                            .extend(b.updates.iter().flat_map(|u| u.iter()).map(
+                                |((key, val), time, diff)| {
+                                    ((key.to_vec(), val.to_vec()), time, diff)
+                                },
+                            ));
                         continue;
                     }
                     Err(err) => return Some(Err(err)),
@@ -1343,25 +1347,25 @@ mod tests {
 
         let batch = BlobTraceBatch {
             desc: desc_from(0, 1, 0),
-            updates: vec![
+            updates: columnar_records(vec![
                 (("k".into(), "v".into()), 0, 1),
                 (("k2".into(), "v2".into()), 0, 1),
-            ],
+            ]),
         };
 
         assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
         let batch = BlobTraceBatch {
             desc: desc_from(1, 3, 0),
-            updates: vec![
+            updates: columnar_records(vec![
                 (("k".into(), "v".into()), 2, 1),
                 (("k3".into(), "v3".into()), 2, 1),
-            ],
+            ]),
         };
         assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
 
         let batch = BlobTraceBatch {
             desc: desc_from(3, 9, 0),
-            updates: vec![(("k".into(), "v".into()), 5, 1)],
+            updates: columnar_records(vec![(("k".into(), "v".into()), 5, 1)]),
         };
         assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
 
@@ -1424,7 +1428,7 @@ mod tests {
 
         let batch = BlobTraceBatch {
             desc: desc_from(9, 10, 0),
-            updates: vec![(("k".into(), "v".into()), 9, 1)],
+            updates: columnar_records(vec![(("k".into(), "v".into()), 9, 1)]),
         };
         assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
         t.validate_allow_compaction(&Antichain::from_elem(10))?;
@@ -1499,10 +1503,10 @@ mod tests {
         // Add updates to both the trace and the unsealeds.
         let batch = BlobTraceBatch {
             desc: desc_from(0, 2, 0),
-            updates: vec![
+            updates: columnar_records(vec![
                 (("k1".into(), "v1".into()), 0, 1),
                 (("k2".into(), "v2".into()), 1, 1),
-            ],
+            ]),
         };
         t.trace_append(batch, &mut blob)?;
 

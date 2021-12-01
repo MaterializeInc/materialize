@@ -300,7 +300,7 @@ pub fn bench_encode_batch(c: &mut Criterion) {
             Antichain::from_elem(1),
             Antichain::from_elem(0),
         ),
-        updates: data.records().collect::<Vec<_>>(),
+        updates: data.batches().collect::<Vec<_>>(),
     };
 
     group.bench_function(BenchmarkId::new("unsealed", data.goodput_pretty()), |b| {
