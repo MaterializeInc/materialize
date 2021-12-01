@@ -10,12 +10,11 @@ menu:
 
 {{< cloud-notice >}}
 
-The [Deployments page](http://cloud.materialize.com/deployments) is your Materialize Cloud dashboard. All users can use it to view a deployment's details by clicking on the deployment card.
+The [Deployments page](http://cloud.materialize.com/deployments) is your Materialize Cloud dashboard. You can use it to:
 
-Administrators can also:
-
-* [Create new deployments](../create-deployments)
-* [Delete deployments](../destroy-deployments)
-* [Edit deployments](../administer-workspace)
-* [Update deployments](../update-deployments)
-* [View logs and troubleshoot](../troubleshoot-cloud)
+- View a deployment's details by clicking on the deployment name.
+- [Change a deployment's name or size](../change-deployment-details)
+- [Create new deployments](../create-deployments)
+- [Delete deployments](../destroy-deployments)
+- [Update deployments](../update-deployments)
+- [View logs and troubleshoot](../troubleshoot-cloud)
