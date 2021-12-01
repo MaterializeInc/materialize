@@ -294,6 +294,30 @@ predicate-propagation
 (#0 <= #1)
 (#0 > #1)
 
+# Join (non-null contraint propagated via join equivalence): #1 is not null, which implies #2 is not null
+build apply=PredicateKnowledge
+(filter (join [(get x) (get y)] [[#1 #2]]) [(call_unary not (call_unary is_null #2))])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get y (u1)
+
+%2 =
+| Join %0 %1 (= #1 #2)
+| | implementation = Unimplemented
+| Filter !(false)
+----
+----
+
+build apply=PredicateKnowledge
+(filter (join [(get x) (get y)] [[#1 #2]]) [(call_unary is_null #2)])
+----
+%0 =
+| Constant
+
 #
 # TODO: improve impossible condition detection
 #
