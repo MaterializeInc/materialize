@@ -46,7 +46,7 @@
 //!   session contained the string `<TEMP>`, it will be replaced with a
 //!   temporary directory.
 //! - `update-upper`: Sends a batch of
-//!   [`FrontierUppers`](dataflow_types::client::WorkerFeedback::FrontierUppers) to the
+//!   [`FrontierUppers`](dataflow_types::client::Response::FrontierUppers) to the
 //!   Coordinator. Input is one update per line of the format
 //!   `database.schema.item N` where N is some numeric timestamp. No output.
 //! - `inc-timestamp`: Increments the timestamp by number in the input. No
@@ -74,7 +74,6 @@ use tokio::sync::Mutex as TokioMutex;
 use build_info::DUMMY_BUILD_INFO;
 use coord::session::{EndTransactionAction, Session};
 use coord::{ExecuteResponse, PersistConfig, SessionClient, StartupResponse};
-use dataflow_types::client::WorkerFeedback;
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
 use ore::metrics::MetricsRegistry;
@@ -227,16 +226,13 @@ impl CoordTest {
         let mut to_queue = vec![];
         for mut msg in self.queued_feedback.drain(..) {
             // Filter out requested ids.
-            if let WorkerFeedback::FrontierUppers(uppers) = &mut msg.message {
+            if let dataflow_types::client::Response::FrontierUppers(uppers) = &mut msg {
                 // Requeue excluded uppers so future wait-sql directives don't always have to
                 // specify the same exclude list forever.
                 let mut requeue = uppers.clone();
                 requeue.retain(|(id, _data)| exclude_uppers.contains(id));
                 if !requeue.is_empty() {
-                    to_queue.push(dataflow_types::client::Response {
-                        worker_id: msg.worker_id,
-                        message: WorkerFeedback::FrontierUppers(requeue),
-                    });
+                    to_queue.push(dataflow_types::client::Response::FrontierUppers(requeue));
                 }
                 uppers.retain(|(id, _data)| !exclude_uppers.contains(id));
             }
@@ -267,7 +263,7 @@ impl CoordTest {
         let mut to_send = vec![];
         let mut to_queue = vec![];
         for msg in self.queued_feedback.drain(..) {
-            if let WorkerFeedback::PeekResponse(..) = msg.message {
+            if let dataflow_types::client::Response::PeekResponse(..) = msg {
                 to_send.push(msg);
             } else {
                 to_queue.push(msg);
@@ -497,11 +493,9 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                         batch.update(ts, 1);
                         updates.push((id, batch));
                     }
-                    ct.dataflow_client
-                        .forward_response(dataflow_types::client::Response {
-                            worker_id: 0,
-                            message: WorkerFeedback::FrontierUppers(updates),
-                        });
+                    ct.dataflow_client.forward_response(
+                        dataflow_types::client::Response::FrontierUppers(updates),
+                    );
                     "".into()
                 }
                 "inc-timestamp" => {
@@ -565,10 +559,6 @@ impl<C> dataflow_types::client::Client for InterceptingDataflowClient<C>
 where
     C: dataflow_types::client::Client,
 {
-    fn num_workers(&self) -> usize {
-        1
-    }
-
     async fn send(&mut self, cmd: dataflow_types::client::Command) {
         self.inner.lock().await.send(cmd).await
     }

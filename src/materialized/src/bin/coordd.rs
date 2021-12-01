@@ -84,8 +84,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.dataflowd_addr
     );
 
-    let dataflow_client =
-        dataflowd::RemoteClient::connect(args.workers, &args.dataflowd_addr).await?;
+    let dataflow_client = dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
+
     let mut metrics_registry = MetricsRegistry::new();
     let (coord_handle, coord_client) = coord::serve(coord::Config {
         dataflow_client,

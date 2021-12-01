@@ -124,10 +124,9 @@ pub struct Frontiers<T: Timestamp> {
 }
 
 impl<T: Timestamp + Copy> Frontiers<T> {
-    /// Creates an empty index state from a number of workers and a function to run
-    /// when the since changes. Returns the initial since handle.
+    /// Creates an empty index state from a function to run when the since changes.
+    /// Returns the initial since handle.
     pub fn new<I, F>(
-        workers: usize,
         initial: I,
         compaction_window_ms: Option<T>,
         since_action: F,
@@ -139,7 +138,7 @@ impl<T: Timestamp + Copy> Frontiers<T> {
         let mut upper = MutableAntichain::new();
         // Upper must always start at minimum ("0"), even if we initialize since to
         // something in advance of it.
-        upper.update_iter(Some((T::minimum(), workers as i64)));
+        upper.update_iter(Some((T::minimum(), 1)));
         let durability = upper.clone();
         let frontier = Self {
             upper,
@@ -222,7 +221,7 @@ mod tests {
     fn test_frontiers_action() {
         let expect = Rc::new(RefCell::new(Antichain::from_elem(0)));
         let inner = Rc::clone(&expect);
-        let (f, initial) = Frontiers::new(1, Some(0), None, move |since| {
+        let (f, initial) = Frontiers::new(Some(0), None, move |since| {
             assert_eq!(*inner.borrow(), since);
         });
         // Adding 5 should not change the since.

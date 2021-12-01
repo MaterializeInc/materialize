@@ -31,9 +31,7 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use dataflow_types::client::{
-    Command, LocalClient, Response, TimestampBindingFeedback, WorkerFeedback,
-};
+use dataflow_types::client::{Command, LocalClient, Response, TimestampBindingFeedback};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     Consistency, DataflowError, ExternalSourceConnector, PeekResponse, SourceConnector,
@@ -94,18 +92,26 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     let dataflow_source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
     let dataflow_sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
 
-    let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
-
     // Construct endpoints for each thread that will receive the coordinator's
-    // sequenced command stream.
+    // sequenced command stream and send the responses to the coordinator.
     //
     // TODO(benesch): package up this idiom of handing out ownership of N items
     // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
     // is hard to read through.
-    let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+    let (response_txs, response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+        .map(|_| mpsc::unbounded_channel())
+        .unzip();
+    let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| crossbeam_channel::unbounded())
         .unzip();
-    let command_rxs: Mutex<Vec<_>> = Mutex::new(worker_rxs.into_iter().map(Some).collect());
+    // A mutex around a vector of optional (take-able) pairs of (tx, rx) for worker/client communication.
+    let channels: Mutex<Vec<_>> = Mutex::new(
+        response_txs
+            .into_iter()
+            .zip(command_rxs)
+            .map(Some)
+            .collect(),
+    );
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
@@ -113,7 +119,8 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let _tokio_guard = tokio_executor.enter();
-        let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % config.workers]
+        let (response_tx, command_rx) = channels.lock().unwrap()
+            [timely_worker.index() % config.workers]
             .take()
             .unwrap();
         let worker_idx = timely_worker.index();
@@ -137,7 +144,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
             materialized_logger: None,
             command_rx,
             pending_peeks: Vec::new(),
-            feedback_tx: feedback_tx.clone(),
+            response_tx,
             reported_frontiers: HashMap::new(),
             reported_bindings_frontiers: HashMap::new(),
             last_bindings_feedback: Instant::now(),
@@ -150,8 +157,8 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
     })
     .map_err(|e| anyhow!("{}", e))?;
     let client = LocalClient::new(
-        feedback_rx,
-        worker_txs,
+        response_rxs,
+        command_txs,
         worker_guards
             .guards()
             .iter()
@@ -183,12 +190,12 @@ where
     /// Peek commands that are awaiting fulfillment.
     pending_peeks: Vec<PendingPeek>,
     /// The channel over which frontier information is reported.
-    feedback_tx: mpsc::UnboundedSender<Response>,
-    /// Tracks the frontier information that has been sent over `feedback_tx`.
+    response_tx: mpsc::UnboundedSender<Response>,
+    /// Tracks the frontier information that has been sent over `response_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    /// Tracks the timestamp binding durability information that has been sent over `feedback_tx`.
+    /// Tracks the timestamp binding durability information that has been sent over `response_tx`.
     reported_bindings_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    /// Tracks the last time we sent binding durability info over `feedback_tx`.
+    /// Tracks the last time we sent binding durability info over `response_tx`.
     last_bindings_feedback: Instant,
     /// Metrics bundle.
     metrics: WorkerMetrics,
@@ -568,10 +575,7 @@ where
         }
 
         if !progress.is_empty() {
-            self.send_response(Response {
-                worker_id: self.timely_worker.index(),
-                message: WorkerFeedback::FrontierUppers(progress),
-            });
+            self.send_response(Response::FrontierUppers(progress));
         }
     }
 
@@ -630,13 +634,10 @@ where
         }
 
         if !changes.is_empty() || !bindings.is_empty() {
-            self.send_response(Response {
-                worker_id: self.timely_worker.index(),
-                message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
-                    changes,
-                    bindings,
-                }),
-            });
+            self.send_response(Response::TimestampBindings(TimestampBindingFeedback {
+                changes,
+                bindings,
+            }));
         }
         self.last_bindings_feedback = Instant::now();
     }
@@ -997,10 +998,7 @@ where
     /// meant to prevent multiple responses to the same peek.
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         // Respond with the response.
-        self.send_response(Response {
-            worker_id: self.timely_worker.index(),
-            message: WorkerFeedback::PeekResponse(peek.conn_id, response),
-        });
+        self.send_response(Response::PeekResponse(peek.conn_id, response));
 
         // Log responding to the peek request.
         if let Some(logger) = self.materialized_logger.as_mut() {
@@ -1012,10 +1010,7 @@ where
     fn process_tails(&mut self) {
         let mut tail_responses = self.render_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
-            self.send_response(Response {
-                worker_id: self.timely_worker.index(),
-                message: WorkerFeedback::TailResponse(sink_id, response),
-            });
+            self.send_response(Response::TailResponse(sink_id, response));
         }
     }
 
@@ -1023,7 +1018,7 @@ where
     fn send_response(&self, response: Response) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.feedback_tx.send(response);
+        let _ = self.response_tx.send(response);
     }
 }
 

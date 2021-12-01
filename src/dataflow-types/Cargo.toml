@@ -16,6 +16,7 @@ crossbeam-channel = "0.5.1"
 enum-iterator = "0.7.0"
 enum-kinds = "0.5.1"
 expr = { path = "../expr" }
+futures = "0.3.17"
 globset = { version = "0.4.8", features = ["serde1"] }
 interchange = { path = "../interchange" }
 persist-types = { path = "../persist-types" }

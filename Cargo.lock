@@ -1327,6 +1327,7 @@ dependencies = [
  "enum-iterator",
  "enum-kinds",
  "expr",
+ "futures",
  "globset",
  "http",
  "interchange",

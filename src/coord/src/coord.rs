@@ -108,7 +108,7 @@ use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use build_info::BuildInfo;
-use dataflow_types::client::{TimestampBindingFeedback, WorkerFeedback};
+use dataflow_types::client::TimestampBindingFeedback;
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, DataflowDescription, ExternalSourceConnector, IndexDesc, PeekResponse,
@@ -328,7 +328,7 @@ where
 
     /// A map from pending peeks to the queue into which responses are sent, and
     /// the IDs of workers who have responded.
-    pending_peeks: HashMap<u32, (mpsc::UnboundedSender<PeekResponse>, HashSet<usize>)>,
+    pending_peeks: HashMap<u32, mpsc::UnboundedSender<PeekResponse>>,
     /// A map from pending tails to the queue into which responses are sent.
     ///
     /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
@@ -393,10 +393,6 @@ impl<C> Coordinator<C>
 where
     C: dataflow_types::client::Client + 'static,
 {
-    fn num_workers(&self) -> usize {
-        self.dataflow_client.num_workers()
-    }
-
     /// Assign a timestamp for a read.
     fn get_read_ts(&mut self) -> Timestamp {
         let ts = self.get_ts();
@@ -453,14 +449,9 @@ where
         I: IntoIterator<Item = Timestamp>,
     {
         let since_updates = Rc::clone(&self.since_updates);
-        let (frontier, handle) = Frontiers::new(
-            self.num_workers(),
-            initial,
-            compaction_window_ms,
-            move |frontier| {
-                since_updates.borrow_mut().insert(id, frontier);
-            },
-        );
+        let (frontier, handle) = Frontiers::new(initial, compaction_window_ms, move |frontier| {
+            since_updates.borrow_mut().insert(id, frontier);
+        });
         let prev = self.since_handles.insert(id, handle);
         // Ensure we don't double-register ids.
         assert!(prev.is_none());
@@ -733,36 +724,17 @@ where
         }
     }
 
-    async fn message_worker(
-        &mut self,
-        dataflow_types::client::Response { worker_id, message }: dataflow_types::client::Response,
-    ) {
+    async fn message_worker(&mut self, message: dataflow_types::client::Response) {
         match message {
-            WorkerFeedback::PeekResponse(conn_id, response) => {
-                let (channel, workers_responded) = self
-                    .pending_peeks
-                    .get_mut(&conn_id)
-                    .expect("no more PeekResponses after closing peek channel");
-
-                // Each worker may respond only once to each peek.
-                assert!(
-                    workers_responded.insert(worker_id),
-                    "worker {} responded more than once on conn {}",
-                    worker_id,
-                    conn_id
-                );
-
-                channel
+            dataflow_types::client::Response::PeekResponse(conn_id, response) => {
+                // We expect exactly one peek response, which we forward.
+                self.pending_peeks
+                    .remove(&conn_id)
+                    .expect("no more PeekResponses after closing peek channel")
                     .send(response)
                     .expect("Peek endpoint terminated prematurely");
-
-                // We've gotten responses from all workers, close peek
-                // channel to propagate response to those awaiting.
-                if workers_responded.len() == self.num_workers() {
-                    self.pending_peeks.remove(&conn_id);
-                };
             }
-            WorkerFeedback::TailResponse(sink_id, response) => {
+            dataflow_types::client::Response::TailResponse(sink_id, response) => {
                 // We use an `if let` here because the peek could have been cancelled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
@@ -788,13 +760,16 @@ where
                     }
                 }
             }
-            WorkerFeedback::FrontierUppers(updates) => {
+            dataflow_types::client::Response::FrontierUppers(updates) => {
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
             }
-            WorkerFeedback::TimestampBindings(TimestampBindingFeedback { bindings, changes }) => {
+            dataflow_types::client::Response::TimestampBindings(TimestampBindingFeedback {
+                bindings,
+                changes,
+            }) => {
                 self.catalog
                     .insert_timestamp_bindings(
                         bindings
@@ -1290,7 +1265,7 @@ where
     /// 1. The `upper` frontier for each source, index and sink does not go backwards with
     /// upper updates
     /// 2. `upper` never contains any times with negative multiplicity.
-    /// 3. `upper` never contains any times with multiplicity greater than `n_workers`
+    /// 3. `upper` never contains any times with multiplicity greater than `1`.
     /// 4. No updates increase the sum of all multiplicities in `upper`.
     ///
     /// Note that invariants 2 - 4 require single dimensional time, and a fixed number of
@@ -1302,7 +1277,6 @@ where
     fn validate_update_iter(
         upper: &mut MutableAntichain<Timestamp>,
         mut changes: ChangeBatch<Timestamp>,
-        num_workers: usize,
     ) -> Vec<(Timestamp, i64)> {
         let old_frontier = upper.frontier().to_owned();
 
@@ -1321,7 +1295,7 @@ where
         for (t, _) in changes.into_inner() {
             let count = upper.count_for(&t);
             assert!(count >= 0);
-            assert!(count as usize <= num_workers);
+            assert!(count as usize <= 1);
         }
 
         assert!(<_ as PartialOrder>::less_equal(
@@ -1334,9 +1308,8 @@ where
 
     /// Updates the upper frontier of a named view.
     fn update_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
-        let num_workers = self.num_workers();
         if let Some(index_state) = self.indexes.get_mut(name) {
-            let changes = Self::validate_update_iter(&mut index_state.upper, changes, num_workers);
+            let changes = Self::validate_update_iter(&mut index_state.upper, changes);
 
             if !changes.is_empty() {
                 // Advance the compaction frontier to trail the new frontier.
@@ -1368,7 +1341,7 @@ where
                 }
             }
         } else if let Some(source_state) = self.sources.get_mut(name) {
-            let changes = Self::validate_update_iter(&mut source_state.upper, changes, num_workers);
+            let changes = Self::validate_update_iter(&mut source_state.upper, changes);
 
             if !changes.is_empty() {
                 if let Some(compaction_window_ms) = source_state.compaction_window_ms {
@@ -1385,7 +1358,7 @@ where
             }
         } else if let Some(sink_state) = self.sink_writes.get_mut(name) {
             // Only one dataflow worker should give updates for sinks
-            let changes = Self::validate_update_iter(&mut sink_state.frontier, changes, 1);
+            let changes = Self::validate_update_iter(&mut sink_state.frontier, changes);
 
             if !changes.is_empty() {
                 sink_state.advance_source_handles();
@@ -4917,8 +4890,7 @@ pub mod fast_path_peek {
 
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.
-            self.pending_peeks
-                .insert(conn_id, (rows_tx, std::collections::HashSet::new()));
+            self.pending_peeks.insert(conn_id, rows_tx);
             self.broadcast(peek_command).await;
 
             use dataflow_types::PeekResponse;
