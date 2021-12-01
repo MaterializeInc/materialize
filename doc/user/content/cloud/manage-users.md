@@ -13,10 +13,7 @@ aliases:
 
 If you're an administrative user, you can add and remove other members and change members' roles. To start, click on your profile icon and select **Account Settings**. Administrative options are under the **Workspace** heading.
 
-
-## Manage users
-
-### Add users
+## Add users
 
 1. Click **Users** to see the Users page, then click **Invite user**.
 
@@ -32,11 +29,11 @@ If you're an administrative user, you can add and remove other members and chang
 
 To change a user's [role](#user-roles), click the three dots menu (**⋮**) and select **Edit roles**. Click inside the **Select roles** text box to see the role options.
 
-### Delete users
+## Delete users
 
 Click the three dots menu (**⋮**) and select **Delete user**. You will be asked to confirm this decision before the deletion continues.
 
-### User roles
+## User roles
 
 Role | Privileges
 -----|-----------

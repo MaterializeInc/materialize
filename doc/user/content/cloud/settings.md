@@ -13,7 +13,7 @@ aliases:
 
 In Account Settings, you can update your personal details, change your password, and enable personal security settings.
 
-Administrative users can also manage [workspace memberships]() and [security options]().
+Administrative users can also manage [workspace memberships](../manage-users) and [security options](../manage-workspaces).
 
 To go to your Materialize Cloud settings, click on the user icon in the right of the top navbar, then select **Account settings**.
 
