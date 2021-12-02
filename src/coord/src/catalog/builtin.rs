@@ -1600,7 +1600,21 @@ pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
     needs_logs: false,
 };
 
-// Next id BuiltinView: 5035
+pub const PG_TABLES: BuiltinView = BuiltinView {
+    name: "pg_tables",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_tables AS 
+SELECT n.nspname AS schemaname,
+  c.relname AS tablename,
+  pg_catalog.pg_get_userbyid(c.relowner) AS tableowner
+FROM pg_catalog.pg_class c
+LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = ANY (ARRAY['r','p'])",
+    id: GlobalId::System(5035),
+    needs_logs: false,
+};
+
+// Next id BuiltinView: 5036
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
@@ -1741,6 +1755,7 @@ lazy_static! {
             Builtin::View(&PG_ATTRDEF),
             Builtin::View(&PG_SETTINGS),
             Builtin::View(&PG_CONSTRAINT),
+            Builtin::View(&PG_TABLES),
         ];
 
         // TODO(sploiselle): assign static global IDs to functions
