@@ -22,7 +22,6 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use globset::Glob;
 use http::Uri;
-use ore::str::NormalizedProtobufMessageName;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -31,7 +30,7 @@ use uuid::Uuid;
 
 use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, PartitionId};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
-use interchange::protobuf;
+use interchange::protobuf::{self, NormalizedProtobufMessageName};
 use kafka_util::KafkaAddrs;
 use repr::{ColumnName, ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
 

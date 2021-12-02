@@ -8,10 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use criterion::{black_box, Criterion, Throughput};
-use ore::str::NormalizedProtobufMessageName;
 use protobuf::{Message, MessageField};
 
-use interchange::protobuf::{DecodedDescriptors, Decoder};
+use interchange::protobuf::{DecodedDescriptors, Decoder, NormalizedProtobufMessageName};
 
 use gen::benchmark::{Connector, Record, Value};
 

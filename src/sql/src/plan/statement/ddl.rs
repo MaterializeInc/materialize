@@ -20,6 +20,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail};
 use aws_arn::ARN;
 use globset::GlobBuilder;
+use interchange::protobuf::NormalizedProtobufMessageName;
 use itertools::Itertools;
 use log::{debug, error};
 use regex::Regex;
@@ -38,7 +39,7 @@ use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
-use ore::str::{NormalizedProtobufMessageName, StrExt};
+use ore::str::StrExt;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::ast::CsrSeedCompiledOrLegacy;
 

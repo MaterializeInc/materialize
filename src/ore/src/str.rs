@@ -18,8 +18,6 @@
 use std::fmt::{self, Write};
 use std::ops::Deref;
 
-use serde::{Deserialize, Serialize};
-
 /// Extension methods for [`str`].
 pub trait StrExt {
     /// Wraps the string slice in a type whose display implementation renders
@@ -145,28 +143,5 @@ where
     Separated {
         separator,
         iter: iter.into_iter(),
-    }
-}
-
-/// Wrapper type that ensures a protobuf message name is properly normalized.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct NormalizedProtobufMessageName(String);
-
-impl NormalizedProtobufMessageName {
-    /// Create a new normalized protobuf message name.  A leading dot will be
-    /// prepended to the provided message name if necessary.
-    pub fn new(mut message_name: String) -> Self {
-        if !message_name.starts_with('.') {
-            message_name = format!(".{}", message_name);
-        }
-        NormalizedProtobufMessageName(message_name)
-    }
-}
-
-impl Deref for NormalizedProtobufMessageName {
-    type Target = String;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
