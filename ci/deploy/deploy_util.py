@@ -75,7 +75,7 @@ def upload_latest_redirect(platform: str, version: str) -> None:
 
 
 def deploy_tarball(platform: str, materialized: Path) -> None:
-    tar_path = materialized.with_suffix(".tar.gz")
+    tar_path = Path("materialized-{platform}.tar.gz")
     with tarfile.open(str(tar_path), "x:gz") as f:
         f.addfile(_tardir("materialized"))
         f.addfile(_tardir("materialized/bin"))
