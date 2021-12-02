@@ -64,7 +64,7 @@ def main() -> None:
     for repo in repos:
         mz_path = Path(f"materialized-{repo.rd.arch}")
         ci_util.acquire_materialized(repo, mz_path)
-        deploy_util.deploy_tarball("x86_64-unknown-linux-gnu", mz_path)
+        deploy_util.deploy_tarball(f"{repo.rd.arch}-unknown-linux-gnu", mz_path)
 
 
 def publish_deb(arch: Arch, version: str) -> None:
