@@ -54,7 +54,9 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
-use crate::persistcfg::{PersistConfig, PersistDetails, PersistMultiDetails, PersisterWithConfig};
+use crate::persistcfg::{
+    PersistConfig, PersisterWithConfig, TablePersistDetails, TablePersistMultiDetails,
+};
 use crate::session::{PreparedStatement, Session};
 use crate::CoordError;
 
@@ -368,7 +370,7 @@ struct CatalogEntryMap {
     /// currently being persisted (i.e it matches the output of
     /// self.generate_persist_multi_details() and is updated whenever the set of
     /// persisted tables changes).
-    persist_multi_details: Option<PersistMultiDetails>,
+    persist_multi_details: Option<TablePersistMultiDetails>,
 }
 
 impl std::ops::Deref for CatalogEntryMap {
@@ -408,7 +410,7 @@ impl CatalogEntryMap {
         ret
     }
 
-    fn generate_persist_multi_details(&self) -> Option<PersistMultiDetails> {
+    fn generate_persist_multi_details(&self) -> Option<TablePersistMultiDetails> {
         let mut all_table_ids = Vec::new();
         let mut handles = Vec::new();
         for (_, entry) in self.by_id.iter() {
@@ -425,13 +427,13 @@ impl CatalogEntryMap {
         }
         MultiWriteHandle::new(&handles)
             .ok()
-            .map(|write_handle| PersistMultiDetails {
+            .map(|write_handle| TablePersistMultiDetails {
                 all_table_ids,
                 write_handle,
             })
     }
 
-    pub fn persist_multi_details(&self) -> Option<&PersistMultiDetails> {
+    pub fn persist_multi_details(&self) -> Option<&TablePersistMultiDetails> {
         // Verify the persist_multi_details invariant.
         debug_assert_eq!(
             &self.persist_multi_details,
@@ -512,7 +514,7 @@ pub struct Table {
     pub defaults: Vec<Expr<Raw>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
-    pub persist: Option<PersistDetails>,
+    pub persist: Option<TablePersistDetails>,
 }
 
 impl Table {
@@ -2214,7 +2216,7 @@ impl Catalog {
         let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => {
-                let persist = self.persist.details_from_name(persist_name)?;
+                let persist = self.persist.table_details_from_name(persist_name)?;
                 CatalogItem::Table(Table {
                     create_sql: table.create_sql,
                     desc: table.desc,
@@ -2425,11 +2427,11 @@ impl Catalog {
         &self,
         id: GlobalId,
         name: &FullName,
-    ) -> Result<Option<PersistDetails>, PersistError> {
-        self.persist.details(id, &name.to_string())
+    ) -> Result<Option<TablePersistDetails>, PersistError> {
+        self.persist.table_details(id, &name.to_string())
     }
 
-    pub fn persist_multi_details(&self) -> Option<&PersistMultiDetails> {
+    pub fn persist_multi_details(&self) -> Option<&TablePersistMultiDetails> {
         self.state.by_id.persist_multi_details()
     }
 
