@@ -24,13 +24,12 @@ services:
       - --tls-cert=/share/secrets/materialized.crt
       - --tls-key=/share/secrets/materialized.key
       - --tls-ca=/share/secrets/ca.crt
-      - --listen-addr=0.0.0.0:6876
     volumes:
       - secrets:/share/secrets
     environment:
       - MZ_DEV=1
     ports:
-      - 6876
+      - 6875
     depends_on: [test-certs]
   dbt-test:
     mzbuild: dbt-materialize
@@ -52,9 +51,21 @@ mzworkflows:
         port: 6875
       - step: wait-for-tcp
         host: tls-materialized
-        port: 6876
+        port: 6875
       - step: run
         service: dbt-test
+        command: [env, DBT_HOST=materialized, pytest, dbt-materialize/test]
+      - step: run
+        service: dbt-test
+        command: [
+          env,
+          DBT_HOST=tls-materialized,
+          DBT_SSLCERT=/share/secrets/materialized.crt,
+          DBT_SSLKEY=/share/secrets/materialized.key,
+          DBT_SSLROOTCERT=/share/secrets/ca.crt,
+          pytest,
+          dbt-materialize/test
+        ]
 
 volumes:
   secrets:
