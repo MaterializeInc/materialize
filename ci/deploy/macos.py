@@ -19,7 +19,7 @@ from . import deploy_util
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("arch", choices=[Arch.X86_64, Arch.AARCH64])
+    parser.add_argument("arch", choices=[Arch.X86_64, Arch.AARCH64], type=Arch)
     args = parser.parse_args()
 
     target = f"{args.arch}-apple-darwin"
