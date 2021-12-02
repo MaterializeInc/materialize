@@ -1603,7 +1603,7 @@ pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
 pub const PG_TABLES: BuiltinView = BuiltinView {
     name: "pg_tables",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_tables AS 
+    sql: "CREATE VIEW pg_tables AS
 SELECT n.nspname AS schemaname,
     c.relname AS tablename,
     pg_catalog.pg_get_userbyid(c.relowner) AS tableowner
