@@ -326,6 +326,88 @@ reduce
 ----
 #0
 
+## Case/If optimizations
+
+reduce
+(if (call_binary gt #0 #1) false true)
+[int32 int32]
+----
+((isnull(#0) || isnull(#1)) || (#0 <= #1))
+
+reduce
+(if (call_binary gt #0 #1) false (null bool))
+[int32 int32]
+----
+(null && ((isnull(#0) || isnull(#1)) || (#0 <= #1)))
+
+reduce
+(if (call_binary gt #0 #1) false false)
+[int32 int32]
+----
+false
+
+# non-literal expression in the THEN clause
+reduce
+(if (call_binary gt #0 #1) (call_binary eq #0 (1 int32)) false)
+[int32 int32]
+----
+if (#0 > #1) then {(#0 = 1)} else {false}
+
+reduce
+(if (call_binary gt #0 #1) (null bool) false)
+[int32 int32]
+----
+(null && (#0 > #1))
+
+# non-literal expression in the THEN clause
+reduce
+(if (call_binary gt #0 #1) true false)
+[int32 int32]
+----
+(#0 > #1)
+
+reduce
+(if (call_binary gt #0 #1) true (null bool))
+[int32 int32]
+----
+(null || (#0 > #1))
+
+reduce
+(if (call_binary gt #0 #1) (call_binary eq #0 (1 int32)) true)
+[int32 int32]
+----
+if (#0 > #1) then {(#0 = 1)} else {true}
+
+reduce
+(if (call_binary gt #0 #1) (null bool) true)
+[int32 int32]
+----
+(null || (#0 <= #1))
+
+reduce
+(if (call_binary gt #0 #1) true true)
+[int32 int32]
+----
+true
+
+reduce
+(if (call_binary gt #0 #1) (null bool) (null bool))
+[int32 int32]
+----
+null
+
+reduce
+(if (call_binary gt #0 #1) (null int32) (null int32))
+[int32 int32]
+----
+null
+
+reduce
+(if (call_binary gt #0 #1) (1 int32) (2 int32))
+[int32 int32]
+----
+if (#0 > #1) then {1} else {2}
+
 ## undistribute_and/or works despite multiple copies of the same expression in
 ## the intersection
 
