@@ -1605,8 +1605,8 @@ pub const PG_TABLES: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_tables AS 
 SELECT n.nspname AS schemaname,
-  c.relname AS tablename,
-  pg_catalog.pg_get_userbyid(c.relowner) AS tableowner
+    c.relname AS tablename,
+    pg_catalog.pg_get_userbyid(c.relowner) AS tableowner
 FROM pg_catalog.pg_class c
 LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind = ANY (ARRAY['r','p'])",
