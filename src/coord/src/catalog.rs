@@ -55,7 +55,8 @@ use crate::catalog::builtin::{
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::{
-    PersistConfig, PersisterWithConfig, TablePersistDetails, TablePersistMultiDetails,
+    EnvelopePersistDetails, PersistConfig, PersisterWithConfig, SourcePersistDetails,
+    TablePersistDetails, TablePersistMultiDetails,
 };
 use crate::session::{PreparedStatement, Session};
 use crate::CoordError;
@@ -316,7 +317,7 @@ impl CatalogState {
 
         let item = self.get_by_id(&id).item();
         match item {
-            CatalogItem::Source(source) => match &source.connector {
+            CatalogItem::Source(source) => match &source.connector() {
                 SourceConnector::External { connector, .. } => match &connector {
                     ExternalSourceConnector::PubNub(_) => Volatile,
                     ExternalSourceConnector::Kinesis(_) => Volatile,
@@ -527,12 +528,30 @@ impl Table {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
+    // These fields represent the declarative part of a source, for example the schema of records.
     pub create_sql: String,
     pub optimized_expr: OptimizedMirRelationExpr,
-    pub connector: SourceConnector,
     pub bare_desc: RelationDesc,
     pub desc: RelationDesc,
-    pub persist_name: Option<String>,
+
+    // This describes the "physical" details of the source, i.e. how it should be rendered in a
+    // dataflow.
+    pub details: SourceDetails,
+}
+
+impl Source {
+    pub fn connector(&self) -> &SourceConnector {
+        match &self.details {
+            SourceDetails::NonpersistedSource(connector) => connector,
+            SourceDetails::PersistedSource(connector, _persist_details) => connector,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum SourceDetails {
+    NonpersistedSource(SourceConnector),
+    PersistedSource(SourceConnector, SourcePersistDetails),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -663,7 +682,7 @@ impl CatalogItem {
 
     pub fn source_connector(&self, name: &FullName) -> Result<&SourceConnector, SqlCatalogError> {
         match &self {
-            CatalogItem::Source(source) => Ok(&source.connector),
+            CatalogItem::Source(source) => Ok(source.connector()),
             _ => Err(SqlCatalogError::UnknownSource(name.to_string())),
         }
     }
@@ -950,13 +969,14 @@ impl Catalog {
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
                             optimized_expr,
-                            connector: dataflow_types::SourceConnector::Local {
-                                timeline: Timeline::EpochMilliseconds,
-                                persisted_name: None,
-                            },
+                            details: SourceDetails::NonpersistedSource(
+                                dataflow_types::SourceConnector::Local {
+                                    timeline: Timeline::EpochMilliseconds,
+                                    persisted_name: None,
+                                },
+                            ),
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
-                            persist_name: None,
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -2165,32 +2185,52 @@ impl Catalog {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
                 eval_env: None,
-                persist_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
+                persist_name: None,
+                persist_details: table
+                    .persist
+                    .as_ref()
+                    .map(|p| SerializedSourcePersistDetails {
+                        primary_stream: p.stream_name.clone(),
+                        secondary_streams: HashMap::new(),
+                    }),
             },
-            CatalogItem::Source(source) => SerializedCatalogItem::V1 {
-                create_sql: source.create_sql.clone(),
-                eval_env: None,
-                persist_name: source.persist_name.clone(),
-            },
+            CatalogItem::Source(source) => {
+                let persist_details = match &source.details {
+                    SourceDetails::NonpersistedSource(_) => None,
+                    SourceDetails::PersistedSource(_connector, persist_details) => {
+                        Some(persist_details.clone().into())
+                    }
+                };
+                SerializedCatalogItem::V1 {
+                    create_sql: source.create_sql.clone(),
+                    eval_env: None,
+                    persist_name: None,
+                    persist_details,
+                }
+            }
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
                 eval_env: None,
                 persist_name: None,
+                persist_details: None,
             },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
                 create_sql: index.create_sql.clone(),
                 eval_env: None,
                 persist_name: None,
+                persist_details: None,
             },
             CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
                 create_sql: sink.create_sql.clone(),
                 eval_env: None,
                 persist_name: None,
+                persist_details: None,
             },
             CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
                 create_sql: typ.create_sql.clone(),
                 eval_env: None,
                 persist_name: None,
+                persist_details: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };
@@ -2202,21 +2242,44 @@ impl Catalog {
             create_sql,
             eval_env: _,
             persist_name,
+            persist_details,
         } = serde_json::from_slice(&bytes)?;
-        self.parse_item(id, create_sql, Some(&PlanContext::zero()), persist_name)
+        let persist_details = match persist_name {
+            // Restore from older version if there.
+            Some(persist_name) => {
+                assert!(persist_details.is_none(), "cannot have both a persist_name (legacy) and persist_details in a catalog item");
+                // Tables only have a primary stream.
+                Some(SerializedSourcePersistDetails {
+                    primary_stream: persist_name,
+                    secondary_streams: HashMap::new(),
+                })
+            }
+            None => persist_details,
+        };
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()), persist_details)
     }
 
+    // Parses the given SQL string into a `CatalogItem`.
+    //
+    // The given `persist_details` are an optional description of the persisted streams that this
+    // source uses, if it is a persisted source. The required `String` is the primary stream that
+    // carries the actual data of the item while the `HashMap` describes potentially required
+    // secondary streams.
     fn parse_item(
         &self,
         id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
-        persist_name: Option<String>,
+        persist_details: Option<SerializedSourcePersistDetails>,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => {
+                let persist_name = persist_details.map(| SerializedSourcePersistDetails { primary_stream, secondary_streams }| {
+                    assert!(secondary_streams.len() == 0, "there must only be a primary stream name for a persisted table, but we have secondary streams: {:?}", secondary_streams);
+                    primary_stream
+                });
                 let persist = self.persist.table_details_from_name(persist_name)?;
                 CatalogItem::Table(Table {
                     create_sql: table.create_sql,
@@ -2231,13 +2294,21 @@ impl Catalog {
                 let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(source.expr)?;
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
+                let persist_details = self
+                    .persist
+                    .source_details_from_stream_names(&source.connector, persist_details)?;
+                let details = match persist_details {
+                    Some(persist_details) => {
+                        SourceDetails::PersistedSource(source.connector, persist_details)
+                    }
+                    None => SourceDetails::NonpersistedSource(source.connector),
+                };
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
                     optimized_expr,
-                    connector: source.connector,
+                    details,
                     bare_desc: source.bare_desc,
                     desc: transformed_desc,
-                    persist_name,
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
@@ -2436,14 +2507,14 @@ impl Catalog {
         self.state.by_id.persist_multi_details()
     }
 
-    pub fn source_persist_name(
+    pub fn source_persist_details(
         &self,
         id: GlobalId,
         connector: &SourceConnector,
         name: &FullName,
-    ) -> Option<String> {
+    ) -> Result<Option<SourcePersistDetails>, PersistError> {
         self.persist
-            .source_stream_name(id, connector, &name.to_string())
+            .source_details(id, connector, &name.to_string())
     }
 }
 
@@ -2503,7 +2574,37 @@ enum SerializedCatalogItem {
         // The name "eval_env" is historical.
         eval_env: Option<SerializedPlanContext>,
         persist_name: Option<String>,
+        persist_details: Option<SerializedSourcePersistDetails>,
     },
+}
+
+/// Serialized source persistence details. See `SourcePersistDetails` for an explanation of the
+/// fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializedSourcePersistDetails {
+    pub primary_stream: String,
+    pub secondary_streams: HashMap<String, String>,
+}
+
+impl From<SourcePersistDetails> for SerializedSourcePersistDetails {
+    fn from(source_persist_details: SourcePersistDetails) -> Self {
+        let primary_stream = source_persist_details.primary_stream;
+        let mut secondary_streams = HashMap::new();
+
+        secondary_streams.insert(
+            "timestamp-bindings".to_string(),
+            source_persist_details.timestamp_bindings_stream,
+        );
+
+        match source_persist_details.envelope_details {
+            EnvelopePersistDetails::Upsert => (), // nothing in there to persist,
+        }
+
+        SerializedSourcePersistDetails {
+            primary_stream,
+            secondary_streams,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

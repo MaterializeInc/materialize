@@ -150,7 +150,8 @@ use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
 use self::prometheus::Scraper;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState, Table,
+    self, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, SinkConnectorState,
+    SourceDetails, Table,
 };
 use crate::client::{Client, Handle};
 use crate::command::{
@@ -2214,17 +2215,24 @@ where
             let source_id = self.catalog.allocate_id()?;
             let source_oid = self.catalog.allocate_oid()?;
 
-            let persist_name =
-                self.catalog
-                    .source_persist_name(source_id, &source.connector, &name);
+            let persist_details = self
+                .catalog
+                .source_persist_details(source_id, &source.connector, &name)
+                .map_err(|err| anyhow!("{}", err))?;
+
+            let details = match persist_details {
+                Some(persist_details) => {
+                    SourceDetails::PersistedSource(source.connector, persist_details)
+                }
+                None => SourceDetails::NonpersistedSource(source.connector),
+            };
 
             let source = catalog::Source {
                 create_sql: source.create_sql,
                 optimized_expr,
-                connector: source.connector,
+                details,
                 bare_desc: source.bare_desc,
                 desc: transformed_desc,
-                persist_name,
             };
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
@@ -3855,7 +3863,7 @@ where
                                     ..
                                 }),
                             ..
-                        } = &source.connector
+                        } = source.connector()
                         {
                             replication_slots_to_drop
                                 .entry(conn.clone())
@@ -4230,9 +4238,9 @@ where
             if let Some(entry) = self.catalog.try_get_by_id(source_id) {
                 if let CatalogItem::Source(s) = entry.item() {
                     self.ts_tx
-                        .send(TimestampMessage::Add(source_id, s.connector.clone()))
+                        .send(TimestampMessage::Add(source_id, s.connector().clone()))
                         .expect("Failed to send CREATE Instance notice to timestamper");
-                    let connector = s.connector.clone();
+                    let connector = s.connector().clone();
                     self.broadcast(dataflow_types::client::Command::AddSourceTimestamping {
                         id: source_id,
                         connector,
@@ -4281,7 +4289,7 @@ where
             let entry = self.catalog.get_by_id(&id);
             match entry.item() {
                 CatalogItem::Source(source) => {
-                    timelines.insert(id, source.connector.timeline());
+                    timelines.insert(id, source.connector().timeline());
                 }
                 CatalogItem::Index(index) => {
                     ids.push(index.on);

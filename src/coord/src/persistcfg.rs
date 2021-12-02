@@ -9,11 +9,15 @@
 
 //! Materialize-specific persistence configuration.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dataflow_types::{ExternalSourceConnector, SourceConnector, SourceEnvelope};
+use dataflow_types::{
+    EnvelopePersistDesc, ExternalSourceConnector, SourceConnector, SourceEnvelope,
+    SourcePersistDesc,
+};
 use ore::metrics::MetricsRegistry;
 use persist::error::{Error, ErrorLog};
 use persist::indexed::encoding::Id as PersistId;
@@ -30,6 +34,8 @@ use persist::indexed::runtime::{
     self, MultiWriteHandle, RuntimeClient, RuntimeConfig, StreamWriteHandle,
 };
 use uuid::Uuid;
+
+use crate::catalog::SerializedSourcePersistDetails;
 
 #[derive(Clone, Debug)]
 pub enum PersistStorage {
@@ -227,13 +233,13 @@ impl PersisterWithConfig {
         }))
     }
 
-    pub fn source_stream_name(
+    pub fn source_details(
         &self,
         id: GlobalId,
         connector: &SourceConnector,
         pretty: &str,
-    ) -> Option<String> {
-        match connector {
+    ) -> Result<Option<SourcePersistDetails>, Error> {
+        let serialized_details = match connector {
             SourceConnector::External {
                 connector: ExternalSourceConnector::Kafka(_),
                 envelope: SourceEnvelope::Upsert(_),
@@ -242,9 +248,104 @@ impl PersisterWithConfig {
                 // NB: This gets written down in the catalog, so it should be
                 // safe to change the naming, if necessary. See
                 // Catalog::deserialize_item.
-                Some(format!("user-source-{}-{}", id, pretty))
+                let name_prefix = format!("user-source-{}-{}", id, pretty);
+                let data_name = format!("{}", name_prefix);
+                let timestamp_bindings_name = format!("{}-timestamp-bindings", name_prefix);
+
+                let mut secondary_streams = HashMap::new();
+                secondary_streams.insert("timestamp-bindings".to_string(), timestamp_bindings_name);
+                Some(SerializedSourcePersistDetails {
+                    primary_stream: data_name,
+                    secondary_streams,
+                })
             }
             _ => None,
+        };
+
+        self.source_details_from_stream_names(connector, serialized_details)
+    }
+
+    // NOTE: This is not a From<SerializedSourcePersistDetails> because we also need access to the
+    // connector and the persist runtime in future changes.
+    pub fn source_details_from_stream_names(
+        &self,
+        connector: &SourceConnector,
+        serialized_details: Option<SerializedSourcePersistDetails>,
+    ) -> Result<Option<SourcePersistDetails>, Error> {
+        let details = serialized_details.map(|serialized_details| {
+            let envelope_details = match connector {
+                SourceConnector::External {
+                    envelope: SourceEnvelope::Upsert(_),
+                    ..
+                } => EnvelopePersistDetails::Upsert,
+
+                SourceConnector::External { envelope, .. } => {
+                    return Err(format!("unsupported envelope: {:?}", envelope).into());
+                }
+
+                connector => {
+                    return Err(format!(
+                        "only external sources support persistence, got: {:?}",
+                        connector
+                    )
+                    .into());
+                }
+            };
+
+            let timestamp_bindings_stream = serialized_details
+                .secondary_streams
+                .get("timestamp-bindings")
+                .ok_or("missing timestamp-bindings stream")?
+                .to_string();
+
+            Ok(SourcePersistDetails {
+                primary_stream: serialized_details.primary_stream,
+                timestamp_bindings_stream,
+                envelope_details,
+            })
+        });
+
+        details.transpose()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourcePersistDetails {
+    /// Name of the primary persisted stream of this source. This is what a consumer of the
+    /// persisted data would be interested in while the secondary stream(s) of the source are an
+    /// internal implementation detail.
+    pub primary_stream: String,
+
+    /// Persisted stream of timestamp bindings.
+    pub timestamp_bindings_stream: String,
+
+    /// Any additional details that we need to make the envelope logic stateful.
+    pub envelope_details: EnvelopePersistDetails,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum EnvelopePersistDetails {
+    // TODO: We only have support for UPSERT right now, which doesn't need any state besides the
+    // primary stream (which doubles as the upsert state) and the timestamp bindings.
+    //
+    // I put this here as a placeholder and we can expand in the future, when we will also have
+    // `Debezium` and know what it needs as additional state.
+    Upsert,
+}
+
+impl From<SourcePersistDetails> for SourcePersistDesc {
+    fn from(source_persist_details: SourcePersistDetails) -> Self {
+        let primary_stream = source_persist_details.primary_stream;
+        let timestamp_bindings_stream = source_persist_details.timestamp_bindings_stream;
+
+        let envelope_desc = match source_persist_details.envelope_details {
+            EnvelopePersistDetails::Upsert => EnvelopePersistDesc::Upsert,
+        };
+
+        SourcePersistDesc {
+            primary_stream,
+            timestamp_bindings_stream,
+            envelope_desc,
         }
     }
 }

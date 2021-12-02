@@ -112,21 +112,28 @@ impl<'a> DataflowBuilder<'a> {
                                 },
                                 operators: None,
                                 bare_desc: table.desc.clone(),
-                                persisted_name: None,
+                                persist_desc: None,
                             },
                             *id,
                         );
                     }
                     CatalogItem::Source(source) => {
+                        let persist_desc = match &source.details {
+                            SourceDetails::NonpersistedSource(_connector) => None,
+                            SourceDetails::PersistedSource(_connector, persist_details) => {
+                                Some(persist_details.clone().into())
+                            }
+                        };
+
                         if source.optimized_expr.0.is_trivial_source() {
                             dataflow.import_source(
                                 *id,
                                 dataflow_types::SourceDesc {
                                     name: entry.name().to_string(),
-                                    connector: source.connector.clone(),
+                                    connector: source.connector().clone(),
                                     operators: None,
                                     bare_desc: source.bare_desc.clone(),
-                                    persisted_name: source.persist_name.clone(),
+                                    persist_desc,
                                 },
                                 *id,
                             );
@@ -138,10 +145,10 @@ impl<'a> DataflowBuilder<'a> {
                                 bare_source_id,
                                 dataflow_types::SourceDesc {
                                     name: entry.name().to_string(),
-                                    connector: source.connector.clone(),
+                                    connector: source.connector().clone(),
                                     operators: None,
                                     bare_desc: source.bare_desc.clone(),
-                                    persisted_name: source.persist_name.clone(),
+                                    persist_desc,
                                 },
                                 *id,
                             );

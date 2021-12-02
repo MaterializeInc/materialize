@@ -24,8 +24,8 @@ use crate::catalog::builtin::{
     MZ_ROLES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Func, Index, Sink, SinkConnector, SinkConnectorState, Source, Table,
-    Type, TypeInner, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Func, Index, Sink, SinkConnector, SinkConnectorState, Source,
+    SourceDetails, Table, Type, TypeInner, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.
@@ -183,7 +183,13 @@ impl CatalogState {
         source: &Source,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let persisted_name_datum = Datum::from(source.persist_name.as_ref().map(|s| s.as_str()));
+        let persist_name = match &source.details {
+            SourceDetails::NonpersistedSource(_) => None,
+            SourceDetails::PersistedSource(_connector, persist_details) => {
+                Some(persist_details.primary_stream.as_str())
+            }
+        };
+        let persisted_name_datum = Datum::from(persist_name);
         vec![BuiltinTableUpdate {
             id: MZ_SOURCES.id,
             row: Row::pack_slice(&[
@@ -191,7 +197,7 @@ impl CatalogState {
                 Datum::Int32(oid as i32),
                 Datum::Int64(schema_id),
                 Datum::String(name),
-                Datum::String(source.connector.name()),
+                Datum::String(source.connector().name()),
                 Datum::String(self.is_volatile(id).as_str()),
                 persisted_name_datum,
             ]),

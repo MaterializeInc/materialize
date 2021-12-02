@@ -508,7 +508,32 @@ pub struct SourceDesc {
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
     pub bare_desc: RelationDesc,
-    pub persisted_name: Option<String>,
+    pub persist_desc: Option<SourcePersistDesc>,
+}
+
+/// The persistence details that are needed to render a persistent Source.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SourcePersistDesc {
+    /// Name of the primary persisted stream of this source. This is what a consumer of the
+    /// persisted data would be interested in while the secondary stream(s) of the source are an
+    /// internal implementation detail.
+    pub primary_stream: String,
+
+    /// Persisted stream of timestamp bindings.
+    pub timestamp_bindings_stream: String,
+
+    /// Any additional details that we need to make the envelope logic stateful.
+    pub envelope_desc: EnvelopePersistDesc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EnvelopePersistDesc {
+    // TODO: We only have support for UPSERT right now, which doesn't need any state besides the
+    // primary stream (which doubles as the upsert state) and the timestamp bindings.
+    //
+    // I put this here as a placeholder and we can expand in the future, when we will also have
+    // `Debezium` and know what it needs as additional state.
+    Upsert,
 }
 
 /// A sink for updates to a relational collection.

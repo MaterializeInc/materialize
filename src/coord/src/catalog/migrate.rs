@@ -48,6 +48,7 @@ where
             create_sql,
             eval_env,
             persist_name,
+            persist_details,
         } = serde_json::from_slice(&def)?;
         let mut stmt = sql::parse::parse(&create_sql)?.into_element();
 
@@ -57,6 +58,7 @@ where
             create_sql: stmt.to_ast_string_stable(),
             eval_env,
             persist_name,
+            persist_details,
         };
 
         let serialized_item =
