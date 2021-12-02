@@ -2218,9 +2218,10 @@ where
             let source_id = self.catalog.allocate_id()?;
             let source_oid = self.catalog.allocate_oid()?;
 
-            let persist_name =
-                self.catalog
-                    .source_persist_name(source_id, &source.connector, &name);
+            let persist = self
+                .catalog
+                .source_persist_details(source_id, &source.connector, &name)
+                .map_err(|err| anyhow!("{}", err))?;
 
             let source = catalog::Source {
                 create_sql: source.create_sql,
@@ -2228,7 +2229,7 @@ where
                 connector: source.connector,
                 bare_desc: source.bare_desc,
                 desc: transformed_desc,
-                persist_name,
+                persist,
             };
             ops.push(catalog::Op::CreateItem {
                 id: source_id,

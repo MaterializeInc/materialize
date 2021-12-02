@@ -14,6 +14,8 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
+use dataflow_types::SourcePersistDesc;
+
 use super::*;
 use ore::stack::maybe_grow;
 
@@ -108,10 +110,9 @@ impl<'a> DataflowBuilder<'a> {
                                 },
                                 operators: None,
                                 bare_desc: table.desc.clone(),
-                                persisted_name: table
-                                    .persist
-                                    .as_ref()
-                                    .map(|p| p.stream_name.clone()),
+                                persist_desc: table.persist.as_ref().map(|p| {
+                                    SourcePersistDesc::single_stream(p.stream_name.clone())
+                                }),
                             },
                             *id,
                         );
@@ -125,7 +126,10 @@ impl<'a> DataflowBuilder<'a> {
                                     connector: source.connector.clone(),
                                     operators: None,
                                     bare_desc: source.bare_desc.clone(),
-                                    persisted_name: source.persist_name.clone(),
+                                    persist_desc: source
+                                        .persist
+                                        .as_ref()
+                                        .map(|p| SourcePersistDesc::new(p.streams.clone())),
                                 },
                                 *id,
                             );
@@ -140,7 +144,10 @@ impl<'a> DataflowBuilder<'a> {
                                     connector: source.connector.clone(),
                                     operators: None,
                                     bare_desc: source.bare_desc.clone(),
-                                    persisted_name: source.persist_name.clone(),
+                                    persist_desc: source
+                                        .persist
+                                        .as_ref()
+                                        .map(|p| SourcePersistDesc::new(p.streams.clone())),
                                 },
                                 *id,
                             );

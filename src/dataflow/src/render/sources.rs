@@ -108,36 +108,38 @@ where
                     ((handle, capability), ok_stream, err_collection)
                 };
 
-                let (ok_stream, err_collection) =
-                    match (&mut render_state.persist, src.persisted_name) {
-                        (Some(persist), Some(stream_name)) => {
-                            let read = persist
-                                .create_or_load(&stream_name)
-                                .map(|(_write, read)| read);
-                            let (persist_ok_stream, persist_err_stream) =
-                                scope.persisted_source(read).ok_err(|x| match x {
-                                    (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
-                                    (Err(err), ts, diff) => Err((err, ts, diff)),
-                                });
-                            let (persist_ok_stream, decode_err_stream) = persist_ok_stream
-                                .ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
-                            let persist_err_collection = persist_err_stream
-                                .concat(&decode_err_stream)
-                                .map(move |(err, ts, diff)| {
-                                    let err = SourceError::new(
-                                        stream_name.clone(),
-                                        SourceErrorDetails::Persistence(err),
-                                    );
-                                    (err.into(), ts, diff)
-                                })
-                                .as_collection();
-                            (
-                                ok_stream.concat(&persist_ok_stream),
-                                err_collection.concat(&persist_err_collection),
-                            )
-                        }
-                        _ => (ok_stream, err_collection),
-                    };
+                let persisted_name = src.persist_desc.as_ref().map(|p| p.get_single_stream());
+
+                let (ok_stream, err_collection) = match (&mut render_state.persist, persisted_name)
+                {
+                    (Some(persist), Some(stream_name)) => {
+                        let read = persist
+                            .create_or_load(&stream_name)
+                            .map(|(_write, read)| read);
+                        let (persist_ok_stream, persist_err_stream) =
+                            scope.persisted_source(read).ok_err(|x| match x {
+                                (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
+                                (Err(err), ts, diff) => Err((err, ts, diff)),
+                            });
+                        let (persist_ok_stream, decode_err_stream) =
+                            persist_ok_stream.ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
+                        let persist_err_collection = persist_err_stream
+                            .concat(&decode_err_stream)
+                            .map(move |(err, ts, diff)| {
+                                let err = SourceError::new(
+                                    stream_name.clone(),
+                                    SourceErrorDetails::Persistence(err),
+                                );
+                                (err.into(), ts, diff)
+                            })
+                            .as_collection();
+                        (
+                            ok_stream.concat(&persist_ok_stream),
+                            err_collection.concat(&persist_err_collection),
+                        )
+                    }
+                    _ => (ok_stream, err_collection),
+                };
 
                 render_state.local_inputs.insert(
                     src_id,
@@ -181,41 +183,40 @@ where
                 // whose contents will be concatenated and inserted along the collection.
                 let mut error_collections = Vec::<Collection<_, _>>::new();
 
-                let source_persist_config =
-                    match (src.persisted_name, render_state.persist.as_mut()) {
-                        (Some(persisted_name), Some(persist)) => {
-                            let mut persist_errs = Vec::new();
+                let source_persist_config = match (src.persist_desc, render_state.persist.as_mut())
+                {
+                    (Some(persist_desc), Some(persist)) => {
+                        let mut persist_errs = Vec::new();
 
-                            let source_persist_config =
-                                get_persist_config(&uid, persisted_name, persist);
+                        let source_persist_config = get_persist_config(&uid, persist_desc, persist);
 
-                            if let Err(ref e) = source_persist_config {
-                                let err = SourceError::new(
-                                    src.name.clone(),
-                                    SourceErrorDetails::Persistence(e.to_string()),
-                                );
-                                persist_errs.push(err);
-                            }
-
-                            // Make sure to always create and push an error stream, even if there
-                            // are no errors. This ensures that the shape of the operator graph is
-                            // consistent across all timely workers.
-                            //
-                            // TODO: The error collections are not the right place for surfacing
-                            // persistence errors, since they are not deterministic/definite. We
-                            // don't have a better place right now, though.
-                            error_collections.push(
-                                persist_errs
-                                    .to_stream(scope)
-                                    .map(DataflowError::SourceError)
-                                    .pass_through("source-persist-errors")
-                                    .as_collection(),
+                        if let Err(ref e) = source_persist_config {
+                            let err = SourceError::new(
+                                src.name.clone(),
+                                SourceErrorDetails::Persistence(e.to_string()),
                             );
-
-                            source_persist_config.ok()
+                            persist_errs.push(err);
                         }
-                        _ => None,
-                    };
+
+                        // Make sure to always create and push an error stream, even if there
+                        // are no errors. This ensures that the shape of the operator graph is
+                        // consistent across all timely workers.
+                        //
+                        // TODO: The error collections are not the right place for surfacing
+                        // persistence errors, since they are not deterministic/definite. We
+                        // don't have a better place right now, though.
+                        error_collections.push(
+                            persist_errs
+                                .to_stream(scope)
+                                .map(DataflowError::SourceError)
+                                .pass_through("source-persist-errors")
+                                .as_collection(),
+                        );
+
+                        source_persist_config.ok()
+                    }
+                    _ => None,
+                };
 
                 let fast_forwarded = match &connector {
                     ExternalSourceConnector::Kafka(KafkaSourceConnector {
@@ -691,7 +692,7 @@ impl<K: Codec, V: Codec, ST: Codec, AT: Codec> PersistentSourceConfig<K, V, ST, 
 
 fn get_persist_config(
     source_id: &SourceInstanceId,
-    persisted_name: String,
+    persist_desc: SourcePersistDesc,
     persist_client: &mut persist::indexed::runtime::RuntimeClient,
 ) -> Result<
     PersistentSourceConfig<
@@ -702,10 +703,16 @@ fn get_persist_config(
     >,
     persist::error::Error,
 > {
+    let streams = persist_desc.streams;
+
     // TODO: Ensure that we only render one materialized source when persistence is enabled. We can
     // use https://github.com/MaterializeInc/materialize/pull/8522, which has most of the plumbing.
-    let persist_bindings_name = format!("{}-timestamp-bindings", persisted_name);
-    let persist_data_name = format!("{}", persisted_name);
+    let persist_bindings_name = streams
+        .get("timestamp-bindings")
+        .expect("missing stream mapping for 'timestamp_bindings'");
+    let persist_data_name = streams
+        .get("upsert-state")
+        .expect("missing stream mapping for 'data'");
 
     let (bindings_write, bindings_read) = persist_client
         .create_or_load::<SourceTimestamp, AssignedTimestamp>(&persist_bindings_name)?;

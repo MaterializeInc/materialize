@@ -55,7 +55,8 @@ use crate::catalog::builtin::{
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::{
-    PersistConfig, PersisterWithConfig, TablePersistDetails, TablePersistMultiDetails,
+    PersistConfig, PersisterWithConfig, SourcePersistDetails, TablePersistDetails,
+    TablePersistMultiDetails,
 };
 use crate::session::{PreparedStatement, Session};
 use crate::CoordError;
@@ -532,7 +533,7 @@ pub struct Source {
     pub connector: SourceConnector,
     pub bare_desc: RelationDesc,
     pub desc: RelationDesc,
-    pub persist_name: Option<String>,
+    pub persist: Option<SourcePersistDetails>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -955,7 +956,7 @@ impl Catalog {
                             },
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
-                            persist_name: None,
+                            persist: None,
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -2166,11 +2167,24 @@ impl Catalog {
                 eval_env: None,
                 persist_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
             },
-            CatalogItem::Source(source) => SerializedCatalogItem::V1 {
-                create_sql: source.create_sql.clone(),
-                eval_env: None,
-                persist_name: source.persist_name.clone(),
-            },
+            CatalogItem::Source(source) => {
+                // TODO: This seems hacky, we're serializing our own format to the one string
+                // "field" that we have to work with. Good thing is that we don't break the
+                // catalog, though.
+                let persist_name = source.persist.as_ref().map(|p| {
+                    p.streams
+                        .iter()
+                        .map(|(logical_name, physical_name)| {
+                            format!("{}:{}", logical_name, physical_name)
+                        })
+                        .join(",")
+                });
+                SerializedCatalogItem::V1 {
+                    create_sql: source.create_sql.clone(),
+                    eval_env: None,
+                    persist_name,
+                }
+            }
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
                 eval_env: None,
@@ -2202,7 +2216,23 @@ impl Catalog {
             eval_env: _,
             persist_name,
         } = serde_json::from_slice(&bytes)?;
-        self.parse_item(id, create_sql, Some(&PlanContext::zero()), persist_name)
+        let persist_streams = persist_name.map(|name| {
+            let mut streams = HashMap::new();
+            if name.contains(':') {
+                // We have a map that contains multiple names, parse it.
+                for entry in name.split(',') {
+                    let mut split = entry.split(':');
+                    let logical_name = split.next().expect("missing logical stream name");
+                    let physical_name = split.next().expect("missing physical stream name");
+                    streams.insert(logical_name.to_string(), physical_name.to_string());
+                }
+            } else {
+                streams.insert(name.clone(), name);
+            }
+
+            streams
+        });
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()), persist_streams)
     }
 
     fn parse_item(
@@ -2210,12 +2240,17 @@ impl Catalog {
         id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
-        persist_name: Option<String>,
+        persist_streams: Option<HashMap<String, String>>,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => {
+                // TODO: Find a way around this. Maybe.
+                let persist_name = persist_streams.map(|streams| {
+                    assert!(streams.len() == 1, "there must be exactly one stream name for a persisted table, but have {:?}", streams);
+                    streams.iter().next().expect("missing stream name").1.clone()
+                });
                 let persist = self.persist.details_from_name(persist_name)?;
                 CatalogItem::Table(Table {
                     create_sql: table.create_sql,
@@ -2230,13 +2265,16 @@ impl Catalog {
                 let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(source.expr)?;
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
+                let persist = self
+                    .persist
+                    .source_details_from_stream_names(persist_streams)?;
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
                     optimized_expr,
                     connector: source.connector,
                     bare_desc: source.bare_desc,
                     desc: transformed_desc,
-                    persist_name,
+                    persist,
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
@@ -2435,14 +2473,14 @@ impl Catalog {
         self.state.by_id.persist_multi_details()
     }
 
-    pub fn source_persist_name(
+    pub fn source_persist_details(
         &self,
         id: GlobalId,
         connector: &SourceConnector,
         name: &FullName,
-    ) -> Option<String> {
+    ) -> Result<Option<SourcePersistDetails>, PersistError> {
         self.persist
-            .source_stream_name(id, connector, &name.to_string())
+            .source_details(id, connector, &name.to_string())
     }
 }
 

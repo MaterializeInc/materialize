@@ -11,6 +11,7 @@ use std::os::unix::ffi::OsStringExt;
 
 use dataflow_types::{AvroOcfSinkConnector, KafkaSinkConnector};
 use expr::{GlobalId, MirScalarExpr};
+use itertools::Itertools;
 use ore::collections::CollectionExt;
 use repr::adt::array::ArrayDimension;
 use repr::{Datum, Diff, Row};
@@ -183,7 +184,14 @@ impl CatalogState {
         source: &Source,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let persisted_name_datum = Datum::from(source.persist_name.as_ref().map(|s| s.as_str()));
+        let persist_streams = source.persist.as_ref().map(|persist| {
+            persist
+                .streams
+                .iter()
+                .map(|(logical_name, physical_name)| format!("{}:{}", logical_name, physical_name))
+                .join(",")
+        });
+        let persisted_name_datum = Datum::from(persist_streams.as_ref().map(|s| s.as_str()));
         vec![BuiltinTableUpdate {
             id: MZ_SOURCES.id,
             row: Row::pack_slice(&[

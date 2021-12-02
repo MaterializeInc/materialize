@@ -508,7 +508,54 @@ pub struct SourceDesc {
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
     pub bare_desc: RelationDesc,
-    pub persisted_name: Option<String>,
+    pub persist_desc: Option<SourcePersistDesc>,
+}
+
+/// The persistence details that are needed to render a persistent Source.
+// TODO: This makes it more evident how Source-centric SourceDesc is, and how using it for Tables
+// is a bit off. We could refactor this in a follow-up change, i.e. create a separate TableDesc
+// that is specific to the needs of Tables. Also, there is `SourcePersistDetails` for the
+// coordinator-side details and this `SourcePersistDesc` for the things we need to send to
+// `dataflow`. Naming is hard...
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SourcePersistDesc {
+    /// A mapping from logical stream name (what the stream is used for) to physical/underlying
+    /// stream name.
+    ///
+    /// For example, the Kafka Upsert source implementation needs a "data" stream and a
+    /// "timestamp-bindings" stream. Those would be the logical name. The physical name is the name
+    /// of the persisted stream that we generated for a specific source. The physical name of the
+    /// "timestamp-bindings" stream could be "user-source-u1-foo-timestamp-bindings" for a given
+    /// source.
+    pub streams: HashMap<String, String>,
+}
+
+impl SourcePersistDesc {
+    /// Creates a [SourcePersistDesc] that contains the given stream mappings.
+    pub fn new(streams: HashMap<String, String>) -> SourcePersistDesc {
+        SourcePersistDesc { streams }
+    }
+
+    /// Creates a [SourcePersistDesc] that contains only one mapping. This is useful for tables,
+    /// that always only use one underlying persisted stream.
+    pub fn single_stream(stream_name: String) -> SourcePersistDesc {
+        let mut persist_streams = HashMap::new();
+        persist_streams.insert(stream_name.clone(), stream_name);
+        SourcePersistDesc {
+            streams: persist_streams,
+        }
+    }
+
+    /// Returns a singular stream name. This panics if this [SourcePersistDesc] does not contain
+    /// exactly one mapping.
+    pub fn get_single_stream(&self) -> String {
+        assert!(
+            self.streams.len() == 1,
+            "persist description has more than one stream mapping"
+        );
+        let (name, _name) = self.streams.iter().next().expect("known to exist");
+        name.clone()
+    }
 }
 
 /// A sink for updates to a relational collection.

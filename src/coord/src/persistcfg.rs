@@ -9,6 +9,7 @@
 
 //! Materialize-specific persistence configuration.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -224,13 +225,13 @@ impl PersisterWithConfig {
         }))
     }
 
-    pub fn source_stream_name(
+    pub fn source_details(
         &self,
         id: GlobalId,
         connector: &SourceConnector,
         pretty: &str,
-    ) -> Option<String> {
-        match connector {
+    ) -> Result<Option<SourcePersistDetails>, Error> {
+        let streams = match connector {
             SourceConnector::External {
                 connector: ExternalSourceConnector::Kafka(_),
                 envelope: SourceEnvelope::Upsert(_),
@@ -239,11 +240,41 @@ impl PersisterWithConfig {
                 // NB: This gets written down in the catalog, so it should be
                 // safe to change the naming, if necessary. See
                 // Catalog::deserialize_item.
-                Some(format!("user-source-{}-{}", id, pretty))
+                let name_prefix = format!("user-source-{}-{}", id, pretty);
+                let data_name = format!("{}", name_prefix);
+                let timestamp_bindings_name = format!("{}-timestamp-bindings", name_prefix);
+
+                let mut streams = HashMap::new();
+                streams.insert("upsert-state".to_string(), data_name);
+                streams.insert("timestamp-bindings".to_string(), timestamp_bindings_name);
+                Some(streams)
             }
             _ => None,
-        }
+        };
+
+        self.source_details_from_stream_names(streams)
     }
+
+    pub fn source_details_from_stream_names(
+        &self,
+        streams: Option<HashMap<String, String>>,
+    ) -> Result<Option<SourcePersistDetails>, Error> {
+        let details = streams.map(|streams| SourcePersistDetails { streams });
+        Ok(details)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourcePersistDetails {
+    /// A mapping from logical stream name (what the stream is used for) to physical/underlying
+    /// stream name.
+    ///
+    /// For example, the Kafka Upsert source implementation needs a "data" stream and a
+    /// "timestamp-bindings" stream. Those would be the logical name. The physical name is the name
+    /// of the persisted stream that we generated for a specific source. The physical name of the
+    /// "timestamp-bindings" stream could be "user-source-u1-foo-timestamp-bindings" for a given
+    /// source.
+    pub streams: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
