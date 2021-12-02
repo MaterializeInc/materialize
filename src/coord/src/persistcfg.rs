@@ -14,7 +14,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use build_info::BuildInfo;
-use dataflow_types::{ExternalSourceConnector, SourceConnector, SourceEnvelope};
+use dataflow_types::{
+    EnvelopePersistDesc, ExternalSourceConnector, SourceConnector, SourceEnvelope,
+    SourcePersistDesc,
+};
 use ore::metrics::MetricsRegistry;
 use persist::error::{Error, ErrorLog};
 use persist::indexed::encoding::Id as PersistId;
@@ -31,6 +34,8 @@ use persist::indexed::runtime::{
     self, MultiWriteHandle, RuntimeClient, RuntimeConfig, StreamWriteHandle,
 };
 use uuid::Uuid;
+
+use crate::catalog::{SerializedEnvelopePersistDetails, SerializedSourcePersistDetails};
 
 #[derive(Clone, Debug)]
 pub enum PersistStorage {
@@ -231,13 +236,13 @@ impl PersisterWithConfig {
         }))
     }
 
-    pub fn source_stream_name(
+    pub fn source_persist_desc(
         &self,
         id: GlobalId,
         connector: &SourceConnector,
         pretty: &str,
-    ) -> Option<String> {
-        match connector {
+    ) -> Result<Option<SourcePersistDesc>, Error> {
+        let serialized_details = match connector {
             SourceConnector::External {
                 connector: ExternalSourceConnector::Kafka(_),
                 envelope: SourceEnvelope::Upsert(_),
@@ -246,10 +251,63 @@ impl PersisterWithConfig {
                 // NB: This gets written down in the catalog, so it should be
                 // safe to change the naming, if necessary. See
                 // Catalog::deserialize_item.
-                Some(format!("user-source-{}-{}", id, pretty))
+                let name_prefix = format!("user-source-{}-{}", id, pretty);
+                let primary_stream = format!("{}", name_prefix);
+                let timestamp_bindings_stream = format!("{}-timestamp-bindings", name_prefix);
+
+                Some(SerializedSourcePersistDetails {
+                    primary_stream,
+                    timestamp_bindings_stream,
+                    envelope_details: crate::catalog::SerializedEnvelopePersistDetails::Upsert,
+                })
             }
             _ => None,
-        }
+        };
+
+        self.source_persist_desc_from_serialized(connector, serialized_details)
+    }
+
+    // NOTE: This is not a From<SerializedSourcePersistDetails> because we also need access to the
+    // connector and the persist runtime in future changes.
+    pub fn source_persist_desc_from_serialized(
+        &self,
+        connector: &SourceConnector,
+        serialized_details: Option<SerializedSourcePersistDetails>,
+    ) -> Result<Option<SourcePersistDesc>, Error> {
+        let details = serialized_details.map(|serialized_details| {
+            let envelope_desc = match connector {
+                SourceConnector::External {
+                    envelope: SourceEnvelope::Upsert(_),
+                    ..
+                } => {
+                    assert!(matches!(
+                        serialized_details.envelope_details,
+                        SerializedEnvelopePersistDetails::Upsert
+                    ));
+                    EnvelopePersistDesc::Upsert
+                }
+
+                SourceConnector::External { envelope, .. } => {
+                    return Err(format!("unsupported envelope: {:?}", envelope).into());
+                }
+
+                connector => {
+                    return Err(format!(
+                        "only external sources support persistence, got: {:?}",
+                        connector
+                    )
+                    .into());
+                }
+            };
+
+            Ok(SourcePersistDesc {
+                primary_stream: serialized_details.primary_stream,
+                timestamp_bindings_stream: serialized_details.timestamp_bindings_stream,
+                envelope_desc,
+            })
+        });
+
+        details.transpose()
     }
 }
 

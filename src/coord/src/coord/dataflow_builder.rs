@@ -99,52 +99,36 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_by_id(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
+                        let connector = SourceConnector::Local {
+                            timeline: table.timeline(),
+                            persisted_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
+                        };
                         dataflow.import_source(
                             *id,
                             dataflow_types::SourceDesc {
                                 name: entry.name().to_string(),
-                                connector: SourceConnector::Local {
-                                    timeline: table.timeline(),
-                                    persisted_name: table
-                                        .persist
-                                        .as_ref()
-                                        .map(|p| p.stream_name.clone()),
-                                },
+                                connector,
                                 operators: None,
                                 bare_desc: table.desc.clone(),
-                                persisted_name: None,
                             },
                             *id,
                         );
                     }
                     CatalogItem::Source(source) => {
+                        let source_connector = dataflow_types::SourceDesc {
+                            name: entry.name().to_string(),
+                            connector: source.connector.clone(),
+                            operators: None,
+                            bare_desc: source.bare_desc.clone(),
+                        };
+
                         if source.optimized_expr.0.is_trivial_source() {
-                            dataflow.import_source(
-                                *id,
-                                dataflow_types::SourceDesc {
-                                    name: entry.name().to_string(),
-                                    connector: source.connector.clone(),
-                                    operators: None,
-                                    bare_desc: source.bare_desc.clone(),
-                                    persisted_name: source.persist_name.clone(),
-                                },
-                                *id,
-                            );
+                            dataflow.import_source(*id, source_connector, *id);
                         } else {
                             // From the dataflow layer's perspective, the source transformation is just a view (across which it should be able to do whole-dataflow optimizations).
                             // Install it as such (giving the source a global transient ID by which the view/transformation can refer to it)
                             let bare_source_id = GlobalId::Transient(transient_id);
-                            dataflow.import_source(
-                                bare_source_id,
-                                dataflow_types::SourceDesc {
-                                    name: entry.name().to_string(),
-                                    connector: source.connector.clone(),
-                                    operators: None,
-                                    bare_desc: source.bare_desc.clone(),
-                                    persisted_name: source.persist_name.clone(),
-                                },
-                                *id,
-                            );
+                            dataflow.import_source(bare_source_id, source_connector, *id);
                             let mut transformation = source.optimized_expr.clone();
                             transformation.0.visit_mut_post(&mut |node| {
                                 match node {

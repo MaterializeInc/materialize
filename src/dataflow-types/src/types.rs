@@ -523,7 +523,6 @@ pub struct SourceDesc {
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
     pub bare_desc: RelationDesc,
-    pub persisted_name: Option<String>,
 }
 
 /// A sink for updates to a relational collection.
@@ -788,6 +787,7 @@ pub enum SourceConnector {
         consistency: Consistency,
         ts_frequency: Duration,
         timeline: Timeline,
+        persist: Option<SourcePersistDesc>,
     },
 
     /// A local "source" is either fed by a local input handle, or by reading from a
@@ -811,6 +811,33 @@ pub enum SourceConnector {
         timeline: Timeline,
         persisted_name: Option<String>,
     },
+}
+
+/// The details needed to make a source that uses an external [`SourceConnector`] persistent.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SourcePersistDesc {
+    /// Name of the primary persisted stream of this source. This is what a consumer of the
+    /// persisted data would be interested in while the secondary stream(s) of the source are an
+    /// internal implementation detail.
+    pub primary_stream: String,
+
+    /// Persisted stream of timestamp bindings.
+    pub timestamp_bindings_stream: String,
+
+    /// Any additional details that we need to make the envelope logic stateful.
+    pub envelope_desc: EnvelopePersistDesc,
+}
+
+/// The persistence details we need for persisting a source envelopes data structures.
+///
+/// This is a 1:1 mapping from envelope to `EnvelopePersistDesc`, as opposed to having a `None`
+/// that covers all envelopes that don't need additional data. Mostly, to just be explicit, but
+/// also because there is already a `NONE` envelope.
+///
+/// Some envelopes will require additional streams, which should be listed in the variant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EnvelopePersistDesc {
+    Upsert,
 }
 
 impl SourceConnector {
