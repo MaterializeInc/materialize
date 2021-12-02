@@ -86,9 +86,12 @@ impl Pending {
         }
     }
 
+    // Add all non-empty writes to be persisted into an arrangement in the future.
     fn add_writes(&mut self, updates: Vec<(Id, ColumnarRecords)>) {
         for (id, updates) in updates {
-            self.writes.entry(id).or_default().push(updates);
+            if updates.len() != 0 {
+                self.writes.entry(id).or_default().push(updates);
+            }
         }
     }
 
@@ -856,6 +859,14 @@ impl AppliedState {
             return Ok(());
         }
 
+        // Sanity check the invariant that only non-empty writes get appended to
+        // unsealed.
+        if cfg!(debug_assertions) {
+            for update in updates.iter() {
+                assert!(update.len() > 0);
+            }
+        }
+
         let batch = BlobUnsealedBatch {
             desc: desc.clone(),
             updates,
@@ -1333,6 +1344,27 @@ mod tests {
         let ArrangementSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, vec![(("1".into(), "".into()), 1, 4)]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn regression_empty_unsealed_batch() -> Result<(), Error> {
+        let updates = vec![];
+
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
+        let id = block_on(|res| i.register("0", "", "", res))?;
+
+        // Write the data and move it into the unsealed part of the index.
+        assert_eq!(
+            block_on_drain(&mut i, |i, handle| {
+                i.write(
+                    vec![(id, updates.iter().collect::<ColumnarRecords>())],
+                    handle,
+                )
+            }),
+            Ok(SeqNo(1))
+        );
 
         Ok(())
     }
