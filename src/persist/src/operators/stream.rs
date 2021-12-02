@@ -784,19 +784,21 @@ where
                         session.give(update);
                     }
 
-                    let write_future = write.write(&to_retract);
-                    to_retract.clear();
+                    if !to_retract.is_empty() {
+                        let write_future = write.write(&to_retract);
+                        to_retract.clear();
 
-                    // We are not using the capability for the main output later, but we are
-                    // holding on to it to keep the frontier from advancing because that frontier
-                    // is used downstream to track how far we have persisted. This is used, for
-                    // example, by upsert()/persist()/seal()/conditional_seal() operators
-                    // and await_frontier().
-                    pending_futures.push_back((
-                        cap.delayed(cap.time()),
-                        cap.retain_for_output(error_output_port),
-                        write_future,
-                    ));
+                        // We are not using the capability for the main output later, but we are
+                        // holding on to it to keep the frontier from advancing because that frontier
+                        // is used downstream to track how far we have persisted. This is used, for
+                        // example, by upsert()/persist()/seal()/conditional_seal() operators
+                        // and await_frontier().
+                        pending_futures.push_back((
+                            cap.delayed(cap.time()),
+                            cap.retain_for_output(error_output_port),
+                            write_future,
+                        ));
+                    }
                 });
 
                 // Swing through all pending futures and see if they're ready. Ready futures will
