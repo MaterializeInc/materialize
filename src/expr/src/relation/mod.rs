@@ -439,6 +439,73 @@ impl MirRelationExpr {
                 for key_set in &mut input_typ.keys {
                     key_set.retain(|k| !cols_equal_to_literal.contains(&k));
                 }
+                if !input_typ.keys.is_empty() {
+                    // If `[0 1]` is an input key and there `#0 = #1` exists as a
+                    // predicate, we should present both `[0]` and `[1]` as keys
+                    // of the output. Also, if there is a key involving X column
+                    // and an equality between X and another column Y, a variant
+                    // of that key with Y instead of X should be presented as
+                    // a key of the output.
+
+                    // First, we build an iterator over the equivalences
+                    let classes = predicates.iter().filter_map(|p| {
+                        if let MirScalarExpr::CallBinary {
+                            func: crate::BinaryFunc::Eq,
+                            expr1,
+                            expr2,
+                        } = p
+                        {
+                            if let Some(c1) = expr1.as_column() {
+                                if let Some(c2) = expr2.as_column() {
+                                    return Some((c1, c2));
+                                }
+                            }
+                        }
+                        None
+                    });
+
+                    // Keep doing replacements until the number of keys settles
+                    let mut prev_keys: HashSet<_> = input_typ.keys.drain(..).collect();
+                    let mut prev_keys_size = 0;
+                    while prev_keys_size != prev_keys.len() {
+                        prev_keys_size = prev_keys.len();
+                        for (c1, c2) in classes.clone() {
+                            let mut new_keys = HashSet::new();
+                            for key in prev_keys.into_iter() {
+                                let contains_c1 = key.contains(&c1);
+                                let contains_c2 = key.contains(&c2);
+                                if contains_c1 && contains_c2 {
+                                    new_keys.insert(
+                                        key.iter().filter(|c| **c != c1).cloned().collect_vec(),
+                                    );
+                                    new_keys.insert(
+                                        key.iter().filter(|c| **c != c2).cloned().collect_vec(),
+                                    );
+                                } else {
+                                    if contains_c1 {
+                                        new_keys.insert(
+                                            key.iter()
+                                                .map(|c| if *c == c1 { c2 } else { *c })
+                                                .sorted()
+                                                .collect_vec(),
+                                        );
+                                    } else if contains_c2 {
+                                        new_keys.insert(
+                                            key.iter()
+                                                .map(|c| if *c == c2 { c1 } else { *c })
+                                                .sorted()
+                                                .collect_vec(),
+                                        );
+                                    }
+                                    new_keys.insert(key);
+                                }
+                            }
+                            prev_keys = new_keys;
+                        }
+                    }
+
+                    input_typ.keys = prev_keys.into_iter().sorted().collect_vec();
+                }
                 // Augment non-nullability of columns, by observing either
                 // 1. Predicates that explicitly test for null values, and
                 // 2. Columns that if null would make a predicate be null.
