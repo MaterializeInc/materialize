@@ -338,7 +338,7 @@ reduce
 (if (call_binary gt #0 #1) false (null bool))
 [int32 int32]
 ----
-(null && ((isnull(#0) || isnull(#1)) || (#0 <= #1)))
+null
 
 reduce
 (if (call_binary gt #0 #1) false false)
@@ -357,7 +357,7 @@ reduce
 (if (call_binary gt #0 #1) (null bool) false)
 [int32 int32]
 ----
-(null && (#0 > #1))
+null
 
 # non-literal expression in the THEN clause
 reduce
@@ -407,6 +407,80 @@ reduce
 [int32 int32]
 ----
 if (#0 > #1) then {1} else {2}
+
+# AND/OR simplifications
+
+reduce
+(call_binary or #1 false)
+[bool]
+----
+#1
+
+reduce
+(call_binary or false #1)
+[bool]
+----
+#1
+
+reduce
+(call_binary or #1 true)
+[bool]
+----
+true
+
+reduce
+(call_binary or true #1)
+[bool]
+----
+true
+
+reduce
+(call_binary or #1 null)
+[bool]
+----
+(#1 || null)
+
+reduce
+(call_binary or null #1)
+[bool]
+----
+(#1 || null)
+
+reduce
+(call_binary and #1 false)
+[bool]
+----
+false
+
+reduce
+(call_binary and false #1)
+[bool]
+----
+false
+
+reduce
+(call_binary and #1 true)
+[bool]
+----
+#1
+
+reduce
+(call_binary and true #1)
+[bool]
+----
+#1
+
+reduce
+(call_binary and #1 null)
+[bool]
+----
+null
+
+reduce
+(call_binary and null #1)
+[bool]
+----
+null
 
 ## undistribute_and/or works despite multiple copies of the same expression in
 ## the intersection

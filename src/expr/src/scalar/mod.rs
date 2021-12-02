@@ -518,9 +518,15 @@ impl MirScalarExpr {
                             }
                         } else if *func == BinaryFunc::And {
                             // If we are here, not both inputs are literals.
-                            if expr1.is_literal_false() || expr2.is_literal_true() {
+                            if expr1.is_literal_false()
+                                || expr1.is_literal_null()
+                                || expr2.is_literal_true()
+                            {
                                 *e = expr1.take();
-                            } else if expr2.is_literal_false() || expr1.is_literal_true() {
+                            } else if expr2.is_literal_false()
+                                || expr2.is_literal_null()
+                                || expr1.is_literal_true()
+                            {
                                 *e = expr2.take();
                             } else if expr1 == expr2 {
                                 *e = expr1.take();
