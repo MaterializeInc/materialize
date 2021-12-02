@@ -101,7 +101,11 @@ List new features before bug fixes.
 
 {{< /comment >}}
 
-{{% version-header v0.10.1 %}}
+{{% version-header v0.12.0 %}}
+
+- No changes yet.
+
+{{% version-header v0.11.0 %}}
 
 - Accept message names in [Protobuf sources] that do not start with a leading
   dot. This fixes a regression introduced in v0.9.12.
