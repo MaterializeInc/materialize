@@ -176,7 +176,7 @@ impl JoinInputMapper {
     /// where column references have been remapped to the local context.
     /// Assumes that all columns in `expr` are from the same input.
     pub fn map_expr_to_local(&self, mut expr: MirScalarExpr) -> MirScalarExpr {
-        expr.visit_mut(&mut |e| {
+        expr.visit_mut_post(&mut |e| {
             if let MirScalarExpr::Column(c) = e {
                 *c -= self.prior_arities[self.input_relation[*c]];
             }
@@ -188,7 +188,7 @@ impl JoinInputMapper {
     /// creates a new version where column references have been remapped to the
     /// global context.
     pub fn map_expr_to_global(&self, mut expr: MirScalarExpr, index: usize) -> MirScalarExpr {
-        expr.visit_mut(&mut |e| {
+        expr.visit_mut_post(&mut |e| {
             if let MirScalarExpr::Column(c) = e {
                 *c += self.prior_arities[index];
             }

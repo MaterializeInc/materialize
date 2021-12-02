@@ -70,7 +70,7 @@ pub fn canonicalize_equivalences(
             // which will then replace `to_reduce[i]`.
             let mut new_equivalence = Vec::with_capacity(to_reduce[i].len());
             while let Some((_, mut popped_expr)) = to_reduce[i].pop() {
-                popped_expr.visit_mut(&mut |e: &mut MirScalarExpr| {
+                popped_expr.visit_mut_post(&mut |e: &mut MirScalarExpr| {
                     // If a simpler expression can be found that is equivalent
                     // to e,
                     if let Some(simpler_e) = to_reduce.iter().find_map(|cls| {
@@ -174,7 +174,7 @@ fn rank_complexity(expr: &MirScalarExpr) -> usize {
         return 0;
     }
     let mut non_literal_count = 1;
-    expr.visit(&mut |e| {
+    expr.visit_post(&mut |e| {
         if !e.is_literal() {
             non_literal_count += 1
         }
