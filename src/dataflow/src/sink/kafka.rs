@@ -412,7 +412,7 @@ impl KafkaSinkState {
         }
     }
 
-    fn send_consistency_record<'a>(
+    fn send_consistency_record(
         &self,
         transaction_id: &str,
         status: &str,
@@ -467,7 +467,7 @@ impl KafkaSinkState {
     /// *NOTE*: `END` records will only be emitted when
     /// `KafkaSinkConnector.consistency` points to a consistency topic. The
     /// write frontier will be advanced regardless.
-    fn maybe_emit_progress<'a>(
+    fn maybe_emit_progress(
         &mut self,
         input_frontier: AntichainRef<Timestamp>,
     ) -> Result<(), anyhow::Error> {

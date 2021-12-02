@@ -320,7 +320,7 @@ async fn sql(sc: &mut SessionClient, query: String) -> anyhow::Result<Vec<Execut
 }
 
 pub async fn walk(dir: &str) {
-    datadriven::walk_async(dir, |tf| run_test(tf)).await;
+    datadriven::walk_async(dir, run_test).await;
 }
 
 pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {

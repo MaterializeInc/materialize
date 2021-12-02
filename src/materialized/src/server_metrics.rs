@@ -47,7 +47,7 @@ impl Metrics {
             let mut system = sysinfo::System::new();
             system.refresh_system();
 
-            let memory_limit = cgroup::detect_memory_limit().unwrap_or_else(|| MemoryLimit {
+            let memory_limit = cgroup::detect_memory_limit().unwrap_or(MemoryLimit {
                 max: None,
                 swap_max: None,
             });

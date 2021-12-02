@@ -139,13 +139,9 @@ where
                         _ => (ok_stream, err_collection),
                     };
 
-                render_state.local_inputs.insert(
-                    src_id,
-                    LocalInput {
-                        handle: handle,
-                        capability,
-                    },
-                );
+                render_state
+                    .local_inputs
+                    .insert(src_id, LocalInput { handle, capability });
                 let as_of_frontier = self.as_of_frontier.clone();
                 let ok_collection = ok_stream
                     .map_in_place(move |(_, mut time, _)| {

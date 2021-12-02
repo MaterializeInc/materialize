@@ -1494,12 +1494,12 @@ impl Datum<'static> {
 
 // Verify that bytes for static datums with manually stuffed bytes are correct.
 #[test]
-fn verify_static_datum_bytes<'a>() {
+fn verify_static_datum_bytes() {
     let arena = crate::RowArena::new();
     {
         let empty_array_datum: Datum = arena.make_datum(|packer| {
             packer
-                .push_array::<_, Datum<'a>>(
+                .push_array::<_, Datum<'_>>(
                     &[crate::adt::array::ArrayDimension {
                         lower_bound: 1,
                         length: 0,
@@ -1518,7 +1518,7 @@ fn verify_static_datum_bytes<'a>() {
 
     {
         let empty_list_datum: Datum = arena.make_datum(|packer| {
-            packer.push_list::<_, Datum<'a>>(std::iter::empty());
+            packer.push_list::<_, Datum<'_>>(std::iter::empty());
         });
         if EMPTY_LIST_ROW.iter().next().is_none() || Datum::empty_list() != empty_list_datum {
             panic!(

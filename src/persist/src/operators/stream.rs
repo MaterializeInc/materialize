@@ -411,7 +411,7 @@ where
                 primary_data_input.for_each(|cap, data| {
                     data.swap(&mut primary_data_buffer);
 
-                    let as_result = primary_data_buffer.drain(..).map(|update| Ok(update));
+                    let as_result = primary_data_buffer.drain(..).map(Ok);
 
                     let mut session = data_output.session(&cap);
                     session.give_iterator(as_result);
@@ -620,7 +620,7 @@ where
                     }
                 }
 
-                input_frontier.clone_from(&mut new_input_frontier);
+                input_frontier.clone_from(&new_input_frontier);
                 // We need to downgrade when the input frontier is empty. This basically releases
                 // all the capabilities so that downstream operators and eventually the worker can
                 // shut down.

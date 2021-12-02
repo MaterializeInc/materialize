@@ -221,7 +221,7 @@ impl SourceReader for KinesisSourceReader {
                         let data = record
                             .data
                             .map(|blob| blob.into_inner())
-                            .unwrap_or_else(|| vec![]);
+                            .unwrap_or_else(Vec::new);
                         self.processed_message_count += 1;
                         let source_message = SourceMessage {
                             partition: PartitionId::None,

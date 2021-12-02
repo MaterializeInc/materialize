@@ -987,10 +987,8 @@ pub fn decode_copy_format_csv(
     let mut record = ByteRecord::new();
 
     while rdr.read_byte_record(&mut record)? {
-        if record.len() == 1 {
-            if record.iter().next() == Some(&END_OF_COPY_MARKER) {
-                break;
-            }
+        if record.len() == 1 && record.iter().next() == Some(&END_OF_COPY_MARKER) {
+            break;
         }
 
         match record.len().cmp(&column_types.len()) {

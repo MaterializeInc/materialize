@@ -128,7 +128,7 @@ impl FromHir {
                     select_box.columns.push(Column {
                         expr: BoxScalarExpr::ColumnReference(ColumnReference {
                             quantifier_id,
-                            position: position,
+                            position,
                         }),
                         alias: None,
                     });

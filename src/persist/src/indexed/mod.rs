@@ -580,7 +580,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         let seals_for_listeners = pending.seals;
         let updates_for_listeners = updates_by_id.clone();
 
-        let ret = (|| {
+        let ret = {
             // TODO: The following error handling took a while to debug, see if
             // we can make this more obvious.
             if let Err(err) = self
@@ -592,7 +592,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             } else {
                 self.try_set_meta(meta_before)
             }
-        })();
+        };
 
         let ret = match ret {
             Ok(()) => {
@@ -1149,14 +1149,14 @@ mod tests {
         f: F,
     ) -> Result<T, Error> {
         let (tx, rx) = PFuture::new();
-        f(index, tx.into());
+        f(index, tx);
         index.drain_pending()?;
         rx.recv()
     }
 
     fn block_on<T, F: FnOnce(PFutureHandle<T>)>(f: F) -> Result<T, Error> {
         let (tx, rx) = PFuture::new();
-        f(tx.into());
+        f(tx);
         rx.recv()
     }
 

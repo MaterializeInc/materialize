@@ -1744,10 +1744,7 @@ where
                 tx.send(self.sequence_create_role(plan).await, session);
             }
             Plan::CreateTable(plan) => {
-                tx.send(
-                    self.sequence_create_table(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_create_table(&session, plan).await, session);
             }
             Plan::CreateSource(plan) => {
                 tx.send(
@@ -1759,7 +1756,7 @@ where
                 self.sequence_create_sink(session, plan, tx).await;
             }
             Plan::CreateView(plan) => {
-                tx.send(self.sequence_create_view(&mut session, plan).await, session);
+                tx.send(self.sequence_create_view(&session, plan).await, session);
             }
             Plan::CreateViews(plan) => {
                 tx.send(
@@ -3491,7 +3488,7 @@ where
                 affected_rows += diff;
             }
 
-            if all_positive_diffs == false {
+            if !all_positive_diffs {
                 // Consolidate rows. This is useful e.g. for an UPDATE where the row
                 // doesn't change, and we need to reflect that in the number of
                 // affected rows.
@@ -3695,7 +3692,7 @@ where
         {
             Ok(resp) => resp,
             Err(e) => {
-                tx.send(Err(e.into()), session);
+                tx.send(Err(e), session);
                 return;
             }
         };

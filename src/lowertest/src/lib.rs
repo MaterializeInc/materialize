@@ -514,7 +514,7 @@ where
             let result = chars
                 .next()
                 .map(|c| c.to_uppercase().chain(chars).collect::<String>())
-                .unwrap_or_else(|| String::new());
+                .unwrap_or_else(String::new);
             result
         })
         .collect::<Vec<_>>()

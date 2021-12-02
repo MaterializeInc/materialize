@@ -548,7 +548,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
     let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
-    let memory_limit = detect_memory_limit().unwrap_or_else(|| MemoryLimit {
+    let memory_limit = detect_memory_limit().unwrap_or(MemoryLimit {
         max: None,
         swap_max: None,
     });

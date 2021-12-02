@@ -37,7 +37,7 @@ fn load_system_config() -> ProxyConfig {
     fn get_any_env(names: &[&str]) -> Option<String> {
         let val = names
             .iter()
-            .map(|n| env::var(n))
+            .map(env::var)
             .find(|v| *v != Err(env::VarError::NotPresent));
         match val {
             Some(Ok(val)) => Some(val),

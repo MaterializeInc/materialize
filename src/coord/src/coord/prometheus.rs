@@ -154,7 +154,7 @@ fn add_expiring_update(
     });
 }
 
-fn add_metadata_update<'a, I: IntoIterator<Item = Row>>(
+fn add_metadata_update<I: IntoIterator<Item = Row>>(
     updates: I,
     diff: Diff,
     retain_for: u64,

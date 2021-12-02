@@ -545,25 +545,24 @@ impl MirScalarExpr {
                                 Err(err.clone()),
                                 e.typ(&relation_type).scalar_type,
                             );
-                        } else if *func == VariadicFunc::RegexpMatch {
-                            if exprs[1].is_literal()
-                                && exprs.get(2).map_or(true, |e| e.is_literal())
-                            {
-                                let needle = exprs[1].as_literal_str().unwrap();
-                                let flags = match exprs.len() {
-                                    3 => exprs[2].as_literal_str().unwrap(),
-                                    _ => "",
-                                };
-                                *e = match func::build_regex(needle, flags) {
-                                    Ok(regex) => mem::take(exprs)
-                                        .into_first()
-                                        .call_unary(UnaryFunc::RegexpMatch(Regex(regex))),
-                                    Err(err) => MirScalarExpr::literal(
-                                        Err(err),
-                                        e.typ(&relation_type).scalar_type,
-                                    ),
-                                };
-                            }
+                        } else if *func == VariadicFunc::RegexpMatch
+                            && exprs[1].is_literal()
+                            && exprs.get(2).map_or(true, |e| e.is_literal())
+                        {
+                            let needle = exprs[1].as_literal_str().unwrap();
+                            let flags = match exprs.len() {
+                                3 => exprs[2].as_literal_str().unwrap(),
+                                _ => "",
+                            };
+                            *e = match func::build_regex(needle, flags) {
+                                Ok(regex) => mem::take(exprs)
+                                    .into_first()
+                                    .call_unary(UnaryFunc::RegexpMatch(Regex(regex))),
+                                Err(err) => MirScalarExpr::literal(
+                                    Err(err),
+                                    e.typ(&relation_type).scalar_type,
+                                ),
+                            };
                         }
                     }
                     MirScalarExpr::If { cond, then, els } => {
@@ -648,11 +647,10 @@ impl MirScalarExpr {
                     if matches!(
                         *func,
                         BinaryFunc::Eq | BinaryFunc::Or | BinaryFunc::And | BinaryFunc::NotEq
-                    ) {
-                        if expr2 < expr1 {
-                            // 4) Canonically order elements so that deduplication works better.
-                            ::std::mem::swap(expr1, expr2);
-                        }
+                    ) && expr2 < expr1
+                    {
+                        // 4) Canonically order elements so that deduplication works better.
+                        ::std::mem::swap(expr1, expr2);
                     }
                 }
             },

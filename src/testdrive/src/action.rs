@@ -352,7 +352,7 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
         state.temp_path.display().to_string(),
     );
     vars.insert("testdrive.aws-region".into(), state.aws_region().into());
-    vars.insert("testdrive.aws-endpoint".into(), state.aws_endpoint().into());
+    vars.insert("testdrive.aws-endpoint".into(), state.aws_endpoint());
     vars.insert("testdrive.aws-account".into(), state.aws_account.clone());
     {
         let aws_credentials = state

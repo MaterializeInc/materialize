@@ -96,7 +96,7 @@ where
     // when it is transmitted.
     let mut temporal = Vec::new();
     let mut predicates = Vec::new();
-    let mut position_or = (0..source_arity).map(|x| Some(x)).collect::<Vec<_>>();
+    let mut position_or = (0..source_arity).map(Some).collect::<Vec<_>>();
     if let Some(mut operators) = operators.take() {
         for predicate in operators.predicates.drain(..) {
             if predicate.contains_temporal() {

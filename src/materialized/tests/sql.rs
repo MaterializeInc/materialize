@@ -422,7 +422,7 @@ fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
     while state != State::Done {
         let row = client_reads.query_one("FETCH 1 c2", &[])?;
 
-        if row.get::<_, bool>("mz_progressed") == false {
+        if !row.get::<_, bool>("mz_progressed") {
             assert_eq!(row.get::<_, i64>("mz_diff"), 1);
             assert_eq!(row.get::<_, String>("data"), "data");
             state = State::WaitingForProgress;

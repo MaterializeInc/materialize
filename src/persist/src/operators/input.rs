@@ -63,7 +63,7 @@ where
 
         // Replay the previously persisted data, if any.
         let snapshot = read.snapshot();
-        let (ok_previous, err_previous) = self.replay(snapshot).ok_err(|x| split_ok_err(x));
+        let (ok_previous, err_previous) = self.replay(snapshot).ok_err(split_ok_err);
 
         let ok_previous = ok_previous.map(|((k, _), ts, diff)| (k, ts, diff));
 

@@ -85,12 +85,15 @@ impl PidFile {
 
     /// Like [`open`](PidFile::open), but opens the file with the specified
     /// permissions rather than 0600.
+    #[allow(clippy::unnecessary_mut_passed)] // this mut is being passed as a mut pointer
     pub fn open_with<P>(path: P, permissions: Permissions) -> Result<PidFile, Error>
     where
         P: AsRef<Path>,
     {
         let path_cstring = CString::new(path.as_ref().as_os_str().as_bytes())?;
         let mut old_pid: libc::pid_t = -1;
+
+        #[allow(clippy::useless_conversion)] // the types differ on macos/linux
         let mode: libc::mode_t = permissions
             .mode()
             .try_into()

@@ -434,11 +434,7 @@ impl ReducePlan {
         match self {
             ReducePlan::DistinctNegated => {}
             _ => {
-                keys.push(
-                    (0..key_arity)
-                        .map(|column| expr::MirScalarExpr::Column(column))
-                        .collect(),
-                );
+                keys.push((0..key_arity).map(expr::MirScalarExpr::Column).collect());
             }
         }
         keys

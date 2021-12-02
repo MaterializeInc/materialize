@@ -22,7 +22,7 @@ use timely::dataflow::ProbeHandle;
 use timely::Config;
 
 use ore::metrics::MetricsRegistry;
-use persist;
+
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamWriteHandle};
 use persist::operators::source::PersistedSource;

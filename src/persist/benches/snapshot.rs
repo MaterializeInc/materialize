@@ -49,13 +49,7 @@ where
 {
     let data_len = 100_000;
     let data: Vec<((String, String), u64, isize)> = (0..data_len)
-        .map(|i| {
-            (
-                (format!("key{}", i).into(), format!("val{}", i).into()),
-                i as u64,
-                1,
-            )
-        })
+        .map(|i| ((format!("key{}", i), format!("val{}", i)), i as u64, 1))
         .collect();
 
     let mut runtime = new_fn(1).expect("creating index cannot fail");

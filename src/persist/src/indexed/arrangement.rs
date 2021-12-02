@@ -750,7 +750,7 @@ impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
 
     fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
         let mut iters = Vec::with_capacity(num_iters.get());
-        iters.resize_with(num_iters.get(), || TraceSnapshotIter::default());
+        iters.resize_with(num_iters.get(), TraceSnapshotIter::default);
         // TODO: This should probably distribute batches based on size, but for
         // now it's simpler to round-robin them.
         for (i, batch) in self.batches.into_iter().enumerate() {
@@ -966,7 +966,7 @@ mod tests {
         lo: u64,
         hi: Option<u64>,
     ) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, isize)>, Error> {
-        let hi = hi.map_or_else(|| Antichain::new(), |e| Antichain::from_elem(e));
+        let hi = hi.map_or_else(Antichain::new, Antichain::from_elem);
         let snapshot = arrangement.unsealed_snapshot(Antichain::from_elem(lo), hi, &blob)?;
         let updates = snapshot.read_to_end()?;
         Ok(updates)

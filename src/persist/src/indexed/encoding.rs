@@ -889,7 +889,7 @@ mod tests {
             let (name, id) = x;
             StreamRegistration {
                 name: name.to_owned(),
-                id: id,
+                id,
                 key_codec_name: "".into(),
                 val_codec_name: "".into(),
             }

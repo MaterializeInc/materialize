@@ -1142,18 +1142,16 @@ impl<'a> Parser<'a> {
                 // 'string' FROM 'int' FOR 'int'
                 exprs.push(self.parse_expr()?);
             }
+        } else if self.parse_keyword(FOR) {
+            // 'string' FOR 'int'
+            exprs.push(Expr::Value(Value::Number(String::from("1"))));
+            exprs.push(self.parse_expr()?);
         } else {
-            if self.parse_keyword(FOR) {
-                // 'string' FOR 'int'
-                exprs.push(Expr::Value(Value::Number(String::from("1"))));
-                exprs.push(self.parse_expr()?);
-            } else {
-                // 'string', 'int'
-                // or
-                // 'string', 'int', 'int'
-                self.expect_token(&Token::Comma)?;
-                exprs.extend(self.parse_comma_separated(Parser::parse_expr)?);
-            }
+            // 'string', 'int'
+            // or
+            // 'string', 'int', 'int'
+            self.expect_token(&Token::Comma)?;
+            exprs.extend(self.parse_comma_separated(Parser::parse_expr)?);
         }
 
         self.expect_token(&Token::RParen)?;
@@ -1450,7 +1448,6 @@ impl<'a> Parser<'a> {
     }
 
     /// Bail out if the current token is not one of the expected keywords, or consume it if it is
-    #[must_use = "must match against result to determine what keyword was parsed"]
     fn expect_one_of_keywords(&mut self, keywords: &[Keyword]) -> Result<Keyword, ParserError> {
         if let Some(keyword) = self.parse_one_of_keywords(keywords) {
             Ok(keyword)
@@ -1464,7 +1461,6 @@ impl<'a> Parser<'a> {
     }
 
     /// Bail out if the current token is not an expected keyword, or consume it if it is
-    #[must_use]
     fn expect_keyword(&mut self, expected: Keyword) -> Result<(), ParserError> {
         if self.parse_keyword(expected) {
             Ok(())
@@ -2445,7 +2441,7 @@ impl<'a> Parser<'a> {
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
                     if_exists,
                     name,
-                    restrict: restrict,
+                    restrict,
                 }));
             }
             Some(INDEX) => ObjectType::Index,
