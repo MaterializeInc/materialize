@@ -3631,17 +3631,8 @@ fn plan_function<'a>(
         Func::Aggregate(_) => {
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
-        Func::Table(_) => {
-            bail_unsupported!(
-                1546,
-                format!("table function ({}) in scalar position", name)
-            );
-        }
-        Func::Set(_) => {
-            bail_unsupported!(
-                1546,
-                format!("table function ({}) in scalar position", name)
-            );
+        Func::Table(_) | Func::Set(_) => {
+            bail!("table functions are not allowed in {}", ecx.name);
         }
         Func::Scalar(impls) => impls,
         Func::ScalarWindow(impls) => {

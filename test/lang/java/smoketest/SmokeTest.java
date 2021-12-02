@@ -105,4 +105,19 @@ class SmokeTest {
         stmt.execute("DROP TABLE materialize.public.getcols");
         stmt.close();
     }
+
+    @Test
+    void testPgJDBCgetPrimaryKeys() throws SQLException, ClassNotFoundException {
+        Statement stmt = conn.createStatement();
+        stmt.execute("CREATE TABLE materialize.public.getpks (a INT, b STRING)");
+        stmt.close();
+
+        ResultSet columns = conn.getMetaData().getPrimaryKeys("materialize", "public", "getpks");
+        Assertions.assertFalse(columns.next());
+        columns.close();
+
+        stmt = conn.createStatement();
+        stmt.execute("DROP TABLE materialize.public.getpks");
+        stmt.close();
+    }
 }
