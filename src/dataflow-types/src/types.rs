@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, PartitionId};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
-use interchange::protobuf;
+use interchange::protobuf::{self, NormalizedProtobufMessageName};
 use kafka_util::KafkaAddrs;
 use repr::{ColumnName, ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
 
@@ -366,7 +366,7 @@ impl DataEncoding {
             DataEncoding::Protobuf(ProtobufEncoding {
                 descriptors,
                 message_name,
-            }) => protobuf::DecodedDescriptors::from_bytes(descriptors, message_name.into())?
+            }) => protobuf::DecodedDescriptors::from_bytes(descriptors, message_name.to_owned())?
                 .columns()
                 .iter()
                 .fold(RelationDesc::empty(), |desc, (name, ty)| {
@@ -451,7 +451,7 @@ pub struct AvroOcfEncoding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProtobufEncoding {
     pub descriptors: Vec<u8>,
-    pub message_name: String,
+    pub message_name: NormalizedProtobufMessageName,
 }
 
 /// Arguments necessary to define how to decode from CSV format

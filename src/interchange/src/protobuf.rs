@@ -18,9 +18,25 @@ use protobuf::reflect::{
     RuntimeFieldType, RuntimeTypeBox,
 };
 use protobuf::{CodedInputStream, Message, MessageDyn};
+use serde::{Deserialize, Serialize};
 
 use ore::str::StrExt;
 use repr::{ColumnName, ColumnType, Datum, Row, ScalarType};
+
+/// Wrapper type that ensures a protobuf message name is properly normalized.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NormalizedProtobufMessageName(String);
+
+impl NormalizedProtobufMessageName {
+    /// Create a new normalized protobuf message name.  A leading dot will be
+    /// prepended to the provided message name if necessary.
+    pub fn new(mut message_name: String) -> Self {
+        if !message_name.starts_with('.') {
+            message_name = format!(".{}", message_name);
+        }
+        NormalizedProtobufMessageName(message_name)
+    }
+}
 
 /// A decoded description of the schema of a Protobuf message.
 #[derive(Debug)]
@@ -33,10 +49,10 @@ impl DecodedDescriptors {
     /// Builds a `DecodedDescriptors` from an encoded [`FileDescriptorSet`]
     /// and the fully qualified name of a message inside that file descriptor
     /// set.
-    pub fn from_bytes(bytes: &[u8], mut message_name: String) -> Result<Self, anyhow::Error> {
-        if !message_name.starts_with('.') {
-            message_name = format!(".{}", message_name);
-        }
+    pub fn from_bytes(
+        bytes: &[u8],
+        NormalizedProtobufMessageName(message_name): NormalizedProtobufMessageName,
+    ) -> Result<Self, anyhow::Error> {
         let fds =
             FileDescriptorSet::parse_from_bytes(bytes).context("parsing file descriptor set")?;
         let fds = FileDescriptor::new_dynamic_fds(fds.file);
