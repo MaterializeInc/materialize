@@ -10,5 +10,7 @@
 -- Enable replication, following the example from GitHub, with extra data removed
 -- https://github.com/debezium/docker-images/blob/ecf6c2c2827a77117991ecedf5e81b2ec9418f53/examples/mysql/1.5/inventory.sql
 
-GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'replicator' IDENTIFIED BY 'replpass';
-GRANT SELECT, RELOAD, SHOW DATABASES, REPLICATION SLAVE, REPLICATION CLIENT  ON *.* TO 'debezium' IDENTIFIED BY 'dbz';
+CREATE USER 'replicator';
+GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'replicator';
+CREATE USER 'debezium' IDENTIFIED WITH mysql_native_password BY 'dbz';
+GRANT SELECT, RELOAD, SHOW DATABASES, REPLICATION SLAVE, REPLICATION CLIENT  ON *.* TO 'debezium';

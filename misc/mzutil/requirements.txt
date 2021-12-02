@@ -1,2 +1,2 @@
-psycopg2-binary==2.8.6
+psycopg2==2.8.6
 toml==0.10.2

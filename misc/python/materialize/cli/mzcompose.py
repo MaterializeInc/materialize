@@ -268,7 +268,7 @@ class ArgumentParser(argparse.ArgumentParser):
 
     def print_help(self, file: Optional[IO[str]] = None) -> None:
         print(
-            """mzcompose orchestrates services defined in mzcompose.yml.
+            f"""mzcompose orchestrates services defined in mzcompose.yml.
 It wraps Docker Compose to add some Materialize-specific features.
 
 Usage:

@@ -12,13 +12,14 @@ import os
 from pathlib import Path
 
 from materialize import spawn
+from materialize.xcompile import KRB5_CONF_OVERRIDES, Arch
 
 from . import deploy_util
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("arch", choices=["x86_64", "aarch64"])
+    parser.add_argument("arch", choices=[Arch.X86_64, Arch.AARCH64])
     args = parser.parse_args()
 
     target = f"{args.arch}-apple-darwin"
@@ -36,12 +37,7 @@ def main() -> None:
             # explicitly set the `--target` flag to help our autoconf-based C
             # dependencies along.
             CFLAGS=f"--target={target}",
-            # Explicitly tell libkrb5 about features available in the cross
-            # toolchain that its configure script cannot auto-detect when cross
-            # compiling.
-            krb5_cv_attr_constructor_destructor="yes",
-            ac_cv_func_regcomp="yes",
-            ac_cv_printf_positional="yes",
+            **KRB5_CONF_OVERRIDES,
         ),
     )
 

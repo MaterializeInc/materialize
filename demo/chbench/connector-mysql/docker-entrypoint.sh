@@ -46,6 +46,7 @@ curl -H 'Content-Type: application/json' connect:8083/connectors --data '{
     "database.server.id": "1234",
     "database.history.kafka.bootstrap.servers": "kafka:9092",
     "database.history.kafka.topic": "mysql-history",
+    "database.allowPublicKeyRetrieval": "true",
     "time.precision.mode": "connect"
  }
 }'

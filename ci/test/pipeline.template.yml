@@ -15,14 +15,23 @@
 dag: true
 
 steps:
-  - id: build
-    label: ":docker: build"
-    command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build
+  - id: build-x86_64
+    label: ":docker: build x86_64"
+    command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build x86_64
     inputs:
       - "*"
     timeout_in_minutes: 60
     agents:
       queue: builder
+
+  - id: build-aarch64
+    label: ":docker: build aarch64"
+    command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build aarch64
+    inputs:
+      - "*"
+    timeout_in_minutes: 60
+    agents:
+      queue: builder-aarch64
 
   - id: lint-fast
     label: ":bath: lint and rustfmt"
@@ -62,7 +71,7 @@ steps:
 
   - id: cargo-test
     label: ":cargo: test"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
@@ -80,7 +89,7 @@ steps:
 
   - id: testdrive
     label: ":racing_car: testdrive"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/testdrive]
     plugins:
@@ -91,7 +100,7 @@ steps:
 
   - id: cluster-smoke
     label: "Cluster smoke test"
-    depends_on: build
+    depends_on: build-x86_64
     inputs: [test/cluster]
     plugins:
       - ./ci/plugins/mzcompose:
@@ -100,7 +109,7 @@ steps:
 
   - id: kafka-ssl
     label: ":lock: Kafka SSL smoke test"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/kafka-ssl/smoketest.td]
     plugins:
@@ -110,7 +119,7 @@ steps:
 
   - id: kafka-krb5
     label: ":hotdog: Kafka Kerberos smoke test"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/kafka-krb5/smoketest.td]
     plugins:
@@ -120,7 +129,7 @@ steps:
 
   - id: kafka-sasl-plain
     label: ":hotdog: Kafka SASL PLAIN smoke test"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/kafka-sasl-plain/smoketest.td]
     plugins:
@@ -130,7 +139,7 @@ steps:
 
   - id: sqllogictest-fast
     label: ":bulb: Fast SQL logic tests"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/sqllogictest]
     plugins:
@@ -140,7 +149,7 @@ steps:
 
   - id: streaming-demo
     label: ":credit_card: billing demo"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
@@ -149,7 +158,7 @@ steps:
 
   - id: perf-kinesis
     label: ":shower: kinesis streaming demo"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
@@ -159,7 +168,7 @@ steps:
 
   - id: perf-upsert
     label: ":point_up: upsert streaming demo"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
@@ -168,7 +177,7 @@ steps:
 
   - id: chbench-demo
     label: "chbench sanity check"
-    depends_on: build
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: chbench
@@ -177,7 +186,7 @@ steps:
 
   - id: aggregations-benchmark
     label: "aggregations benchmark sanity check"
-    depends_on: build
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: aggregations
@@ -186,7 +195,7 @@ steps:
 
   - id: avro-upsert-benchmark
     label: "avro upsert benchmark sanity check"
-    depends_on: build
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: avro-upsert
@@ -195,7 +204,7 @@ steps:
 
   - id: kafka-sink-avro-debezium-benchmark
     label: "kafka sink (avro debezium) benchmark sanity check"
-    depends_on: build
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-sink-avro-debezium
@@ -204,7 +213,7 @@ steps:
 
   - id: tb
     label: tb
-    depends_on: build
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: tb
@@ -213,7 +222,7 @@ steps:
 
   - id: catalog-compat
     label: ":book: catalog compatibility check"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
@@ -222,7 +231,7 @@ steps:
 
   - id: restarts
     label: ":arrows_clockwise: restarts"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
@@ -231,7 +240,7 @@ steps:
 
   - id: upgrade
     label: "Upgrade testing"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 60
     inputs: [test/upgrade]
     exclude_image_dependencies:
@@ -244,7 +253,7 @@ steps:
 
   - id: metabase-demo
     label: "metabase-demo"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 10
     plugins:
       - ./ci/plugins/mzcompose:
@@ -253,7 +262,7 @@ steps:
 
   - id: dbt-materialize
     label: "dbt-materialize"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 10
     plugins:
       - ./ci/plugins/mzcompose:
@@ -262,7 +271,7 @@ steps:
 
   - id: debezium-avro
     label: "Debezium Avro test (Postgres)"
-    depends_on: build
+    depends_on: build-x86_64
     inputs: [test/debezium-avro]
     plugins:
       - ./ci/plugins/mzcompose:
@@ -271,7 +280,7 @@ steps:
 
   - id: debezium-sql-server
     label: "Debezium test (SQL Server)"
-    depends_on: build
+    depends_on: build-x86_64
     inputs: [test/debezium-avro]
     plugins:
       - ./ci/plugins/mzcompose:
@@ -280,7 +289,7 @@ steps:
 
   - id: pg-cdc
     label: "Postgres CDC test"
-    depends_on: build
+    depends_on: build-x86_64
     inputs: [test/pg-cdc]
     plugins:
       - ./ci/plugins/mzcompose:
@@ -289,7 +298,7 @@ steps:
 
   - id: pg-cdc-resumption
     label: "Postgres CDC test (Resumption logic)"
-    depends_on: build
+    depends_on: build-x86_64
     inputs: [test/pg-cdc-resumption]
     plugins:
       - ./ci/plugins/mzcompose:
@@ -298,7 +307,7 @@ steps:
 
   - id: s3-resumption
     label: "S3 Retry/Resumption test"
-    depends_on: build
+    depends_on: build-x86_64
     inputs: [test/s3-resumption]
     plugins:
       - ./ci/plugins/mzcompose:
@@ -307,7 +316,7 @@ steps:
 
   - id: kafka-exactly-once
     label: "Test for the Kafka exactly-once sink"
-    depends_on: build
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-exactly-once
@@ -315,7 +324,7 @@ steps:
 
   - id: persistence
     label: "Tests for persistence"
-    depends_on: build
+    depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
@@ -323,7 +332,7 @@ steps:
 
   - id: mzcompose-self
     label: "mzcompose self test"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 10
     plugins:
       - ./ci/plugins/mzcompose:
@@ -332,7 +341,7 @@ steps:
 
   - id: lang-csharp
     label: ":csharp: tests"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/csharp]
     plugins:
@@ -342,7 +351,7 @@ steps:
 
   - id: lang-js
     label: ":javascript: tests"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/js]
     plugins:
@@ -352,7 +361,7 @@ steps:
 
   - id: lang-java
     label: ":java: tests"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/java]
     plugins:
@@ -362,7 +371,7 @@ steps:
 
   - id: lang-python
     label: ":python: tests"
-    depends_on: build
+    depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/python]
     plugins:
@@ -373,6 +382,7 @@ steps:
   - id: deploy
     label: ":rocket: Deploy"
     depends_on:
+      - build-aarch64
       - lint-fast
       - lint-slow
       - cargo-test

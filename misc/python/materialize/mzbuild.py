@@ -34,7 +34,8 @@ from typing import IO, Any, Dict, Iterable, Iterator, List, Sequence, Set
 
 import yaml
 
-from materialize import cargo, git, spawn, ui
+from materialize import cargo, git, spawn, ui, xcompile
+from materialize.xcompile import Arch
 
 announce = ui.speaker("==> ")
 
@@ -68,45 +69,31 @@ class RepositoryDetails:
 
     Attributes:
         root: The path to the root of the repository.
+        arch: The CPU architecture to build for.
         release_mode: Whether the repository is being built in release mode.
         coverage: Whether the repository has code coverage instrumentation
             enabled.
         cargo_workspace: The `cargo.Workspace` associated with the repository.
     """
 
-    def __init__(self, root: Path, release_mode: bool, coverage: bool):
+    def __init__(self, root: Path, arch: Arch, release_mode: bool, coverage: bool):
         self.root = root
+        self.arch = arch
         self.release_mode = release_mode
         self.coverage = coverage
         self.cargo_workspace = cargo.Workspace(root)
 
-    def xcargo(self) -> str:
-        """Determine the path to a Cargo executable that targets linux/amd64."""
-        return str(self.root / "bin" / "xcompile")
+    def cargo(self, subcommand: str, rustflags: List[str]) -> List[str]:
+        """Start a cargo invocation for the configured architecture."""
+        return xcompile.cargo(self.arch, subcommand, rustflags)
 
-    def xcargo_target_dir(self) -> Path:
+    def tool(self, name: str) -> List[str]:
+        """Start a binutils tool invocation for the configured architecture."""
+        return xcompile.tool(self.arch, name)
+
+    def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
-        return self.root / "target" / "x86_64-unknown-linux-gnu"
-
-
-def xbinutil(tool: str) -> str:
-    """Determine the name of a binutils tool for linux/amd64."""
-    if sys.platform == "linux":
-        return tool
-    else:
-        return f"x86_64-unknown-linux-gnu-{tool}"
-
-
-xobjcopy = xbinutil("objcopy")
-xstrip = xbinutil("strip")
-
-xrustflags = "-C link-arg=-Wl,--compress-debug-sections=zlib"
-if sys.platform != "darwin":
-    # The cross-compiling toolchain that bin/xcompile installs on macOS does not
-    # support lld.
-    #
-    # TODO(benesch): use a newer cross toolchain.
-    xrustflags += " -C link-arg=-fuse-ld=lld"
+        return self.root / "target" / xcompile.target(self.arch)
 
 
 def docker_images() -> Set[str]:
@@ -236,34 +223,33 @@ class CargoBuild(CargoPreImage):
         self.bin = config.pop("bin", None)
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
-        self.rustflags = config.pop("rustflags", xrustflags)
+        self.rustflags = config.pop("rustflags", [])
         if rd.coverage:
-            self.rustflags += " -Zinstrument-coverage -C link-dead-code "
-            # Nix generates some unresolved symbols that -Zinstrument-coverage
-            # somehow causes the linker to complain about, so just disable
-            # warnings about unresolved symbols and hope it all works out.
-            # See: https://github.com/nix-rust/nix/issues/1116
-            self.rustflags += " -Clink-arg=-Wl,--warn-unresolved-symbols"
+            self.rustflags += [
+                "-Zinstrument-coverage",
+                "-Clink-dead-code",
+                # Nix generates some unresolved symbols that -Zinstrument-coverage
+                # somehow causes the linker to complain about, so just disable
+                # warnings about unresolved symbols and hope it all works out.
+                # See: https://github.com/nix-rust/nix/issues/1116
+                "-Clink-arg=-Wl,--warn-unresolved-symbols",
+            ]
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
     def build(self) -> None:
-        cargo_build = [self.rd.xcargo(), "build", "--bin", self.bin]
+        cargo_build = [*self.rd.cargo("build", self.rustflags), "--bin", self.bin]
         if self.rd.release_mode:
             cargo_build.append("--release")
-        spawn.runv(
-            cargo_build,
-            cwd=self.rd.root,
-            env=dict(os.environ, XCOMPILE_RUSTFLAGS=self.rustflags),
-        )
+        spawn.runv(cargo_build, cwd=self.rd.root)
         cargo_profile = "release" if self.rd.release_mode else "debug"
-        shutil.copy(self.rd.xcargo_target_dir() / cargo_profile / self.bin, self.path)
+        shutil.copy(self.rd.cargo_target_dir() / cargo_profile / self.bin, self.path)
         if self.strip:
             # NOTE(benesch): the debug information is large enough that it slows
             # down CI, since we're packaging these binaries up into Docker
             # images and shipping them around. A bit unfortunate, since it'd be
             # nice to have useful backtraces if the binary crashes.
-            spawn.runv([xstrip, "--strip-debug", self.path / self.bin])
+            spawn.runv([*self.rd.tool("strip"), "--strip-debug", self.path / self.bin])
         else:
             # Even if we've been asked not to strip the binary, remove the
             # `.debug_pubnames` and `.debug_pubtypes` sections. These are just
@@ -275,7 +261,7 @@ class CargoBuild(CargoPreImage):
             # See: https://github.com/rust-lang/rust/issues/46034
             spawn.runv(
                 [
-                    xobjcopy,
+                    *self.rd.tool("objcopy"),
                     "-R",
                     ".debug_pubnames",
                     "-R",
@@ -285,9 +271,7 @@ class CargoBuild(CargoPreImage):
             )
         if self.extract:
             output = spawn.capture(
-                cargo_build + ["--message-format=json"],
-                unicode=True,
-                env=dict(os.environ, XCOMPILE_RUSTFLAGS=self.rustflags),
+                cargo_build + ["--message-format=json"], unicode=True
             )
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
@@ -334,12 +318,7 @@ class CargoTest(CargoPreImage):
         # it built in a machine readable form. Without the first invocation, the
         # error messages would also be sent to the output file in JSON, and the
         # user would only see a vague "could not compile <package>" error.
-        args = [
-            self.rd.xcargo(),
-            "test",
-            "--locked",
-            "--no-run",
-        ]
+        args = [*self.rd.cargo("test", rustflags=[]), "--locked", "--no-run"]
         spawn.runv(args)
         output = spawn.capture(args + ["--message-format=json"], unicode=True)
 
@@ -372,7 +351,7 @@ class CargoTest(CargoPreImage):
         with open(self.path / "tests" / "manifest", "w") as manifest:
             for (executable, slug, crate_path) in tests:
                 shutil.copy(executable, self.path / "tests" / slug)
-                spawn.runv([xstrip, self.path / "tests" / slug])
+                spawn.runv([*self.rd.tool("strip"), self.path / "tests" / slug])
                 manifest.write(f"{slug} {crate_path}\n")
         shutil.move(str(self.path / "materialized"), self.path / "tests")
         shutil.move(str(self.path / "testdrive"), self.path / "tests")
@@ -482,7 +461,7 @@ class ResolvedImage:
         A spec is the unique identifier for the image given its current
         fingerprint. It is a valid Docker Hub name.
         """
-        return self.image.docker_name(f"mzbuild-{self.fingerprint()}")
+        return f"materialize/{self.name}:mzbuild-{self.fingerprint()}"
 
     def write_dockerfile(self) -> IO[bytes]:
         """Render the Dockerfile without mzbuild directives.
@@ -508,13 +487,18 @@ class ResolvedImage:
         spawn.runv(["git", "clean", "-ffdX", self.image.path], print_to=sys.stderr)
         for pre_image in self.image.pre_images:
             pre_image.run()
+        build_args = {
+            **self.image.build_args,
+            "ARCH_GCC": str(self.image.rd.arch),
+            "ARCH_GO": self.image.rd.arch.go_str(),
+        }
         f = self.write_dockerfile()
         cmd: Sequence[str] = [
             "docker",
             "build",
             "-f",
             "-",
-            *(f"--build-arg={k}={v}" for k, v in self.image.build_args.items()),
+            *(f"--build-arg={k}={v}" for k, v in build_args.items()),
             "-t",
             self.spec(),
             str(self.image.path),
@@ -621,6 +605,9 @@ class ResolvedImage:
 
         for pre_image in self.image.pre_images:
             self_hash.update(pre_image.extra().encode())
+            self_hash.update(b"\0")
+
+        self_hash.update(f"arch={self.image.rd.arch}".encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
@@ -688,14 +675,6 @@ class DependencySet:
             if dep.publish and not is_docker_image_pushed(dep.spec()):
                 spawn.runv(["docker", "push", dep.spec()])
 
-    def push_tagged(self, tag: str) -> None:
-        """Like push, but use the specified tag instead of the image's spec."""
-        for dep in self:
-            name = dep.image.docker_name(tag)
-            if dep.publish:
-                spawn.runv(["docker", "tag", dep.spec(), name])
-                spawn.runv(["docker", "push", name])
-
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self.dependencies.values())
 
@@ -714,6 +693,7 @@ class Repository:
 
     Args:
         root: The path to the root of the repository.
+        arch: The CPU architecture to build for.
         release_mode: Whether to build the repository in release mode.
         coverage: Whether to enable code coverage instrumentation.
 
@@ -722,8 +702,14 @@ class Repository:
         compose_dirs: The set of directories containing an `mzcompose.yml` or `mzworkflows.py` file.
     """
 
-    def __init__(self, root: Path, release_mode: bool = True, coverage: bool = False):
-        self.rd = RepositoryDetails(root, release_mode, coverage)
+    def __init__(
+        self,
+        root: Path,
+        arch: Arch = Arch.host(),
+        release_mode: bool = True,
+        coverage: bool = False,
+    ):
+        self.rd = RepositoryDetails(root, arch, release_mode, coverage)
         self.images: Dict[str, Image] = {}
         self.compositions: Dict[str, Path] = {}
         for (path, dirs, files) in os.walk(self.root, topdown=True):
