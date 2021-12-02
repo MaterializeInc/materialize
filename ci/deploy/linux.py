@@ -68,7 +68,7 @@ def main() -> None:
 
 
 def publish_deb(arch: Arch, version: str) -> None:
-    filename = f"materialized_{version}_{arch}.deb"
+    filename = f"materialized_{version}_{arch.go_str()}.deb"
     print(f"Publishing {filename}")
 
     # Download the staged package, as deb-s3 needs various metadata from it.

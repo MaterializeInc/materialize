@@ -23,17 +23,8 @@ APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
 
 
-def apt_arch(arch: Arch) -> str:
-    if arch == Arch.X86_64:
-        return "amd64"
-    elif arch == Arch.AARCH64:
-        return "arm64"
-    else:
-        raise RuntimeError("unreachable")
-
-
 def apt_materialized_path(arch: Arch, version: str) -> str:
-    return f"pool/generic/m/ma/materialized_{version}_{apt_arch(arch)}.deb"
+    return f"pool/generic/m/ma/materialized_{version}_{arch.go_str()}.deb"
 
 
 def _tardir(name: str) -> tarfile.TarInfo:
@@ -84,7 +75,7 @@ def upload_latest_redirect(platform: str, version: str) -> None:
 
 
 def deploy_tarball(platform: str, materialized: Path) -> None:
-    tar_path = Path("materialized.tar.gz")
+    tar_path = materialized.with_suffix(".tar.gz")
     with tarfile.open(str(tar_path), "x:gz") as f:
         f.addfile(_tardir("materialized"))
         f.addfile(_tardir("materialized/bin"))
