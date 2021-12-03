@@ -28,6 +28,7 @@ use crate::TransformArgs;
 use expr::{
     BinaryFunc, JoinInputMapper, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT,
 };
+use itertools::Itertools;
 use ore::stack::{CheckedRecursion, RecursionGuard};
 use repr::Datum;
 use repr::ScalarType;
@@ -157,7 +158,8 @@ impl PredicateKnowledge {
                     body_knowledge
                 }
                 MirRelationExpr::Project { input, outputs } => {
-                    let mut input_knowledge = self.action(input, let_knowledge)?;
+                    let mut input_knowledge =
+                        denormalize_predicates(self.action(input, let_knowledge)?);
                     // Need to
                     // 1. restrict to supported columns,
                     // 2. rewrite constraints using new column identifiers,
@@ -284,7 +286,7 @@ impl PredicateKnowledge {
                     }
                     // 1. Visit each predicate, and collect those that reach no `ScalarExpr::Column` when substituting per `key_exprs`.
                     //    They will be preserved and presented as output.
-                    for mut predicate in input_knowledge.iter().cloned() {
+                    for mut predicate in denormalize_predicates(input_knowledge.clone()) {
                         if predicate.substitute(&key_exprs) {
                             predicates.push(predicate);
                         }
@@ -344,9 +346,9 @@ impl PredicateKnowledge {
                 MirRelationExpr::Negate { input } => self.action(input, let_knowledge)?,
                 MirRelationExpr::Threshold { input } => self.action(input, let_knowledge)?,
                 MirRelationExpr::Union { base, inputs } => {
-                    let mut know1 = expand_equivalences(self.action(base, let_knowledge)?);
+                    let mut know1 = denormalize_predicates(self.action(base, let_knowledge)?);
                     for input in inputs.iter_mut() {
-                        let know2 = expand_equivalences(self.action(input, let_knowledge)?);
+                        let know2 = denormalize_predicates(self.action(input, let_knowledge)?);
                         know1.retain(|predicate| know2.contains(predicate));
                     }
                     know1
@@ -533,10 +535,39 @@ fn append_constraint(constraints: &mut Vec<Constraint>, predicate: MirScalarExpr
     }
 }
 
-/// Denormalizes the equivalences in the given list for easily computing the
-/// intersection with another list of constraints.
-fn expand_equivalences(constraints: Vec<Constraint>) -> Vec<Constraint> {
+/// Denormalizes the predicates in the given list for 1) easily computing the
+/// intersection with another list of constraints or 2) computing the
+/// constraints that can be propagated through a projection.
+///
+/// 1) happens when computing the constraints that can be lifted from a union.
+/// Given the following constraints from the branches of a union, if we directly
+/// computed the intersection of the two lists we would end up with an empty list
+/// of constraints.
+///
+///   branch 1: [Equivalence[#0 #1 #2], Predicate(#0 > 10)]
+///   branch 2: [Equivalence[#1 #2 #3], Predicate(#1 > 10)]
+///   intersection: []
+///
+/// However, both branches share some common information that becomes obvious after
+/// denormalizing the information from the branches:
+///
+///   denormalized constraints from branch 1: [Equivalence[#0 #1], Equivalence[#0 #2], Equivalence[#1 #2], Predicate(#0 > 10), Predicate(#1 > 10), Predicate(#2 > 10)]
+///   denormalized constraints from  branch 2: [Equivalence[#1 #2], Equivalence[#1#3], Equivalence[#2 #3], Predicate(#1 > 10), Predicate(#2 > 10), Predicate(#3 > 10)]
+///   intersection: [Equivalence[#1 #2], Predicate(#1 > 10), Predicate(#2 > 10)]
+///   normalized intersection: [Equivalence[#1 #2], Predicate(#1 > 10)]
+///
+/// 2) happens when computing the constraints that can be lifted from a Reduce or
+/// a project operator.
+///
+/// This method expands each n-ary equivalence constraint as n(n-1)/2 binary
+/// equivalences with all possible pairs within the equivalence. Also, it expands
+/// each predicate constraint, written in terms of the representives of the
+/// equivalence classes, and re-writes them in terms of every other member of each
+/// equivalence class.
+fn denormalize_predicates(constraints: Vec<Constraint>) -> Vec<Constraint> {
     let mut result = Vec::new();
+    let mut representatives = Vec::new();
+    let mut other_predicates = Vec::new();
     for constraint in constraints {
         if let Constraint::Equivalence(class) = constraint {
             for (idx1, expr1) in class.iter().enumerate() {
@@ -544,10 +575,38 @@ fn expand_equivalences(constraints: Vec<Constraint>) -> Vec<Constraint> {
                     result.push(Constraint::Equivalence(vec![expr1.clone(), expr2.clone()]));
                 }
             }
+
+            let mut iter = class.into_iter();
+            if let Some(representative) = iter.next() {
+                representatives.push((representative, iter.collect_vec()));
+            }
         } else {
-            result.push(constraint);
+            other_predicates.push(constraint);
         }
     }
+
+    // Rewrite all non-equivalence predicates in terms of every other
+    // member of the equivalences.
+    for (representative, others) in representatives.iter() {
+        let mut rewritten_predicates = Vec::new();
+        for constraint in other_predicates.iter() {
+            if let Constraint::Predicate(p) = &constraint {
+                for other in others {
+                    let mut structured = PredicateStructure::default();
+                    structured.replacements.insert(representative, other);
+
+                    let mut cloned_p = p.clone();
+                    if optimize(&mut cloned_p, &structured) {
+                        rewritten_predicates.push(Constraint::Predicate(cloned_p));
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        other_predicates.extend(rewritten_predicates);
+    }
+    result.extend(other_predicates);
     result
 }
 
