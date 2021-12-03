@@ -26,7 +26,7 @@ use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
 use crate::operators::replay::Replay;
 use crate::operators::split_ok_err;
 use crate::operators::stream::Persist;
-use crate::operators::stream::RetractFutureUpdates;
+use crate::operators::stream::RetractUnsealed;
 
 use persist_types::Codec;
 
@@ -127,12 +127,11 @@ where
         let (restored_upsert_oks, _state_errs) = {
             let snapshot = persist_config.read_handle.snapshot();
             let (restored_oks, restored_errs) = self.scope().replay(snapshot).ok_err(split_ok_err);
-            let (restored_upsert_oks, retract_errs) = restored_oks
-                .filter_and_retract_future_updates(
-                    name,
-                    persist_config.write_handle.clone(),
-                    persist_config.upper_seal_ts,
-                );
+            let (restored_upsert_oks, retract_errs) = restored_oks.retract_unsealed(
+                name,
+                persist_config.write_handle.clone(),
+                persist_config.upper_seal_ts,
+            );
             let combined_errs = restored_errs.concat(&retract_errs);
             (restored_upsert_oks, combined_errs)
         };
