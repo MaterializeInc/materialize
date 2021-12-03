@@ -167,6 +167,8 @@ boundary don't silently merge their release notes into the wrong place.
   `bigint` column named `ordinality` that numbers the returned rows, starting
   with 1.
 
+- **Breaking change.** Disallow views with multiple unnamed columns.
+
 {{% version-header v0.13.0 %}}
 
 - Allow join trees that mix [`LATERAL`](/sql/join#lateral-subqueries)

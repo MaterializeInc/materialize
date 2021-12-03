@@ -2305,7 +2305,8 @@ impl Catalog {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
-                let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
+                let desc =
+                    RelationDesc::new(optimized_expr.typ(), view.column_names.iter().map(Some));
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     optimized_expr,

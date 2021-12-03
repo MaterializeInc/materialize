@@ -13,4 +13,4 @@
 
 > CREATE TABLE regexp_table (a STRING);
 
-> CREATE MATERIALIZED VIEW regexp_view AS SELECT a NOT LIKE 'b', a ILIKE 'b', a ~ 'b', a ~* 'b', a !~ 'b', a !~* 'b' FROM regexp_table;
+> CREATE MATERIALIZED VIEW regexp_view AS SELECT a NOT LIKE 'b' c1, a ILIKE 'b' c2, a ~ 'b' c3, a ~* 'b' c4, a !~ 'b' c5, a !~* 'b' c6 FROM regexp_table;

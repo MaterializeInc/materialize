@@ -226,12 +226,12 @@ on_name   key_name        seq_in_index  column_name expression nullable enabled
 v5        i5              1             substr      <null>     true     true
 v5        v5_primary_idx  1             substr      <null>     true     true
 
-> CREATE VIEW multicol AS SELECT 'a' AS a, 'b', 'c', 'd' AS d
+> CREATE VIEW multicol AS SELECT 'a' AS a, 'b' AS b, 'c' AS c, 'd' AS d
 > CREATE INDEX i6 ON multicol (2, a, 4)
 > SHOW INDEX IN multicol
 on_name   key_name  seq_in_index column_name  expression   nullable enabled
 ---------------------------------------------------------------------------
-multicol  i6        1            ?column?     <null>       false     true
+multicol  i6        1            b            <null>       false     true
 multicol  i6        2            a            <null>       false     true
 multicol  i6        3            d            <null>       false     true
 
