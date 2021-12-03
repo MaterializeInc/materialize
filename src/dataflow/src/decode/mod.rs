@@ -230,7 +230,6 @@ pub(crate) enum DataDecoderInner {
 #[derive(Debug)]
 struct DataDecoder {
     inner: DataDecoderInner,
-    //metadata: MetadataVec,
     metrics: Metrics,
 }
 
