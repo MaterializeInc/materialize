@@ -171,7 +171,7 @@ mapfile_shim() {
 # Dies if the host architecture is unknown.
 arch_gcc() {
     local arch
-    arch=$(arch)
+    arch=$(uname -m)
     case "$arch" in
         x86_64|aarch64) echo "$arch" ;;
         arm64) echo aarch64 ;;
