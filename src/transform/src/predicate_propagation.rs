@@ -282,7 +282,15 @@ impl PredicateKnowledge {
                     // 0. Form a map from key expressions to the columns they will become.
                     let mut key_exprs = HashMap::new();
                     for (index, expr) in group_key.iter().enumerate() {
-                        key_exprs.insert(expr.clone(), MirScalarExpr::Column(index));
+                        let key = expr.clone();
+                        let new_column = MirScalarExpr::Column(index);
+                        let existing_column =
+                            key_exprs.entry(key).or_insert_with(|| new_column.clone());
+                        // Report duplicated keys as equivalences
+                        predicates.push(Constraint::Equivalence(vec![
+                            existing_column.clone(),
+                            new_column,
+                        ]));
                     }
                     // 1. Visit each predicate, and collect those that reach no `ScalarExpr::Column` when substituting per `key_exprs`.
                     //    They will be preserved and presented as output.
