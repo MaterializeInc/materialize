@@ -771,3 +771,49 @@ predicate-propagation
 Equivalence[#0 #2]
 Equivalence[#1 #3]
 !(isnull(#1))
+
+predicate-propagation
+(project (filter (project (get x) [0 0]) [(call_binary gt #0 1)]) [1])
+----
+!(isnull(#0))
+(#0 > 1)
+
+predicate-propagation
+(project (filter (project (get x) [0 0 0]) [(call_binary gt #0 1)]) [1 2])
+----
+Equivalence[#0 #1]
+!(isnull(#0))
+(#0 > 1)
+
+predicate-propagation
+(project (filter (project (get x) [0 0 0]) [(call_binary gt #1 1)]) [0 2])
+----
+Equivalence[#0 #1]
+!(isnull(#0))
+(#0 > 1)
+
+predicate-propagation
+(project (filter (project (get x) [0 0 0]) [(call_binary gt #1 1)]) [1 2])
+----
+Equivalence[#0 #1]
+!(isnull(#0))
+(#0 > 1)
+
+predicate-propagation
+(reduce (filter (project (get x) [0 0 0]) [(call_binary gt #1 1)]) [#2] [])
+----
+!(isnull(#0))
+(#0 > 1)
+
+predicate-propagation
+(reduce (filter (project (get x) [0 0 0]) [(call_binary gt #1 1)]) [#0 #1] [])
+----
+!(isnull(#1))
+(#1 > 1)
+
+predicate-propagation
+(reduce (filter (project (get x) [0 0 0]) [(call_binary gt #1 1)]) [#1 #2] [])
+----
+!(isnull(#0))
+!(isnull(#1))
+(#1 > 1)
