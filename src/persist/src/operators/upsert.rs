@@ -144,7 +144,7 @@ where
             &restored_upsert_oks,
             Exchange::new(move |(key, _value, _ts): &(K, Option<V>, T)| key.hashed()),
             Exchange::new(move |((key, _data), _ts, _diff): &((K, _), _, _)| key.hashed()),
-            "Upsert",
+            &operator_name.clone(),
             move |_cap, _info| {
                 // This is a map of (time) -> (capability, ((key) -> (value with max offset))). This
                 // is a BTreeMap because we want to ensure that if we receive (key1, value1, time
