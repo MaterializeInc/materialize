@@ -161,7 +161,8 @@ fn try_push_reduction(
     // }
     // ```
     //
-    // `<component>` is either `Join`
+    // `<component>` is either `Join {<subset of inputs>}` or
+    // `<element of inputs>`.
 
     let old_join_mapper =
         JoinInputMapper::new_from_input_types(&inputs.iter().map(|i| i.typ()).collect::<Vec<_>>());
@@ -173,7 +174,7 @@ fn try_push_reduction(
         .partition(|cls| cls.iter().any(|expr| group_key.contains(expr)));
 
     // 2) Find the connected components that remain after removing constraints
-    //    containing the group key. Also, track the set of constraints that
+    //    containing the GroupBykey. Also, track the set of constraints that
     //    connect the inputs in each component.
     let mut components = (0..inputs.len())
         .map(|i| (vec![i], Vec::new()))
@@ -189,7 +190,8 @@ fn try_push_reduction(
         let (components_to_connect, other): (Vec<_>, Vec<_>) = components
             .into_iter()
             .partition(|(inputs, _)| inputs.iter().any(|i| inputs_to_connect.contains(i)));
-        // c) Union the components. Add the current constraint to
+        // c) Union the components. Add the current constraint to the list of
+        // constraints connecting the union of the components.
         let mut connected_component = Vec::new();
         let mut all_constraints = vec![equivalence];
         for (mut componentn, mut constraintsn) in components_to_connect {
@@ -207,6 +209,14 @@ fn try_push_reduction(
         }
     }
     components.sort();
+    // TODO: Connect components referenced by the same multi-input expression
+    // contained in a constraint containing a GroupBy key.
+    // For the example query below, there should be two components `{foo, bar}`
+    // and `baz`.
+    // ```
+    // select sum(foo.b) from foo, bar, baz
+    // where foo.a * bar.a = 24 group by foo.a * bar.a
+    // ```
 
     // Maps (input idxs from old join) -> (idx of component it belongs to)
     let input_component_map = HashMap::from_iter(
@@ -240,7 +250,10 @@ fn try_push_reduction(
     let mut new_projection = Vec::with_capacity(group_key.len());
     let mut new_join_equivalences_by_component = Vec::new();
 
-    // 3a) Calculate the group key for each reduction
+    // 3a) Calculate the group key for each new reduce. We must make sure that
+    // the union of group keys across the new reduces can produce:
+    // (1) the group keys of the old reduce.
+    // (2) every expression in the equivalences of the new join.
     for key in group_key {
         // i) Find the equivalence class that the key is in.
         if let Some(cls) = new_join_equivalences
@@ -260,8 +273,8 @@ fn try_push_reduction(
                     new_join_cls.push((component, new_reduces[component].arity()));
                     new_reduces[component].add_group_key(expr.clone());
                 } else {
-                    // TODO: support reduction pushdown where a constraint
-                    // contains an multi-component expression.
+                    // Abort reduction pushdown if the expression does not
+                    // refer to exactly one component.
                     return None;
                 }
             }
@@ -328,6 +341,7 @@ fn try_push_reduction(
     );
 }
 
+/// Returns None if `expr` does not belong to exactly one component.
 fn lookup_corresponding_component(
     expr: &MirScalarExpr,
     old_join_mapper: &JoinInputMapper,

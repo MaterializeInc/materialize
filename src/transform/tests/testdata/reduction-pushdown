@@ -59,7 +59,7 @@ build apply=ReductionPushdown
 ----
 ----
 
-## distinct(<multiple columns from differing inputs>) \
+## distinct(<multiple columns from differing inputs>)
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y)] [[#1 #3]]) [#0 #1 #2] [])
@@ -77,6 +77,119 @@ build apply=ReductionPushdown
 | Join %0 %1 (= #1 #2)
 | | implementation = Unimplemented
 | Project (#0, #1, #3)
+----
+----
+
+## Expressions in join equivalence classes
+
+build apply=ReductionPushdown
+(reduce (join [(get x) (get y)] [[(call_variadic substr [#1 5]) #3]]) [#3] [])
+----
+----
+%0 =
+| Get x (u1)
+| Distinct group=(substr(#1, 5))
+
+%1 =
+| Get y (u2)
+| Distinct group=(#1)
+
+%2 =
+| Join %0 %1 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#1)
+----
+----
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (get y)]
+        [[(call_variadic substr [#1 5]) #3]])
+    [(call_variadic substr [#1 5])]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+| Distinct group=(substr(#1, 5))
+
+%1 =
+| Get y (u2)
+| Distinct group=(#1)
+
+%2 =
+| Join %0 %1 (= #0 #1)
+| | implementation = Unimplemented
+| Project (#0)
+----
+----
+
+### Negative test: Do not do reduction pushdown
+### if there are multi-component expressions in the join equivalence
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (get y)]
+        [[(call_variadic substr [#1 5]) (call_binary text_concat #1 #3)]])
+    [(call_variadic substr [#1 5])]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Join %0 %1 (= substr(#1, 5) (#1 || #3))
+| | implementation = Unimplemented
+| Distinct group=(substr(#1, 5))
+----
+----
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (get y)]
+        [[(call_variadic substr [#1 5]) #3]
+         [(call_binary text_concat #1 #3) "hello"]])
+    [(call_variadic substr [#1 5])]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Join %0 %1 (= substr(#1, 5) #3) (= (#1 || #3) "hello")
+| | implementation = Unimplemented
+| Distinct group=(substr(#1, 5))
+----
+----
+
+### Negative test: multi-input expression in group by key
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (get y)]
+        [[(call_binary text_concat #1 #3) "hello"]])
+    [(call_binary text_concat #1 #3)]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Join %0 %1 (= (#1 || #3) "hello")
+| | implementation = Unimplemented
+| Distinct group=((#1 || #3))
 ----
 ----
 
@@ -132,7 +245,7 @@ build apply=ReductionPushdown
 ----
 ----
 
-## Similar to the above, but the join graph is now y-x-z instead of x-y-z
+### Similar to the above, but the join graph is now y-x-z instead of x-y-z
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y) (get z)] [[#0 #2] [#1 #5]]) [#3 #5] [])
@@ -160,7 +273,7 @@ build apply=ReductionPushdown
 ----
 ----
 
-## Push down reductions on join(x, y) and join(z, w)
+### Push down reductions on join(x, y) and join(z, w)
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y) (get z) (get w)] [[#0 #2] [#3 #5] [#4 #6]]) [#3 #5] [])
@@ -192,6 +305,33 @@ build apply=ReductionPushdown
 | Join %2 %5 (= #0 #2) (= #1 #3)
 | | implementation = Unimplemented
 | Project (#0, #3)
+----
+----
+
+### TODO: support this case where a reduction pushdown can happen by breaking
+### it into components x-y and z.
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (get y) (get z)]
+        [[(call_binary text_concat #1 #3) "hello"] [#1 #5]])
+    [(call_binary text_concat #1 #3)]
+    [])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Get z (u3)
+
+%3 =
+| Join %0 %1 %2 (= (#1 || #3) "hello") (= #1 #5)
+| | implementation = Unimplemented
+| Distinct group=((#1 || #3))
 ----
 ----
 
@@ -317,6 +457,43 @@ build apply=ReductionPushdown
 | Join %0 %1 %2 (= #0 #2 #4)
 | | implementation = Unimplemented
 | Project (#2, #1, #3)
+----
+----
+
+# Pushdown agg(distinct <single-component multi-input expression>)
+
+build apply=ReductionPushdown
+(reduce
+    (join [(get x) (get y) (get z) (get w)] [[#1 #3 #5] [#4 #6]])
+    [#6]
+    [(sum_int32 (call_binary add_int32 #0 (call_unary cast_int16_to_int32 #2)) true)
+     (sum_int16 (call_binary mul_int16 #2 #4) true)])
+----
+----
+%0 =
+| Get x (u1)
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Get z (u3)
+
+%3 =
+| Join %0 %1 %2 (= #1 #3 #5)
+| | implementation = Unimplemented
+| Reduce group=(#4)
+| | agg sum(distinct (#0 + i16toi32(#2)))
+| | agg sum(distinct (#2 * #4))
+
+%4 =
+| Get w (u0)
+| Distinct group=(#0)
+
+%5 =
+| Join %3 %4 (= #0 #3)
+| | implementation = Unimplemented
+| Project (#3, #1, #2)
 ----
 ----
 
