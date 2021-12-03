@@ -85,14 +85,14 @@ impl PredicateKnowledge {
                 MirRelationExpr::Get { id, typ: _ } => {
                     // If we fail to find bound knowledge, use at least the nullability of the type
                     // (added later for all expression types).
-                    let_knowledge.get(id).cloned().unwrap_or_else(|| Vec::new())
+                    let_knowledge.get(id).cloned().unwrap_or_else(Vec::new)
                 }
                 MirRelationExpr::Constant { rows, typ } => {
                     // Each column could 1. be equal to a literal, 2. known to be non-null.
                     // They could be many other things too, but these are the ones we can handle.
                     if let Ok([(row, _cnt), rows @ ..]) = rows.as_deref_mut() {
                         // An option for each column that contains a common value.
-                        let mut literal = row.iter().map(|x| Some(x)).collect::<Vec<_>>();
+                        let mut literal = row.iter().map(Some).collect::<Vec<_>>();
                         // True for each column that is never `Datum::Null`.
                         let mut non_null = literal
                             .iter()
