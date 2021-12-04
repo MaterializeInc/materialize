@@ -1232,4 +1232,43 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn retract_unsealed() -> Result<(), Error> {
+        ore::test::init_logging_default("trace");
+        let mut registry = MemRegistry::new();
+        let p = registry.runtime_no_reentrance()?;
+
+        timely::execute_directly(move |worker| {
+            let (mut input, probe) = worker.dataflow(|scope| {
+                let (write, _read) = p.create_or_load::<(), ()>("test").unwrap();
+                let mut input = Handle::new();
+                let stream = input.to_stream(scope);
+
+                let (output, _) = stream.retract_unsealed("test_retract_unsealed", write, 5);
+
+                let probe = output.probe();
+
+                (input, probe)
+            });
+
+            for i in 0..=6 {
+                input.send((((), ()), i, 1));
+            }
+
+            // Note that these were all sent at the timely time of 0.
+            input.advance_to(1);
+            while probe.less_than(&1) {
+                worker.step();
+            }
+        });
+
+        let expected = vec![(((), ()), 5, -1), (((), ()), 6, -1)];
+
+        let p = registry.runtime_no_reentrance()?;
+        let (_write, read) = p.create_or_load("test")?;
+        assert_eq!(read.snapshot()?.read_to_end()?, expected);
+
+        Ok(())
+    }
 }
