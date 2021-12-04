@@ -25,6 +25,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::{Branch, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::{Data as TimelyData, PartialOrder};
@@ -741,114 +742,31 @@ where
         Stream<G, ((K, V), u64, isize)>,
         Stream<G, (String, u64, isize)>,
     ) {
-        let scope = self.scope();
-        let operator_name = format!("retract_unsealed({})", name);
-        let mut persist_op = OperatorBuilder::new(operator_name.clone(), self.scope());
+        let (pass_through, to_retract) = self.branch(move |_, (_, t, _)| t >= &upper_ts);
 
-        let mut input = persist_op.new_input(&self, Pipeline);
+        let (retract_oks, errs) = to_retract
+            .map(|(data, time, diff)| (data, time, -diff))
+            .persist(&format!("retract_unsealed({})", name), write);
 
-        let (mut data_output, data_output_stream) = persist_op.new_output();
-        let (mut error_output, error_output_stream) = persist_op.new_output();
+        // Introduce a data-dependency between pass_through, and retract_oks even
+        // though in reality they operate on disjoint subsets of data and no true
+        // data dependency exists. This way, we ensure that the frontier doesn't
+        // advance for downstreams users until after all retractions have been
+        // persisted.
+        //
+        // TODO: we could have done this with fewer operators by concatenating
+        // pass_through, to_retract, and retract_oks, as to_retract and retract_oks
+        // cancel out. This approach seemed more isolated and safer.
+        //
+        // TODO: this approach also has the downside that this flat_map needs to
+        // go through all of the retractions individually. We could avoid this
+        // extra work by having `persist` take an argument that determines whether
+        // it should pass through outputs or not.
+        let retract_oks = retract_oks.flat_map(|_| None);
 
-        let mut buffer = Vec::new();
-        let error_output_port = error_output_stream.name().port;
+        let oks = pass_through.concat(&retract_oks);
 
-        // An activator that allows futures to re-schedule this operator when ready.
-        let activator = Arc::new(scope.sync_activator_for(&persist_op.operator_info().address[..]));
-
-        let mut pending_futures = VecDeque::new();
-
-        // Reusable buffer for collecting updates that we need to retract. We retract in batches in
-        // order to not make too many persist calls and keep too many write futures around.
-        let mut to_retract = Vec::new();
-
-        persist_op.build(move |_capabilities| {
-            move |_frontiers| {
-                let mut data_output = data_output.activate();
-                let mut error_output = error_output.activate();
-
-                // Write out everything and forward, keeping the write futures.
-                input.for_each(|cap, data| {
-                    data.swap(&mut buffer);
-                    let mut session = data_output.session(&cap);
-                    for update in buffer.drain(..) {
-                        if update.1 >= upper_ts {
-                            log::trace!(
-                                "Update {:?} is beyond upper_ts {}, retracting...",
-                                update,
-                                upper_ts
-                            );
-                            let (data, ts, diff) = update;
-                            let anti_update = (data, ts, -diff);
-                            to_retract.push(anti_update);
-                            continue;
-                        }
-                        session.give(update);
-                    }
-
-                    if !to_retract.is_empty() {
-                        let write_future = write.write(&to_retract);
-                        to_retract.clear();
-
-                        // We are not using the capability for the main output later, but we are
-                        // holding on to it to keep the frontier from advancing because that frontier
-                        // is used downstream to track how far we have persisted. This is used, for
-                        // example, by upsert()/persist()/seal()/conditional_seal() operators
-                        // and await_frontier().
-                        pending_futures.push_back((
-                            cap.delayed(cap.time()),
-                            cap.retain_for_output(error_output_port),
-                            write_future,
-                        ));
-                    }
-                });
-
-                // Swing through all pending futures and see if they're ready. Ready futures will
-                // invoke the Activator, which will make sure that we arrive here, even when there
-                // are no changes in the input frontier or new input.
-                let waker = futures_util::task::waker_ref(&activator);
-                let mut context = Context::from_waker(&waker);
-
-                while let Some((cap, error_cap, pending_future)) = pending_futures.front_mut() {
-                    match Pin::new(pending_future).poll(&mut context) {
-                        std::task::Poll::Ready(result) => {
-                            match result {
-                                Ok(seq_no) => {
-                                    log::trace!(
-                                        "In {}, finished writing for time: {}, seq_no: {:?}",
-                                        &operator_name,
-                                        cap.time(),
-                                        seq_no,
-                                    );
-                                }
-                                Err(e) => {
-                                    let mut session = error_output.session(&error_cap);
-                                    let error = format!(
-                                        "In {}, error writing data for time {}: {}",
-                                        &operator_name,
-                                        error_cap.time(),
-                                        e
-                                    );
-                                    log::error!("{}", error);
-
-                                    // TODO: make error retractable? Probably not...
-                                    session.give((error, *error_cap.time(), 1));
-                                }
-                            }
-
-                            let _ = pending_futures.pop_front().expect("known to exist");
-                        }
-                        std::task::Poll::Pending => {
-                            // We assume that write requests are worked off in order and stop
-                            // trying for the first write that is not done.
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-
-        (data_output_stream, error_output_stream)
+        (oks, errs)
     }
 }
 
@@ -1241,7 +1159,7 @@ mod tests {
 
         timely::execute_directly(move |worker| {
             let (mut input, probe) = worker.dataflow(|scope| {
-                let (write, _read) = p.create_or_load::<(), ()>("test").unwrap();
+                let (write, _read) = p.create_or_load::<(), ()>("test");
                 let mut input = Handle::new();
                 let stream = input.to_stream(scope);
 
@@ -1266,7 +1184,7 @@ mod tests {
         let expected = vec![(((), ()), 5, -1), (((), ()), 6, -1)];
 
         let p = registry.runtime_no_reentrance()?;
-        let (_write, read) = p.create_or_load("test")?;
+        let (_write, read) = p.create_or_load("test");
         assert_eq!(read.snapshot()?.read_to_end()?, expected);
 
         Ok(())
