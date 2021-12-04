@@ -929,6 +929,56 @@ mod tests {
     }
 
     #[test]
+    fn seal_frontier_advance_only_on_success() -> Result<(), Error> {
+        ore::test::init_logging_default("trace");
+        let mut registry = MemRegistry::new();
+        let mut unreliable = UnreliableHandle::default();
+        let p = registry.runtime_unreliable(unreliable.clone())?;
+
+        timely::execute_directly(move |worker| {
+            let (mut input, seal_probe) = worker.dataflow(|scope| {
+                let (write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
+                let mut input = Handle::new();
+                let stream = input.to_stream(scope);
+
+                let (sealed_stream, _) = stream.seal("test", write);
+
+                let seal_probe = sealed_stream.probe();
+
+                (input, seal_probe)
+            });
+
+            input.send((((), ()), 0, 1));
+
+            input.advance_to(1);
+            while seal_probe.less_than(&1) {
+                worker.step();
+            }
+
+            unreliable.make_unavailable();
+
+            input.advance_to(2);
+
+            // This is the best we can do. Wait for a bit, and verify that the frontier didn't
+            // advance. Of course, we cannot rule out that the frontier might advance on the 11th
+            // step, but tests without the fix showed the test to be very unstable on this
+            for _i in 0..10 {
+                worker.step();
+            }
+            assert!(seal_probe.less_than(&2));
+
+            // After we make the runtime available again, sealing will work and the frontier will
+            // advance.
+            unreliable.make_available();
+            while seal_probe.less_than(&2) {
+                worker.step();
+            }
+        });
+
+        Ok(())
+    }
+
+    #[test]
     fn conditional_seal() -> Result<(), Error> {
         ore::test::init_logging_default("trace");
         let mut registry = MemRegistry::new();
