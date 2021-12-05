@@ -12,7 +12,7 @@ aws-smithy-client = { version = "0.30.0-alpha", default-features = false }
 aws-smithy-http = "0.30.0-alpha"
 aws-sdk-kinesis = { version = "0.0.26-alpha", default-features = false, features = ["client", "native-tls"], optional = true }
 aws-sdk-s3 = { version = "0.0.26-alpha", default-features = false, features = ["client", "native-tls"], optional = true }
-aws-sdk-sqs = { version = "0.0.26-alpha", default-features = false, features = ["client", "native-tls"], optional = true }
+aws-sdk-sqs = { version = "0.2.0", default-features = false, features = ["client", "native-tls"], optional = true }
 aws-sdk-sts = { version = "0.0.26-alpha", default-features = false, features = ["client", "native-tls"], optional = true }
 aws-types = { version = "0.0.26-alpha" }
 hyper = "0.14.14"
