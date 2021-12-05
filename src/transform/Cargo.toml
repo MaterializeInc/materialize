@@ -14,7 +14,7 @@ ore = { path = "../../src/ore" }
 repr = { path = "../repr" }
 
 [dev-dependencies]
-anyhow = "1.0.50"
+anyhow = "1.0.51"
 datadriven = "0.6.0"
 expr_test_util = {path = "../expr-test-util"}
 lowertest = {path = "../lowertest"}
