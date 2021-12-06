@@ -220,8 +220,8 @@ async fn download_objects_task(
                         );
                         bucket_info.keys.insert(msg.key);
                     }
-                    Err(DownloadError::Failed { .. }) => {
-                        if tx.send(Err(S3Error::RetryFailed)).await.is_err() {
+                    Err(DownloadError::Failed { err }) => {
+                        if tx.send(Err(S3Error::IOError(err))).await.is_err() {
                             rx.close();
                             break;
                         };
@@ -664,6 +664,7 @@ enum S3Error {
     },
     ListObjectsFailed(SdkError<ListObjectsV2Error>),
     RetryFailed,
+    IOError(std::io::Error),
 }
 
 impl std::error::Error for S3Error {}
@@ -683,6 +684,7 @@ impl std::fmt::Display for S3Error {
             }
             S3Error::ListObjectsFailed(err) => err.fmt(f),
             S3Error::RetryFailed => write!(f, "Retry failed to produce result"),
+            S3Error::IOError(e) => write!(f, "IOError: {}", e),
         }
     }
 }
@@ -943,6 +945,7 @@ impl SourceReader for S3SourceReader {
                         Err(anyhow!("Client construction failed: {}", err))
                     }
                     S3Error::RetryFailed => Err(anyhow!("Retry failed")),
+                    S3Error::IOError(e) => Err(e.into()),
                     S3Error::GetObjectError { .. } | S3Error::ListObjectsFailed(_) => {
                         Ok(NextMessage::Pending)
                     }
