@@ -4,7 +4,6 @@ description: "Change Materialize Cloud profile or password."
 menu:
   main:
     parent: "cloud"
-    weight: 4
 aliases:
   - account-settings
 ---
