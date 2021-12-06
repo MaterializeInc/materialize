@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.51"
 async-trait = "0.1.51"
 aws-config = { version = "0.0.26-alpha", default-features = false, features = ["default-provider", "native-tls"] }
-aws-types = { version = "0.0.26-alpha", features = ["hardcoded-credentials"] }
+aws-types = { version = "0.2.0", features = ["hardcoded-credentials"] }
 aws-smithy-http = "0.30.0-alpha"
 ccsr = { path = "../ccsr" }
 crossbeam-channel = "0.5.1"
