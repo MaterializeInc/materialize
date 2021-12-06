@@ -103,7 +103,12 @@ List new features before bug fixes.
 
 {{% version-header v0.12.0 %}}
 
-- No changes yet.
+- Add the [`window_tumbling`](/sql/functions/windowed-aggregates) function to
+  convert [`timestamp`] data into non-overlapping windows of a specified width.
+  You can then easily use the returned column to perform aggregate functions
+  over `timestamp` windows.
+
+  Requires [experimental mode].
 
 {{% version-header v0.11.0 %}}
 
@@ -1195,7 +1200,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   **Backwards-incompatible change.**
 
 - Add the `--experimental` command-line option to enable a new [experimental
-  mode](/cli/#experimental-mode), which grants access to experimental features
+  mode], which grants access to experimental features
   at the risk of compromising stability and backwards compatibility. Forthcoming
   features that require experimental mode will be marked as such in their
   documentation.
@@ -1584,6 +1589,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`CREATE VIEW`]: /sql/create-view
 [`date`]: /sql/types/date
 [`double precision`]: /sql/types/float8
+[experimental mode](/cli/#experimental-mode)
 [`interval`]: /sql/types/interval
 [`list`]: /sql/types/list/
 [`map`]: /sql/types/map/

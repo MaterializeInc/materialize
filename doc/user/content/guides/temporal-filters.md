@@ -56,6 +56,12 @@ You do not need to insert a deletion event and can rely on the query to maintain
 Temporal filters allow you to implement several windowing idioms for data that comes with logical timestamps.
 The patterns discussed below are all instances of temporal filters. Each pattern is a generalization of the last.
 
+Note that these functions greatly differ from Materialize's [windowed aggregate
+functions](/sql/functions/windowed-aggregates). Our windowing idioms let users
+control which data views return as a function of `mz_logical_timestamp()`,
+whereas windowed aggregate functions' primary function is to express `timestamp`
+data as well-defined windows.
+
 ### Tumbling windows
 
 **Tumbling windows** are what we call windows when their duration equals their period (the amount of time before a new window begins). This creates fixed-size, contiguous, non-overlapping time intervals where each record belongs to exactly one interval.

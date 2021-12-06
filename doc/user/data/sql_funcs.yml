@@ -435,8 +435,8 @@
     url: to_char
 
   - signature: 'window_tumbling(ts: timestamp, width: interval) -> Record { window_start, window_end }'
-    description: Determines which non-overlapping window of the specified `width` starting at the Unix epoch `ts` belongs to.
-    url: window_tumbling
+    description: '[Experimental](/cli/#experimental-mode)––Determines which non-overlapping window of the specified `width` starting at the Unix epoch `ts` belongs to.'
+    url: windowed-aggregates
 
 - type: UUID
   functions:

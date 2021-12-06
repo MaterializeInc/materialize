@@ -1861,7 +1861,7 @@ impl TimestampLike for chrono::NaiveDateTime {
         self.clone()
     }
 
-    fn from_date_time(dt: NaiveDateTime) -> NaiveDateTime {
+    fn from_date_time(dt: NaiveDateTime) -> Self {
         dt
     }
 

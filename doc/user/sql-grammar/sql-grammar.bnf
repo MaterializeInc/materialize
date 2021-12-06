@@ -331,6 +331,8 @@ func_substring ::=
   'substring' '(' str ',' start_pos (',' len)? ')'
 func_timezone ::=
     'TIMEZONE' '(' zone'::'type ',' ( 'timestamp' | 'timestamptz' ) ')'
+func_window_tumbling ::=
+    'window_tumbling' '(' ts ',' i ')'
 join_expr ::=
     select_pred ('CROSS' | 'NATURAL' join_type?) 'JOIN' table_ref select_post
 	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' | 'ON' expression ) select_post
