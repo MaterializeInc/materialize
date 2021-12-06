@@ -196,7 +196,7 @@ async fn download_objects_task(
                 let (tx, activator, client, msg_ref, sid) =
                     (&tx, &activator, &client, &msg, &source_id);
 
-                let (status, update) = download_object(
+                let download_result = download_object(
                     tx,
                     &activator,
                     &client,
@@ -207,23 +207,11 @@ async fn download_objects_task(
                 )
                 .await;
 
-                let bucket_info = seen_buckets.get_mut(&msg.bucket).expect("just inserted");
-                if let Some(update) = update {
-                    bucket_info.metrics.inc(1, update.bytes, update.messages);
-                }
                 // Extract and handle status updates
-                match status {
-                    DownloadStatus::Failed { err, .. } => {
-                        if tx.send(Err(err)).await.is_err() {
-                            rx.close();
-                            break;
-                        };
-                    }
-                    DownloadStatus::SendFailed => {
-                        rx.close();
-                        break;
-                    }
-                    DownloadStatus::Ok => {
+                match download_result {
+                    Ok(update) => {
+                        let bucket_info = seen_buckets.get_mut(&msg.bucket).expect("just inserted");
+                        bucket_info.metrics.inc(1, update.bytes, update.messages);
                         log::debug!(
                             "source_id={} successfully downloaded {}/{}",
                             source_id,
@@ -231,6 +219,16 @@ async fn download_objects_task(
                             msg.key
                         );
                         bucket_info.keys.insert(msg.key);
+                    }
+                    Err(DownloadError::Failed { err }) => {
+                        if tx.send(Err(S3Error::IoError(err))).await.is_err() {
+                            rx.close();
+                            break;
+                        };
+                    }
+                    Err(DownloadError::SendFailed) => {
+                        rx.close();
+                        break;
                     }
                 };
             }
@@ -648,10 +646,9 @@ struct DownloadMetricUpdate {
 }
 
 #[derive(Debug)]
-enum DownloadStatus {
-    Ok,
+enum DownloadError {
     Failed {
-        err: S3Error,
+        err: std::io::Error,
     },
     /// Unable to send data to the `get_next_message` function, dataflow has shut down
     SendFailed,
@@ -667,6 +664,7 @@ enum S3Error {
     },
     ListObjectsFailed(SdkError<ListObjectsV2Error>),
     RetryFailed,
+    IoError(std::io::Error),
 }
 
 impl std::error::Error for S3Error {}
@@ -686,6 +684,7 @@ impl std::fmt::Display for S3Error {
             }
             S3Error::ListObjectsFailed(err) => err.fmt(f),
             S3Error::RetryFailed => write!(f, "Retry failed to produce result"),
+            S3Error::IoError(e) => write!(f, "IoError: {}", e),
         }
     }
 }
@@ -700,7 +699,7 @@ async fn download_object(
     key: &str,
     compression: Compression,
     source_id: &str,
-) -> (DownloadStatus, Option<DownloadMetricUpdate>) {
+) -> Result<DownloadMetricUpdate, DownloadError> {
     let retry_reader: RetryReader<_, _, _> = RetryReader::new(|state, offset| async move {
         let range = if offset == 0 {
             None
@@ -755,20 +754,13 @@ async fn download_object(
         Ok(buf) => {
             if buf.is_empty() {
                 log::trace!("source_id={} empty object {}/{}", source_id, bucket, key);
-                return (DownloadStatus::Ok, Default::default());
+                return Ok(Default::default());
             }
         }
-        Err(_) => {
-            return (
-                DownloadStatus::Failed {
-                    err: S3Error::RetryFailed,
-                },
-                Default::default(),
-            )
-        }
+        Err(err) => return Err(DownloadError::Failed { err }),
     };
 
-    let (mut download_status, metric_update) = match compression {
+    let mut download_result = match compression {
         Compression::None => read_object_chunked(source_id, reader, tx).await,
         Compression::Gzip => {
             let decoder = GzipDecoder::new(reader);
@@ -777,30 +769,30 @@ async fn download_object(
     };
 
     log::debug!(
-        "source_id={} {}/{} download_status={:?}",
+        "source_id={} {}/{} download_result={:?}",
         source_id,
         bucket,
         key,
-        download_status
+        download_result,
     );
 
-    if matches!(download_status, DownloadStatus::Ok) {
+    if download_result.is_ok() {
         let sent = tx.send(Ok(InternalMessage {
             record: MessagePayload::EOF,
         }));
         if sent.await.is_err() {
-            download_status = DownloadStatus::SendFailed;
+            download_result = Err(DownloadError::SendFailed);
         }
     };
     activator.activate().expect("s3 reader activation failed");
-    (download_status, metric_update)
+    download_result
 }
 
 async fn read_object_chunked<R>(
     source_id: &str,
     reader: R,
     tx: &Sender<Result<InternalMessage, S3Error>>,
-) -> (DownloadStatus, Option<DownloadMetricUpdate>)
+) -> Result<DownloadMetricUpdate, DownloadError>
 where
     R: Unpin + AsyncRead,
 {
@@ -820,20 +812,10 @@ where
                     .await
                     .is_err()
                 {
-                    return (DownloadStatus::SendFailed, None);
+                    return Err(DownloadError::SendFailed);
                 }
             }
-            Err(_) => {
-                return (
-                    DownloadStatus::Failed {
-                        err: S3Error::RetryFailed,
-                    },
-                    Some(DownloadMetricUpdate {
-                        bytes: bytes_read.try_into().expect("usize <= u64"),
-                        messages: chunks,
-                    }),
-                )
-            }
+            Err(err) => return Err(DownloadError::Failed { err }),
         }
     }
 
@@ -843,13 +825,10 @@ where
         chunks,
         bytes_read
     );
-    return (
-        DownloadStatus::Ok,
-        Some(DownloadMetricUpdate {
-            bytes: bytes_read.try_into().expect("usize <= u64"),
-            messages: chunks,
-        }),
-    );
+    return Ok(DownloadMetricUpdate {
+        bytes: bytes_read.try_into().expect("usize <= u64"),
+        messages: chunks,
+    });
 }
 
 impl SourceReader for S3SourceReader {
@@ -966,6 +945,7 @@ impl SourceReader for S3SourceReader {
                         Err(anyhow!("Client construction failed: {}", err))
                     }
                     S3Error::RetryFailed => Err(anyhow!("Retry failed")),
+                    S3Error::IoError(e) => Err(e.into()),
                     S3Error::GetObjectError { .. } | S3Error::ListObjectsFailed(_) => {
                         Ok(NextMessage::Pending)
                     }
