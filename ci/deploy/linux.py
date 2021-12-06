@@ -59,6 +59,7 @@ def main() -> None:
             publish_multiarch_images("latest", deps)
     else:
         publish_multiarch_images("unstable", deps)
+        publish_multiarch_images(f'unstable-{git.rev_parse("HEAD")}', deps)
 
     print("--- Uploading binary tarball")
     for repo in repos:

@@ -249,7 +249,10 @@ class CargoBuild(CargoPreImage):
             # down CI, since we're packaging these binaries up into Docker
             # images and shipping them around. A bit unfortunate, since it'd be
             # nice to have useful backtraces if the binary crashes.
-            spawn.runv([*self.rd.tool("strip"), "--strip-debug", self.path / self.bin])
+            spawn.runv(
+                [*self.rd.tool("strip"), "--strip-debug", self.path / self.bin],
+                cwd=self.rd.root,
+            )
         else:
             # Even if we've been asked not to strip the binary, remove the
             # `.debug_pubnames` and `.debug_pubtypes` sections. These are just
@@ -267,11 +270,14 @@ class CargoBuild(CargoPreImage):
                     "-R",
                     ".debug_pubtypes",
                     self.path / self.bin,
-                ]
+                ],
+                cwd=self.rd.root,
             )
         if self.extract:
             output = spawn.capture(
-                cargo_build + ["--message-format=json"], unicode=True
+                cargo_build + ["--message-format=json"],
+                unicode=True,
+                cwd=self.rd.root,
             )
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
