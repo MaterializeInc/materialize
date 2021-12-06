@@ -33,7 +33,7 @@ use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, P
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{self, NormalizedProtobufMessageName};
 use kafka_util::KafkaAddrs;
-use repr::{ColumnDesc, ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
+use repr::{ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
 
 /// The response from a `Peek`.
 ///
@@ -352,9 +352,9 @@ impl SourceDataEncoding {
     }
 }
 
-pub fn included_column_desc(included_columns: Vec<ColumnDesc>) -> RelationDesc {
+pub fn included_column_desc(included_columns: Vec<(&str, ColumnType)>) -> RelationDesc {
     let mut desc = RelationDesc::empty();
-    for ColumnDesc { name, ty } in included_columns {
+    for (name, ty) in included_columns {
         desc = desc.with_named_column(name, ty);
     }
     desc
@@ -873,12 +873,9 @@ impl ExternalSourceConnector {
     ///
     /// The columns declared here must be kept in sync with the actual source
     /// implementations that produce these columns.
-    pub fn metadata_columns<'a>(&'a self, include_defaults: bool) -> Vec<ColumnDesc<'a>> {
+    pub fn metadata_columns<'a>(&'a self, include_defaults: bool) -> Vec<(&'a str, ColumnType)> {
         let mut columns = Vec::new();
-        let default_col = |name| ColumnDesc {
-            name,
-            ty: ScalarType::Int64.nullable(false),
-        };
+        let default_col = |name| (name, ScalarType::Int64.nullable(false));
         match self {
             Self::Kafka(KafkaSourceConnector {
                 include_partition: part,
@@ -900,13 +897,7 @@ impl ExternalSourceConnector {
                     (topic, ScalarType::String),
                 ] {
                     if let Some(include) = include {
-                        items.insert(
-                            include.pos + 1,
-                            ColumnDesc {
-                                name: &include.name,
-                                ty: ty.nullable(false),
-                            },
-                        );
+                        items.insert(include.pos + 1, (&include.name, ty.nullable(false)));
                     }
                 }
 

@@ -37,13 +37,6 @@ pub struct ColumnType {
     pub nullable: bool,
 }
 
-/// A [`ColumnType`] with its name
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ColumnDesc<'a> {
-    pub name: &'a str,
-    pub ty: ColumnType,
-}
-
 /// This method exists solely for the purpose of making ColumnType nullable by
 /// default in unit tests. The default value of a bool is false, and the only
 /// way to make an object take on any other value by default is to pass it a
