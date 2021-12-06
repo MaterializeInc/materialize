@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.50"
+anyhow = "1.0.51"
 aws-sdk-s3 = { version = "0.0.26-alpha", default-features = false }
 bytefmt = "0.1.7"
 futures = "0.3.18"
@@ -16,4 +16,4 @@ ore = { path = "../../../src/ore" }
 structopt = "0.3.25"
 tokio = { version = "1.13.0", features = ["macros", "net", "rt", "time"] }
 tracing = "0.1.29"
-tracing-subscriber = { version = "0.3.2", default-features = false, features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.3", default-features = false, features = ["env-filter", "fmt"] }
