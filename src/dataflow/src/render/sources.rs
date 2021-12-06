@@ -12,13 +12,11 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use chrono::NaiveDateTime;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
 use persist_types::Codec;
 use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
 use timely::dataflow::operators::{Concat, Map, OkErr, ToStream, UnorderedInput};
 use timely::dataflow::Scope;
 
@@ -31,7 +29,7 @@ use expr::{GlobalId, Id, SourceInstanceId};
 use ore::cast::CastFrom;
 use ore::now::NowFn;
 use ore::result::ResultExt;
-use repr::{Datum, RelationDesc, Row, ScalarType, Timestamp};
+use repr::{RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -44,12 +42,12 @@ use crate::render::upsert::UpsertData;
 use crate::render::{RelevantTokens, RenderState};
 use crate::server::LocalInput;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
+use crate::source::SourceConfig;
 use crate::source::{
     self, metrics::SourceBaseMetrics, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
     PostgresSourceReader, PubNubSourceReader, S3SourceReader,
 };
 use crate::source::{DecodeResult, PersistentTimestampBindingsConfig};
-use crate::source::{KafkaMetadata, SourceConfig};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -401,6 +399,7 @@ where
                                     value_encoding,
                                     &self.debug_name,
                                     &envelope,
+                                    metadata_columns,
                                     &mut linear_operators,
                                     fast_forwarded,
                                     render_state.metrics.clone(),
@@ -410,6 +409,7 @@ where
                                     value_encoding,
                                     &self.debug_name,
                                     &envelope,
+                                    metadata_columns,
                                     &mut linear_operators,
                                     fast_forwarded,
                                     render_state.metrics.clone(),
@@ -427,8 +427,7 @@ where
                             match &envelope {
                                 SourceEnvelope::Debezium(dedupe_strategy, mode) => {
                                     // TODO: this needs to happen separately from trackstate
-                                    let data =
-                                        append_metadata_to_value_upsert(metadata_columns, results);
+                                    let data = append_metadata_to_value_upsert(results);
 
                                     let results = match mode {
                                         DebeziumMode::Upsert => {
@@ -508,8 +507,7 @@ where
                                     // The opeator currently does it unconditionally
                                     let upsert_operator_name = format!("{}-upsert", source_name);
 
-                                    let results =
-                                        append_metadata_to_value_upsert(metadata_columns, results);
+                                    let results = append_metadata_to_value_upsert(results);
 
                                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                                         &upsert_operator_name,
@@ -567,8 +565,7 @@ where
                                     (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                                 }
                                 SourceEnvelope::None(key_envelope) => {
-                                    let results =
-                                        append_metadata_to_value(metadata_columns, results);
+                                    let results = append_metadata_to_value(results);
 
                                     let (stream, errors) =
                                         flatten_results_prepend_keys(key_envelope, results)
@@ -765,10 +762,7 @@ struct KV {
     val: Option<Result<Row, DecodeError>>,
 }
 
-pub type MetadataVec = SmallVec<[IncludedColumnSource; 4]>;
-
 fn append_metadata_to_value<G>(
-    included_columns: MetadataVec,
     results: timely::dataflow::Stream<G, DecodeResult>,
 ) -> timely::dataflow::Stream<G, KV>
 where
@@ -777,12 +771,10 @@ where
     results.map(move |res| {
         let val = res.value.map(|val_result| {
             val_result.map(|mut val| {
-                include_metadata(
-                    included_columns.clone(),
-                    res.position,
-                    res.metadata,
-                    &mut val,
-                );
+                if let Some(md) = res.metadata {
+                    val.extend(md.into_iter());
+                }
+
                 val
             })
         });
@@ -792,28 +784,19 @@ where
 }
 
 fn append_metadata_to_value_upsert<G>(
-    included_columns: SmallVec<[IncludedColumnSource; 4]>,
     results: timely::dataflow::Stream<G, DecodeResult>,
 ) -> timely::dataflow::Stream<G, UpsertData>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     results.map(move |res| {
-        let mut metadata = Row::default();
-        include_metadata(
-            included_columns.clone(),
-            res.position,
-            res.metadata,
-            &mut metadata,
-        );
-
         UpsertData {
             key: res.key,
             value: res.value,
             // TODO: turn this into a bail. Need to handle persistence and other upsert things that
             // don't have any error handling.
             offset: res.position.expect("Kafka must have offset"),
-            metadata,
+            metadata: res.metadata.unwrap_or_else(Row::default),
         }
     })
 }
@@ -855,43 +838,6 @@ where
                         row
                     })
                 })
-        }
-    }
-}
-
-fn include_metadata(
-    included_columns: SmallVec<[IncludedColumnSource; 4]>,
-    position: Option<i64>,
-    metadata: Option<KafkaMetadata>,
-    row: &mut Row,
-) {
-    if !included_columns.is_empty() {
-        let m = metadata.as_ref();
-        for col in included_columns {
-            match col {
-                IncludedColumnSource::Partition => {
-                    row.push(Datum::from(m.map(|m| m.partition).unwrap()))
-                }
-                IncludedColumnSource::Offset => row.push(Datum::from(m.map(|m| m.offset).unwrap())),
-                IncludedColumnSource::Timestamp => {
-                    let ts = m.map(|m| m.timestamp).unwrap();
-                    let (secs, mut millis) = (ts / 1000, (ts.abs() % 1000) as u32);
-                    if secs < 0 {
-                        millis = 1000 - millis;
-                    }
-
-                    row.push(Datum::from(NaiveDateTime::from_timestamp(
-                        secs.into(),
-                        millis * 1_000_000,
-                    )))
-                }
-                IncludedColumnSource::Topic => {
-                    panic!("TOPIC not yet supported")
-                }
-                IncludedColumnSource::DefaultPosition => {
-                    row.push(Datum::from(position.expect("prevalidated")))
-                }
-            }
         }
     }
 }

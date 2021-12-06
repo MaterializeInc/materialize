@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use ::regex::Regex;
+use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
@@ -27,8 +28,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, KeyEnvelope,
-    LinearOperator, RegexEncoding, SourceEnvelope,
+    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, IncludedColumnSource,
+    KeyEnvelope, LinearOperator, IncludeRequests, RegexEncoding, SourceEnvelope,
 };
 use interchange::avro::ConfluentAvroResolver;
 use log::error;
@@ -39,7 +40,7 @@ use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::protobuf::ProtobufDecoderState;
 use crate::metrics::Metrics;
-use crate::source::{DecodeResult, KafkaMetadata, SourceOutput};
+use crate::source::{DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;
@@ -441,6 +442,7 @@ pub fn render_decode_delimited<G>(
     value_encoding: DataEncoding,
     debug_name: &str,
     envelope: &SourceEnvelope,
+    metadata_items: IncludeRequests,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
@@ -527,6 +529,7 @@ where
                             value,
                             position: *position,
                             metadata: to_kafka_metadata(
+                                metadata_items.clone(),
                                 partition.clone(),
                                 *position,
                                 *upstream_time,
@@ -567,6 +570,7 @@ pub fn render_decode<G>(
     value_encoding: DataEncoding,
     debug_name: &str,
     envelope: &SourceEnvelope,
+    metadata_items: IncludeRequests,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
@@ -611,8 +615,12 @@ where
                     partition,
                 } in data.iter()
                 {
-                    let metadata =
-                        to_kafka_metadata(partition.clone(), *position, *upstream_time_millis);
+                    let metadata = to_kafka_metadata(
+                        metadata_items.clone(),
+                        partition.clone(),
+                        *position,
+                        *upstream_time_millis,
+                    );
 
                     let value = match value {
                         MessagePayload::Data(data) => data,
@@ -733,16 +741,41 @@ where
 }
 
 fn to_kafka_metadata(
+    metadata_items: IncludeRequests,
     partition: PartitionId,
     position: Option<i64>,
     upstream_time_millis: Option<i64>,
-) -> Option<KafkaMetadata> {
+) -> Option<Row> {
     if let PartitionId::Kafka(partition) = partition {
-        Some(KafkaMetadata {
-            offset: position.expect("kafka sources always have position"),
-            timestamp: upstream_time_millis.expect("kafka sources always have upstream_time"),
-            partition,
-        })
+        if !metadata_items.0.is_empty() {
+            let mut row = Row::default();
+            for item in metadata_items.0.iter() {
+                match item {
+                    IncludedColumnSource::Partition => row.push(Datum::from(partition)),
+                    IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => row
+                        .push(Datum::from(
+                            position.expect("kafka sources always have position"),
+                        )),
+                    IncludedColumnSource::Timestamp => {
+                        let ts =
+                            upstream_time_millis.expect("kafka sources always have upstream_time");
+                        let (secs, mut millis) = (ts / 1000, (ts.abs() % 1000) as u32);
+                        if secs < 0 {
+                            millis = 1000 - millis;
+                        }
+
+                        row.push(Datum::from(NaiveDateTime::from_timestamp(
+                            secs,
+                            millis * 1_000_000,
+                        )))
+                    }
+                    IncludedColumnSource::Topic => unreachable!("Topic is not implemented yet"),
+                }
+            }
+            Some(row)
+        } else {
+            None
+        }
     } else {
         None
     }

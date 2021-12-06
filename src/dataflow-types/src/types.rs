@@ -955,10 +955,7 @@ impl ExternalSourceConnector {
         }
     }
 
-    pub fn metadata_column_types(
-        &self,
-        default_metadata: bool,
-    ) -> SmallVec<[IncludedColumnSource; 4]> {
+    pub fn metadata_column_types(&self, default_metadata: bool) -> IncludeRequests {
         match self {
             ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 include_partition: part,
@@ -985,7 +982,7 @@ impl ExternalSourceConnector {
                     }
                 }
 
-                items.into_values().collect()
+                MetadataVec(items.into_values().collect())
             }
 
             ExternalSourceConnector::Kinesis(_)
@@ -996,10 +993,10 @@ impl ExternalSourceConnector {
                 if default_metadata {
                     items.push(IncludedColumnSource::DefaultPosition);
                 }
-                items
+                MetadataVec(items)
             }
             ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => {
-                SmallVec::new()
+                MetadataVec(SmallVec::new())
             }
         }
     }
@@ -1126,6 +1123,10 @@ pub struct KafkaSourceConnector {
     /// If present, include the offset as an output column of the source with the given name.
     pub include_offset: Option<IncludedColumnPos>,
 }
+
+/// The set of Metadata Items a source requested
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MetadataVec(pub SmallVec<[IncludedColumnSource; 4]>);
 
 /// Which piece of metadata a column corresponds to
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
