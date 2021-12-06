@@ -34,7 +34,7 @@ mz-protoc = { path = "../../src/protoc" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
 regex = "1.5.4"
 repr = { path = "../repr" }
-reqwest = "0.11.6"
+reqwest = "0.11.7"
 serde = { version = "1.0.130", features = ["derive"] }
 serde_json = "1.0.72"
 sql-parser = { path = "../sql-parser" }
