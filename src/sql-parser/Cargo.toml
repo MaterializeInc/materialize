@@ -21,7 +21,7 @@ datadriven = "0.6.0"
 unicode-width = "0.1.9"
 
 [build-dependencies]
-anyhow = "1.0.50"
+anyhow = "1.0.51"
 ore = { path = "../ore", default-features = false }
 phf = { version = "0.10.0", features = ["uncased"] }
 phf_codegen = { version = "0.10.0" }

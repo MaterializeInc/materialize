@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.50"
+anyhow = "1.0.51"
 async-trait = "0.1.51"
 build-info = { path = "../build-info" }
 coord = { path = "../coord" }
