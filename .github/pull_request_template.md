@@ -14,9 +14,9 @@ in the PR, GitHub will have already added its commit message above.
 
 Which of the following best describes the motivation behind this PR?
 
-  * This PR fixes a recognized bug. [Link to issue.]
+  * This PR fixes a recognized bug: [Link to issue.]
 
-  * This PR adds a known-desirable feature. [Link to issue.]
+  * This PR adds a known-desirable feature: [Link to issue.]
 
   * This PR fixes a previously unreported bug.
 
@@ -51,5 +51,4 @@ Delete this section if no tips.
 ### Checklist
 
 - [ ] This PR has adequate test coverage / QA involvement has been duly considered.
-- [ ] This PR adds a release note for any
-  [user-facing behavior changes](https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md#what-changes-require-a-release-note).
+- [ ] This PR adds a release note for any [user-facing behavior changes](https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md#what-changes-require-a-release-note).
