@@ -27,9 +27,7 @@ use timely::PartialOrder;
 
 use dataflow_types::{SinkAsOf, SinkDesc, TailResponse, TailSinkConnector};
 use expr::GlobalId;
-use ore::cast::CastFrom;
-use repr::adt::numeric::{self, Numeric};
-use repr::{Datum, Diff, Row, Timestamp};
+use repr::{Diff, Row, Timestamp};
 
 use crate::render::sinks::SinkRender;
 use crate::render::RenderState;
@@ -101,8 +99,6 @@ fn tail<G>(
         .arrange_by_key()
         .stream;
 
-    let mut packer = Row::default();
-
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
     // An encapsulation of the Tail response protocol.
@@ -133,24 +129,7 @@ fn tail<G>(
                                 as_of.frontier.less_equal(time)
                             };
                             if should_emit {
-                                packer.push(Datum::from(numeric::Numeric::from(*time)));
-                                if connector.emit_progress {
-                                    // When sinking with PROGRESS, the output
-                                    // includes an additional column that
-                                    // indicates whether a timestamp is
-                                    // complete. For regular "data" upates this
-                                    // is always `false`.
-                                    packer.push(Datum::False);
-                                }
-
-                                packer.push(Datum::Int64(i64::cast_from(diff)));
-
-                                packer.extend_by_row(&row);
-
-                                let row = packer.finish_and_reuse();
-
-                                // Add the unpacked timestamp so we can sort by them later.
-                                results.push((*time, row));
+                                results.push((*time, diff, row.clone()));
                             }
                         });
                         cursor.step_val(&batch);
@@ -159,51 +138,36 @@ fn tail<G>(
                 }
             }
 
-            // Sort results by time and convert to Vec<Row>. We use stable sort here because
-            // it will produce deterministic results since the cursor will always produce
-            // rows in the same order.
-            results.sort_by_key(|(time, _)| *time);
-            let mut results: Vec<Row> = results.into_iter().map(|(_, row)| row).collect();
-
-            if let Some(batch) = batches.last() {
-                let progress_row = update_progress(
-                    &mut input_frontier,
-                    batch.desc.upper().borrow(),
-                    &mut packer,
-                    connector.object_columns + 1,
-                );
-                if connector.emit_progress && tail_protocol.is_some() {
-                    if let Some(progress_row) = progress_row {
-                        results.push(progress_row);
-                    }
-                }
-            }
+            // Sort results by time. We use stable sort here because it will produce deterministic
+            // results since the cursor will always producerows in the same order.
+            results.sort_by_key(|(time, _, _)| *time);
 
             // Emit data if configured, otherwise it is an error to have data to send.
             if let Some(tail_protocol) = &mut tail_protocol {
-                tail_protocol.send(results);
+                tail_protocol.send_rows(results);
             } else {
                 assert!(
                     results.is_empty(),
                     "Observed data at inactive TAIL instance"
                 );
             }
+
+            if let Some(batch) = batches.last() {
+                let progress = update_progress(&mut input_frontier, batch.desc.upper().borrow());
+                if connector.emit_progress {
+                    if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
+                        tail_protocol.send_progress(progress);
+                    }
+                }
+            }
         });
 
-        let progress_row = update_progress(
-            &mut input_frontier,
-            input.frontier().frontier(),
-            &mut packer,
-            connector.object_columns + 1,
-        );
+        let progress = update_progress(&mut input_frontier, input.frontier().frontier());
 
         // Only emit updates if this operator/worker received actual data for emission.
-        if let Some(tail_protocol) = &mut tail_protocol {
-            if connector.emit_progress {
-                if let Some(progress_row) = progress_row {
-                    let results = vec![progress_row];
-                    tail_protocol.send(results);
-                }
+        if connector.emit_progress {
+            if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
+                tail_protocol.send_progress(progress);
             }
         }
 
@@ -230,10 +194,21 @@ struct TailProtocol {
 }
 
 impl TailProtocol {
+    /// Send the current upper frontier of the tail.
+    ///
+    /// Does nothing if `self.complete()` has been called.
+    fn send_progress(&mut self, upper: Timestamp) {
+        if let Some(buffer) = &mut self.tail_response_buffer {
+            buffer
+                .borrow_mut()
+                .push((self.sink_id, TailResponse::Progress(upper)));
+        }
+    }
+
     /// Send further rows as responses.
     ///
     /// Does nothing if `self.complete()` has been called.
-    fn send(&mut self, rows: Vec<Row>) {
+    fn send_rows(&mut self, rows: Vec<(Timestamp, Diff, Row)>) {
         if let Some(buffer) = &mut self.tail_response_buffer {
             buffer
                 .borrow_mut()
@@ -270,9 +245,7 @@ impl Drop for TailProtocol {
 fn update_progress(
     current_input_frontier: &mut Antichain<Timestamp>,
     new_input_frontier: AntichainRef<Timestamp>,
-    packer: &mut Row,
-    empty_columns: usize,
-) -> Option<Row> {
+) -> Option<Timestamp> {
     // Test to see if strict progress has occurred. This is true if the new
     // frontier is not less or equal to the old frontier.
     let progress = !PartialOrder::less_equal(&new_input_frontier, &current_input_frontier.borrow());
@@ -286,22 +259,11 @@ fn update_progress(
         // anymore. There might not even be progress in the first dimension.
         // We panic, so that future developers introducing multi-dimensional
         // time in Materialize will notice.
-        let upper = new_input_frontier
+        new_input_frontier
             .iter()
             .at_most_one()
             .expect("more than one element in the frontier")
-            .cloned();
-
-        // the input frontier might be empty
-        upper.map(|upper| {
-            packer.push(Datum::from(Numeric::from(upper)));
-            packer.push(Datum::True);
-            // Fill in the diff column and all table columns with NULL.
-            for _ in 0..empty_columns {
-                packer.push(Datum::Null);
-            }
-            packer.finish_and_reuse()
-        })
+            .cloned()
     } else {
         None
     }

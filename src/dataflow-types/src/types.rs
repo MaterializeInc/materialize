@@ -59,8 +59,10 @@ impl PeekResponse {
 /// Various responses that can be communicated about the progress of a TAIL command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TailResponse {
+    /// Progress information about the upper frontier.
+    Progress(Timestamp),
     /// Rows that should be returned in order to the client.
-    Rows(Vec<Row>),
+    Rows(Vec<(Timestamp, Diff, Row)>),
     /// Sent once the stream is complete. Indicates the end.
     Complete,
     /// The TAIL dataflow was dropped before completing. Indicates the end.
