@@ -40,12 +40,12 @@ impl ProtoMeta {
     /// The following is an EBNF-ish spec for the format:
     ///
     /// ```none
-    /// encoding = 7u8 v7_encoding
+    /// encoding = 8u8 v8_encoding
     /// v7_encoding = proto_meta md5_checksum
     /// proto_meta = u8* (the protobuf serialization of ProtoMeta)
     /// md5_checksum = u8 u8 u8 u8 (little endian, md5 of proto_meta)
     /// ```
-    pub const ENCODING_VERSION: u8 = 7;
+    pub const ENCODING_VERSION: u8 = 8;
 
     /// The [Self::ENCODING_VERSION] of this previously encoded ProtoMeta.
     ///
