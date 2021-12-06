@@ -220,8 +220,8 @@ async fn download_objects_task(
                         );
                         bucket_info.keys.insert(msg.key);
                     }
-                    Err(DownloadError::Failed { err, .. }) => {
-                        if tx.send(Err(err)).await.is_err() {
+                    Err(DownloadError::Failed { .. }) => {
+                        if tx.send(Err(S3Error::RetryFailed)).await.is_err() {
                             rx.close();
                             break;
                         };
@@ -648,7 +648,7 @@ struct DownloadMetricUpdate {
 #[derive(Debug)]
 enum DownloadError {
     Failed {
-        err: S3Error,
+        err: std::io::Error,
     },
     /// Unable to send data to the `get_next_message` function, dataflow has shut down
     SendFailed,
@@ -755,11 +755,7 @@ async fn download_object(
                 return Ok(Default::default());
             }
         }
-        Err(_) => {
-            return Err(DownloadError::Failed {
-                err: S3Error::RetryFailed,
-            })
-        }
+        Err(err) => return Err(DownloadError::Failed { err }),
     };
 
     let mut download_result = match compression {
@@ -817,11 +813,7 @@ where
                     return Err(DownloadError::SendFailed);
                 }
             }
-            Err(_) => {
-                return Err(DownloadError::Failed {
-                    err: S3Error::RetryFailed,
-                })
-            }
+            Err(err) => return Err(DownloadError::Failed { err }),
         }
     }
 
