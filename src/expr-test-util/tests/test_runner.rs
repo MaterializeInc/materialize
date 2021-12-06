@@ -84,8 +84,7 @@ mod test {
                             // whitespace, remove whitespace before comparing results.
                             Ok(rel) => format!(
                                 "{}\n",
-                                catalog
-                                    .generate_explanation(&rel, s.args.get("format"))
+                                generate_explanation(&catalog, &rel, s.args.get("format"))
                                     .trim_end()
                             ),
                             Err(err) => format!("error: {}\n", err),

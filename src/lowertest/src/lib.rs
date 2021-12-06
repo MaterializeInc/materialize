@@ -17,7 +17,7 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use ore::{result::ResultExt, str::separated};
+use ore::{result::ResultExt, str::separated, str::StrExt};
 
 pub use lowertest_derive::{gen_reflect_info_func, MzEnumReflect, MzStructReflect};
 
@@ -243,7 +243,16 @@ where
                     },
                 }
             }
-            TokenTree::Ident(ident) => Ok(Some(ident.to_string())),
+            TokenTree::Ident(ident) => {
+                // If type_name == "String", then we are trying to construct
+                // either a String or Option<String>. Thus, if ident == null,
+                // we may be trying to construct a None object.
+                if type_name == "String" && ident != "null" {
+                    Ok(Some(ident.to_string().quoted().to_string()))
+                } else {
+                    Ok(Some(ident.to_string()))
+                }
+            }
             TokenTree::Literal(literal) => Ok(Some(literal.to_string())),
         }
     } else {

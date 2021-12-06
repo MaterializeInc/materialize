@@ -13,21 +13,30 @@ use crate::catalog::{
     CatalogSchema, SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
-use crate::names::{FullName, PartialName};
+use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::plan::query::QueryLifetime;
 use crate::plan::{StatementContext, StatementDesc};
 use build_info::DUMMY_BUILD_INFO;
 use chrono::MIN_DATETIME;
 use dataflow_types::SourceConnector;
 use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use expr_test_util::generate_explanation;
 use lazy_static::lazy_static;
+use lowertest::*;
 use ore::now::{EpochMillis, NOW_ZERO};
-use repr::{RelationDesc, ScalarType};
+use repr::{ColumnType, RelationDesc, RelationType, ScalarType};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::query_model;
+
+gen_reflect_info_func!(
+    produce_rti,
+    [ScalarType, TestCatalogCommand],
+    [ColumnType, RelationType,]
+);
 
 lazy_static! {
     static ref DUMMY_CONFIG: CatalogConfig = CatalogConfig {
@@ -43,6 +52,7 @@ lazy_static! {
         now: NOW_ZERO.clone(),
         disable_user_indexes: false,
     };
+    static ref RTI: ReflectedTypeInfo = produce_rti();
 }
 
 /// A dummy [`CatalogItem`] implementation.
@@ -51,16 +61,28 @@ lazy_static! {
 /// not demanding of the catalog, as many methods are unimplemented.
 #[derive(Debug)]
 pub enum TestCatalogItem {
+    /// Represents some kind of data source. Could be a Source/Table/View.
+    BaseTable {
+        name: FullName,
+        id: GlobalId,
+        desc: RelationDesc,
+    },
     Func(&'static Func),
 }
 
 impl CatalogItem for TestCatalogItem {
     fn name(&self) -> &FullName {
-        unimplemented!()
+        match &self {
+            TestCatalogItem::BaseTable { name, .. } => name,
+            _ => unimplemented!(),
+        }
     }
 
     fn id(&self) -> GlobalId {
-        unimplemented!()
+        match &self {
+            TestCatalogItem::BaseTable { id, .. } => *id,
+            _ => unimplemented!(),
+        }
     }
 
     fn oid(&self) -> u32 {
@@ -68,13 +90,22 @@ impl CatalogItem for TestCatalogItem {
     }
 
     fn desc(&self) -> Result<&RelationDesc, CatalogError> {
-        unimplemented!()
+        match &self {
+            TestCatalogItem::BaseTable { desc, .. } => Ok(desc),
+            _ => Err(CatalogError::UnknownItem(format!(
+                "{:?} does not have a desc() method",
+                self
+            ))),
+        }
     }
 
     fn func(&self) -> Result<&'static Func, CatalogError> {
         match &self {
             TestCatalogItem::Func(func) => Ok(func),
-            //_ => Err(CatalogError::UnknownFunction(format!("{:?}", self))),
+            _ => Err(CatalogError::UnknownFunction(format!(
+                "{:?} does not have a func() method",
+                self
+            ))),
         }
     }
 
@@ -83,7 +114,10 @@ impl CatalogItem for TestCatalogItem {
     }
 
     fn item_type(&self) -> CatalogItemType {
-        unimplemented!()
+        match &self {
+            TestCatalogItem::BaseTable { .. } => CatalogItemType::View,
+            TestCatalogItem::Func(_) => CatalogItemType::Func,
+        }
     }
 
     fn create_sql(&self) -> &str {
@@ -113,7 +147,13 @@ impl CatalogItem for TestCatalogItem {
 /// not demanding of the catalog, as many methods are unimplemented.
 #[derive(Debug)]
 pub struct TestCatalog {
+    /// Contains the Materialize builtin functions.
     funcs: HashMap<&'static str, TestCatalogItem>,
+    /// Contains dummy data sources.
+    tables: HashMap<String, TestCatalogItem>,
+    /// Maps (unique id) -> (name of data source).
+    /// Exists to support the `*get_item_by_id` functions.
+    id_to_name: HashMap<GlobalId, String>,
 }
 
 impl Default for TestCatalog {
@@ -128,7 +168,11 @@ impl Default for TestCatalog {
         for (name, func) in PG_CATALOG_BUILTINS.iter() {
             funcs.insert(*name, TestCatalogItem::Func(func));
         }
-        Self { funcs }
+        Self {
+            funcs,
+            tables: HashMap::new(),
+            id_to_name: HashMap::new(),
+        }
     }
 }
 
@@ -165,8 +209,11 @@ impl SessionCatalog for TestCatalog {
         unimplemented!();
     }
 
-    fn resolve_item(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
+    fn resolve_item(&self, partial_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
+        if let Some(result) = self.tables.get(&partial_name.item[..]) {
+            return Ok(result);
+        }
+        Err(CatalogError::UnknownItem(partial_name.item.clone()))
     }
 
     fn resolve_function(
@@ -179,8 +226,8 @@ impl SessionCatalog for TestCatalog {
         Err(CatalogError::UnknownFunction(partial_name.item.clone()))
     }
 
-    fn get_item_by_id(&self, _: &GlobalId) -> &dyn CatalogItem {
-        unimplemented!();
+    fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
+        &self.tables[&self.id_to_name[id]]
     }
 
     fn try_get_item_by_id(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
@@ -218,10 +265,73 @@ impl ExprHumanizer for TestCatalog {
     }
 }
 
+/// Contains the arguments for a command for [TestCatalog].
+///
+/// See [lowertest] for the command syntax.
+#[derive(Debug, Serialize, Deserialize, MzEnumReflect)]
+pub enum TestCatalogCommand {
+    /// Insert a source into the catalog.
+    Defsource {
+        source_name: String,
+        typ: RelationType,
+        #[serde(default)]
+        column_names: Vec<Option<String>>,
+    },
+}
+
+impl TestCatalog {
+    fn execute_commands(&mut self, spec: &str) -> Result<String, String> {
+        let mut stream_iter = tokenize(spec)?.into_iter();
+        loop {
+            let command: Option<TestCatalogCommand> = deserialize_optional(
+                &mut stream_iter,
+                "TestCatalogCommand",
+                &RTI,
+                &mut GenericTestDeserializeContext::default(),
+            )?;
+            if let Some(command) = command {
+                match command {
+                    TestCatalogCommand::Defsource {
+                        source_name,
+                        typ,
+                        column_names,
+                    } => {
+                        assert_eq!(
+                            typ.arity(),
+                            column_names.len(),
+                            "Ensure that there are the right number of column names for source {}",
+                            source_name
+                        );
+                        let id = GlobalId::User(self.tables.len() as u64);
+                        self.id_to_name.insert(id, source_name.clone());
+                        self.tables.insert(
+                            source_name.clone(),
+                            TestCatalogItem::BaseTable {
+                                name: FullName {
+                                    database: DatabaseSpecifier::from(Some(
+                                        self.default_database().to_string(),
+                                    )),
+                                    schema: self.user().to_string(),
+                                    item: source_name,
+                                },
+                                id,
+                                desc: RelationDesc::new(typ, column_names.into_iter()),
+                            },
+                        );
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        Ok("ok\n".to_string())
+    }
+}
+
 #[test]
 fn test_hir_generator() {
     datadriven::walk("tests/querymodel", |f| {
-        let catalog = TestCatalog::default();
+        let mut catalog = TestCatalog::default();
 
         f.run(move |s| -> String {
             let build_stmt = |stmt, dot_graph, lower| -> String {
@@ -250,7 +360,8 @@ fn test_hir_generator() {
                     }
 
                     if lower {
-                        output += &model.lower().pretty_humanized(&catalog);
+                        output +=
+                            &generate_explanation(&catalog, &model.lower(), s.args.get("format"));
                     }
 
                     output
@@ -273,6 +384,10 @@ fn test_hir_generator() {
             match s.directive.as_str() {
                 "build" => execute_command(true, false),
                 "lower" => execute_command(false, true),
+                "cat" => match catalog.execute_commands(&s.input) {
+                    Ok(ok) => ok,
+                    Err(err) => err,
+                },
                 _ => panic!("unknown directive: {}", s.directive),
             }
         })

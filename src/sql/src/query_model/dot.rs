@@ -179,6 +179,19 @@ impl DotGenerator {
             rows.extend(predicates.iter().map(|p| p.to_string()));
         }
 
+        if !b.unique_keys.is_empty() {
+            rows.push(format!(
+                "UNIQUE KEY {}",
+                separated(
+                    " ",
+                    b.unique_keys.iter().map(|key_set| format!(
+                        "[{}]",
+                        separated(", ", key_set.iter().map(|k| k.to_string()))
+                    ))
+                )
+            ));
+        }
+
         DotLabel::MultiRow(&rows).to_string()
     }
 

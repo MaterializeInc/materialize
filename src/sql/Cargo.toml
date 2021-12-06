@@ -47,3 +47,5 @@ uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [dev-dependencies]
 datadriven = "0.6.0"
+expr_test_util = { path = "../expr-test-util"}
+lowertest = { path = "../lowertest"}

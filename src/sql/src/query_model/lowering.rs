@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use crate::query_model::{
-    BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Model, QuantifierSet,
-    QuantifierType,
+    BaseColumn, BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Get, Model,
+    QuantifierSet, QuantifierType,
 };
 use itertools::Itertools;
 use repr::RelationType;
@@ -59,6 +59,28 @@ impl<'a> Lowerer<'a> {
         );
 
         match &the_box.box_type {
+            BoxType::Get(Get { id }) => {
+                let typ = RelationType::new(
+                    the_box
+                        .columns
+                        .iter()
+                        .map(|c| {
+                            if let BoxScalarExpr::BaseColumn(BaseColumn { column_type, .. }) =
+                                &c.expr
+                            {
+                                column_type.clone()
+                            } else {
+                                panic!("expected all columns in Get BoxType to BaseColumn");
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .with_keys(the_box.unique_keys.clone());
+                get_outer.product(SR::Get {
+                    id: expr::Id::Global(*id),
+                    typ,
+                })
+            }
             BoxType::Values(values) => {
                 let identity = SR::constant(vec![vec![]], RelationType::new(vec![]));
                 // TODO(asenac) lower actual values
