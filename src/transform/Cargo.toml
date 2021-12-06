@@ -19,5 +19,5 @@ datadriven = "0.6.0"
 expr_test_util = {path = "../expr-test-util"}
 lowertest = {path = "../lowertest"}
 ore = { path = "../ore"}
-proc-macro2 = "1.0.30"
+proc-macro2 = "1.0.33"
 serde_json = "1.0.72"
