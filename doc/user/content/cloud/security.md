@@ -6,7 +6,6 @@ disable_toc: true
 menu:
   main:
     parent: "cloud"
-    weight:
 ---
 
 {{< cloud-notice >}}

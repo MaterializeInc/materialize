@@ -5,7 +5,7 @@ disable_toc: true
 menu:
   main:
     parent: "cloud"
-    weight:
+    weight: 3
 aliases:
   - connect-to-materialize-cloud
 ---

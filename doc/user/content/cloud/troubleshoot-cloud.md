@@ -4,7 +4,6 @@ description: "Troubleshoot problems with Materialize Cloud."
 menu:
   main:
     parent: "cloud"
-    weight:
 ---
 
 {{< cloud-notice >}}

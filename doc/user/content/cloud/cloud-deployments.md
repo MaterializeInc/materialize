@@ -5,7 +5,6 @@ disable_toc: true
 menu:
   main:
     parent: "cloud"
-    weight: 6
 ---
 
 {{< cloud-notice >}}
@@ -16,5 +15,5 @@ The [Deployments page](http://cloud.materialize.com/deployments) is your Materia
 - [Change a deployment's name or size](../change-deployment-details)
 - [Create new deployments](../create-deployments)
 - [Delete deployments](../destroy-deployments)
-- [Update deployments](../update-deployments)
+- [Update deployments](../maintenance-windows/#how-to-upgrade)
 - [View logs and troubleshoot](../troubleshoot-cloud)
