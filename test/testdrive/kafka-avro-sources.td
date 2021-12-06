@@ -227,6 +227,14 @@ a b
 2 3
 
 # test INCLUDE metadata
+
+! CREATE MATERIALIZED SOURCE non_dbz_data_metadata
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  INCLUDE TOPIC
+  ENVELOPE NONE
+INCLUDE TOPIC not yet supported
+
 > CREATE MATERIALIZED SOURCE non_dbz_data_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'

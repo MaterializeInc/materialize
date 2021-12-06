@@ -117,16 +117,23 @@ creature
 --------
 moros
 
+! CREATE MATERIALIZED SOURCE doin_upsert_metadata
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE OFFSET
+  ENVELOPE DEBEZIUM
+INCLUDE OFFSET with Debezium requires UPSERT semantics
+
 > CREATE MATERIALIZED SOURCE doin_upsert_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  INCLUDE OFFSET AS test_kafka_offset
+  INCLUDE PARTITION, OFFSET AS test_kafka_offset
   ENVELOPE DEBEZIUM UPSERT
 
-> SELECT creature, test_kafka_offset FROM doin_upsert_metadata WHERE id = 4
-creature test_kafka_offset
---------------------------
-moros    9
+> SELECT * FROM doin_upsert_metadata WHERE id = 4
+id creature partition test_kafka_offset
+---------------------------------------
+4  moros    0         9
 
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=6
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": null}

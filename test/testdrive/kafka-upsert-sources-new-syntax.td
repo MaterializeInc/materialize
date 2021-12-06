@@ -515,3 +515,22 @@ f3        f1        f1           f2   partition  offset
 <null>    yin       dog          243   0         15
 air       qi        chicken      47    0         13
 earth     dao       rhinoceros   211   0         12
+
+> CREATE MATERIALIZED SOURCE include_metadata_ts
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
+  WITH (start_offset=1)
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE PARTITION, OFFSET, TIMESTAMP as ts
+  ENVELOPE UPSERT
+
+> SELECT "offset" FROM include_metadata_ts WHERE ts > '2021-01-01'
+offset
+------
+15
+13
+12
+
+> SELECT "offset" FROM include_metadata_ts WHERE ts < '2021-01-01'
+offset
+------
