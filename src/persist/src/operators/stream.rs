@@ -705,15 +705,17 @@ where
 }
 
 /// Extension trait for [`Stream`].
-pub trait RetractFutureUpdates<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
+pub trait RetractUnsealed<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// Passes through each element of the stream and sends retractions to the given
-    /// [`StreamWriteHandle`] for updates that are beyond the given `upper_ts`.
+    /// [`StreamWriteHandle`] for updates that are beyond the given `upper_ts`. In practice,
+    /// the `upper_ts` is the lowest timestamp that is sealed across all persisted streams
+    /// for a source.
     ///
     /// This does not wait for retractions to be persisted before passing through the data. We do,
     /// however, wait for data to be persisted before allowing the frontier to advance. In other
     /// words, this operator is holding on to capabilities as long as retractions belonging to
     /// their timestamp is not persisted.
-    fn filter_and_retract_future_updates(
+    fn retract_unsealed(
         &self,
         name: &str,
         write: StreamWriteHandle<K, V>,
@@ -724,13 +726,13 @@ pub trait RetractFutureUpdates<G: Scope<Timestamp = u64>, K: TimelyData, V: Time
     );
 }
 
-impl<G, K, V> RetractFutureUpdates<G, K, V> for Stream<G, ((K, V), u64, isize)>
+impl<G, K, V> RetractUnsealed<G, K, V> for Stream<G, ((K, V), u64, isize)>
 where
     G: Scope<Timestamp = u64>,
     K: TimelyData + Codec + Debug,
     V: TimelyData + Codec + Debug,
 {
-    fn filter_and_retract_future_updates(
+    fn retract_unsealed(
         &self,
         name: &str,
         write: StreamWriteHandle<K, V>,
@@ -740,7 +742,7 @@ where
         Stream<G, (String, u64, isize)>,
     ) {
         let scope = self.scope();
-        let operator_name = format!("retract_future_updates({})", name);
+        let operator_name = format!("retract_unsealed({})", name);
         let mut persist_op = OperatorBuilder::new(operator_name.clone(), self.scope());
 
         let mut input = persist_op.new_input(&self, Pipeline);
