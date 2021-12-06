@@ -23,7 +23,6 @@ def workflow_redpanda_testdrive(w: Workflow):
 
     # Features currently not supported by Redpanda:
     # - `kafka-time-offset.td` (https://github.com/vectorizedio/redpanda/issues/2397)
-    # - `schema-registry-publish` with `format=protobuf` (Redpanda does not support schema publication for protobuf/json)
 
     # Due to interactions between docker-compose, entrypoint, command, and bash, it is not possible to have
     # a more complex filtering expression in 'command' . So we basically run the entire testdrive suite here
@@ -32,5 +31,5 @@ def workflow_redpanda_testdrive(w: Workflow):
 
     w.run_service(
         service="testdrive-svc",
-        command="grep -L -E 'kafka_time_offset|schema-type=protobuf' testdrive/*.td",
+        command="grep -L -E 'kafka_time_offset' testdrive/*.td",
     )
