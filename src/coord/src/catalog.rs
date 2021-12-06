@@ -476,11 +476,10 @@ pub struct Schema {
     pub functions: BTreeMap<String, GlobalId>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct Role {
     pub name: String,
     pub id: i64,
-    #[serde(skip)]
     pub oid: u32,
 }
 
@@ -493,7 +492,7 @@ pub struct CatalogEntry {
     name: FullName,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub enum CatalogItem {
     Table(Table),
     Source(Source),
@@ -504,11 +503,10 @@ pub enum CatalogItem {
     Func(Func),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
-    #[serde(skip)]
     pub defaults: Vec<Expr<Raw>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
@@ -523,7 +521,7 @@ impl Table {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Source {
     pub create_sql: String,
     pub optimized_expr: OptimizedMirRelationExpr,
@@ -533,7 +531,7 @@ pub struct Source {
     pub persist_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
@@ -543,13 +541,13 @@ pub struct Sink {
     pub depends_on: Vec<GlobalId>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub enum SinkConnectorState {
     Pending(SinkConnectorBuilder),
     Ready(SinkConnector),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct View {
     pub create_sql: String,
     pub optimized_expr: OptimizedMirRelationExpr,
@@ -558,7 +556,7 @@ pub struct View {
     pub depends_on: Vec<GlobalId>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
@@ -568,14 +566,14 @@ pub struct Index {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Type {
     pub create_sql: String,
     pub inner: TypeInner,
     pub depends_on: Vec<GlobalId>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub enum TypeInner {
     Array {
         element_id: GlobalId,
@@ -600,13 +598,12 @@ impl From<sql::plan::TypeInner> for TypeInner {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Func {
-    #[serde(skip)]
     pub inner: &'static sql::func::Func,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub enum Volatility {
     Volatile,
     Nonvolatile,
