@@ -778,7 +778,7 @@ async fn download_object(
         download_result,
     );
 
-    if let Ok(_) = &download_result {
+    if download_result.is_ok() {
         let sent = tx.send(Ok(InternalMessage {
             record: MessagePayload::EOF,
         }));
