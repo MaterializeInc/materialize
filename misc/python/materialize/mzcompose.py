@@ -1103,7 +1103,7 @@ class Testdrive(PythonService):
         name: str = "testdrive-svc",
         mzbuild: str = "testdrive",
         no_reset: bool = False,
-        default_timeout: int = 30,
+        default_timeout: str = "30s",
         validate_catalog: bool = True,
         entrypoint: Optional[List[str]] = None,
         shell_eval: Optional[bool] = False,

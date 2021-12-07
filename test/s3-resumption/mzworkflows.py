@@ -24,7 +24,7 @@ daemons = [
     Toxiproxy(),
 ]
 
-services = [*daemons, Testdrive(default_timeout=600)]
+services = [*daemons, Testdrive(default_timeout="600s")]
 
 #
 # Test the S3 resumption logic by first instructing Toxiproxy to drop a connection
