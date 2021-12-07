@@ -108,9 +108,8 @@ where
     S: Source + 'static,
 {
     let (ts_write, ts_read) = persist
-        .create_or_load::<S::SourceTimestamp, AssignedTimestamp>(&format!("{}_ts", name_base))?;
-    let (out_write, out_read) =
-        persist.create_or_load::<S::K, S::V>(&format!("{}_out", name_base))?;
+        .create_or_load::<S::SourceTimestamp, AssignedTimestamp>(&format!("{}_ts", name_base));
+    let (out_write, out_read) = persist.create_or_load::<S::K, S::V>(&format!("{}_out", name_base));
 
     // TODO: I think we need to synchronize the sources on what they think
     // current "system time" is. Otherwise, the timestamps that we seal up to

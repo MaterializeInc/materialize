@@ -154,7 +154,7 @@ impl DirectCore {
                 Ok(ingest.clone())
             }
             Entry::Vacant(x) => {
-                let (write, read) = self.runtime.create_or_load(name)?;
+                let (write, read) = self.runtime.create_or_load(name);
                 let dataflow_read = read.clone();
                 let (output_tx, output_rx) = mpsc::channel();
                 let output_tx = Arc::new(Mutex::new(output_tx));
@@ -171,7 +171,7 @@ impl DirectCore {
                                 .lock()
                                 .expect("clone doesn't panic and poison lock")
                                 .clone();
-                            let data = scope.persisted_source(Ok(dataflow_read));
+                            let data = scope.persisted_source(dataflow_read);
                             data.probe_with(&mut probe).capture_into(output_tx);
                         });
                         while worker.step_or_park(None) {
@@ -483,7 +483,7 @@ impl DirectWorker {
         let mut updates = Vec::new();
         for req in req.writes {
             let stream = self.stream(&req.stream)?;
-            updates.push((stream.write.stream_id(), vec![req.update]));
+            updates.push((stream.write.stream_id()?, vec![req.update]));
             write_handles.push(stream.write.clone());
         }
         let write_handles = write_handles.iter().collect::<Vec<_>>();

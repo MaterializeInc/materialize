@@ -16,7 +16,7 @@ use std::time::Duration;
 use dataflow_types::{ExternalSourceConnector, SourceConnector, SourceEnvelope};
 use ore::metrics::MetricsRegistry;
 use persist::error::{Error, ErrorLog};
-use persist::indexed::encoding::Id;
+use persist::indexed::encoding::Id as PersistId;
 use persist::s3::{Config as S3Config, S3Blob};
 use persist::storage::LockInfo;
 use repr::Row;
@@ -213,9 +213,12 @@ impl PersisterWithConfig {
             Some(x) => x,
             None => return Ok(None),
         };
-        let (write_handle, _) = persister.create_or_load(&stream_name)?;
+        let (write_handle, _) = persister.create_or_load(&stream_name);
         Ok(Some(PersistDetails {
             stream_name,
+            // We need to get the stream_id now because we cannot get it later since most methods
+            // in the coordinator/catalog aren't fallible.
+            stream_id: write_handle.stream_id()?,
             write_handle,
         }))
     }
@@ -245,12 +248,13 @@ impl PersisterWithConfig {
 #[derive(Debug, Clone, Serialize)]
 pub struct PersistDetails {
     pub stream_name: String,
+    pub stream_id: PersistId,
     #[serde(skip)]
     pub write_handle: StreamWriteHandle<Row, ()>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistMultiDetails {
-    pub all_table_ids: Vec<Id>,
+    pub all_table_ids: Vec<PersistId>,
     pub write_handle: MultiWriteHandle<Row, ()>,
 }

@@ -1396,8 +1396,7 @@ where
                 }) = self.catalog.get_by_id(on).item()
                 {
                     if self.catalog.default_index_for(*on) == Some(*id) {
-                        table_since_updates
-                            .push((persist.write_handle.stream_id(), frontier.clone()));
+                        table_since_updates.push((persist.stream_id, frontier.clone()));
                     }
                 }
             }
@@ -2775,8 +2774,7 @@ where
                                         .map(|(row, diff)| ((row, ()), timestamp, diff))
                                         .collect();
                                     persist_streams.push(&persist.write_handle);
-                                    persist_updates
-                                        .push((persist.write_handle.stream_id(), updates));
+                                    persist_updates.push((persist.stream_id, updates));
                                 }
                                 _ => {
                                     let updates = rows

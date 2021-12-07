@@ -53,7 +53,7 @@ where
         .collect();
 
     let mut runtime = new_fn(1).expect("creating index cannot fail");
-    let (write, read) = runtime.create_or_load("0").expect("registration succeeds");
+    let (write, read) = runtime.create_or_load("0");
 
     // Write the data out to the index's unsealed.
     write

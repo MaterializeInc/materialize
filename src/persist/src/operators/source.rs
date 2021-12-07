@@ -19,7 +19,6 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::Data as TimelyData;
 
-use crate::error::Error;
 use crate::indexed::runtime::StreamReadHandle;
 use crate::indexed::{ListenEvent, ListenFn};
 use crate::operators::replay::Replay;
@@ -30,7 +29,7 @@ pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyDat
     /// listens for any new data added to the persisted stream after that.
     fn persisted_source(
         &mut self,
-        read: Result<StreamReadHandle<K, V>, Error>,
+        read: StreamReadHandle<K, V>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)>;
 }
 
@@ -42,7 +41,7 @@ where
 {
     fn persisted_source(
         &mut self,
-        read: Result<StreamReadHandle<K, V>, Error>,
+        read: StreamReadHandle<K, V>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
         let (listen_tx, listen_rx) = mpsc::channel();
         let listen_fn = ListenFn(Box::new(move |e| {
@@ -51,7 +50,7 @@ where
             let _ = listen_tx.send(e);
         }));
 
-        let snapshot = read.and_then(|read| read.listen(listen_fn));
+        let snapshot = read.listen(listen_fn);
 
         let snapshot_seal = snapshot
             .as_ref()
@@ -171,14 +170,12 @@ mod tests {
 
         let (oks, errs) = timely::execute_directly(move |worker| {
             let (oks, errs) = worker.dataflow(|scope| {
-                let read = p
-                    .create_or_load::<String, ()>("1")
-                    .map(|(_write, read)| read);
+                let (_write, read) = p.create_or_load::<String, ()>("1");
                 let (ok_stream, err_stream) = scope.persisted_source(read).ok_err(split_ok_err);
                 (ok_stream.capture(), err_stream.capture())
             });
 
-            let (write, _) = p.create_or_load("1").unwrap();
+            let (write, _) = p.create_or_load("1");
             for i in 1..=5 {
                 write
                     .write(&[((i.to_string(), ()), i, 1)])
@@ -223,7 +220,7 @@ mod tests {
         let seal_ts = {
             let p = registry.runtime_no_reentrance()?;
 
-            let (write, _) = p.create_or_load("1").unwrap();
+            let (write, _) = p.create_or_load("1");
             for i in 1..=5 {
                 write
                     .write(&[((i.to_string(), ()), i, 1)])
@@ -242,9 +239,7 @@ mod tests {
             let mut probe = ProbeHandle::new();
 
             worker.dataflow(|scope| {
-                let read = p
-                    .create_or_load::<String, ()>("1")
-                    .map(|(_write, read)| read);
+                let (_write, read) = p.create_or_load::<String, ()>("1");
                 let (oks, _rrs) = scope.persisted_source(read).ok_err(split_ok_err);
 
                 oks.probe_with(&mut probe);
@@ -271,7 +266,7 @@ mod tests {
         // Write some data using 3 workers.
         timely::execute(Config::process(3), move |worker| {
             worker.dataflow::<u64, _, _>(|scope| {
-                let (write, _) = p.create_or_load("1").unwrap();
+                let (write, _) = p.create_or_load("1");
                 // Write one thing from each worker.
                 write
                     .write(&[((format!("worker-{}", scope.index()), ()), 1, 1)])
@@ -288,8 +283,8 @@ mod tests {
         let capture_tx = Arc::new(Mutex::new(tx));
         timely::execute(Config::process(2), move |worker| {
             worker.dataflow(|scope| {
-                let (write, read) = p.create_or_load("1").unwrap();
-                let (ok_stream, _) = scope.persisted_source(Ok(read)).ok_err(split_ok_err);
+                let (write, read) = p.create_or_load("1");
+                let (ok_stream, _) = scope.persisted_source(read).ok_err(split_ok_err);
 
                 // Write one thing from each worker again. This time at timestamp 2.
                 write
@@ -335,7 +330,7 @@ mod tests {
     #[test]
     fn error_stream() -> Result<(), Error> {
         let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let read = p.create_or_load::<(), ()>("1").map(|(_write, read)| read);
+        let (_write, read) = p.create_or_load::<(), ()>("1");
         p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {
@@ -364,7 +359,9 @@ mod tests {
 
     #[test]
     fn initial_error_handling() -> Result<(), Error> {
-        let read: Result<StreamReadHandle<(), ()>, _> = Err(Error::String("ciao".to_owned()));
+        let p = MemRegistry::new().runtime_no_reentrance()?;
+        let err = Err(Error::String("ciao".to_owned()));
+        let read: StreamReadHandle<(), ()> = StreamReadHandle::new("test_name".to_string(), err, p);
 
         let recv = timely::execute_directly(move |worker| {
             let recv = worker.dataflow(|scope| {
@@ -399,7 +396,7 @@ mod tests {
     #[test]
     fn regression_8687_deterministic_operator_construction() -> Result<(), Error> {
         let p = MemRegistry::new().runtime_no_reentrance()?;
-        let (write, _read) = p.create_or_load::<String, ()>("1").unwrap();
+        let (write, _read) = p.create_or_load::<String, ()>("1");
 
         // Write some data.
         let data = vec![(("ciao".into(), ()), 1, 1), (("bello".into(), ()), 1, 1)];
@@ -421,9 +418,7 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(2));
                 }
                 worker.dataflow(|scope| {
-                    let read = p
-                        .create_or_load::<String, ()>("1")
-                        .map(|(_write, read)| read);
+                    let (_write, read) = p.create_or_load::<String, ()>("1");
                     let data = scope.persisted_source(read);
                     data.probe_with(&mut probe);
                 });
