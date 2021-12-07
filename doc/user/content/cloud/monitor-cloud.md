@@ -14,7 +14,7 @@ We want to make it possible for you to monitor Materialize Cloud with the same t
 We also provide some internal tools that can be helpful for monitoring or debugging:
 
 - The [system catalog SQL interface](#system-catalog-sql-interface)
-- [Deployment metrics](../cloud-deployments/#metrics) 
+- [Deployment metrics](../cloud-deployments/#metrics)
 
 ## Connect to Materialize Cloud
 
