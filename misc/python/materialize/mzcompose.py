@@ -897,7 +897,7 @@ class Redpanda(PythonService):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v21.11.1-beta1",
+        version: str = "v21.11.1",
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
         ports: Optional[List[int]] = None,
