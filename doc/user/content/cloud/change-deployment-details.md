@@ -8,9 +8,9 @@ hidden: true
 
 To change a deployment name or size:
 
-1. Go to the deployment page and click **Update** in the top right corner.
+1. Go to the deployment page and click **Edit** in the top right corner.
 
-1. Make your changes in the Update deployments dialog and save them by clicking **Update**.
+1. Make your changes in the Edit deployments dialog and save them by clicking **Save**.
 
 These changes will not affect your connection details.
 
