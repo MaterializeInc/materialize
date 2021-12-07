@@ -2020,6 +2020,18 @@ lazy_static! {
                     })
                 }), 939;
             },
+
+            "generate_subscripts" => Table {
+                params!(ArrayAny, Int32) => Operation::variadic(move |_ecx, exprs| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSubscripts,
+                        exprs: exprs,
+                        column_names: vec![Some("generate_subscripts".into())],
+                    })
+                }), 1192;
+            },
+
+
             "jsonb_array_elements" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                     Ok(TableFuncPlan {

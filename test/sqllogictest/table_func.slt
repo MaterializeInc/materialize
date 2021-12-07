@@ -1084,3 +1084,36 @@ query II
 SELECT generate_series(1, 1), (SELECT generate_series(2, 2))
 ----
 1 2
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::int[], 1) AS s;
+----
+ 1
+ 2
+ 3
+ 4
+
+# GENERATE_SUBSCRIPTS
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::int[], 0) AS s;
+----
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::int[], -1) AS s;
+----
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::int[], 2) AS s;
+----
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::int[], 12345) AS s;
+----
+
+query error parsing multi-dimensional arrays is not supported
+SELECT generate_subscripts('{{1,2,3,4}, {5,6,7,8}}'::int[], 1) AS s;
+
+query error multiple table functions in select projections not yet supported, see https://github.com/MaterializeInc/materialize/issues/1546 for more details
+SELECT generate_subscripts('{1,2,3,4}'::int[], 1), repeat_row(generate_series) AS s;
+
