@@ -193,8 +193,7 @@ class CargoPreImage(PreImage):
 
     def inputs(self) -> Set[str]:
         return {
-            "ci/builder/stable.stamp",
-            "ci/builder/nightly.stamp",
+            "ci/builder",
             "Cargo.toml",
             # TODO(benesch): we could in theory fingerprint only the subset of
             # Cargo.lock that applies to the crates at hand, but that is a
