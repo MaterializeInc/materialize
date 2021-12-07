@@ -11,7 +11,10 @@ menu:
 
 We want to make it possible for you to monitor Materialize Cloud with the same tools you use for the rest of your pipeline. Currently Materialize Cloud only supports Prometheus, but we are working on a Datadog integration. If there are any other tools you're interested in, please [let us know](https://materialize.com/s/chat).
 
-You may also find the system catalog SQL interface helpful in debugging issues.
+We also provide some internal tools that can be helpful for monitoring or debugging:
+
+- The [system catalog SQL interface](#system-catalog-sql-interface)
+- [Deployment metrics](../cloud-deployments/#metrics)
 
 ## Connect to Materialize Cloud
 
