@@ -41,6 +41,7 @@ pub struct IngestAction {
     timestamp: Option<i64>,
     publish: bool,
     rows: Vec<String>,
+    start_iteration: isize,
     repeat: isize,
 }
 
@@ -151,6 +152,7 @@ impl Transcoder {
 pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let partition = cmd.args.opt_parse::<i32>("partition")?;
+    let start_iteration = cmd.args.opt_parse::<isize>("start-iteration")?.unwrap_or(0);
     let repeat = cmd.args.opt_parse::<isize>("repeat")?.unwrap_or(1);
     let publish = cmd.args.opt_bool("publish")?.unwrap_or(false);
     let format = match cmd.args.string("format")?.as_str() {
@@ -212,6 +214,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         timestamp,
         publish,
         rows: cmd.input,
+        start_iteration,
         repeat,
     })
 }
@@ -311,7 +314,7 @@ impl Action for IngestAction {
 
         let mut futs = FuturesUnordered::new();
 
-        for iteration in 0..self.repeat {
+        for iteration in self.start_iteration..(self.start_iteration + self.repeat) {
             for row in &self.rows {
                 let row = substitute_vars(
                     row,
@@ -347,7 +350,10 @@ impl Action for IngestAction {
                 });
             }
 
-            if iteration % INGEST_BATCH_SIZE == 0 || iteration == (self.repeat - 1) {
+            // Reap the futures thus produced periodically or after the last iteration
+            if iteration % INGEST_BATCH_SIZE == 0
+                || iteration == (self.start_iteration + self.repeat - 1)
+            {
                 while let Some(res) = futs.next().await {
                     res.map_err(|(e, _message)| e.to_string_alt())?;
                 }

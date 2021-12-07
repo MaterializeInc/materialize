@@ -650,7 +650,13 @@ For data provided as `format=bytes key-format=bytes`, the separator between the 
 
 ##### `repeat=N`
 
-Send the same data `N` times to Kafka. This is used to create larger Kafka topics without bloating the test
+Send the same data `N` times to Kafka. This is used to create longer Kafka topics without bloating the test.
+
+The variable `${kafka-ingest.iteration}` will hold the current iteration and can be used in the body of `$ kafka-ingest`.
+
+##### `start-iteration=N`
+
+Set the starting value of the `${kafka-ingest.iteration}` variable.
 
 #### `partition=N`
 
