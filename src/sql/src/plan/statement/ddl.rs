@@ -41,7 +41,7 @@ use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
-use sql_parser::ast::CsrSeedCompiledOrLegacy;
+use sql_parser::ast::{CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -414,7 +414,6 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let mut key_envelope = None;
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
@@ -519,10 +518,7 @@ pub fn plan_create_source(
                     SourceIncludeMetadataType::Offset => {
                         connector.include_offset = unwrap_name(item.alias, "offset", pos);
                     }
-                    SourceIncludeMetadataType::Key => {
-                        key_envelope =
-                            Some(get_key_envelope(item.alias.clone(), envelope, &encoding)?);
-                    }
+                    SourceIncludeMetadataType::Key => {} // handled below
                 }
             }
 
@@ -702,6 +698,7 @@ pub fn plan_create_source(
             (connector, encoding)
         }
     };
+    let key_envelope = get_key_envelope(&include_metadata, envelope, &encoding)?;
 
     // TODO (materialize#2537): cleanup format validation
     // Avro format validation is different for the Debezium envelope
@@ -1173,43 +1170,51 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
     }))
 }
 
+/// Extract the key envelope, if it is requested
 fn get_key_envelope(
-    name: Option<Ident>,
+    included_items: &[SourceIncludeMetadata],
     envelope: &Envelope,
     encoding: &SourceDataEncoding,
-) -> Result<KeyEnvelope, anyhow::Error> {
-    if matches!(envelope, Envelope::Debezium { .. }) {
+) -> Result<Option<KeyEnvelope>, anyhow::Error> {
+    let key_definition = included_items
+        .iter()
+        .find(|i| i.ty == SourceIncludeMetadataType::Key);
+    if matches!(envelope, Envelope::Debezium { .. }) && key_definition.is_some() {
         bail!("Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.");
     }
-    Ok(match name {
-        Some(name) => KeyEnvelope::Named(name.into_string()),
-        None if matches!(envelope, Envelope::Upsert { .. }) => KeyEnvelope::LegacyUpsert,
-        None => {
-            // If the key is requested but comes from an unnamed type then it gets the name "key"
-            //
-            // Otherwise it gets the names of the columns in the type
-            if let SourceDataEncoding::KeyValue { key, value: _ } = encoding {
-                let is_composite = match key {
-                    DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
-                        bail!("{} sources cannot use INCLUDE KEY", key.op_name())
-                    }
-                    DataEncoding::Bytes | DataEncoding::Text => false,
-                    DataEncoding::Avro(_)
-                    | DataEncoding::Csv(_)
-                    | DataEncoding::Protobuf(_)
-                    | DataEncoding::Regex { .. } => true,
-                };
+    if let Some(kd) = key_definition {
+        Ok(Some(match &kd.alias {
+            Some(name) => KeyEnvelope::Named(name.as_str().to_string()),
+            None if matches!(envelope, Envelope::Upsert { .. }) => KeyEnvelope::LegacyUpsert,
+            None => {
+                // If the key is requested but comes from an unnamed type then it gets the name "key"
+                //
+                // Otherwise it gets the names of the columns in the type
+                if let SourceDataEncoding::KeyValue { key, value: _ } = encoding {
+                    let is_composite = match key {
+                        DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
+                            bail!("{} sources cannot use INCLUDE KEY", key.op_name())
+                        }
+                        DataEncoding::Bytes | DataEncoding::Text => false,
+                        DataEncoding::Avro(_)
+                        | DataEncoding::Csv(_)
+                        | DataEncoding::Protobuf(_)
+                        | DataEncoding::Regex { .. } => true,
+                    };
 
-                if is_composite {
-                    KeyEnvelope::Flattened
+                    if is_composite {
+                        KeyEnvelope::Flattened
+                    } else {
+                        KeyEnvelope::Named("key".to_string())
+                    }
                 } else {
-                    KeyEnvelope::Named("key".to_string())
+                    bail!("INCLUDE KEY requires an explicit or implicit KEY FORMAT")
                 }
-            } else {
-                bail!("INCLUDE KEY requires an explicit or implicit KEY FORMAT")
             }
-        }
-    })
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 pub fn describe_create_view(
