@@ -59,10 +59,11 @@ impl PeekResponse {
 /// Various responses that can be communicated about the progress of a TAIL command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TailResponse {
-    /// Progress information about the upper frontier.
-    Progress(Timestamp),
+    /// Progress information. Subsequent messages from this worker will only contain timestamps
+    /// greater or equal to an element of this frontier.
+    Progress(Antichain<Timestamp>),
     /// Rows that should be returned in order to the client.
-    Rows(Vec<(Timestamp, Diff, Row)>),
+    Rows(Vec<(Row, Timestamp, Diff)>),
     /// Sent once the stream is complete. Indicates the end.
     Complete,
     /// The TAIL dataflow was dropped before completing. Indicates the end.
@@ -1163,12 +1164,8 @@ impl SinkConnector {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TailSinkConnector {
-    pub emit_progress: bool,
-    pub object_columns: usize,
-    pub value_desc: RelationDesc,
-}
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+pub struct TailSinkConnector {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkConnectorBuilder {

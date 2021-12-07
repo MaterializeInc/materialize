@@ -16,7 +16,6 @@ use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
 use differential_dataflow::Collection;
 
-use itertools::Itertools;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
@@ -64,7 +63,6 @@ where
         tail(
             sinked_collection,
             sink_id,
-            self.clone(),
             render_state.tail_response_buffer.clone(),
             sink.as_of.clone(),
         );
@@ -77,7 +75,6 @@ where
 fn tail<G>(
     sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     sink_id: GlobalId,
-    connector: TailSinkConnector,
     tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
     as_of: SinkAsOf,
 ) where
@@ -129,7 +126,7 @@ fn tail<G>(
                                 as_of.frontier.less_equal(time)
                             };
                             if should_emit {
-                                results.push((*time, diff, row.clone()));
+                                results.push((row.clone(), *time, diff));
                             }
                         });
                         cursor.step_val(&batch);
@@ -137,10 +134,6 @@ fn tail<G>(
                     cursor.step_key(&batch);
                 }
             }
-
-            // Sort results by time. We use stable sort here because it will produce deterministic
-            // results since the cursor will always producerows in the same order.
-            results.sort_by_key(|(time, _, _)| *time);
 
             // Emit data if configured, otherwise it is an error to have data to send.
             if let Some(tail_protocol) = &mut tail_protocol {
@@ -154,10 +147,8 @@ fn tail<G>(
 
             if let Some(batch) = batches.last() {
                 let progress = update_progress(&mut input_frontier, batch.desc.upper().borrow());
-                if connector.emit_progress {
-                    if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
-                        tail_protocol.send_progress(progress);
-                    }
+                if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
+                    tail_protocol.send_progress(progress);
                 }
             }
         });
@@ -165,10 +156,8 @@ fn tail<G>(
         let progress = update_progress(&mut input_frontier, input.frontier().frontier());
 
         // Only emit updates if this operator/worker received actual data for emission.
-        if connector.emit_progress {
-            if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
-                tail_protocol.send_progress(progress);
-            }
+        if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
+            tail_protocol.send_progress(progress);
         }
 
         // If the frontier is empty the tailing is complete. We should say so!
@@ -197,7 +186,7 @@ impl TailProtocol {
     /// Send the current upper frontier of the tail.
     ///
     /// Does nothing if `self.complete()` has been called.
-    fn send_progress(&mut self, upper: Timestamp) {
+    fn send_progress(&mut self, upper: Antichain<Timestamp>) {
         if let Some(buffer) = &mut self.tail_response_buffer {
             buffer
                 .borrow_mut()
@@ -208,7 +197,7 @@ impl TailProtocol {
     /// Send further rows as responses.
     ///
     /// Does nothing if `self.complete()` has been called.
-    fn send_rows(&mut self, rows: Vec<(Timestamp, Diff, Row)>) {
+    fn send_rows(&mut self, rows: Vec<(Row, Timestamp, Diff)>) {
         if let Some(buffer) = &mut self.tail_response_buffer {
             buffer
                 .borrow_mut()
@@ -245,7 +234,7 @@ impl Drop for TailProtocol {
 fn update_progress(
     current_input_frontier: &mut Antichain<Timestamp>,
     new_input_frontier: AntichainRef<Timestamp>,
-) -> Option<Timestamp> {
+) -> Option<Antichain<Timestamp>> {
     // Test to see if strict progress has occurred. This is true if the new
     // frontier is not less or equal to the old frontier.
     let progress = !PartialOrder::less_equal(&new_input_frontier, &current_input_frontier.borrow());
@@ -254,16 +243,7 @@ fn update_progress(
         current_input_frontier.clear();
         current_input_frontier.extend(new_input_frontier.iter().cloned());
 
-        // This only looks at the first entry of the antichain.
-        // If we ever have multi-dimensional time, this is not correct
-        // anymore. There might not even be progress in the first dimension.
-        // We panic, so that future developers introducing multi-dimensional
-        // time in Materialize will notice.
-        new_input_frontier
-            .iter()
-            .at_most_one()
-            .expect("more than one element in the frontier")
-            .cloned()
+        Some(new_input_frontier.to_owned())
     } else {
         None
     }

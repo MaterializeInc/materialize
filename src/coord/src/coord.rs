@@ -112,7 +112,7 @@ use dataflow_types::client::TimestampBindingFeedback;
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, DataflowDescription, ExternalSourceConnector, IndexDesc, PeekResponse,
-    PostgresSourceConnector, SinkConnector, SourceConnector, TailResponse, TailSinkConnector,
+    PostgresSourceConnector, SinkConnector, SourceConnector, TailSinkConnector,
     TimestampSourceUpdate, Update,
 };
 use dataflow_types::{SinkAsOf, Timeline};
@@ -120,7 +120,6 @@ use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
-use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, NowFn};
 use ore::retry::Retry;
@@ -166,6 +165,7 @@ use crate::session::{
     TransactionStatus, WriteOp,
 };
 use crate::sink_connector;
+use crate::tail::PendingTail;
 use crate::timestamp::{TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 
@@ -358,18 +358,6 @@ struct ConnMeta {
 struct TxnReads {
     timedomain_ids: HashSet<GlobalId>,
     _handles: Vec<AntichainToken<Timestamp>>,
-}
-
-/// A description of a pending tail from coord's perspective
-struct PendingTail {
-    /// Channel to send responses to the client
-    ///
-    /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
-    channel: mpsc::UnboundedSender<Vec<Row>>,
-    /// Whether progress information should be emitted
-    emit_progress: bool,
-    /// Number of columns in the output
-    object_columns: usize,
 }
 
 /// Enforces critical section invariants for functions that perform writes to
@@ -749,66 +737,10 @@ where
                 // We use an `if let` here because the peek could have been cancelled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
-                if let Some(PendingTail {
-                    channel,
-                    emit_progress,
-                    object_columns,
-                }) = self.pending_tails.get_mut(&sink_id)
-                {
-                    let mut packer = Row::default();
-                    match response {
-                        TailResponse::Progress(upper) => {
-                            packer.push(Datum::from(numeric::Numeric::from(upper)));
-                            packer.push(Datum::True);
-                            // Fill in the diff column and all table columns with NULL.
-                            for _ in 0..(*object_columns + 1) {
-                                packer.push(Datum::Null);
-                            }
-                            let row = packer.finish_and_reuse();
-
-                            let result = channel.send(vec![row]);
-                            if result.is_err() {
-                                // TODO(benesch): we should actually drop the sink if the
-                                // receiver has gone away. E.g. form a DROP SINK command?
-                            }
-                        }
-                        TailResponse::Rows(rows) => {
-                            let rows = rows
-                                .into_iter()
-                                .map(|(time, diff, row)| {
-                                    packer.push(Datum::from(numeric::Numeric::from(time)));
-                                    if *emit_progress {
-                                        // When sinking with PROGRESS, the output
-                                        // includes an additional column that
-                                        // indicates whether a timestamp is
-                                        // complete. For regular "data" upates this
-                                        // is always `false`.
-                                        packer.push(Datum::False);
-                                    }
-
-                                    packer.push(Datum::Int64(i64::cast_from(diff)));
-
-                                    packer.extend_by_row(&row);
-
-                                    packer.finish_and_reuse()
-                                })
-                                .collect();
-                            // TODO(benesch): the lack of backpressure here can result in
-                            // unbounded memory usage.
-                            let result = channel.send(rows);
-                            if result.is_err() {
-                                // TODO(benesch): we should actually drop the sink if the
-                                // receiver has gone away. E.g. form a DROP SINK command?
-                            }
-                        }
-                        TailResponse::Complete => {
-                            // TODO: Indicate this explicitly.
-                            self.pending_tails.remove(&sink_id);
-                        }
-                        TailResponse::Dropped => {
-                            // TODO: Could perhaps do this earlier, in response to DROP SINK.
-                            self.pending_tails.remove(&sink_id);
-                        }
+                if let Some(pending_tail) = self.pending_tails.get_mut(&sink_id) {
+                    let remove = pending_tail.process_response(response);
+                    if remove {
+                        self.pending_tails.remove(&sink_id);
                     }
                 }
             }
@@ -3105,7 +3037,6 @@ where
             copy_to,
             emit_progress,
             object_columns,
-            desc,
         } = plan;
         // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
@@ -3136,22 +3067,12 @@ where
         let sink_id = self.catalog.allocate_id()?;
         session.add_drop_sink(sink_id);
         let (tx, rx) = mpsc::unbounded_channel();
-        self.pending_tails.insert(
-            sink_id,
-            PendingTail {
-                channel: tx,
-                emit_progress,
-                object_columns,
-            },
-        );
+        self.pending_tails
+            .insert(sink_id, PendingTail::new(tx, emit_progress, object_columns));
         let sink_description = dataflow_types::SinkDesc {
             from: source_id,
             from_desc: self.catalog.get_by_id(&source_id).desc().unwrap().clone(),
-            connector: SinkConnector::Tail(TailSinkConnector {
-                emit_progress,
-                object_columns,
-                value_desc: desc,
-            }),
+            connector: SinkConnector::Tail(TailSinkConnector::default()),
             envelope: None,
             as_of: SinkAsOf {
                 frontier,
