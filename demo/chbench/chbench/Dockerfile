@@ -15,6 +15,8 @@ COPY . workdir/
 
 ARG DEBIAN_FRONTEND="noninteractive"
 
+# WARNING: MySQL ODBC v8.0.27 has a critical bug that causes chbench to
+# segfault. Do not upgrade! See: https://bugs.mysql.com/bug.php?id=105504.
 RUN apt-get update && apt-get install -qy curl gnupg2 \
     && curl -s 'https://packages.confluent.io/deb/5.3/archive.key' | apt-key add - \
     && echo 'deb [arch=amd64] https://packages.confluent.io/deb/5.3 stable main' >> /etc/apt/sources.list \
@@ -41,15 +43,15 @@ RUN apt-get update && apt-get install -qy curl gnupg2 \
     && rm mysql.asc \
     && echo "trusted-key 8C718D3B5072E1F5" >> ~/.gnupg/gpg.conf \
     && curl -fsSL \
-        https://dev.mysql.com/get/Downloads/Connector-ODBC/8.0/mysql-connector-odbc-8.0.27-src.tar.gz \
+        https://dev.mysql.com/get/Downloads/Connector-ODBC/8.0/mysql-connector-odbc-8.0.26-src.tar.gz \
         > mysql-odbc.tar.gz \
     && curl -fsSL \
-        "https://dev.mysql.com/downloads/gpg/?file=mysql-connector-odbc-8.0.27-src.tar.gz&p=10" \
+        "https://dev.mysql.com/downloads/gpg/?file=mysql-connector-odbc-8.0.26-src.tar.gz&p=10" \
         > mysql-odbc.asc \
     && tar -xzf mysql-odbc.tar.gz \
     && rm mysql-odbc.asc mysql-odbc.tar.gz \
-    && (cd mysql-connector-odbc-8.0.27-src && cmake -DWITH_UNIXODBC=1 . && make -j8 myodbc-installer && make install) \
-    && rm -r mysql-connector-odbc-8.0.27-src \
+    && (cd mysql-connector-odbc-8.0.26-src && cmake -DWITH_UNIXODBC=1 . && make -j8 myodbc-installer && make install) \
+    && rm -r mysql-connector-odbc-8.0.26-src \
     && myodbc-installer -a -d -n "Mysql" -t "Driver=/usr/local/lib/libmyodbc8a.so" \
     && mkdir workdir/build \
     && cd workdir/build \
