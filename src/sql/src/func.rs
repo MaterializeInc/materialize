@@ -2025,14 +2025,14 @@ lazy_static! {
                 params!(ArrayAny, Int32) => Operation::variadic(move |_ecx, exprs| {
                     Ok(TableFuncPlan {
                         func: TableFunc::GenerateSubscriptsArray,
-                        exprs: exprs,
+                        exprs,
                         column_names: vec![Some("generate_subscripts".into())],
                     })
                 }), 1192;
                 params!(ListAny, Int32) => Operation::variadic(move |_ecx, exprs| {
                     Ok(TableFuncPlan {
                         func: TableFunc::GenerateSubscriptsList,
-                        exprs: exprs,
+                        exprs,
                         column_names: vec![Some("generate_subscripts".into())],
                     })
                 }), oid::FUNC_GENERATE_SUBSCRIPTS_LIST_OID;
