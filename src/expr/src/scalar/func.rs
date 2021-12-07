@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
@@ -110,120 +109,6 @@ pub fn or<'a>(
             _ => unreachable!(),
         },
     }
-}
-
-fn cast_string_to_array<'a>(
-    a: Datum<'a>,
-    cast_expr: &'a MirScalarExpr,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let datums = strconv::parse_array(
-        a.unwrap_str(),
-        || Datum::Null,
-        |elem_text| {
-            let elem_text = match elem_text {
-                Cow::Owned(s) => temp_storage.push_string(s),
-                Cow::Borrowed(s) => s,
-            };
-            cast_expr.eval(&[Datum::String(elem_text)], temp_storage)
-        },
-    )?;
-    array_create_scalar(&datums, temp_storage)
-}
-
-fn cast_string_to_list<'a>(
-    a: Datum<'a>,
-    list_typ: &ScalarType,
-    cast_expr: &'a MirScalarExpr,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let parsed_datums = strconv::parse_list(
-        a.unwrap_str(),
-        matches!(list_typ.unwrap_list_element_type(), ScalarType::List { .. }),
-        || Datum::Null,
-        |elem_text| {
-            let elem_text = match elem_text {
-                Cow::Owned(s) => temp_storage.push_string(s),
-                Cow::Borrowed(s) => s,
-            };
-            cast_expr.eval(&[Datum::String(elem_text)], temp_storage)
-        },
-    )?;
-
-    Ok(temp_storage.make_datum(|packer| packer.push_list(parsed_datums)))
-}
-
-fn cast_string_to_map<'a>(
-    a: Datum<'a>,
-    map_typ: &ScalarType,
-    cast_expr: &'a MirScalarExpr,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let parsed_map = strconv::parse_map(
-        a.unwrap_str(),
-        matches!(map_typ.unwrap_map_value_type(), ScalarType::Map { .. }),
-        |value_text| -> Result<Datum, EvalError> {
-            let value_text = match value_text {
-                Cow::Owned(s) => temp_storage.push_string(s),
-                Cow::Borrowed(s) => s,
-            };
-            cast_expr.eval(&[Datum::String(value_text)], temp_storage)
-        },
-    )?;
-    let mut pairs: Vec<(String, Datum)> = parsed_map.into_iter().map(|(k, v)| (k, v)).collect();
-    pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
-    pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
-    Ok(temp_storage.make_datum(|packer| {
-        packer.push_dict_with(|packer| {
-            for (k, v) in pairs {
-                packer.push(Datum::String(&k));
-                packer.push(v);
-            }
-        })
-    }))
-}
-
-fn cast_str_to_char<'a>(
-    a: Datum<'a>,
-    length: Option<usize>,
-    fail_on_len: bool,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let s =
-        repr::adt::char::format_str_trim(a.unwrap_str(), length, fail_on_len).map_err(|_| {
-            assert!(fail_on_len);
-            EvalError::StringValueTooLong {
-                target_type: "character".to_string(),
-                length: length.unwrap(),
-            }
-        })?;
-
-    Ok(Datum::String(temp_storage.push_string(s)))
-}
-
-fn pad_char<'a>(
-    a: Datum<'a>,
-    length: Option<usize>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let s = repr::adt::char::format_str_pad(a.unwrap_str(), length);
-    Ok(Datum::String(temp_storage.push_string(s)))
-}
-
-fn cast_string_to_varchar<'a>(
-    a: Datum<'a>,
-    length: Option<usize>,
-    fail_on_len: bool,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let s = repr::adt::varchar::format_str(a.unwrap_str(), length, fail_on_len).map_err(|_| {
-        assert!(fail_on_len);
-        EvalError::StringValueTooLong {
-            target_type: "character varying".to_string(),
-            length: length.unwrap(),
-        }
-    })?;
-    Ok(Datum::String(temp_storage.push_string(s)))
 }
 
 fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -3281,48 +3166,19 @@ pub enum UnaryFunc {
     CastStringToFloat32(CastStringToFloat32),
     CastStringToFloat64(CastStringToFloat64),
     CastStringToDate(CastStringToDate),
-    CastStringToArray {
-        // Target array's type.
-        return_ty: ScalarType,
-        // The expression to cast the discovered array elements to the array's
-        // element type.
-        cast_expr: Box<MirScalarExpr>,
-    },
-    CastStringToList {
-        // Target list's type
-        return_ty: ScalarType,
-        // The expression to cast the discovered list elements to the list's
-        // element type.
-        cast_expr: Box<MirScalarExpr>,
-    },
-    CastStringToMap {
-        // Target map's value type
-        return_ty: ScalarType,
-        // The expression used to cast the discovered values to the map's value
-        // type.
-        cast_expr: Box<MirScalarExpr>,
-    },
+    CastStringToArray(CastStringToArray),
+    CastStringToList(CastStringToList),
+    CastStringToMap(CastStringToMap),
     CastStringToTime(CastStringToTime),
     CastStringToTimestamp(CastStringToTimestamp),
     CastStringToTimestampTz(CastStringToTimestampTz),
     CastStringToInterval(CastStringToInterval),
     CastStringToNumeric(CastStringToNumeric),
     CastStringToUuid(CastStringToUuid),
-    CastStringToChar {
-        length: Option<usize>,
-        fail_on_len: bool,
-    },
-    /// All Char data is stored in Datum::String with its blank padding removed
-    /// (i.e. trimmed), so this function provides a means of restoring any
-    /// removed padding.
-    PadChar {
-        length: Option<usize>,
-    },
-    CastStringToVarChar {
-        length: Option<usize>,
-        fail_on_len: bool,
-    },
-    CastCharToString,
+    CastStringToChar(CastStringToChar),
+    PadChar(PadChar),
+    CastStringToVarChar(CastStringToVarChar),
+    CastCharToString(CastCharToString),
     CastVarCharToString,
     CastDateToTimestamp,
     CastDateToTimestampTz,
@@ -3532,6 +3388,13 @@ derive_unary!(
     CastStringToTimestampTz,
     CastStringToInterval,
     CastStringToUuid,
+    CastStringToArray,
+    CastStringToList,
+    CastStringToMap,
+    CastStringToChar,
+    PadChar,
+    CastStringToVarChar,
+    CastCharToString,
     Cos,
     Cosh,
     Sin,
@@ -3673,28 +3536,15 @@ impl UnaryFunc {
             | CastStringToTimestampTz(_)
             | CastStringToInterval(_)
             | CastStringToUuid(_)
+            | CastStringToArray(_)
+            | CastStringToList(_)
+            | CastStringToMap(_)
+            | CastStringToChar(_)
+            | PadChar(_)
+            | CastStringToVarChar(_)
+            | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInterval => Ok(neg_interval(a)),
-            CastStringToArray { cast_expr, .. } => cast_string_to_array(a, cast_expr, temp_storage),
-            CastStringToList {
-                cast_expr,
-                return_ty,
-            } => cast_string_to_list(a, return_ty, cast_expr, temp_storage),
-            CastStringToMap {
-                cast_expr,
-                return_ty,
-            } => cast_string_to_map(a, return_ty, cast_expr, temp_storage),
-            CastStringToChar {
-                length,
-                fail_on_len,
-            } => cast_str_to_char(a, *length, *fail_on_len, temp_storage),
-            PadChar { length } => pad_char(a, *length, temp_storage),
-            CastStringToVarChar {
-                length,
-                fail_on_len,
-            } => cast_string_to_varchar(a, *length, *fail_on_len, temp_storage),
-            // This function simply allows the expression of changing a's type from varchar to string
-            CastCharToString => Ok(a),
             CastVarCharToString => Ok(a),
             CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
             CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
@@ -3881,6 +3731,13 @@ impl UnaryFunc {
             | CastStringToTimestampTz(_)
             | CastStringToInterval(_)
             | CastStringToUuid(_)
+            | CastStringToArray(_)
+            | CastStringToList(_)
+            | CastStringToMap(_)
+            | CastStringToChar(_)
+            | PadChar(_)
+            | CastStringToVarChar(_)
+            | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -3891,8 +3748,7 @@ impl UnaryFunc {
             CastTimeToInterval => ScalarType::Interval.nullable(nullable),
             CastStringToJsonb => ScalarType::Jsonb.nullable(nullable),
 
-            CastCharToString
-            | CastVarCharToString
+            CastVarCharToString
             | CastDateToString
             | CastTimeToString
             | CastTimestampToString
@@ -3935,20 +3791,10 @@ impl UnaryFunc {
             CastJsonbToFloat64 => ScalarType::Float64.nullable(nullable),
             CastJsonbToBool => ScalarType::Bool.nullable(nullable),
 
-            CastStringToArray { return_ty, .. }
-            | CastStringToMap { return_ty, .. }
-            | CastInPlace { return_ty } => (return_ty.clone()).nullable(nullable),
+            CastInPlace { return_ty } => (return_ty.clone()).nullable(nullable),
 
-            CastList1ToList2 { return_ty, .. } | CastStringToList { return_ty, .. } => {
+            CastList1ToList2 { return_ty, .. } => {
                 return_ty.default_embedded_value().nullable(false)
-            }
-
-            CastStringToChar { length, .. } | PadChar { length } => {
-                ScalarType::Char { length: *length }.nullable(nullable)
-            }
-
-            CastStringToVarChar { length, .. } => {
-                ScalarType::VarChar { length: *length }.nullable(nullable)
             }
 
             NegInterval => input_type,
@@ -4113,6 +3959,13 @@ impl UnaryFunc {
             | CastStringToTimestampTz(_)
             | CastStringToInterval(_)
             | CastStringToUuid(_)
+            | CastStringToArray(_)
+            | CastStringToList(_)
+            | CastStringToMap(_)
+            | CastStringToChar(_)
+            | PadChar(_)
+            | CastStringToVarChar(_)
+            | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4129,8 +3982,7 @@ impl UnaryFunc {
             | ByteLengthString => false,
             IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
             CastTimeToInterval | CastStringToJsonb => false,
-            CastCharToString
-            | CastVarCharToString
+            CastVarCharToString
             | CastDateToString
             | CastTimeToString
             | CastTimestampToString
@@ -4152,13 +4004,7 @@ impl UnaryFunc {
             CastIntervalToTime | TimezoneTime { .. } => false,
             CastDateToTimestamp | CastTimestampTzToTimestamp | TimezoneTimestampTz(_) => false,
             CastDateToTimestampTz | CastTimestampToTimestampTz | TimezoneTimestamp(_) => false,
-            CastList1ToList2 { .. }
-            | CastStringToArray { .. }
-            | CastStringToList { .. }
-            | CastStringToMap { .. }
-            | CastInPlace { .. } => false,
-            CastStringToChar { .. } | PadChar { .. } => false,
-            CastStringToVarChar { .. } => false,
+            CastList1ToList2 { .. } | CastInPlace { .. } => false,
             JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
@@ -4220,8 +4066,7 @@ impl UnaryFunc {
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            CastCharToString
-            | CastVarCharToString
+            CastVarCharToString
             | CastDateToTimestamp
             | CastDateToTimestampTz
             | CastDateToString
@@ -4347,16 +4192,16 @@ impl UnaryFunc {
             | CastStringToTimestampTz(_)
             | CastStringToInterval(_)
             | CastStringToUuid(_)
+            | CastStringToArray(_)
+            | CastStringToList(_)
+            | CastStringToMap(_)
+            | CastStringToChar(_)
+            | PadChar(_)
+            | CastStringToVarChar(_)
+            | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInterval => f.write_str("-"),
-            CastStringToArray { .. } => f.write_str("strtoarray"),
-            CastStringToList { .. } => f.write_str("strtolist"),
-            CastStringToMap { .. } => f.write_str("strtomap"),
-            CastStringToChar { .. } => f.write_str("strtochar"),
-            PadChar { .. } => f.write_str("padchar"),
-            CastCharToString => f.write_str("chartostr"),
             CastVarCharToString => f.write_str("varchartostr"),
-            CastStringToVarChar { .. } => f.write_str("strtovarchar"),
             CastDateToTimestamp => f.write_str("datetots"),
             CastDateToTimestampTz => f.write_str("datetotstz"),
             CastDateToString => f.write_str("datetostr"),

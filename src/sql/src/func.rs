@@ -1394,7 +1394,7 @@ lazy_static! {
                             // to match historical baggage in PostgreSQL.
                             ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
                             // TODO(#7572): remove call to PadChar
-                            ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar { length }),
+                            ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                             _ => typeconv::to_string(ecx, expr)
                         });
                     }
@@ -1580,7 +1580,7 @@ lazy_static! {
                 params!(String) => UnaryFunc::ByteLengthString, 1374;
                 params!(Char) => Operation::unary(|ecx, e| {
                     let length = ecx.scalar_type(&e).unwrap_char_varchar_length();
-                    Ok(e.call_unary(UnaryFunc::PadChar { length })
+                    Ok(e.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
                         .call_unary(UnaryFunc::ByteLengthString)
                     )
                 }), 1375;
@@ -1775,7 +1775,7 @@ lazy_static! {
                 params!(Any) => Operation::unary(|ecx, e| {
                     // TODO(#7572): remove this
                     let e = match ecx.scalar_type(&e) {
-                        ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar { length }),
+                        ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                         _ => e,
                     };
                     Ok(typeconv::to_jsonb(ecx, e))
@@ -1884,7 +1884,7 @@ lazy_static! {
                 params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
                     // TODO(#7572): remove this
                     let e = match ecx.scalar_type(&e) {
-                        ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar { length }),
+                        ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                         _ => e,
                     };
                     // `AggregateFunc::JsonbAgg` filters out `Datum::Null` (it
@@ -1904,11 +1904,11 @@ lazy_static! {
                 params!(Any, Any) => Operation::binary_ordered(|ecx, key, val, order_by| {
                     // TODO(#7572): remove this
                     let key = match ecx.scalar_type(&key) {
-                        ScalarType::Char { length } => key.call_unary(UnaryFunc::PadChar { length }),
+                        ScalarType::Char { length } => key.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                         _ => key,
                     };
                     let val = match ecx.scalar_type(&val) {
-                        ScalarType::Char { length } => val.call_unary(UnaryFunc::PadChar { length }),
+                        ScalarType::Char { length } => val.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                         _ => val,
                     };
 
@@ -2503,7 +2503,7 @@ lazy_static! {
                 params!(String, String) => IsLikePatternMatch { case_insensitive: false }, 1209;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
-                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                    Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
                     )
                 }), 1211;
@@ -2516,7 +2516,7 @@ lazy_static! {
                 }), 1210;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
-                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                    Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not(func::Not))
                     )
@@ -2531,7 +2531,7 @@ lazy_static! {
                 params!(String, String) => IsRegexpMatch { case_insensitive: false }, 641;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
-                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                    Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
                     )
                 }), 1055;
@@ -2542,7 +2542,7 @@ lazy_static! {
                 }), 1228;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
-                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                    Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
                     )
                 }), 1234;
@@ -2555,7 +2555,7 @@ lazy_static! {
                 }), 642;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
-                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                    Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
                         .call_unary(UnaryFunc::Not(func::Not))
                     )
@@ -2569,7 +2569,7 @@ lazy_static! {
                 }), 1229;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
-                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                    Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
                         .call_unary(UnaryFunc::Not(func::Not))
                     )

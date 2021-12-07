@@ -329,58 +329,58 @@ lazy_static! {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_array_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToArray {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToArray(func::CastStringToArray {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
-                }))
+                })))
             }),
             (String, List) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_list_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToList {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToList(func::CastStringToList {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
-                }))
+                })))
             }),
             (String, Map) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_val_type = to_type.unwrap_map_value_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_val_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToMap {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToMap(func::CastStringToMap {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
-                }))
+                })))
             }),
             (String, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
             (String, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
 
             // CHAR
-            (Char, String) => Implicit: CastCharToString,
+            (Char, String) => Implicit: CastCharToString(func::CastCharToString),
             (Char, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
             (Char, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
 
             // VARCHAR
             (VarChar, String) => Implicit: CastVarCharToString,
             (VarChar, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
             (VarChar, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
 
             // RECORD
