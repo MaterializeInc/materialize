@@ -1641,6 +1641,7 @@ fn plan_view_select(
                         names: vec![],
                         expr: group_expr.cloned(),
                         nameable: true,
+                        visible_to_wildcard: true,
                     }
                 };
 
@@ -1666,6 +1667,7 @@ fn plan_view_select(
                 names: vec![],
                 expr: Some(Expr::Function(sql_function.clone())),
                 nameable: true,
+                visible_to_wildcard: true,
             });
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || having.is_some() {
@@ -1751,6 +1753,7 @@ fn plan_view_select(
                         .collect(),
                     expr: None,
                     nameable: true,
+                    visible_to_wildcard: true,
                 });
             }
         }
@@ -2512,11 +2515,13 @@ fn expand_select_item<'a>(
                 .items
                 .iter()
                 .enumerate()
+                .filter(|(_i, item)| item.visible_to_wildcard)
                 .map(|(i, item)| {
                     let name = item.names.get(0).and_then(|n| n.column_name.clone());
                     (ExpandedSelectItem::InputOrdinal(i), name)
                 })
                 .collect();
+
             Ok(items)
         }
         SelectItem::Expr { expr, alias } => {
@@ -2727,12 +2732,22 @@ fn plan_using_constraint(
     right_scope: Scope,
     kind: JoinKind,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let mut join_exprs = vec![];
-    let mut map_exprs = vec![];
-    let mut new_items = vec![];
-    let mut dropped_columns = HashSet::new();
-
     let mut both_scope = left_scope.clone().product(right_scope.clone())?;
+
+    // Cargo culting PG here; no discernable reason this must fail, but PG does
+    // so we do, as well.
+    let mut unique_column_names = HashSet::new();
+    for c in column_names {
+        if !unique_column_names.insert(c) {
+            return Err(PlanError::Unsupported {
+                feature: format!(
+                    "column name {} appears more than once in USING clause",
+                    c.as_str().quoted()
+                ),
+                issue_no: None,
+            });
+        }
+    }
 
     let ecx = &ExprContext {
         qcx: &right_qcx,
@@ -2750,6 +2765,12 @@ fn plan_using_constraint(
         allow_subqueries: false,
     };
 
+    let mut join_exprs = vec![];
+    let mut map_exprs = vec![];
+    let mut new_items = vec![];
+    let mut priority_cols = vec![];
+    let mut non_priority_cols = vec![];
+
     for column_name in column_names {
         let (lhs, _) = left_scope.resolve_column(column_name)?;
         let (mut rhs, _) = right_scope.resolve_column(column_name)?;
@@ -2760,13 +2781,12 @@ fn plan_using_constraint(
             )
         }
 
-        // The new column can be named using aliases from either the right or
-        // left.
-        let mut names = left_scope.items[lhs.column].names.clone();
-        names.extend(right_scope.items[rhs.column].names.clone());
-
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();
+
+        // Track that these columns must have their priority reset.
+        non_priority_cols.push(lhs.column);
+        non_priority_cols.push(rhs.column);
 
         // Join keys must be resolved to same type.
         let mut exprs = coerce_homogeneous_exprs(
@@ -2783,35 +2803,70 @@ fn plan_using_constraint(
         )?;
         let (expr1, expr2) = (exprs.remove(0), exprs.remove(0));
 
+        match kind {
+            JoinKind::LeftOuter { .. } | JoinKind::Inner { .. } => priority_cols.push(lhs.column),
+            JoinKind::RightOuter => priority_cols.push(rhs.column),
+            JoinKind::FullOuter => {
+                // Create a new column that will be the coalesced value of left and right
+                let names = both_scope.items[lhs.column]
+                    .names
+                    .iter()
+                    .chain(both_scope.items[rhs.column].names.iter())
+                    .map(|scope_item_name| scope_item_name.column_name.clone())
+                    .unique()
+                    .map(|column_name| ScopeItemName {
+                        table_name: None,
+                        column_name,
+                        priority: true,
+                    })
+                    .collect::<Vec<_>>();
+
+                priority_cols.push(both_scope.items.len() + map_exprs.len());
+                map_exprs.push(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![expr1.clone(), expr2.clone()],
+                });
+                new_items.push(ScopeItem {
+                    names,
+                    expr: None,
+                    nameable: true,
+                    visible_to_wildcard: true,
+                });
+            }
+        }
+
         join_exprs.push(HirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
-            expr1: Box::new(expr1.clone()),
-            expr2: Box::new(expr2.clone()),
+            expr1: Box::new(expr1),
+            expr2: Box::new(expr2),
         });
-        map_exprs.push(HirScalarExpr::CallVariadic {
-            func: VariadicFunc::Coalesce,
-            exprs: vec![expr1, expr2],
-        });
-        new_items.push(ScopeItem {
-            names,
-            expr: None,
-            nameable: true,
-        });
-        dropped_columns.insert(lhs.column);
-        dropped_columns.insert(rhs.column);
     }
-    let project_key =
-        // coalesced join columns
-        (0..map_exprs.len())
-        .map(|i| left_scope.len() + right_scope.len() + i)
-        // other columns that weren't joined
-        .chain(
-            (0..(left_scope.len() + right_scope.len()))
-                .filter(|i| !dropped_columns.contains(i)),
-        )
-        .collect::<Vec<_>>();
     both_scope.items.extend(new_items);
-    let both_scope = both_scope.project(&project_key);
+
+    // Toggle which columns should (not)? return from `SELECT *`.
+    for c in &non_priority_cols {
+        for item_name in both_scope.items[*c].names.iter_mut() {
+            item_name.priority = false;
+        }
+        both_scope.items[*c].visible_to_wildcard = false;
+    }
+
+    for c in &priority_cols {
+        for item_name in both_scope.items[*c].names.iter_mut() {
+            item_name.priority = true;
+        }
+        both_scope.items[*c].visible_to_wildcard = true;
+    }
+
+    // Reproject all returned elements to the front of the list.
+    let project_key = priority_cols
+        .into_iter()
+        .chain(0..both_scope.items.len())
+        .unique()
+        .collect::<Vec<_>>();
+
+    both_scope = both_scope.project(&project_key);
+
     let both = HirRelationExpr::Join {
         left: Box::new(left),
         right: Box::new(right),

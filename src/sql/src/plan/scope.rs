@@ -97,6 +97,12 @@ pub struct ScopeItem {
     // column names. Omitting the name entirely is not an option, since the name
     // is used to label the column in the result set.
     pub nameable: bool,
+    /// Controls whether or not the item should return from `SELECT *`.
+    ///
+    /// It's possible that this feature could be folded into
+    /// `ScopeItemName::priority`, but it isn't clear what the long-term
+    /// ramifications are with SQL support in that case.
+    pub visible_to_wildcard: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +123,7 @@ impl ScopeItem {
             }],
             expr: None,
             nameable: true,
+            visible_to_wildcard: true,
         }
     }
 
@@ -161,6 +168,7 @@ impl Scope {
                 }],
                 expr: None,
                 nameable: true,
+                visible_to_wildcard: true,
             })
             .collect();
         scope
@@ -243,6 +251,11 @@ impl Scope {
         }
     }
 
+    /// Resolves references to a column name to a single column, or errors if
+    /// multiple columns are equally valid references.
+    ///
+    /// Note that you can influence the validity of references using
+    /// `[ScopeItemName]`'s `priority` field.
     pub fn resolve_column<'a>(
         &'a self,
         column_name: &ColumnName,
@@ -324,6 +337,14 @@ impl Scope {
                 .items
                 .into_iter()
                 .chain(right.items.into_iter())
+                .map(|mut item| {
+                    // New scopes should not carry over priorities from old
+                    // scopes.
+                    for name in item.names.iter_mut() {
+                        name.priority = false;
+                    }
+                    item
+                })
                 .collect(),
             outer_scope: self.outer_scope,
         })
