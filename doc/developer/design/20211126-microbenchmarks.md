@@ -33,11 +33,11 @@ Usability goals:
 
 ### Specifying individual tests
 
-An individual tests is a python class that specifies the actions that need to be taken prior to executing the operation under test, the thing to be tested, and any cleanup.
+An individual test is a python class that specifies the actions that need to be taken prior to executing the operation under test, the thing to be tested, and any cleanup.
 
 For example, this microbenchmark will create a Kafka topic, ingest 100000 rows into it and measure the time it takes for the source to catch up.
 
-```
+```python
 class PartitionedKafkaIngestion(WallclockUntilSucces):
    COUNT = 100000
    def benchmark(c: Context):
