@@ -504,6 +504,10 @@
   - signature: 'generate_series(start: timestamp, stop: timestamp, step: interval) -> Col<timestamp>'
     description: Generate all timestamp values between `start` and `stop`, inclusive, incrementing
       by `step` each time.
+  - signature: 'generate_subscripts(a: anyarray, dim: int) -> Col<int>'
+    description: Generates a series comprising the valid subscripts of the `dim`'th dimension of the given array `a`.
+  - signature: 'generate_subscripts(l: anylist, dim: int) -> Col<int>'
+    description: Generates a series comprising the valid subscripts of the `dim`'th dimension of the given list `l`.
   - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
     description: Values of the capture groups of `regex` as matched in `haystack`
   - signature: 'unnest(a: anyarray)'
