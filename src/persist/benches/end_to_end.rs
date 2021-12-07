@@ -151,6 +151,7 @@ fn create_runtime(base_path: &Path, nonce: &str) -> Result<RuntimeClient, Error>
         RuntimeConfig::default(),
         FileLog::new(log_dir, lock_info.clone())?,
         FileBlob::new(blob_dir, lock_info)?,
+        build_info::DUMMY_BUILD_INFO,
         &MetricsRegistry::new(),
         None,
     )?;

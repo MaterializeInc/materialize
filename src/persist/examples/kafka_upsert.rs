@@ -60,6 +60,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
             RuntimeConfig::default(),
             log,
             blob,
+            build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
             None,
         )?

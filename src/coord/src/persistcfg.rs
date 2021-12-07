@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use build_info::BuildInfo;
 use dataflow_types::{ExternalSourceConnector, SourceConnector, SourceEnvelope};
 use ore::metrics::MetricsRegistry;
 use persist::error::{Error, ErrorLog};
@@ -128,6 +129,7 @@ impl PersistConfig {
     pub async fn init(
         &self,
         catalog_id: Uuid,
+        build: BuildInfo,
         reg: &MetricsRegistry,
     ) -> Result<PersisterWithConfig, Error> {
         let persister = if self.user_table_enabled
@@ -145,6 +147,7 @@ impl PersistConfig {
                         RuntimeConfig::with_min_step_interval(self.min_step_interval),
                         log,
                         blob,
+                        build,
                         reg,
                         self.runtime.clone(),
                     )
@@ -157,6 +160,7 @@ impl PersistConfig {
                         RuntimeConfig::with_min_step_interval(self.min_step_interval),
                         log,
                         blob,
+                        build,
                         reg,
                         self.runtime.clone(),
                     )

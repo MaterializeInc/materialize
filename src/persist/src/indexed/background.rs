@@ -192,7 +192,11 @@ mod tests {
 
     #[test]
     fn compact_trace() -> Result<(), Error> {
-        let blob = BlobCache::new(Metrics::default(), MemRegistry::new().blob_no_reentrance()?);
+        let blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
+            Metrics::default(),
+            MemRegistry::new().blob_no_reentrance()?,
+        );
         let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
 
         let b0 = BlobTraceBatch {
@@ -256,7 +260,11 @@ mod tests {
 
     #[test]
     fn compact_trace_errors() -> Result<(), Error> {
-        let blob = BlobCache::new(Metrics::default(), MemRegistry::new().blob_no_reentrance()?);
+        let blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
+            Metrics::default(),
+            MemRegistry::new().blob_no_reentrance()?,
+        );
         let maintainer = Maintainer::new(blob, Arc::new(Runtime::new()?));
 
         // Non-contiguous batch descs

@@ -152,6 +152,7 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
         RuntimeConfig::for_tests(),
         ErrorLog,
         blob,
+        build_info::DUMMY_BUILD_INFO,
         &MetricsRegistry::new(),
         Some(runtime),
     )?;
@@ -175,6 +176,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
                 RuntimeConfig::for_tests(),
                 ErrorLog,
                 blob,
+                build_info::DUMMY_BUILD_INFO,
                 &MetricsRegistry::new(),
                 None,
             )

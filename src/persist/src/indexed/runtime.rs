@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use build_info::BuildInfo;
 use differential_dataflow::trace::Description;
 use log;
 use ore::metrics::MetricsRegistry;
@@ -81,6 +82,7 @@ pub fn start<L, B>(
     config: RuntimeConfig,
     log: L,
     blob: B,
+    build: BuildInfo,
     reg: &MetricsRegistry,
     pool: Option<Arc<Runtime>>,
 ) -> Result<RuntimeClient, Error>
@@ -102,7 +104,7 @@ where
     let pool_guard = pool.enter();
 
     // Start up the runtime.
-    let blob = BlobCache::new(metrics.clone(), blob);
+    let blob = BlobCache::new(build, metrics.clone(), blob);
     let maintainer = Maintainer::new(blob.clone(), pool.clone());
     let indexed = Indexed::new(log, blob, maintainer, metrics.clone())?;
     let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());

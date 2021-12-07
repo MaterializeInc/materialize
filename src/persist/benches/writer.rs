@@ -283,7 +283,7 @@ pub fn bench_writes_indexed(c: &mut Criterion) {
     let file_blob = new_file_blob("indexed_write_drain_blob", temp_dir.path());
 
     let metrics = Metrics::register_with(&MetricsRegistry::new());
-    let blob_cache = BlobCache::new(metrics.clone(), file_blob);
+    let blob_cache = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics.clone(), file_blob);
     let compacter = Maintainer::new(blob_cache.clone(), Arc::new(Runtime::new().unwrap()));
     let file_indexed = Indexed::new(file_log, blob_cache, compacter, metrics)
         .expect("failed to create file indexed");
@@ -310,14 +310,14 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
         .blob_no_reentrance()
         .expect("creating a MemBlob cannot fail");
     let metrics = Metrics::register_with(&MetricsRegistry::new());
-    let mut mem_blob_cache = BlobCache::new(metrics, mem_blob);
+    let mut mem_blob_cache = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics, mem_blob);
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     let file_blob = new_file_blob("indexed_write_drain_blob", temp_dir.path());
 
     let metrics = Metrics::register_with(&MetricsRegistry::new());
-    let mut file_blob_cache = BlobCache::new(metrics, file_blob);
+    let mut file_blob_cache = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics, file_blob);
 
     let updates = generate_updates();
     let size = get_encoded_len(&updates);

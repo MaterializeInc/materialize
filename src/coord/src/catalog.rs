@@ -837,7 +837,11 @@ impl Catalog {
         // fine for now.
         let persist = config
             .persist
-            .init(cluster_id, &config.metrics_registry)
+            .init(
+                cluster_id,
+                config.build_info.clone(),
+                &config.metrics_registry,
+            )
             .await?;
         let persister = persist.persister.clone();
 
