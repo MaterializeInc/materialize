@@ -181,6 +181,8 @@ impl Action for CreateTopicAction {
                 .set("segment.ms", "100")
                 // make sure we get compaction even with low throughput
                 .set("min.cleanable.dirty.ratio", "0.01")
+                .set("min.compaction.lag.ms", "100")
+                .set("delete.retention.ms", "100")
         } else {
             new_topic
         };

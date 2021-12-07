@@ -716,6 +716,7 @@ pub async fn create_state(
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
+        kafka_config.set("message.max.bytes", "15728640");
         let producer: FutureProducer = kafka_config.create().err_hint(
             "opening Kafka producer connection",
             &[format!("connection string: {}", config.kafka_addr)],
