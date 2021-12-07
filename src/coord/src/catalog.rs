@@ -417,7 +417,7 @@ impl CatalogEntryMap {
                     persist: Some(persist),
                     ..
                 }) => {
-                    all_table_ids.push(persist.write_handle.stream_id());
+                    all_table_ids.push(persist.stream_id);
                     handles.push(&persist.write_handle);
                 }
                 _ => {}

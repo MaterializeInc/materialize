@@ -876,7 +876,7 @@ mod tests {
         let p = registry.runtime_no_reentrance()?;
         timely::execute_directly(move |worker| {
             let (mut input, probe) = worker.dataflow(|scope| {
-                let (write, _read) = p.create_or_load("1").unwrap();
+                let (write, _read) = p.create_or_load("1");
                 let mut input = Handle::new();
                 let (ok_stream, _) = input.to_stream(scope).persist("test", write);
                 let probe = ok_stream.probe();
@@ -900,7 +900,7 @@ mod tests {
         ];
 
         let p = registry.runtime_no_reentrance()?;
-        let (_write, read) = p.create_or_load("1")?;
+        let (_write, read) = p.create_or_load("1");
         assert_eq!(read.snapshot()?.read_to_end()?, expected);
 
         Ok(())
@@ -909,7 +909,7 @@ mod tests {
     #[test]
     fn persist_error_stream() -> Result<(), Error> {
         let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let (write, _read) = p.create_or_load::<(), ()>("error_stream").unwrap();
+        let (write, _read) = p.create_or_load::<(), ()>("error_stream");
         p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {
@@ -954,7 +954,7 @@ mod tests {
 
         timely::execute_directly(move |worker| {
             let (mut input, probe) = worker.dataflow(|scope| {
-                let (write, _read) = p.create_or_load::<(), ()>("1").unwrap();
+                let (write, _read) = p.create_or_load::<(), ()>("1");
                 let mut input = Handle::new();
                 let (ok_stream, _) = input.to_stream(scope).seal("test", write);
                 let probe = ok_stream.probe();
@@ -968,7 +968,7 @@ mod tests {
         });
 
         let p = registry.runtime_no_reentrance()?;
-        let (_write, read) = p.create_or_load::<(), ()>("1")?;
+        let (_write, read) = p.create_or_load::<(), ()>("1");
         assert_eq!(read.snapshot()?.get_seal(), Antichain::from_elem(42));
 
         Ok(())
@@ -977,7 +977,7 @@ mod tests {
     #[test]
     fn seal_error_stream() -> Result<(), Error> {
         let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let (write, _read) = p.create_or_load::<(), ()>("error_stream").unwrap();
+        let (write, _read) = p.create_or_load::<(), ()>("error_stream");
         p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {
@@ -1019,8 +1019,8 @@ mod tests {
 
         // Setup listens for both collections and record seal events. Afterwards, we will verify
         // that we get the expected seals, in the right order.
-        let (_write, primary_read) = p.create_or_load::<(), ()>("primary").unwrap();
-        let (_write, condition_read) = p.create_or_load::<(), ()>("condition").unwrap();
+        let (_write, primary_read) = p.create_or_load::<(), ()>("primary");
+        let (_write, condition_read) = p.create_or_load::<(), ()>("condition");
 
         #[derive(Debug, PartialEq, Eq)]
         enum Sealed {
@@ -1056,8 +1056,8 @@ mod tests {
 
         timely::execute_directly(move |worker| {
             let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
-                let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
-                let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
+                let (primary_write, _read) = p.create_or_load::<(), ()>("primary");
+                let (condition_write, _read) = p.create_or_load::<(), ()>("condition");
                 let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
                 let mut condition_input = Handle::new();
                 let primary_stream = primary_input.to_stream(scope);
@@ -1138,8 +1138,8 @@ mod tests {
 
         timely::execute_directly(move |worker| {
             let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
-                let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
-                let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
+                let (primary_write, _read) = p.create_or_load::<(), ()>("primary");
+                let (condition_write, _read) = p.create_or_load::<(), ()>("condition");
                 let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
                 let mut condition_input = Handle::new();
                 let primary_stream = primary_input.to_stream(scope);
@@ -1201,8 +1201,8 @@ mod tests {
 
         let guards = timely::execute(Config::process(3), move |worker| {
             let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
-                let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
-                let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
+                let (primary_write, _read) = p.create_or_load::<(), ()>("primary");
+                let (condition_write, _read) = p.create_or_load::<(), ()>("condition");
                 let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
                 let mut condition_input: Handle<u64, ((), u64, isize)> = Handle::new();
                 let primary_stream = primary_input.to_stream(scope);

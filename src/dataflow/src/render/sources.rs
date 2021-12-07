@@ -111,9 +111,7 @@ where
                 let (ok_stream, err_collection) =
                     match (&mut render_state.persist, src.persisted_name) {
                         (Some(persist), Some(stream_name)) => {
-                            let read = persist
-                                .create_or_load(&stream_name)
-                                .map(|(_write, read)| read);
+                            let (_write, read) = persist.create_or_load(&stream_name);
                             let (persist_ok_stream, persist_err_stream) =
                                 scope.persisted_source(read).ok_err(|x| match x {
                                     (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
@@ -703,11 +701,11 @@ fn get_persist_config(
     let persist_bindings_name = format!("{}-timestamp-bindings", persisted_name);
     let persist_data_name = format!("{}", persisted_name);
 
-    let (bindings_write, bindings_read) = persist_client
-        .create_or_load::<SourceTimestamp, AssignedTimestamp>(&persist_bindings_name)?;
+    let (bindings_write, bindings_read) =
+        persist_client.create_or_load::<SourceTimestamp, AssignedTimestamp>(&persist_bindings_name);
 
     let (data_write, data_read) = persist_client
-        .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(&persist_data_name)?;
+        .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(&persist_data_name);
 
     use persist::indexed::runtime::sealed_ts;
     let bindings_seal_ts = sealed_ts(&bindings_read)?;

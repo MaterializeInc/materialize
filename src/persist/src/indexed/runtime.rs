@@ -283,22 +283,23 @@ impl RuntimeClient {
     /// This method is idempotent. Returns read and write handles used to
     /// construct a persisted stream operator.
     ///
+    /// TODO: This description seems outdated? Or at least only half true.
     /// If data was written by a previous [RuntimeClient] for this id, it's
     /// loaded and replayed into the stream once constructed.
     pub fn create_or_load<K: Codec, V: Codec>(
         &self,
         name: &str,
-    ) -> Result<(StreamWriteHandle<K, V>, StreamReadHandle<K, V>), Error> {
+    ) -> (StreamWriteHandle<K, V>, StreamReadHandle<K, V>) {
         let (tx, rx) = PFuture::new();
         self.core.send(Cmd::Register(
             name.to_owned(),
             (K::codec_name(), V::codec_name()),
             tx,
         ));
-        let id = rx.recv()?;
-        let write = StreamWriteHandle::new(name.to_owned(), id, self.clone());
+        let id = rx.recv();
+        let write = StreamWriteHandle::new(name.to_owned(), id.clone(), self.clone());
         let meta = StreamReadHandle::new(name.to_owned(), id, self.clone());
-        Ok((write, meta))
+        (write, meta)
     }
 
     /// Returns a [Description] of the stream identified by `id_str`.
@@ -383,10 +384,10 @@ impl RuntimeClient {
 
 /// A handle that allows writes of ((Key, Value), Time, Diff) updates into an
 /// [crate::indexed::Indexed] via a [RuntimeClient].
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq)]
 pub struct StreamWriteHandle<K, V> {
     name: String,
-    id: Id,
+    id: Result<Id, Error>,
     runtime: RuntimeClient,
     _phantom: PhantomData<(K, V)>,
 }
@@ -395,7 +396,7 @@ impl<K, V> Clone for StreamWriteHandle<K, V> {
     fn clone(&self) -> Self {
         StreamWriteHandle {
             name: self.name.clone(),
-            id: self.id,
+            id: self.id.clone(),
             runtime: self.runtime.clone(),
             _phantom: self._phantom,
         }
@@ -414,7 +415,7 @@ impl<K, V> fmt::Debug for StreamWriteHandle<K, V> {
 
 impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     /// Returns a new [StreamWriteHandle] for the given stream.
-    pub fn new(name: String, id: Id, runtime: RuntimeClient) -> Self {
+    pub fn new(name: String, id: Result<Id, Error>, runtime: RuntimeClient) -> Self {
         StreamWriteHandle {
             name,
             id,
@@ -429,8 +430,8 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     }
 
     /// Returns the internal stream [Id] for this handle.
-    pub fn stream_id(&self) -> Id {
-        self.id
+    pub fn stream_id(&self) -> Result<Id, Error> {
+        self.id.clone()
     }
 
     /// Synchronously writes (Key, Value, Time, Diff) updates.
@@ -438,9 +439,18 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     where
         I: IntoIterator<Item = &'a ((K, V), u64, isize)>,
     {
-        let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
         let (tx, rx) = PFuture::new();
-        self.runtime.write(vec![(self.id, updates.finish())], tx);
+
+        match self.id {
+            Ok(id) => {
+                let mut updates = WriteReqBuilder::<K, V>::from_iter(updates);
+                self.runtime.write(vec![(id, updates.finish())], tx);
+            }
+            Err(ref e) => {
+                tx.fill(Err(e.clone()));
+            }
+        }
+
         rx
     }
 
@@ -448,14 +458,32 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     /// than it into the trace.
     pub fn seal(&self, upper: u64) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
-        self.runtime.seal(&[self.id], upper, tx);
+
+        match self.id {
+            Ok(id) => {
+                self.runtime.seal(&[id], upper, tx);
+            }
+            Err(ref e) => {
+                tx.fill(Err(e.clone()));
+            }
+        }
+
         rx
     }
 
     /// Unblocks compaction for updates at or before `since`.
     pub fn allow_compaction(&self, since: Antichain<u64>) -> PFuture<SeqNo> {
         let (tx, rx) = PFuture::new();
-        self.runtime.allow_compaction(&[(self.id, since)], tx);
+
+        match self.id {
+            Ok(id) => {
+                self.runtime.allow_compaction(&[(id, since)], tx);
+            }
+            Err(ref e) => {
+                tx.fill(Err(e.clone()));
+            }
+        }
+
         rx
     }
 }
@@ -548,7 +576,7 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
             }
             // It's odd if there are duplicates but the semantics of what that
             // means are straightforward, so for now we support it.
-            stream_ids.insert(handle.id);
+            stream_ids.insert(handle.stream_id()?);
         }
         Ok(MultiWriteHandle {
             ids: stream_ids,
@@ -709,10 +737,10 @@ impl<K: Codec, V: Codec> Iterator for DecodedSnapshotIter<K, V> {
 
 /// A handle for a persisted stream of ((Key, Value), Time, Diff) updates backed
 /// by an [crate::indexed::Indexed] via a [RuntimeClient].
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct StreamReadHandle<K, V> {
     name: String,
-    id: Id,
+    id: Result<Id, Error>,
     runtime: RuntimeClient,
     _phantom: PhantomData<(K, V)>,
 }
@@ -721,7 +749,7 @@ impl<K, V> Clone for StreamReadHandle<K, V> {
     fn clone(&self) -> Self {
         StreamReadHandle {
             name: self.name.clone(),
-            id: self.id,
+            id: self.id.clone(),
             runtime: self.runtime.clone(),
             _phantom: self._phantom,
         }
@@ -730,7 +758,7 @@ impl<K, V> Clone for StreamReadHandle<K, V> {
 
 impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     /// Returns a new [StreamReadHandle] for the given stream.
-    pub fn new(name: String, id: Id, runtime: RuntimeClient) -> Self {
+    pub fn new(name: String, id: Result<Id, Error>, runtime: RuntimeClient) -> Self {
         StreamReadHandle {
             name,
             id,
@@ -746,9 +774,14 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
 
     /// Returns a consistent snapshot of all previously persisted stream data.
     pub fn snapshot(&self) -> Result<DecodedSnapshot<K, V>, Error> {
+        let id = match self.id {
+            Ok(id) => id,
+            Err(ref e) => return Err(e.clone()),
+        };
+
         // TODO: Make snapshot signature non-blocking.
         let (tx, rx) = PFuture::new();
-        self.runtime.snapshot(self.id, tx);
+        self.runtime.snapshot(id, tx);
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))
     }
@@ -763,8 +796,13 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
         &self,
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
     ) -> Result<DecodedSnapshot<K, V>, Error> {
+        let id = match self.id {
+            Ok(id) => id,
+            Err(ref e) => return Err(e.clone()),
+        };
+
         let (tx, rx) = PFuture::new();
-        self.runtime.listen(self.id, listen_fn, tx);
+        self.runtime.listen(id, listen_fn, tx);
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))
     }
@@ -1020,14 +1058,14 @@ mod tests {
 
         let mut runtime = MemRegistry::new().runtime_no_reentrance()?;
 
-        let (write, meta) = runtime.create_or_load("0")?;
+        let (write, meta) = runtime.create_or_load("0");
         write.write(&data).recv()?;
         assert_eq!(meta.snapshot()?.read_to_end()?, data);
 
         // Commands sent after stop return an error, but calling stop again is
         // fine.
         runtime.stop()?;
-        assert!(runtime.create_or_load::<(), ()>("0").is_err());
+        assert!(runtime.create_or_load::<(), ()>("0").0.stream_id().is_err());
         runtime.stop()?;
 
         Ok(())
@@ -1041,12 +1079,12 @@ mod tests {
         ];
 
         let client1 = MemRegistry::new().runtime_no_reentrance()?;
-        let _ = client1.create_or_load::<String, String>("0")?;
+        let _ = client1.create_or_load::<String, String>("0");
 
         // Everything is still running after client1 is dropped.
         let mut client2 = client1.clone();
         drop(client1);
-        let (write, meta) = client2.create_or_load("0")?;
+        let (write, meta) = client2.create_or_load("0");
         write.write(&data).recv()?;
         assert_eq!(meta.snapshot()?.read_to_end()?, data);
         client2.stop()?;
@@ -1066,14 +1104,14 @@ mod tests {
         // Shutdown happens if we explicitly call stop, unlocking the log and
         // blob and allowing them to be reused in the next Indexed.
         let mut persister = registry.runtime_no_reentrance()?;
-        let (write, _) = persister.create_or_load("0")?;
+        let (write, _) = persister.create_or_load("0");
         write.write(&data[0..1]).recv()?;
         assert_eq!(persister.stop(), Ok(()));
 
         // Shutdown happens if all handles are dropped, even if we don't call
         // stop.
         let persister = registry.runtime_no_reentrance()?;
-        let (write, _) = persister.create_or_load("0")?;
+        let (write, _) = persister.create_or_load("0");
         write.write(&data[1..2]).recv()?;
         drop(write);
         drop(persister);
@@ -1081,7 +1119,7 @@ mod tests {
         // We can read back what we previously wrote.
         {
             let persister = registry.runtime_no_reentrance()?;
-            let (_, meta) = persister.create_or_load("0")?;
+            let (_, meta) = persister.create_or_load("0");
             assert_eq!(meta.snapshot()?.read_to_end()?, data);
         }
 
@@ -1094,7 +1132,7 @@ mod tests {
 
         let mut registry = MemRegistry::new();
         let persister = registry.runtime_no_reentrance()?;
-        let (write, _) = persister.create_or_load::<(), ()>(id)?;
+        let (write, _) = persister.create_or_load::<(), ()>(id);
 
         // Initial seal frontier should be `0`.
         let upper = persister.get_description(id)?.upper().clone();
@@ -1114,7 +1152,7 @@ mod tests {
 
         let mut registry = MemRegistry::new();
         let persister = registry.runtime_no_reentrance()?;
-        let (write, _) = persister.create_or_load::<(), ()>(id)?;
+        let (write, _) = persister.create_or_load::<(), ()>(id);
 
         // Initial compaction/since frontier should be `0`.
         let since = persister.get_description(id)?.since().clone();
@@ -1135,7 +1173,7 @@ mod tests {
 
         let mut registry = MemRegistry::new();
         let persister = registry.runtime_no_reentrance()?;
-        let (_write, _) = persister.create_or_load::<(), ()>(id)?;
+        let (_write, _) = persister.create_or_load::<(), ()>(id);
 
         // `lower` will always be `Antichain::from_elem(Timestamp::minimum())`.
         let since = persister.get_description(id)?.lower().clone();
@@ -1155,9 +1193,9 @@ mod tests {
         let client1 = registry.open("1", "multi")?;
         let client2 = registry.open("2", "multi")?;
 
-        let (c1s1, c1s1_read) = client1.create_or_load("1")?;
-        let (c1s2, c1s2_read) = client1.create_or_load("2")?;
-        let (c2s1, _) = client2.create_or_load("1")?;
+        let (c1s1, c1s1_read) = client1.create_or_load("1");
+        let (c1s2, c1s2_read) = client1.create_or_load("2");
+        let (c2s1, _) = client2.create_or_load("1");
 
         // Cannot construct with no streams.
         assert!(MultiWriteHandle::<(), ()>::new(&[]).is_err());
@@ -1168,15 +1206,15 @@ mod tests {
         // Normal write
         let multi = MultiWriteHandle::new(&[&c1s1, &c1s2])?;
         let updates = vec![
-            (c1s1.stream_id(), data[..1].to_vec()),
-            (c1s2.stream_id(), data[1..].to_vec()),
+            (c1s1.stream_id()?, data[..1].to_vec()),
+            (c1s2.stream_id()?, data[1..].to_vec()),
         ];
         multi.write_atomic(updates).recv()?;
         assert_eq!(c1s1_read.snapshot()?.read_to_end()?, data[..1].to_vec());
         assert_eq!(c1s2_read.snapshot()?.read_to_end()?, data[1..].to_vec());
 
         // Normal seal
-        let ids = &[c1s1.stream_id(), c1s2.stream_id()];
+        let ids = &[c1s1.stream_id()?, c1s2.stream_id()?];
         multi.seal(ids, 2).recv()?;
         // We don't expose reading the seal directly, so hack it a bit here by
         // verifying that we can't re-seal at a prior timestamp (which is
@@ -1185,14 +1223,14 @@ mod tests {
         assert_eq!(c1s2.seal(1).recv().map_err(|err| err.to_string()), Err("invalid seal for Id(1): 1 not at or in advance of current seal frontier Antichain { elements: [2] }".into()));
 
         // Cannot write to streams not specified during construction.
-        let (c1s3, _) = client1.create_or_load::<(), ()>("3")?;
+        let (c1s3, _) = client1.create_or_load::<(), ()>("3");
         assert!(multi
-            .write_atomic(vec![(c1s3.stream_id(), data)])
+            .write_atomic(vec![(c1s3.stream_id()?, data)])
             .recv()
             .is_err());
 
         // Cannot seal streams not specified during construction.
-        assert!(multi.seal(&[c1s3.stream_id()], 3).recv().is_err());
+        assert!(multi.seal(&[c1s3.stream_id()?], 3).recv().is_err());
 
         Ok(())
     }
@@ -1201,14 +1239,17 @@ mod tests {
     fn codec_mismatch() -> Result<(), Error> {
         let client = MemRegistry::new().runtime_no_reentrance()?;
 
-        let _ = client.create_or_load::<(), String>("stream")?;
+        let _ = client.create_or_load::<(), String>("stream");
 
         // Normal case: registration uses same key and value codec.
-        let _ = client.create_or_load::<(), String>("stream")?;
+        let _ = client.create_or_load::<(), String>("stream");
 
         // Different key codec
         assert_eq!(
-            client.create_or_load::<Vec<u8>, String>("stream"),
+            client
+                .create_or_load::<Vec<u8>, String>("stream")
+                .0
+                .stream_id(),
             Err(Error::from(
                 "invalid registration: key codec mismatch Vec<u8> vs previous ()"
             ))
@@ -1216,7 +1257,7 @@ mod tests {
 
         // Different val codec
         assert_eq!(
-            client.create_or_load::<(), Vec<u8>>("stream"),
+            client.create_or_load::<(), Vec<u8>>("stream").0.stream_id(),
             Err(Error::from(
                 "invalid registration: val codec mismatch Vec<u8> vs previous String"
             ))
@@ -1266,15 +1307,7 @@ mod tests {
         let data = vec![(("foo".into(), ()), 1, 1), (("foo".into(), ()), 1000, -1)];
 
         let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let handles = p.create_or_load::<String, ()>("1");
-        let read = handles
-            .as_ref()
-            .map(|(_write, read)| read.clone())
-            .map_err(|e| e.clone());
-        let write = handles
-            .as_ref()
-            .map(|(write, _read)| write.clone())
-            .unwrap();
+        let (write, read) = p.create_or_load::<String, ()>("1");
 
         let ok = timely::execute_directly(move |worker| {
             let writes = std::thread::spawn(move || {

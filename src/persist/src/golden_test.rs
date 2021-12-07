@@ -235,7 +235,7 @@ impl PersistState {
         // of a RuntimeClient, so hardcode the ones nemesis uses.
         let mut streams = Vec::new();
         for name in ('a'..='e').map(|x| x.to_string()) {
-            let (_, read) = persist.create_or_load(&name)?;
+            let (_, read) = persist.create_or_load(&name);
             let snap = read.snapshot()?;
             let (seal, since) = (snap.get_seal(), snap.since());
             let mut snap_data = snap.into_iter().collect::<Result<Vec<_>, Error>>()?;
