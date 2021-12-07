@@ -1085,15 +1085,32 @@ SELECT generate_series(1, 1), (SELECT generate_series(2, 2))
 ----
 1 2
 
+# GENERATE_SUBSCRIPTS
+
 query I
 SELECT generate_subscripts('{1,2,3,4}'::int[], 1) AS s;
 ----
- 1
- 2
- 3
- 4
+1
+2
+3
+4
 
-# GENERATE_SUBSCRIPTS
+query I
+SELECT generate_subscripts('{1,NULL,3,NULL}'::int[], 1) AS s;
+----
+1
+2
+3
+4
+
+query I
+SELECT generate_subscripts('{1,2,3,4}'::TEXT[], 1) AS s;
+----
+1
+2
+3
+4
+
 
 query I
 SELECT generate_subscripts('{1,2,3,4}'::int[], 0) AS s;
@@ -1117,3 +1134,48 @@ SELECT generate_subscripts('{{1,2,3,4}, {5,6,7,8}}'::int[], 1) AS s;
 query error multiple table functions in select projections not yet supported, see https://github.com/MaterializeInc/materialize/issues/1546 for more details
 SELECT generate_subscripts('{1,2,3,4}'::int[], 1), repeat_row(generate_series) AS s;
 
+query I
+SELECT generate_subscripts(LIST[1,2,3,4], 1) AS s;
+----
+1
+2
+3
+4
+
+query I
+SELECT generate_subscripts(LIST[1,NULL,3,NULL], 1) AS s;
+----
+1
+2
+3
+4
+
+query I
+SELECT generate_subscripts(LIST['A','B','C','D'], 1) AS s;
+----
+1
+2
+3
+4
+
+query I
+SELECT generate_subscripts(LIST[1,2,3,4], 0) AS s;
+----
+
+query I
+SELECT generate_subscripts(LIST[1,2,3,4], -1) AS s;
+----
+
+query I
+SELECT generate_subscripts(LIST[1,2,3,4], 2) AS s;
+----
+
+query I
+SELECT generate_subscripts(LIST[1,2,3,4], 12345) AS s;
+----
+
+query error parsing multi-dimensional lists is not supported
+SELECT generate_subscripts(LIST[LIST[1,2,3,4], LIST[5,6,7,8]], 1) AS s;
+
+query error multiple table functions in select projections not yet supported, see https://github.com/MaterializeInc/materialize/issues/1546 for more details
+SELECT generate_subscripts(LIST[1,2,3,4], 1), repeat_row(generate_series) AS s;
