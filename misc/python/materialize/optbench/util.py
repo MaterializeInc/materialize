@@ -29,5 +29,5 @@ def results_path(repository: Path, scenario: Scenario, mz_version: str) -> None:
     mz_version = mz_version.replace(" ", "-")
     mz_version = mz_version.replace("(", "")
     mz_version = mz_version.replace(")", "")
-    file = f"mzbench-opt-{scenario}-{mz_version}.csv"
+    file = f"optbench-{scenario}-{mz_version}.csv"
     return repository / file

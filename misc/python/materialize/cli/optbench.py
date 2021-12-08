@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import typer
 
-from . import Scenario, sql, util
+from ..optbench import Scenario, sql, util
 
 # import logging
 # logging.basicConfig(encoding='utf-8', level=logging.DEBUG)
@@ -198,3 +198,8 @@ def info(msg: str, fg: str = typer.colors.GREEN) -> None:
 
 def err(msg: str, fg: str = typer.colors.RED) -> None:
     typer.secho(msg, fg=fg, err=True)
+
+
+
+if __name__ == "__main__":
+    app()

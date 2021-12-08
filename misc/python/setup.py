@@ -28,6 +28,9 @@ setup(
     extras_require={
         "dev": requires("requirements-dev.txt"),
     },
-    package_data={"materialize": ["py.typed"]},
+    package_data={
+        "materialize": ["py.typed"],
+        "materialize.optbench": ["schema/*.sql", "workload/*.sql"],
+    },
     include_package_data=True,
 )
