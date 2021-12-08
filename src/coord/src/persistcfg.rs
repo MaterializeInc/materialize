@@ -197,14 +197,18 @@ impl PersisterWithConfig {
         }
     }
 
-    pub fn details(&self, id: GlobalId, pretty: &str) -> Result<Option<PersistDetails>, Error> {
-        self.details_from_name(self.stream_name(id, pretty))
+    pub fn table_details(
+        &self,
+        id: GlobalId,
+        pretty: &str,
+    ) -> Result<Option<TablePersistDetails>, Error> {
+        self.table_details_from_name(self.stream_name(id, pretty))
     }
 
-    pub fn details_from_name(
+    pub fn table_details_from_name(
         &self,
         stream_name: Option<String>,
-    ) -> Result<Option<PersistDetails>, Error> {
+    ) -> Result<Option<TablePersistDetails>, Error> {
         let stream_name = match stream_name {
             Some(x) => x,
             None => return Ok(None),
@@ -214,7 +218,7 @@ impl PersisterWithConfig {
             None => return Ok(None),
         };
         let (write_handle, _) = persister.create_or_load(&stream_name);
-        Ok(Some(PersistDetails {
+        Ok(Some(TablePersistDetails {
             stream_name,
             // We need to get the stream_id now because we cannot get it later since most methods
             // in the coordinator/catalog aren't fallible.
@@ -246,7 +250,7 @@ impl PersisterWithConfig {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct PersistDetails {
+pub struct TablePersistDetails {
     pub stream_name: String,
     pub stream_id: PersistId,
     #[serde(skip)]
@@ -254,7 +258,7 @@ pub struct PersistDetails {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PersistMultiDetails {
+pub struct TablePersistMultiDetails {
     pub all_table_ids: Vec<PersistId>,
     pub write_handle: MultiWriteHandle<Row, ()>,
 }

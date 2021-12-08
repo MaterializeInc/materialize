@@ -735,8 +735,27 @@ pub enum SourceConnector {
         ts_frequency: Duration,
         timeline: Timeline,
     },
+
+    /// A local "source" is either fed by a local input handle, or by reading from a
+    /// `persisted_source()`. For non-persisted sources, values that are to be inserted
+    /// are sent from the coordinator and pushed into the handle on a worker.
+    ///
+    /// For persisted sources, the coordinator only writes new values to a persistent
+    /// stream. These values will then "show up" here because we read from the same
+    /// persistent stream.
+    // TODO: We could split this up into a `Local` source, that is only fed by a local handle and a
+    // `LocalPersistenceSource` which is fed from a `persisted_source()`. But moving the
+    // persist_name from `SourceDesc` to here is already a huge simplification/clarification. The
+    // persist description on a `SourceDesc` is now purely used to signal that a source actively
+    // persists, while a `LocalPersistenceSource` is a source that happens to read from persistence
+    // but doesn't persist itself.
+    //
+    // That additional split seems like a bigger undertaking, though, because it also needs changes
+    // to the coordinator. And I don't know if I want to invest too much time there when I don't
+    // yet know how Tables will work in a post-ingestd world.
     Local {
         timeline: Timeline,
+        persisted_name: Option<String>,
     },
 }
 
