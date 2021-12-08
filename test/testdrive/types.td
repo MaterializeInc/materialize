@@ -284,3 +284,24 @@ other_int_map_c     user
 > CREATE TYPE jsonb_array_list_c AS LIST (element_type=_jsonb);
 > CREATE TABLE jsonb_array_list_t (a jsonb_array_list_c);
 > INSERT INTO jsonb_array_list_t VALUES (LIST[ARRAY['{"1":2}'::jsonb]]);
+
+# Test pg_table_is_visible.
+
+> SELECT PG_TYPE_IS_VISIBLE('bool'::REGTYPE::OID);
+pg_type_is_visible
+--------------------
+true
+
+> CREATE SCHEMA hidden_schema;
+> CREATE TYPE hidden_schema.my_hidden_type AS LIST (element_type = int4);
+> CREATE TYPE my_type AS LIST (element_type = int4);
+
+> SELECT PG_TYPE_IS_VISIBLE(oid::REGTYPE) FROM mz_catalog.mz_types WHERE name='my_hidden_type';
+pg_type_is_visible
+--------------------
+false
+
+> SELECT PG_TYPE_IS_VISIBLE(oid::REGTYPE) FROM mz_catalog.mz_types WHERE name='my_type';
+pg_type_is_visible
+--------------------
+true
