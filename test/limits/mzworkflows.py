@@ -958,7 +958,7 @@ class RowsJoinCross(Generator):
 
 
 class RowsJoinLargeRetraction(Generator):
-    COUNT = 10_000_000
+    COUNT = 1_000_000
 
     @classmethod
     def body(cls):
@@ -979,7 +979,7 @@ class RowsJoinLargeRetraction(Generator):
 
 
 class RowsJoinDifferential(Generator):
-    COUNT = 10_000_000
+    COUNT = 1_000_000
 
     @classmethod
     def body(cls):
@@ -991,7 +991,7 @@ class RowsJoinDifferential(Generator):
 
 
 class RowsJoinOuter(Generator):
-    COUNT = 10_000_000
+    COUNT = 1_000_000
 
     @classmethod
     def body(cls):
@@ -1002,7 +1002,14 @@ class RowsJoinOuter(Generator):
         print(f"{cls.COUNT}")
 
 
-servers = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized(memory="8G")]
+servers = [
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
+    Materialized(
+        memory="8G", options="--persistent-user-tables --persistent-kafka-upsert-source"
+    ),
+]
 
 services = [*servers, Testdrive()]
 
