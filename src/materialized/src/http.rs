@@ -237,15 +237,11 @@ impl Server {
 #[derive(Clone)]
 pub struct ThirdPartyServer {
     metrics_registry: MetricsRegistry,
-    _global_metrics: Metrics,
 }
 
 impl ThirdPartyServer {
-    pub fn new(metrics_registry: MetricsRegistry, global_metrics: Metrics) -> Self {
-        Self {
-            metrics_registry,
-            _global_metrics: global_metrics,
-        }
+    pub fn new(metrics_registry: MetricsRegistry) -> Self {
+        Self { metrics_registry }
     }
 
     pub async fn serve(self, addr: SocketAddr) {

@@ -46,19 +46,13 @@ pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode
 #[derive(Debug)]
 pub struct Encoder {
     columns: Vec<(ColumnName, ColumnType)>,
-    _schema: Schema,
 }
 
 impl Encoder {
     /// Creates a new CDCv2 encoder from a relation description.
     pub fn new(desc: RelationDesc) -> Self {
         let columns = column_names_and_types(desc);
-        let row_schema = super::build_row_schema_json(&columns, "data");
-        let schema = build_schema(row_schema);
-        Self {
-            columns,
-            _schema: schema,
-        }
+        Self { columns }
     }
 
     /// Encodes a batch of updates as an Avro value.
@@ -266,7 +260,7 @@ mod tests {
     use mz_avro::GeneralDeserializer;
     use repr::ScalarType;
 
-    use crate::avro::build_row_schema_json;
+    use crate::json::build_row_schema_json;
 
     #[test]
     fn test_roundtrip() {
