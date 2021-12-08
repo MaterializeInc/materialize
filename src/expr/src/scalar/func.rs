@@ -2120,6 +2120,7 @@ fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
 )]
 pub enum BinaryFunc {
+    NotImplemented(String),
     And,
     Or,
     AddInt16,
@@ -2272,6 +2273,10 @@ impl BinaryFunc {
         }
 
         match self {
+            BinaryFunc::NotImplemented(name) => Err(EvalError::Undefined(format!(
+                "{} is not yet implemented",
+                name
+            ))),
             BinaryFunc::And => and(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::Or => or(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::AddInt16 => eager!(add_int16),
@@ -2578,7 +2583,8 @@ impl BinaryFunc {
 
             JsonbGetInt64 { stringify: true }
             | JsonbGetString { stringify: true }
-            | JsonbGetPath { stringify: true } => ScalarType::String.nullable(true),
+            | JsonbGetPath { stringify: true }
+            | NotImplemented(_) => ScalarType::String.nullable(true),
 
             JsonbGetInt64 { stringify: false }
             | JsonbGetString { stringify: false }
@@ -2831,7 +2837,8 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat => true,
-            IsLikePatternMatch { .. }
+            NotImplemented(_)
+            | IsLikePatternMatch { .. }
             | ToCharTimestamp
             | ToCharTimestampTz
             | DateBinTimestamp
@@ -2886,6 +2893,7 @@ impl BinaryFunc {
 impl fmt::Display for BinaryFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            BinaryFunc::NotImplemented(name) => f.write_str(name),
             BinaryFunc::And => f.write_str("&&"),
             BinaryFunc::Or => f.write_str("||"),
             BinaryFunc::AddInt16 => f.write_str("+"),
@@ -3118,6 +3126,7 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
     Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
 )]
 pub enum UnaryFunc {
+    NotImplemented(String),
     Not(Not),
     IsNull(IsNull),
     IsTrue(IsTrue),
@@ -3579,6 +3588,10 @@ impl UnaryFunc {
             | CastStringToVarChar(_)
             | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
+            NotImplemented(name) => Err(EvalError::Undefined(format!(
+                "{} is not yet implemented",
+                name
+            ))),
             NegInterval => Ok(neg_interval(a)),
             CastVarCharToString => Ok(a),
             CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
@@ -3799,7 +3812,8 @@ impl UnaryFunc {
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace
             | Upper
-            | Lower => ScalarType::String.nullable(nullable),
+            | Lower
+            | NotImplemented(_) => ScalarType::String.nullable(nullable),
 
             CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
 
@@ -4034,6 +4048,7 @@ impl UnaryFunc {
             | TrimTrailingWhitespace
             | Upper
             | Lower => false,
+            NotImplemented(_) => true,
             CastJsonbToNumeric(_) => false,
             CastTimestampToDate | CastTimestampTzToDate => false,
             CastIntervalToTime | TimezoneTime { .. } => false,
@@ -4235,6 +4250,7 @@ impl UnaryFunc {
             | CastStringToVarChar(_)
             | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
+            NotImplemented(name) => f.write_str(name),
             NegInterval => f.write_str("-"),
             CastVarCharToString => f.write_str("varchartostr"),
             CastDateToTimestamp => f.write_str("datetots"),

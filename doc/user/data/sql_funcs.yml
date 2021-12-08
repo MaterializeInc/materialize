@@ -584,6 +584,8 @@
     description: PostgreSQL compatibility shim. Currently always returns `NULL`.
   - signature: 'pg_column_size(expr: any) -> int'
     description: Returns the number of bytes used to store any individual data value.
+  - signature: 'pg_get_constraintdef(oid: oid [, pretty: bool]) -> text'
+    description: Returns the constraint definition for the given `oid`. Currently unimplemented.
   - signature: 'pg_table_is_visible(relation: oid) -> boolean'
     description: Reports whether the relation with the specified OID is visible in the search path.
   - signature: 'pg_type_is_visible(relation: oid) -> boolean'
