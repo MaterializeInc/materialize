@@ -70,7 +70,6 @@ gid=$(id -g)
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
-    cp misc/python/requirements{,-dev}.txt ci/builder
     docker build --pull \
         --build-arg "ARCH_GCC=$arch_gcc" \
         --build-arg "ARCH_GO=$arch_go" \
