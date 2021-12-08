@@ -1302,14 +1302,12 @@ fn gte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a >= b)
 }
 
-fn to_char_timestamp<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let fmt = DateTimeFormat::compile(b.unwrap_str());
-    Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamp())))
-}
-
-fn to_char_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let fmt = DateTimeFormat::compile(b.unwrap_str());
-    Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamptz())))
+fn to_char_timestamplike<'a, T>(ts: T, format: &str, temp_storage: &'a RowArena) -> Datum<'a>
+where
+    T: TimestampLike,
+{
+    let fmt = DateTimeFormat::compile(format);
+    Datum::String(temp_storage.push_string(fmt.render(ts)))
 }
 
 fn jsonb_get_int64<'a>(
@@ -2485,8 +2483,18 @@ impl BinaryFunc {
             BinaryFunc::IsRegexpMatch { case_insensitive } => {
                 eager!(is_regexp_match_dynamic, *case_insensitive)
             }
-            BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
-            BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
+            BinaryFunc::ToCharTimestamp => Ok(eager!(|a: Datum, b: Datum| to_char_timestamplike(
+                a.unwrap_timestamp(),
+                b.unwrap_str(),
+                temp_storage
+            ))),
+            BinaryFunc::ToCharTimestampTz => {
+                Ok(eager!(|a: Datum, b: Datum| to_char_timestamplike(
+                    a.unwrap_timestamptz(),
+                    b.unwrap_str(),
+                    temp_storage
+                )))
+            }
             BinaryFunc::DateBinTimestamp => {
                 eager!(|a: Datum, b: Datum| date_bin(
                     a.unwrap_interval(),
