@@ -51,7 +51,12 @@ impl PendingTail {
         let mut packer = Row::default();
         match response {
             TailResponse::Progress(upper) => {
-                if self.emit_progress {
+                if self.emit_progress && !upper.is_empty() {
+                    assert_eq!(
+                        upper.len(),
+                        1,
+                        "TAIL only supports single-dimensional timestamps"
+                    );
                     packer.push(Datum::from(numeric::Numeric::from(*&upper[0])));
                     packer.push(Datum::True);
                     // Fill in the diff column and all table columns with NULL.
@@ -66,7 +71,7 @@ impl PendingTail {
                         // receiver has gone away. E.g. form a DROP SINK command?
                     }
                 }
-                false
+                upper.is_empty()
             }
             TailResponse::Rows(mut rows) => {
                 // Sort results by time. We use stable sort here because it will produce deterministic
