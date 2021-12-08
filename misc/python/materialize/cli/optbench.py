@@ -10,12 +10,13 @@
 import csv
 import tempfile
 from pathlib import Path
+from typing import cast
 
 import click
 import numpy as np
-import pandas as pd
+import pandas as pd  # type: ignore
 
-from ..optbench import Scenario, sql, util
+from ..optbench import Scenario, scenarios, sql, util
 
 # import logging
 # logging.basicConfig(encoding='utf-8', level=logging.DEBUG)
@@ -25,13 +26,13 @@ from ..optbench import Scenario, sql, util
 
 
 @click.group()
-def app():
+def app() -> None:
     pass
 
 
 class Arg:
     scenario = dict(
-        type=click.Choice([s.value for s in Scenario]),
+        type=click.Choice(scenarios()),
         callback=lambda ctx, param, value: Scenario(value),
     )
 
@@ -142,7 +143,10 @@ def run(
             data={
                 query.name(): np.array(
                     [
-                        db.explain(query, timing=True).optimization_time().astype(int)
+                        cast(
+                            np.timedelta64,
+                            db.explain(query, timing=True).optimization_time(),
+                        ).astype(int)
                         for _ in range(samples)
                     ]
                 )

@@ -22,3 +22,4 @@ types-PyMYSQL==1.0.2
 types-PyYAML==5.4.10
 types-requests==2.25.11
 types-toml==0.10.1
+types-pkg-resources==0.1.3

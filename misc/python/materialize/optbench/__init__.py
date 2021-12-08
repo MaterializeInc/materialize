@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from enum import Enum
 from pathlib import Path
 from typing import List
 
@@ -19,6 +18,10 @@ def resource_path(name: str) -> Path:
 
 
 def scenarios() -> List[str]:
+    """
+    Determines a list of avilable scenarios based on the intersection
+    of files located in both the `schema` and `workload` resource paths.
+    """
     schema_files = {
         p.stem
         for p in resource_path("schema").iterdir()
@@ -33,7 +36,15 @@ def scenarios() -> List[str]:
     return sorted(schema_files.intersection(workload_files))
 
 
-Scenario = Enum("Scenario", {scenario: scenario for scenario in scenarios()})
-Scenario.__str__ = lambda self: self.value
-Scenario.schema_path = lambda self: resource_path(f"schema/{self}.sql")
-Scenario.workload_path = lambda self: resource_path(f"workload/{self}.sql")
+class Scenario:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def schema_path(self) -> Path:
+        return resource_path(f"schema/{self}.sql")
+
+    def workload_path(self) -> Path:
+        return resource_path(f"workload/{self}.sql")
+
+    def __str__(self) -> str:
+        return self.value
