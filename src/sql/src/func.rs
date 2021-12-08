@@ -2428,7 +2428,7 @@ lazy_static! {
                 params!(Float32) => UnaryFunc::NegFloat32(func::NegFloat32), 584;
                 params!(Float64) => UnaryFunc::NegFloat64(func::NegFloat64), 585;
                 params!(Numeric) => UnaryFunc::NegNumeric(func::NegNumeric), 17510;
-                params!(Interval) => UnaryFunc::NegInterval, 1336;
+                params!(Interval) => UnaryFunc::NegInterval(func::NegInterval), 1336;
                 params!(Int32, Int32) => SubInt32, 555;
                 params!(Int64, Int64) => SubInt64, 685;
                 params!(Float32, Float32) => SubFloat32, 587;

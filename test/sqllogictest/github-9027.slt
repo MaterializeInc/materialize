@@ -647,7 +647,9 @@ WHERE
                                                 "func": "Eq",
                                                 "expr1": {
                                                   "CallUnary": {
-                                                    "func": "CastDateToTimestamp",
+                                                    "func": {
+                                                      "CastDateToTimestamp": null
+                                                    },
                                                     "expr": {
                                                       "Column": 2
                                                     }
