@@ -11,9 +11,9 @@ import csv
 import tempfile
 from pathlib import Path
 
+import click
 import numpy as np
 import pandas as pd
-import typer
 
 from ..optbench import Scenario, sql, util
 
@@ -23,66 +23,81 @@ from ..optbench import Scenario, sql, util
 # Typer CLI Application
 # ---------------------
 
-app = typer.Typer()
+
+@click.group()
+def app():
+    pass
 
 
 class Arg:
-    scenario: Scenario = typer.Argument(..., help="Scenario to use.")
-
-    base: Path = typer.Argument(
-        ...,
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        writable=False,
-        readable=True,
-        resolve_path=True,
-        help="Results of the base run",
+    scenario = dict(
+        type=click.Choice([s.value for s in Scenario]),
+        callback=lambda ctx, param, value: Scenario(value),
     )
 
-    diff: Path = typer.Argument(
-        ...,
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        writable=False,
-        readable=True,
-        resolve_path=True,
-        help="Results of the diff run",
+    base = dict(
+        type=click.Path(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            writable=False,
+            readable=True,
+            resolve_path=True,
+        ),
+        callback=lambda ctx, param, value: Path(value),
+    )
+
+    diff = dict(
+        type=click.Path(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            writable=False,
+            readable=True,
+            resolve_path=True,
+        ),
+        callback=lambda ctx, param, value: Path(value),
     )
 
 
 class Opt:
-    repository: Path = typer.Option(
-        Path(tempfile.gettempdir()),
-        exists=True,
-        file_okay=False,
-        dir_okay=True,
-        writable=True,
-        readable=True,
-        resolve_path=True,
+    repository = dict(
+        default=Path(tempfile.gettempdir()),
+        type=click.Path(
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            writable=True,
+            readable=True,
+            resolve_path=True,
+        ),
         help="Experiment results folder.",
+        callback=lambda ctx, param, value: Path(value),
     )
 
-    samples: int = typer.Option(11, help="Samples per query.")
+    samples = dict(default=11, help="Samples per query.")
 
-    print_results: bool = typer.Option(False, help="Print the experiment results.")
+    print_results = dict(default=False, help="Print the experiment results.")
 
-    db_port: int = typer.Option(6875, help="DB connection port.")
+    db_port = dict(default=6875, help="DB connection port.")
 
-    db_host: str = typer.Option("localhost", help="DB connection host.")
+    db_host = dict(default="localhost", help="DB connection host.")
 
-    db_user: str = typer.Option("materialize", help="DB connection user.")
+    db_user = dict(default="materialize", help="DB connection user.")
 
 
 @app.command()
+@click.argument("scenario", **Arg.scenario)
+@click.option("--db-port", **Opt.db_port)
+@click.option("--db-host", **Opt.db_host)
+@click.option("--db-user", **Opt.db_user)
 def init(
-    scenario: Scenario = Arg.scenario,
-    db_port: int = Opt.db_port,
-    db_host: str = Opt.db_host,
-    db_user: str = Opt.db_user,
+    scenario: Scenario,
+    db_port: int,
+    db_host: str,
+    db_user: str,
 ) -> None:
-    """Initialize the DB under test for the given `scenario`."""
+    """Initialize the DB under test for the given scenario."""
 
     info(f'Initializing "{scenario}" as the DB under test')
 
@@ -95,21 +110,27 @@ def init(
         db.set_database(scenario)
         db.execute_all(statements=sql.parse_from_file(scenario.schema_path()))
     except Exception as e:
-        err(f"DB initialization failed: {e}")
-        raise typer.Exit()
+        raise click.ClickException(f"init command failed: {e}")
 
 
 @app.command()
+@click.argument("scenario", **Arg.scenario)
+@click.option("--samples", **Opt.samples)
+@click.option("--repository", **Opt.repository)
+@click.option("--print-results", **Opt.print_results)
+@click.option("--db-port", **Opt.db_port)
+@click.option("--db-host", **Opt.db_host)
+@click.option("--db-user", **Opt.db_user)
 def run(
-    scenario: Scenario = Arg.scenario,
-    samples: int = Opt.samples,
-    repository: Path = Opt.repository,
-    print_results: bool = Opt.print_results,
-    db_port: int = Opt.db_port,
-    db_host: str = Opt.db_host,
-    db_user: str = Opt.db_user,
+    scenario: Scenario,
+    samples: int,
+    repository: Path,
+    print_results: bool,
+    db_port: int,
+    db_host: str,
+    db_user: str,
 ) -> None:
-    """Run benchmark in the DB under test"""
+    """Run benchmark in the DB under test for a given scenario."""
 
     info(f'Running "{scenario}" scenario')
 
@@ -139,14 +160,15 @@ def run(
         info(f'Writing results to "{results_path}"')
         df.to_csv(results_path, index=False, quoting=csv.QUOTE_MINIMAL)
     except Exception as e:
-        err(f"run command failed: {e}")
-        raise typer.Exit()
+        raise click.ClickException(f"run command failed: {e}")
 
 
 @app.command()
+@click.argument("base", **Arg.base)
+@click.argument("diff", **Arg.diff)
 def compare(
-    base: Path = Arg.base,
-    diff: Path = Arg.diff,
+    base: Path,
+    diff: Path,
 ) -> None:
     """Compare the results of a base and diff benchmark runs."""
 
@@ -179,8 +201,7 @@ def compare(
         print("---------------")
         print(quot_df.to_string())
     except Exception as e:
-        err(f"compare command failed: {e}")
-        raise typer.Exit()
+        raise click.ClickException(f"compare command failed: {e}")
 
 
 # Utility methods
@@ -192,13 +213,12 @@ def print_df(df: pd.DataFrame) -> None:
         print(df)
 
 
-def info(msg: str, fg: str = typer.colors.GREEN) -> None:
-    typer.secho(msg, fg=fg)
+def info(msg: str, fg: str = "green") -> None:
+    click.secho(msg, fg=fg)
 
 
-def err(msg: str, fg: str = typer.colors.RED) -> None:
-    typer.secho(msg, fg=fg, err=True)
-
+def err(msg: str, fg: str = "red") -> None:
+    click.secho(msg, fg=fg, err=True)
 
 
 if __name__ == "__main__":

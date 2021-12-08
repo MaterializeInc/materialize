@@ -15,7 +15,6 @@ pytest==6.2.5
 requests==2.23.0
 sqlparse==0.4.2
 twine==3.4.2
-typer==0.4.0
 types-prettytable==2.1.0
 types-psutil==5.8.13
 types-psycopg2==2.9.1
