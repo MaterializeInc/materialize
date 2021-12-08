@@ -23,7 +23,7 @@ use crate::adt::interval::Interval;
 use crate::gen::row::proto_datum::Datum_type;
 use crate::gen::row::{
     ProtoArray, ProtoArrayDimension, ProtoDate, ProtoDatum, ProtoDatumOther, ProtoDict,
-    ProtoInterval, ProtoNumeric, ProtoRow, ProtoTime, ProtoTimestamp,
+    ProtoDictElement, ProtoInterval, ProtoNumeric, ProtoRow, ProtoTime, ProtoTimestamp,
 };
 use crate::{Datum, Row};
 
@@ -64,8 +64,8 @@ impl Codec for Row {
 impl<'a> From<Datum<'a>> for ProtoDatum {
     fn from(x: Datum<'a>) -> Self {
         let datum_type = match x {
-            Datum::False => Datum_type::other(ProtoDatumOther::False.into()),
-            Datum::True => Datum_type::other(ProtoDatumOther::True.into()),
+            Datum::False => Datum_type::bool(false),
+            Datum::True => Datum_type::bool(true),
             Datum::Int16(x) => Datum_type::int16(x.into()),
             Datum::Int32(x) => Datum_type::int32(x),
             Datum::Int64(x) => Datum_type::int64(x),
@@ -144,7 +144,15 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                 cached_size: Default::default(),
             }),
             Datum::Map(x) => Datum_type::dict(ProtoDict {
-                elements: x.iter().map(|(k, v)| (k.to_owned(), v.into())).collect(),
+                elements: x
+                    .iter()
+                    .map(|(k, v)| ProtoDictElement {
+                        key: k.to_owned(),
+                        val: MessageField::some(v.into()),
+                        unknown_fields: Default::default(),
+                        cached_size: Default::default(),
+                    })
+                    .collect(),
                 unknown_fields: Default::default(),
                 cached_size: Default::default(),
             }),
@@ -163,7 +171,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::JsonNull => Datum_type::other(ProtoDatumOther::JsonNull.into()),
             Datum::Uuid(x) => Datum_type::uuid(x.as_bytes().to_vec()),
             Datum::Dummy => Datum_type::other(ProtoDatumOther::Dummy.into()),
-            Datum::Null => Datum_type::other(ProtoDatumOther::Null.into()),
+            Datum::Null => Datum_type::null(true),
         };
         ProtoDatum {
             datum_type: Some(datum_type),
@@ -189,13 +197,14 @@ impl Row {
         match &x.datum_type {
             Some(Datum_type::other(o)) => match o.enum_value() {
                 Ok(ProtoDatumOther::Unknown) => return Err("unknown datum type".into()),
-                Ok(ProtoDatumOther::Null) => self.push(Datum::Null),
-                Ok(ProtoDatumOther::False) => self.push(Datum::False),
-                Ok(ProtoDatumOther::True) => self.push(Datum::True),
                 Ok(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
                 Ok(ProtoDatumOther::Dummy) => self.push(Datum::Dummy),
                 Err(id) => return Err(format!("unknown datum type: {}", id)),
             },
+            Some(Datum_type::null(true)) => self.push(Datum::Null),
+            Some(Datum_type::null(false)) => return Err(format!("unknown datum null=false")),
+            Some(Datum_type::bool(true)) => self.push(Datum::True),
+            Some(Datum_type::bool(false)) => self.push(Datum::False),
             Some(Datum_type::int16(x)) => {
                 let x = i16::try_from(*x)
                     .map_err(|_| format!("int16 field stored with out of range value: {}", *x))?;
@@ -268,9 +277,13 @@ impl Row {
                 .map_err(|err| err.to_string())?
             }
             Some(Datum_type::dict(x)) => self.push_dict_with(|row| -> Result<(), String> {
-                for (k, v) in x.elements.iter() {
-                    row.push(Datum::from(k.as_str()));
-                    row.try_push_proto(v)?;
+                for e in x.elements.iter() {
+                    row.push(Datum::from(e.key.as_str()));
+                    let val = e
+                        .val
+                        .as_ref()
+                        .ok_or_else(|| format!("missing val for key: {}", e.key))?;
+                    row.try_push_proto(val)?;
                 }
                 Ok(())
             })?,
@@ -357,18 +370,24 @@ mod tests {
             vec![Datum::Int32(31), Datum::Int32(32)],
         )
         .expect("valid array");
-        row.push_dict_with(|row| {
-            row.push(Datum::String("33"));
-            row.push(Datum::Int32(34));
-        });
         row.push_list_with(|row| {
-            row.push(Datum::String("35"));
+            row.push(Datum::String("33"));
             row.push_list_with(|row| {
-                row.push(Datum::String("36"));
-                row.push(Datum::String("37"));
+                row.push(Datum::String("34"));
+                row.push(Datum::String("35"));
             });
-            row.push(Datum::String("38"));
-            row.push(Datum::String("39"));
+            row.push(Datum::String("36"));
+            row.push(Datum::String("37"));
+        });
+        row.push_dict_with(|row| {
+            // Add a bunch of data to the hash to ensure we don't get a
+            // HashMap's random iteration anywhere in the encode/decode path.
+            let mut i = 38;
+            for _ in 0..20 {
+                row.push(Datum::String(&i.to_string()));
+                row.push(Datum::Int32(i + 1));
+                i += 2;
+            }
         });
 
         let mut encoded = Vec::new();

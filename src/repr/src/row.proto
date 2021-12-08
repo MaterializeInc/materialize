@@ -20,13 +20,15 @@ message ProtoDatum {
     // reserve them for the datum types we expect to be most popular.
     oneof datum_type {
         ProtoDatumOther other = 1;
-        int32 int16 = 2;
-        int32 int32 = 3;
-        int64 int64 = 4;
-        float float32 = 5;
-        double float64 = 6;
-        bytes bytes = 7;
-        string string = 8;
+        bool null = 2;
+        bool bool = 3;
+        int32 int16 = 4;
+        int32 int32 = 5;
+        int64 int64 = 6;
+        float float32 = 7;
+        double float64 = 8;
+        bytes bytes = 9;
+        string string = 10;
 
         // These get encoded with 2 bytes for the oneof id. It's a pretty easy
         // and low-debt migration to "bless" one of these into having a 1-byte
@@ -57,11 +59,8 @@ enum ProtoDatumOther {
     // distinguish unset without this sentinel. But stick one in here anyway,
     // in case this enum gets used somewhere else in the future.
     Unknown = 0;
-    Null = 1;
-    False = 2;
-    True = 3;
-    JsonNull = 4;
-    Dummy = 5;
+    JsonNull = 1;
+    Dummy = 2;
 }
 
 message ProtoDate {
@@ -109,8 +108,13 @@ message ProtoArray {
     // All array elements flattened into 1 dimension, encoded in row-major
     // order.
     ProtoRow elements = 1;
-    // TODO: This is a direct translation of our in-mem representation of array
-    // dimensions. Does anyone understand it well enough to document it?
+    // A list of metadata for each dimension in the array. Each dimension has a
+    // lower bound (the index at which the dimension begins) and the length of
+    // the dimension (the number of elements in that dimension). For a 3x4
+    // matrix, for example, you'd have two entries in the dims array, the first
+    // with length 3 and the second with length 4. ATM the lower bound for each
+    // dimension is always 1, but Postgres technically lets you choose any lower
+    // bound you like for each dimension.
     repeated ProtoArrayDimension dims = 2;
 }
 
@@ -120,7 +124,12 @@ message ProtoArrayDimension {
 }
 
 message ProtoDict {
-    map<string, ProtoDatum> elements = 1;
+    repeated ProtoDictElement elements = 1;
+}
+
+message ProtoDictElement {
+    string key = 1;
+    ProtoDatum val = 2;
 }
 
 // TODO: These are difficult to define, but are passed directly from and into
