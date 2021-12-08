@@ -952,6 +952,7 @@ impl Catalog {
                             optimized_expr,
                             connector: dataflow_types::SourceConnector::Local {
                                 timeline: Timeline::EpochMilliseconds,
+                                persisted_name: None,
                             },
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),

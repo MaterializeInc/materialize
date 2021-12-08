@@ -105,13 +105,14 @@ impl<'a> DataflowBuilder<'a> {
                                 name: entry.name().to_string(),
                                 connector: SourceConnector::Local {
                                     timeline: table.timeline(),
+                                    persisted_name: table
+                                        .persist
+                                        .as_ref()
+                                        .map(|p| p.stream_name.clone()),
                                 },
                                 operators: None,
                                 bare_desc: table.desc.clone(),
-                                persisted_name: table
-                                    .persist
-                                    .as_ref()
-                                    .map(|p| p.stream_name.clone()),
+                                persisted_name: None,
                             },
                             *id,
                         );
