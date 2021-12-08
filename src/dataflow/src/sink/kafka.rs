@@ -514,6 +514,10 @@ impl KafkaSinkState {
             assert!(write_frontier.less_equal(&min_frontier));
             write_frontier.clear();
             write_frontier.insert(min_frontier);
+        } else {
+            // If there's no longer an input frontier, we will no longer receive any data forever and, therefore, will
+            // never output more data
+            self.write_frontier.borrow_mut().clear();
         }
 
         Ok(())
