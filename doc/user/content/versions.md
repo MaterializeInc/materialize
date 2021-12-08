@@ -11,14 +11,23 @@ Binary tarballs for all stable releases are provided below. Other installation
 options are available for the latest stable release on the [Install
 page](/install).
 
+{{< warning >}}
+Support for the ARM CPU architecture is in beta. You may encounter performance
+and stability issues. Running Materialize on ARM in production is not yet
+recommended.
+{{< /warning >}}
+
 {{< version-list >}}
 
 Binary tarballs require a recent version of their stated platform:
 
-* macOS binary tarballs require macOS 10.14 and later.
-* Linux binary tarballs require a glibc-based Linux distribution whose kernel
-  and glibc versions are compatible with Ubuntu Xenial. Glibc-based Linux
-  distributions released mid-2016 or later are likely to be compatible.
+* macOS Intel binary tarballs require macOS 10.14+ from v0.1.0 – v0.9.0 and
+  macOS 10.15+ from v0.9.1 onwards.
+* macOS ARM binary tarballs require macOS 11+.
+* Linux Intel binary tarballs require a glibc-based Linux distribution with a
+  kernel version of v2.6.32+ and a glibc version of 2.12.1+.
+* Linux ARM binary tarballs require a glibc-based Linux distrubtion with a
+  kernel version of v3.10+ and a glibc version of 2.17+.
 
 ## Unstable builds
 
@@ -26,10 +35,10 @@ Binary tarballs are built for every merge to the [main branch on
 GitHub][github]. These tarballs are not suitable for use in production.
 **Run unstable builds at your own risk.**
 
-| Method       | Available at                        |
-|--------------|-------------------------------------|
-| Tarball      | [Linux] / [macOS]                   |
-| Docker image | `materialize/materialized:unstable` |
+| Method       | Available at                                              |
+|--------------|-----------------------------------------------------------|
+| Tarball      | [Linux Intel] / [Linux ARM] / [macOS Intel] / [macOS ARM] |
+| Docker image | `materialize/materialized:unstable`                       |
 
 To get an arbitrary commit for:
 
@@ -150,7 +159,9 @@ If you choose to use these unstable interfaces, you do so at your own risk.
 Backwards-incompatible changes may be made to these unstable interfaces at any
 time and without mention in the release notes.
 
-[Linux]: https://binaries.materialize.com/materialized-latest-x86_64-unknown-linux-gnu.tar.gz
-[macOS]: https://binaries.materialize.com/materialized-latest-x86_64-apple-darwin.tar.gz
+[Linux Intel]: https://binaries.materialize.com/materialized-latest-x86_64-unknown-linux-gnu.tar.gz
+[Linux ARM]: https://binaries.materialize.com/materialized-latest-aarch64-unknown-linux-gnu.tar.gz
+[macOS Intel]: https://binaries.materialize.com/materialized-latest-x86_64-apple-darwin.tar.gz
+[macOS ARM]: https://binaries.materialize.com/materialized-latest-aarch64-apple-darwin.tar.gz
 [github]: https://github.com/MaterializeInc/materialize
 [Semantic Versioning]: https://semver.org
