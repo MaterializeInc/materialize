@@ -1334,7 +1334,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_regex",
- "smallvec",
  "timely",
  "tokio",
  "url",

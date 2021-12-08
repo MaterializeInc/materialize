@@ -24,7 +24,6 @@ use globset::Glob;
 use http::Uri;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
 use timely::progress::frontier::Antichain;
 use url::Url;
 use uuid::Uuid;
@@ -33,6 +32,7 @@ use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, P
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{self, NormalizedProtobufMessageName};
 use kafka_util::KafkaAddrs;
+use ore::cast::CastFrom;
 use repr::{ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
 
 /// The response from a `Peek`.
@@ -973,21 +973,15 @@ impl ExternalSourceConnector {
                     }
                 }
 
-                MetadataVec(items.into_values().collect())
+                items.into_values().collect()
             }
 
             ExternalSourceConnector::Kinesis(_)
             | ExternalSourceConnector::File(_)
             | ExternalSourceConnector::AvroOcf(_)
-            | ExternalSourceConnector::S3(_) => {
-                let mut items = SmallVec::new();
-                if default_metadata {
-                    items.push(IncludedColumnSource::DefaultPosition);
-                }
-                MetadataVec(items)
-            }
+            | ExternalSourceConnector::S3(_) => IncludeRequests::default_position(),
             ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => {
-                MetadataVec(SmallVec::new())
+                IncludeRequests::new()
             }
         }
     }
@@ -1116,11 +1110,64 @@ pub struct KafkaSourceConnector {
 }
 
 /// The set of Metadata Items a source requested
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct MetadataVec(pub SmallVec<[IncludedColumnSource; 4]>);
+///
+/// Currently this needs to be copied for every row that we decode, so it is limited to allowing 7
+/// metadata items. Currently the maximum number of metadata items people can request is 3, so
+/// hopefully this will last us long enough that we can fix the implementation so that it is no
+/// longer copied for every decoded row. See #9515
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IncludeRequests {
+    data: [IncludedColumnSource; 7],
+    len: u8,
+}
+
+impl fmt::Debug for IncludeRequests {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("IncludeRequests ")?;
+
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl IncludeRequests {
+    /// Create a new empty set of Metadata requests
+    pub fn new() -> IncludeRequests {
+        IncludeRequests {
+            data: [IncludedColumnSource::DefaultPosition; 7],
+            len: 0,
+        }
+    }
+
+    /// The default metadata that we provide if not `INCLUDE` is specified
+    ///
+    /// Default metadata is a legacy feature and should be removed at some point in the future
+    pub fn default_position() -> IncludeRequests {
+        IncludeRequests {
+            data: [IncludedColumnSource::DefaultPosition; 7],
+            len: 1,
+        }
+    }
+
+    /// Iterate over all metadata sources
+    pub fn iter(&self) -> impl Iterator<Item = IncludedColumnSource> + '_ {
+        self.data.iter().take(usize::cast_from(self.len)).copied()
+    }
+}
+
+impl FromIterator<IncludedColumnSource> for IncludeRequests {
+    fn from_iter<T: IntoIterator<Item = IncludedColumnSource>>(iter: T) -> Self {
+        let mut data = IncludeRequests::new();
+        for item in iter.into_iter() {
+            let idx = usize::cast_from(data.len);
+            data.data[idx] = item;
+            data.len += 1;
+        }
+        data
+    }
+}
 
 /// Which piece of metadata a column corresponds to
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum IncludedColumnSource {
     /// The materialize-specific notion of "position"
     ///

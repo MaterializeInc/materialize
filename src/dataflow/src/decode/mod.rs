@@ -529,7 +529,7 @@ where
                             value,
                             position: *position,
                             metadata: to_kafka_metadata(
-                                metadata_items.clone(),
+                                metadata_items,
                                 partition.clone(),
                                 *position,
                                 *upstream_time,
@@ -638,7 +638,7 @@ where
                                     }
                                     let position = n_seen.next();
                                     let metadata = to_kafka_metadata(
-                                        metadata_items.clone(),
+                                        metadata_items,
                                         partition.clone(),
                                         position,
                                         *upstream_time_millis,
@@ -667,7 +667,7 @@ where
 
                     if value.is_empty() {
                         let metadata = to_kafka_metadata(
-                            metadata_items.clone(),
+                            metadata_items,
                             partition.clone(),
                             None,
                             *upstream_time_millis,
@@ -711,7 +711,7 @@ where
                             }
                             let position = n_seen.next();
                             let metadata = to_kafka_metadata(
-                                metadata_items.clone(),
+                                metadata_items,
                                 partition.clone(),
                                 position,
                                 *upstream_time_millis,
@@ -764,7 +764,7 @@ fn to_kafka_metadata(
     let mut row = Row::default();
     match partition {
         PartitionId::Kafka(partition) => {
-            for item in metadata_items.0 {
+            for item in metadata_items.iter() {
                 match item {
                     IncludedColumnSource::Partition => row.push(Datum::from(partition)),
                     IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => row
@@ -789,7 +789,7 @@ fn to_kafka_metadata(
             }
         }
         PartitionId::None => {
-            for item in metadata_items.0 {
+            for item in metadata_items.iter() {
                 match item {
                     IncludedColumnSource::DefaultPosition => row.push(Datum::from(
                         position.expect("kafka sources always have position"),
