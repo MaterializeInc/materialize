@@ -28,6 +28,14 @@ _src_name_  | The name for the source.
 **CONNECTION** _connection_info_ | Postgres connection parameters. See the Postgres documentation on [supported correction parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) for details.
 **PUBLICATION** _publication_name_ | Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 
+## `WITH` options
+
+The following option is valid within the `WITH` clause.
+
+Field | Value type | Description
+------|------------|------------
+`timestamp_frequency_ms`  |  `int` |  Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently the source advances its timestamp. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
+
 ## PostgreSQL source details
 
 Materialize makes use of PostgreSQL's native replication capabilities to create a continuously updated replica of the desired Postgres tables.
