@@ -180,6 +180,9 @@ where
         (ok_stream, err_stream)
     }
 
+    // XXX(guswynn): file an minimization bug report for the logic flat_map
+    // false positive here
+    #[allow(clippy::redundant_closure)]
     fn flat_map_fallible<D2, E, I, L>(
         &self,
         name: &str,

@@ -37,7 +37,7 @@ impl NonNullable {
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         match relation {
             MirRelationExpr::Map { input, scalars } => {
-                if scalars.iter().any(|s| scalar_contains_isnull(s)) {
+                if scalars.iter().any(scalar_contains_isnull) {
                     let mut metadata = input.typ();
                     for scalar in scalars.iter_mut() {
                         scalar_nonnullable(scalar, &metadata);
@@ -47,7 +47,7 @@ impl NonNullable {
                 }
             }
             MirRelationExpr::Filter { input, predicates } => {
-                if predicates.iter().any(|s| scalar_contains_isnull(s)) {
+                if predicates.iter().any(scalar_contains_isnull) {
                     let metadata = input.typ();
                     for predicate in predicates.iter_mut() {
                         scalar_nonnullable(predicate, &metadata);

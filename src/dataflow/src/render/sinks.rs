@@ -112,8 +112,7 @@ where
         // 3. if none of the above, use the whole row as key to
         //  consolidate and distribute work but don't write to the sink
 
-        let keyed = if user_key_indices.is_some() {
-            let key_indices = user_key_indices.expect("known to exist");
+        let keyed = if let Some(key_indices) = user_key_indices {
             let mut datum_vec = repr::DatumVec::new();
             collection.map(move |row| {
                 // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
@@ -124,8 +123,7 @@ where
                 };
                 (Some(key), row)
             })
-        } else if relation_key_indices.is_some() {
-            let relation_key_indices = relation_key_indices.expect("known to exist");
+        } else if let Some(relation_key_indices) = relation_key_indices {
             let mut datum_vec = repr::DatumVec::new();
             collection.map(move |row| {
                 // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?

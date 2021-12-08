@@ -70,7 +70,8 @@ shared volumes, those files will be owned by root *on your host machine*.
 2. Run `bin/check` and `bin/lint` to see if there are any new Clippy lints or
    rustfmt style adjustments in this release. If so, fix them.
 
-3. Commit all outstanding changes and open a PR.
+3. (optional) [Rebuild the image](#modifying-the-image)
+4. Commit all outstanding changes and open a PR.
 
 You may also need to upgrade the nightly version of the image, if it has become
 sufficiently out-of-date that it can no longer compile our codebase. That

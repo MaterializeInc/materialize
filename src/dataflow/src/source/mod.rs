@@ -503,8 +503,8 @@ impl ConsInfo {
     /// Store a new (time, offset) binding in the cache. If no such binding is
     /// available, we will start proposing our own.
     fn update_timestamp(&mut self, timestamp: Timestamp, offset: Option<MzOffset>) {
-        if offset.is_some() {
-            self.update_timestamp_fixed(timestamp, offset.expect("known to exist"));
+        if let Some(offset) = offset {
+            self.update_timestamp_fixed(timestamp, offset);
         } else {
             // We only got a new timestamp, and no new upper bound. Let's declare the
             // upper bound to be equal to the current maximum processed offset and go

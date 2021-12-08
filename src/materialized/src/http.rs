@@ -237,14 +237,14 @@ impl Server {
 #[derive(Clone)]
 pub struct ThirdPartyServer {
     metrics_registry: MetricsRegistry,
-    global_metrics: Metrics,
+    _global_metrics: Metrics,
 }
 
 impl ThirdPartyServer {
     pub fn new(metrics_registry: MetricsRegistry, global_metrics: Metrics) -> Self {
         Self {
             metrics_registry,
-            global_metrics,
+            _global_metrics: global_metrics,
         }
     }
 

@@ -17,7 +17,7 @@ use sql::catalog::CatalogError as SqlCatalogError;
 #[derive(Debug)]
 pub struct Error {
     pub(crate) kind: ErrorKind,
-    pub(crate) backtrace: Backtrace,
+    pub(crate) _backtrace: Backtrace,
 }
 
 #[derive(Debug)]
@@ -68,7 +68,7 @@ impl Error {
     pub(crate) fn new(kind: ErrorKind) -> Error {
         Error {
             kind,
-            backtrace: Backtrace::new_unresolved(),
+            _backtrace: Backtrace::new_unresolved(),
         }
     }
 

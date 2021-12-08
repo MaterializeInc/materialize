@@ -46,7 +46,7 @@ pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode
 #[derive(Debug)]
 pub struct Encoder {
     columns: Vec<(ColumnName, ColumnType)>,
-    schema: Schema,
+    _schema: Schema,
 }
 
 impl Encoder {
@@ -55,7 +55,10 @@ impl Encoder {
         let columns = column_names_and_types(desc);
         let row_schema = super::build_row_schema_json(&columns, "data");
         let schema = build_schema(row_schema);
-        Self { columns, schema }
+        Self {
+            columns,
+            _schema: schema,
+        }
     }
 
     /// Encodes a batch of updates as an Avro value.

@@ -349,9 +349,8 @@ impl Runtime for Direct {
     type Worker = DirectWorker;
 
     fn add_worker(&mut self) -> DirectWorker {
-        let idx = self.workers;
         self.workers += 1;
-        DirectWorker::new(idx, self.shared.clone())
+        DirectWorker::new(self.shared.clone())
     }
 
     fn finish(self) {
@@ -379,7 +378,6 @@ impl Direct {
 
 #[derive(Debug)]
 pub struct DirectWorker {
-    worker_idx: usize,
     shared: Arc<DirectShared>,
     unreliable: UnreliableHandle,
 
@@ -452,10 +450,9 @@ impl RuntimeWorker for DirectWorker {
 }
 
 impl DirectWorker {
-    fn new(worker_idx: usize, shared: Arc<DirectShared>) -> Self {
+    fn new(shared: Arc<DirectShared>) -> Self {
         let unreliable = shared.unreliable.clone();
         DirectWorker {
-            worker_idx,
             shared,
             unreliable,
             handles_generation: 0,
