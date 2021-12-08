@@ -77,10 +77,7 @@ impl UnionBranchCancellation {
             };
 
             let base_sign = Self::branch_sign(base);
-            let input_signs = inputs
-                .iter()
-                .map(Self::branch_sign)
-                .collect_vec();
+            let input_signs = inputs.iter().map(Self::branch_sign).collect_vec();
 
             // Compare branches if there is at least a negated branch
             if std::iter::once(&base_sign).chain(&input_signs).any(|x| *x) {
