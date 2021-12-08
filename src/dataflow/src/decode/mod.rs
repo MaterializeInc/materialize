@@ -610,18 +610,11 @@ where
                 for SourceOutput {
                     key: _,
                     value,
-                    position,
+                    position: _,
                     upstream_time_millis,
                     partition,
                 } in data.iter()
                 {
-                    let metadata = to_kafka_metadata(
-                        metadata_items.clone(),
-                        partition.clone(),
-                        *position,
-                        *upstream_time_millis,
-                    );
-
                     let value = match value {
                         MessagePayload::Data(data) => data,
                         MessagePayload::EOF => {
@@ -643,11 +636,19 @@ where
                                     } else if matches!(&value, Ok(_)) {
                                         n_successes += 1;
                                     }
+                                    let position = n_seen.next();
+                                    let metadata = to_kafka_metadata(
+                                        metadata_items.clone(),
+                                        partition.clone(),
+                                        position,
+                                        *upstream_time_millis,
+                                    );
+
                                     session.give(DecodeResult {
                                         key: None,
                                         value: Some(value),
-                                        position: n_seen.next(),
-                                        metadata: metadata.clone(),
+                                        position,
+                                        metadata,
                                     });
                                 }
                             }
@@ -665,11 +666,17 @@ where
                     };
 
                     if value.is_empty() {
+                        let metadata = to_kafka_metadata(
+                            metadata_items.clone(),
+                            partition.clone(),
+                            None,
+                            *upstream_time_millis,
+                        );
                         session.give(DecodeResult {
                             key: None,
                             value: None,
                             position: None,
-                            metadata: metadata.clone(),
+                            metadata,
                         });
                     } else {
                         let value_bytes_remaining = &mut value.as_slice();
@@ -702,12 +709,20 @@ where
                             } else if matches!(&value, Ok(_)) {
                                 n_successes += 1;
                             }
+                            let position = n_seen.next();
+                            let metadata = to_kafka_metadata(
+                                metadata_items.clone(),
+                                partition.clone(),
+                                position,
+                                *upstream_time_millis,
+                            );
+
                             if value_bytes_remaining.is_empty() {
                                 session.give(DecodeResult {
                                     key: None,
                                     value: Some(value),
-                                    position: n_seen.next(),
-                                    metadata: metadata.clone(),
+                                    position,
+                                    metadata,
                                 });
                                 value_buf = vec![];
                                 break;
@@ -715,8 +730,8 @@ where
                                 session.give(DecodeResult {
                                     key: None,
                                     value: Some(value),
-                                    position: n_seen.next(),
-                                    metadata: metadata.clone(),
+                                    position,
+                                    metadata,
                                 });
                             }
                             if is_err {
@@ -745,11 +760,11 @@ fn to_kafka_metadata(
     partition: PartitionId,
     position: Option<i64>,
     upstream_time_millis: Option<i64>,
-) -> Option<Row> {
-    if let PartitionId::Kafka(partition) = partition {
-        if !metadata_items.0.is_empty() {
-            let mut row = Row::default();
-            for item in metadata_items.0.iter() {
+) -> Row {
+    let mut row = Row::default();
+    match partition {
+        PartitionId::Kafka(partition) => {
+            for item in metadata_items.0 {
                 match item {
                     IncludedColumnSource::Partition => row.push(Datum::from(partition)),
                     IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => row
@@ -772,11 +787,17 @@ fn to_kafka_metadata(
                     IncludedColumnSource::Topic => unreachable!("Topic is not implemented yet"),
                 }
             }
-            Some(row)
-        } else {
-            None
         }
-    } else {
-        None
+        PartitionId::None => {
+            for item in metadata_items.0 {
+                match item {
+                    IncludedColumnSource::DefaultPosition => row.push(Datum::from(
+                        position.expect("kafka sources always have position"),
+                    )),
+                    _ => unreachable!("Only Kafka supports non-defaultposition metadata items"),
+                }
+            }
+        }
     }
+    row
 }

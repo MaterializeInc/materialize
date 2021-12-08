@@ -169,7 +169,7 @@ pub struct DecodeResult {
     /// If this is a Kafka stream, the appropriate metadata
     // TODO(bwm): This should probably be statically different for different streams, or we should
     // propagate whether metadata is requested into the decoder
-    pub metadata: Option<Row>,
+    pub metadata: Row,
 }
 
 /// Kafka-specific information about the event

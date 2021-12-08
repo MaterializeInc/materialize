@@ -771,8 +771,8 @@ where
     results.map(move |res| {
         let val = res.value.map(|val_result| {
             val_result.map(|mut val| {
-                if let Some(md) = res.metadata {
-                    val.extend(md.into_iter());
+                if !res.metadata.is_empty() {
+                    val.extend(res.metadata.into_iter());
                 }
 
                 val
@@ -796,7 +796,7 @@ where
             // TODO: turn this into a bail. Need to handle persistence and other upsert things that
             // don't have any error handling.
             offset: res.position.expect("Kafka must have offset"),
-            metadata: res.metadata.unwrap_or_else(Row::default),
+            metadata: res.metadata,
         }
     })
 }
