@@ -94,7 +94,11 @@ SELECT LIST[['a', 'b'], ['c']];
  {{a,b},{c}}
 ```
 
-Alternatively, you can construct a list from the results subquery.  These subqueries must return a single column.  Note that, in this form of the `LIST` expression, parentheses are used rather than square brackets.
+{{< version-added v0.9.13 >}}
+Alternatively, you can construct a list from the results of a subquery. The
+subquery must return a single column. Note that, in this form of the `LIST`
+expression, parentheses are used rather than square brackets.
+{{< /version-added >}}
 
 ```sql
 SELECT LIST(SELECT x FROM test0 WHERE x > 0 ORDER BY x DESC LIMIT 3);
