@@ -80,6 +80,11 @@ where
         now: NowFn,
         base_metrics: &SourceBaseMetrics,
     ) {
+        // Extract the linear operators, as we will need to manipulate them.
+        // extracting them reduces the change we might accidentally communicate
+        // them through `src`.
+        let linear_operators = src.operators.take();
+
         // Before proceeding, we may need to remediate sources with non-trivial relational
         // expressions that post-process the bare source. If the expression is trivial, a
         // get of the bare source, we can present `src.operators` to the source directly.
@@ -87,7 +92,58 @@ where
         // at the end of `src.optimized_expr`.
         //
         // This has a lot of potential for improvement in the near future.
-        match src.connector.clone() {
+        match src.connector {
+            ConnectorDesc::NonpersistedSource(connector) => self.render_source(
+                render_state,
+                tokens,
+                scope,
+                materialized_logging,
+                now,
+                base_metrics,
+                src.name,
+                src.bare_desc,
+                linear_operators,
+                src_id,
+                orig_id,
+                connector,
+                None,
+            ),
+            ConnectorDesc::PersistedSource(connector, persist_desc) => self.render_source(
+                render_state,
+                tokens,
+                scope,
+                materialized_logging,
+                now,
+                base_metrics,
+                src.name,
+                src.bare_desc,
+                linear_operators,
+                src_id,
+                orig_id,
+                connector,
+                Some(persist_desc), // <- this is the only different to above!
+            ),
+            ConnectorDesc::Ingest(_) => unreachable!("the coordinator does not send these out"),
+        }
+    }
+
+    fn render_source(
+        &mut self,
+        render_state: &mut RenderState,
+        tokens: &mut RelevantTokens,
+        scope: &mut G,
+        materialized_logging: Option<Logger>,
+        now: NowFn,
+        base_metrics: &SourceBaseMetrics,
+        src_name: String,
+        bare_desc: RelationDesc,
+        linear_operators: Option<LinearOperator>,
+        src_id: GlobalId,
+        orig_id: GlobalId,
+        connector: SourceConnector,
+        persist_desc: Option<SourcePersistDesc>,
+    ) {
+        match connector {
             // Create a new local input (exposed as TABLEs to users). Data is inserted
             // via Command::Insert commands.
             SourceConnector::Local { persisted_name, .. } => {
@@ -102,11 +158,6 @@ where
                 ts_frequency,
                 timeline: _,
             } => {
-                // Extract the linear operators, as we will need to manipulate them.
-                // extracting them reduces the change we might accidentally communicate
-                // them through `src`.
-                let linear_operators = src.operators.take();
-
                 self.render_external_source(
                     render_state,
                     tokens,
@@ -114,14 +165,14 @@ where
                     materialized_logging,
                     now,
                     base_metrics,
-                    src.name,
+                    src_name,
                     src_id,
                     orig_id,
                     connector,
-                    src.persist_desc,
+                    persist_desc,
                     encoding,
                     envelope,
-                    src.bare_desc,
+                    bare_desc,
                     linear_operators,
                     consistency,
                     ts_frequency,

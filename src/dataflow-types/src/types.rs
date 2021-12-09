@@ -503,12 +503,49 @@ pub struct RegexEncoding {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceDesc {
     pub name: String,
-    pub connector: SourceConnector,
     /// Optionally, filtering and projection that may optimistically be applied
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
     pub bare_desc: RelationDesc,
-    pub persist_desc: Option<SourcePersistDesc>,
+    pub connector: ConnectorDesc,
+}
+
+// TODO: In a post-ingestd world, the first two would not be sent to `dataflow`, and only the
+// second would be sent to an `ingestd`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ConnectorDesc {
+    NonpersistedSource(SourceConnector),
+    PersistedSource(SourceConnector, SourcePersistDesc),
+    // TODO: Having this here only makes the rendering code slightly weird for now. I can leave it
+    // in or remove it. It currently doesn't do anything.
+    Ingest(IngestDesc),
+}
+
+impl ConnectorDesc {
+    pub fn nonpersisted(connector: SourceConnector) -> Self {
+        ConnectorDesc::NonpersistedSource(connector)
+    }
+
+    pub fn persisted(connector: SourceConnector, persist_desc: SourcePersistDesc) -> Self {
+        ConnectorDesc::PersistedSource(connector, persist_desc)
+    }
+
+    pub fn connector(&self) -> Option<SourceConnector> {
+        match self {
+            ConnectorDesc::NonpersistedSource(connector) => Some(connector.clone()),
+            ConnectorDesc::PersistedSource(connector, _persist_desc) => Some(connector.clone()),
+            ConnectorDesc::Ingest(_) => None,
+        }
+    }
+}
+
+/// A source that reads that from an ingester. This is "fully described" by the persistent stream
+/// that we have to read from.
+// TODO: This is for future work. No-one will use this for now, and no-one will create one. But
+// there can be prototypes that use this... ;-).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IngestDesc {
+    stream_name: String,
 }
 
 /// The persistence details that are needed to render a persistent Source.

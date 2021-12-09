@@ -15,6 +15,7 @@
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
 use super::*;
+use dataflow_types::ConnectorDesc;
 use ore::stack::maybe_grow;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -99,59 +100,47 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_by_id(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
+                        let connector = ConnectorDesc::nonpersisted(SourceConnector::Local {
+                            timeline: table.timeline(),
+                            persisted_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
+                        });
                         dataflow.import_source(
                             *id,
                             dataflow_types::SourceDesc {
                                 name: entry.name().to_string(),
-                                connector: SourceConnector::Local {
-                                    timeline: table.timeline(),
-                                    persisted_name: table
-                                        .persist
-                                        .as_ref()
-                                        .map(|p| p.stream_name.clone()),
-                                },
+                                connector,
                                 operators: None,
                                 bare_desc: table.desc.clone(),
-                                persist_desc: None,
                             },
                             *id,
                         );
                     }
                     CatalogItem::Source(source) => {
-                        let persist_desc = match &source.details {
-                            SourceDetails::NonpersistedSource(_connector) => None,
-                            SourceDetails::PersistedSource(_connector, persist_details) => {
-                                Some(persist_details.clone().into())
+                        let connector_desc = match &source.details {
+                            SourceDetails::NonpersistedSource(connector) => {
+                                ConnectorDesc::nonpersisted(connector.clone())
                             }
+                            SourceDetails::PersistedSource(connector, persist_details) => {
+                                ConnectorDesc::persisted(
+                                    connector.clone(),
+                                    persist_details.clone().into(),
+                                )
+                            }
+                        };
+                        let source_connector = dataflow_types::SourceDesc {
+                            name: entry.name().to_string(),
+                            connector: connector_desc,
+                            operators: None,
+                            bare_desc: source.bare_desc.clone(),
                         };
 
                         if source.optimized_expr.0.is_trivial_source() {
-                            dataflow.import_source(
-                                *id,
-                                dataflow_types::SourceDesc {
-                                    name: entry.name().to_string(),
-                                    connector: source.connector().clone(),
-                                    operators: None,
-                                    bare_desc: source.bare_desc.clone(),
-                                    persist_desc,
-                                },
-                                *id,
-                            );
+                            dataflow.import_source(*id, source_connector, *id);
                         } else {
                             // From the dataflow layer's perspective, the source transformation is just a view (across which it should be able to do whole-dataflow optimizations).
                             // Install it as such (giving the source a global transient ID by which the view/transformation can refer to it)
                             let bare_source_id = GlobalId::Transient(transient_id);
-                            dataflow.import_source(
-                                bare_source_id,
-                                dataflow_types::SourceDesc {
-                                    name: entry.name().to_string(),
-                                    connector: source.connector().clone(),
-                                    operators: None,
-                                    bare_desc: source.bare_desc.clone(),
-                                    persist_desc,
-                                },
-                                *id,
-                            );
+                            dataflow.import_source(bare_source_id, source_connector, *id);
                             let mut transformation = source.optimized_expr.clone();
                             transformation.0.visit_mut_post(&mut |node| {
                                 match node {
