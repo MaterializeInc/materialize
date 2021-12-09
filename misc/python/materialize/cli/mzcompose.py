@@ -87,11 +87,9 @@ def main(argv: List[str]) -> int:
 
     # From here on out we're definitely invoking Docker Compose, so make sure
     # it's new enough.
-    output = (
-        spawn.capture(["docker-compose", "version", "--short"], unicode=True)
-        .strip()
-        .strip("v")
-    )
+    output = spawn.capture(
+        ["docker-compose", "version", "--short"], unicode=True
+    ).strip()
 
     version = tuple(int(i) for i in output.split("."))
     if version < MIN_COMPOSE_VERSION:
