@@ -104,7 +104,7 @@ List new features before bug fixes.
 {{% version-header v0.12.0 %}}
 
 - Added the `pg_type_is_visible` [compatibility function](/sql/functions#postgresql-compatibility-func).
-- The `pg_get_constraintdef` ([compatibility function](/sql/functions#postgres-compatibility-func) parses but is unimplemented.
+- ensure `pg_get_constraintdef` ([compatibility function](/sql/functions#postgres-compatibility-func) parses, though it remains unimplemented.
 
 {{% version-header v0.11.0 %}}
 
