@@ -70,7 +70,10 @@ create_source_avro_kafka ::=
     'CONFLUENT SCHEMA REGISTRY' url with_options? |
     'SCHEMA' 'FILE' schema_file_path
   )
-  ('INCLUDE KEY' ('AS' key_name)?)?
+  ('INCLUDE'
+    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
+    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
+  )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
 create_source_csv_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
@@ -91,7 +94,10 @@ create_source_csv_kafka ::=
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT')
   ('CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? | format_spec)
-  ('INCLUDE KEY' ('AS' key_name)?)?
+  ('INCLUDE'
+    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
+    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
+  )?
   ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_csv_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
@@ -111,7 +117,10 @@ create_source_json_kafka ::=
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT' ) ( 'TEXT' | 'BYTES' | format_spec)
-  ('INCLUDE KEY' ('AS' key_name )?)?
+  ('INCLUDE'
+    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
+    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
+  )?
   ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_postgres ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
@@ -126,7 +135,10 @@ create_source_protobuf_kafka ::=
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT' )
    ('PROTOBUF MESSAGE' message_name
     'USING SCHEMA' 'FILE' schema_file_path)
-  ('INCLUDE KEY' ('AS' key_name)?)?
+  ('INCLUDE'
+    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
+    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
+  )?
   ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_protobuf_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
@@ -219,7 +231,10 @@ create_source_text_kafka ::=
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT') ('BYTES' | 'TEXT' | format_spec)
-  ('INCLUDE KEY' ('AS' key_name)?)?
+  ('INCLUDE'
+    ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)?
+    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP') ('AS' name)? )*
+  )?
   ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_text_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
