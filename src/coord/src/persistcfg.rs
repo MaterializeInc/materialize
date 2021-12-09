@@ -9,7 +9,6 @@
 
 //! Materialize-specific persistence configuration.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,7 +34,7 @@ use persist::indexed::runtime::{
 };
 use uuid::Uuid;
 
-use crate::catalog::SerializedSourcePersistDetails;
+use crate::catalog::{SerializedEnvelopePersistDetails, SerializedSourcePersistDetails};
 
 #[derive(Clone, Debug)]
 pub enum PersistStorage {
@@ -249,14 +248,13 @@ impl PersisterWithConfig {
                 // safe to change the naming, if necessary. See
                 // Catalog::deserialize_item.
                 let name_prefix = format!("user-source-{}-{}", id, pretty);
-                let data_name = format!("{}", name_prefix);
-                let timestamp_bindings_name = format!("{}-timestamp-bindings", name_prefix);
+                let primary_stream = format!("{}", name_prefix);
+                let timestamp_bindings_stream = format!("{}-timestamp-bindings", name_prefix);
 
-                let mut secondary_streams = HashMap::new();
-                secondary_streams.insert("timestamp-bindings".to_string(), timestamp_bindings_name);
                 Some(SerializedSourcePersistDetails {
-                    primary_stream: data_name,
-                    secondary_streams,
+                    primary_stream,
+                    timestamp_bindings_stream,
+                    envelope_details: crate::catalog::SerializedEnvelopePersistDetails::Upsert,
                 })
             }
             _ => None,
@@ -277,7 +275,13 @@ impl PersisterWithConfig {
                 SourceConnector::External {
                     envelope: SourceEnvelope::Upsert(_),
                     ..
-                } => EnvelopePersistDetails::Upsert,
+                } => {
+                    assert!(matches!(
+                        serialized_details.envelope_details,
+                        SerializedEnvelopePersistDetails::Upsert
+                    ));
+                    EnvelopePersistDetails::Upsert
+                }
 
                 SourceConnector::External { envelope, .. } => {
                     return Err(format!("unsupported envelope: {:?}", envelope).into());
@@ -292,15 +296,9 @@ impl PersisterWithConfig {
                 }
             };
 
-            let timestamp_bindings_stream = serialized_details
-                .secondary_streams
-                .get("timestamp-bindings")
-                .ok_or("missing timestamp-bindings stream")?
-                .to_string();
-
             Ok(SourcePersistDetails {
                 primary_stream: serialized_details.primary_stream,
-                timestamp_bindings_stream,
+                timestamp_bindings_stream: serialized_details.timestamp_bindings_stream,
                 envelope_details,
             })
         });

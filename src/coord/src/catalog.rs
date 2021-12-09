@@ -1061,9 +1061,16 @@ impl Catalog {
                 }
 
                 Builtin::View(view) if config.enable_logging || !view.needs_logs => {
-                    let persist_name = None;
+                    let table_persist_name = None;
+                    let source_persist_details = None;
                     let item = catalog
-                        .parse_item(view.id, view.sql.into(), None, persist_name)
+                        .parse_item(
+                            view.id,
+                            view.sql.into(),
+                            None,
+                            table_persist_name,
+                            source_persist_details,
+                        )
                         .unwrap_or_else(|e| {
                             panic!(
                                 "internal error: failed to load bootstrap view:\n\
@@ -2185,14 +2192,8 @@ impl Catalog {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
                 eval_env: None,
-                persist_name: None,
-                persist_details: table
-                    .persist
-                    .as_ref()
-                    .map(|p| SerializedSourcePersistDetails {
-                        primary_stream: p.stream_name.clone(),
-                        secondary_streams: HashMap::new(),
-                    }),
+                persist_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
+                persist_details: None,
             },
             CatalogItem::Source(source) => {
                 let persist_details = match &source.details {
@@ -2244,19 +2245,13 @@ impl Catalog {
             persist_name,
             persist_details,
         } = serde_json::from_slice(&bytes)?;
-        let persist_details = match persist_name {
-            // Restore from older version if there.
-            Some(persist_name) => {
-                assert!(persist_details.is_none(), "cannot have both a persist_name (legacy) and persist_details in a catalog item");
-                // Tables only have a primary stream.
-                Some(SerializedSourcePersistDetails {
-                    primary_stream: persist_name,
-                    secondary_streams: HashMap::new(),
-                })
-            }
-            None => persist_details,
-        };
-        self.parse_item(id, create_sql, Some(&PlanContext::zero()), persist_details)
+        self.parse_item(
+            id,
+            create_sql,
+            Some(&PlanContext::zero()),
+            persist_name,
+            persist_details,
+        )
     }
 
     // Parses the given SQL string into a `CatalogItem`.
@@ -2270,17 +2265,14 @@ impl Catalog {
         id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
-        persist_details: Option<SerializedSourcePersistDetails>,
+        table_persist_name: Option<String>,
+        source_persist_details: Option<SerializedSourcePersistDetails>,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => {
-                let persist_name = persist_details.map(| SerializedSourcePersistDetails { primary_stream, secondary_streams }| {
-                    assert!(secondary_streams.len() == 0, "there must only be a primary stream name for a persisted table, but we have secondary streams: {:?}", secondary_streams);
-                    primary_stream
-                });
-                let persist = self.persist.table_details_from_name(persist_name)?;
+                let persist = self.persist.table_details_from_name(table_persist_name)?;
                 CatalogItem::Table(Table {
                     create_sql: table.create_sql,
                     desc: table.desc,
@@ -2296,7 +2288,7 @@ impl Catalog {
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
                 let persist_details = self
                     .persist
-                    .source_details_from_stream_names(&source.connector, persist_details)?;
+                    .source_details_from_stream_names(&source.connector, source_persist_details)?;
                 let details = match persist_details {
                     Some(persist_details) => {
                         SourceDetails::PersistedSource(source.connector, persist_details)
@@ -2582,27 +2574,37 @@ enum SerializedCatalogItem {
 /// fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedSourcePersistDetails {
+    /// Name of the primary persisted stream of this source. This is what a consumer of the
+    /// persisted data would be interested in while the secondary stream(s) of the source are an
+    /// internal implementation detail.
     pub primary_stream: String,
-    pub secondary_streams: HashMap<String, String>,
+
+    /// Persisted stream of timestamp bindings.
+    pub timestamp_bindings_stream: String,
+
+    /// Any additional details that we need to make the envelope logic stateful.
+    pub envelope_details: SerializedEnvelopePersistDetails,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SerializedEnvelopePersistDetails {
+    Upsert,
 }
 
 impl From<SourcePersistDetails> for SerializedSourcePersistDetails {
     fn from(source_persist_details: SourcePersistDetails) -> Self {
-        let primary_stream = source_persist_details.primary_stream;
-        let mut secondary_streams = HashMap::new();
-
-        secondary_streams.insert(
-            "timestamp-bindings".to_string(),
-            source_persist_details.timestamp_bindings_stream,
-        );
-
-        match source_persist_details.envelope_details {
-            EnvelopePersistDetails::Upsert => (), // nothing in there to persist,
-        }
-
         SerializedSourcePersistDetails {
-            primary_stream,
-            secondary_streams,
+            primary_stream: source_persist_details.primary_stream,
+            timestamp_bindings_stream: source_persist_details.timestamp_bindings_stream,
+            envelope_details: source_persist_details.envelope_details.into(),
+        }
+    }
+}
+
+impl From<EnvelopePersistDetails> for SerializedEnvelopePersistDetails {
+    fn from(persist_details: EnvelopePersistDetails) -> Self {
+        match persist_details {
+            EnvelopePersistDetails::Upsert => SerializedEnvelopePersistDetails::Upsert,
         }
     }
 }
