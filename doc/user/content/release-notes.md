@@ -109,7 +109,7 @@ List new features before bug fixes.
 
 - **Breaking change.** Remove the `mz_workers` function {{% gh 9363 %}}.
 
-- Provide [pre-compiled binaries](/versions) for the ARM64 CPU architecture.
+- Provide [pre-compiled binaries](/versions) for the ARM CPU architecture.
   Support for this CPU architecture is in **beta**.
 
 - Support [`generate_series`](/sql/functions/#table-func) for [`timestamp`]
