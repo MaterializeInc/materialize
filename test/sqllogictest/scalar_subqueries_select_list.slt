@@ -908,6 +908,7 @@ FROM t2, t3
 %4 =
 | Get %3 (l1)
 | Filter (#0 = #1)
+| ArrangeBy (#0)
 
 %5 =
 | Get materialize.public.t1 (u1)
@@ -915,7 +916,9 @@ FROM t2, t3
 
 %6 = Let l2 =
 | Join %4 %5 (= #0 #2)
-| | implementation = Differential %4 %5.(#0)
+| | implementation = DeltaQuery
+| |   delta %4 %5.(#0)
+| |   delta %5 %4.(#0)
 | Filter !(isnull(#0))
 | Project (#0, #1)
 
