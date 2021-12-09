@@ -69,6 +69,7 @@ pub fn bench_protobuf(c: &mut Criterion) {
             NormalizedProtobufMessageName::new(".bench.Record".to_string()),
         )
         .unwrap(),
+        false, // Don't worry about confluent magic, which is a fixed, small cost, for benchmarks
     );
 
     let mut bg = c.benchmark_group("protobuf");

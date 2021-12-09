@@ -381,6 +381,7 @@ impl DataEncoding {
             DataEncoding::Protobuf(ProtobufEncoding {
                 descriptors,
                 message_name,
+                ..
             }) => protobuf::DecodedDescriptors::from_bytes(descriptors, message_name.to_owned())?
                 .columns()
                 .iter()
@@ -467,6 +468,7 @@ pub struct AvroOcfEncoding {
 pub struct ProtobufEncoding {
     pub descriptors: Vec<u8>,
     pub message_name: NormalizedProtobufMessageName,
+    pub schema_registry_config: Option<ccsr::ClientConfig>,
 }
 
 /// Arguments necessary to define how to decode from CSV format

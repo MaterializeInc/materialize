@@ -64,11 +64,15 @@ impl Action for PublishAction {
                 version: subject.version,
             })
         }
-        state
-            .ccsr_client
-            .publish_schema(&self.subject, &self.schema, self.schema_type, &references)
-            .await
-            .map_err(|e| format!("publishing schema: {}", e))?;
+        println!(
+            "name: {}, ID: {}",
+            self.subject,
+            state
+                .ccsr_client
+                .publish_schema(&self.subject, &self.schema, self.schema_type, &references)
+                .await
+                .map_err(|e| format!("publishing schema: {}", e))?
+        );
         Ok(())
     }
 }

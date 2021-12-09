@@ -1097,16 +1097,28 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
         }
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr {
-                csr_connector: CsrConnectorProto { seed, .. },
+                csr_connector:
+                    CsrConnectorProto {
+                        seed,
+                        url,
+                        with_options: ccsr_options,
+                    },
             } => {
                 if let Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled { key, value })) =
                     seed
                 {
+                    let ccsr_config = kafka_util::generate_ccsr_client_config(
+                        url.parse()?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options))?,
+                        normalize::options(&ccsr_options),
+                    )?;
+
                     let value = DataEncoding::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
                         message_name: NormalizedProtobufMessageName::new(
                             value.message_name.clone(),
                         ),
+                        schema_registry_config: Some(ccsr_config.clone()),
                     });
                     if let Some(key) = key {
                         return Ok(SourceDataEncoding::KeyValue {
@@ -1115,6 +1127,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                                 message_name: NormalizedProtobufMessageName::new(
                                     key.message_name.clone(),
                                 ),
+                                schema_registry_config: Some(ccsr_config),
                             }),
                             value,
                         });
@@ -1138,6 +1151,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 DataEncoding::Protobuf(ProtobufEncoding {
                     descriptors,
                     message_name: NormalizedProtobufMessageName::new(message_name.to_owned()),
+                    schema_registry_config: None,
                 })
             }
         },

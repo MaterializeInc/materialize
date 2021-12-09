@@ -162,6 +162,29 @@ impl Client {
         let _res: Vec<i32> = send_request(req).await?;
         Ok(())
     }
+
+    /// Gets the latest version of the first subject found associated with the scheme with
+    /// the given id, as well as all other subjects referenced by that subject (recursively).
+    ///
+    /// The dependencies are returned in alphabetical order by subject name.
+    pub async fn get_subject_and_references_by_id(
+        &self,
+        id: i32,
+    ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
+        for name in self.list_subjects().await.map_err(|le| match le {
+            ListError::Transport(t) => GetBySubjectError::Transport(t),
+            ListError::Server { code, message } => GetBySubjectError::Server { code, message },
+        })? {
+            let subject = self.get_subject(&name).await?;
+
+            // We just assume the first one we find is correct
+            if subject.schema.id == id {
+                return self.get_subject_and_references(&subject.name).await;
+            }
+        }
+
+        Err(GetBySubjectError::SubjectNotFound)
+    }
 }
 
 async fn send_request<T>(req: reqwest::RequestBuilder) -> Result<T, UnhandledError>
