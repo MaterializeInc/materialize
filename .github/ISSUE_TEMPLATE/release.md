@@ -15,22 +15,13 @@ labels: release-tracker
 
 ## Announce the imminent release internally
 
-- [x] Create this release issue. Determine whether this is a feature release or
-  a patch release by checking the [milestones
-  page](https://github.com/MaterializeInc/materialize/milestones) -- if the date
-  is correct for the next feature release double check with the PMs in the
-  #release slack channel and use that version, otherwise it's a patch release.
-- [ ] Check for open blocking issues:
-  - [ ] For any release, check if there are any open [`M-release-blocker`][rel-blockers]
-    issues or PRs
-  - [ ] If this is a major or minor release (any X.Y release) check if there are open
-    issue or PRs with the [`M-milestone-blocker`][blocker-search] label, include them in
-    a list here, or state that there are none:
+- [x] Create this release issue. Bump the middle component of the version
+  number (e.g., v0.11.0 -> v0.12.0) unless you are issuing an emergency patch
+  release.
 
-  > unknown number of milestone blockers or release blockers
+- [ ] Verify that there are no open [`M-release-blocker`][rel-blockers] issues.
 
 [rel-blockers]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-release-blocker
-[blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-milestone-blocker
 
 ## Release candidate
 
@@ -39,37 +30,29 @@ production readiness.
 
 ### Create the release candidate
 
-- [ ] Choose the commit for the release. Unless there are open release blockers above,
-  this should just be the head commit of the main branch. Checkout that commit.
+- [ ] Choose the commit for the release. The commit should *always* be the
+  last commit before noon EST on Monday, even if you start the release process
+  late.
+
+  If there are open release blockers, what to do depends on the scope of the
+  fix. If the fix lands soon and is small, cherry-pick the fix onto the chosen
+  commit. If the fix is delayed or large, abandon the release until next week.
 
 - [ ] Create a new release candidate, specifying what kind of release this
   should be (see `--help` for all the release types):
 
   ```shell
-  bin/mkrelease new-rc weekly
+  bin/mkrelease new-rc feature
   ```
 
 - [ ] Update the [release notes][] to include a new "unreleased" version so that new
   changes don't get advertised as being part of this release as folks add notes.
 
-  > **NOTE:** the next "unreleased" version should always be a patch-level change, even if the next
-  > release is currently anticipated to be a minor or major version bump.
+  > **NOTE:** the next "unreleased" version should always bump the middle
+  > component.
   >
   > For example, if the version being released is `v0.5.9`, `<NEXT_VERSION>` should always be
-  > `0.5.10`, not `0.6.0`, even if we expect that to be the true next version.
-  >
-  > The rationale is that minor (and major) versions are feature releases and may slip. If folks
-  > are using a development release we expect that they will be less surprised to go from
-  > `v0.5.10-dev` -> `v0.6.0` when they upgrade than upgrading and going from `v0.6.0-dev` ->
-  > `v0.5.10`.
-
-  - Related to the above note, **if this is a feature release** (i.e. the product team has
-    decided that we are bumping the major or minor version) you must also update two items because
-    the highest unreleased version will be incorrect. It will be a patch version (i.e. the `Y` in
-    `W.X.Y`) instead of a major or minor version change (`W` or `X`), update the release notes to
-    reflect the version that is actually being released:
-    - The [release notes][]
-    - Any recent migrations in [`src/coord/src/catalog/migrate.rs`][migrations]
+  > `0.6.0`.
 
 - [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
 
@@ -118,20 +101,16 @@ a release is published.
 
 ### Test the release candidate
 
-To run the required load tests on the release candidate tag, Materialize employees
-can follow [these instructions for running semi-automatic load tests][load-instr]
-in the infrastructure repository. All of these tests can be run in parallel.
-
-[load-instr]: https://github.com/MaterializeInc/infra/blob/main/doc/starting-a-load-test.md
-
 - [ ] [A full SQL logic test run][slts] will be automatically triggered when the [deploy
   job][] for your release has been completed. Find it [here][slts] and link to it, don't
   check this checkmark off until it has succeeded.
 
-- [ ] Wait for the [deploy job][] for the currently-releasing version tag to complete and
-  then start the load tests according to [these instructions][load-instr], using your
-  release tag as the `git-ref` value for the release benchmarks. You can use [This
-  commit][] as an example to follow.
+- [ ] Wait for the [deploy job][] for the currently-releasing version tag to
+  complete. Then launch the load tests using the `bin/scratch` script:
+
+  ```
+  bin/scratch create < misc/load-tests/release.json
+  ```
 
 [slts]: https://buildkite.com/materialize/sql-logic-tests
 [deploy job]: https://buildkite.com/materialize/deploy
@@ -156,29 +135,15 @@ in the infrastructure repository. All of these tests can be run in parallel.
   ```console
   $ bin/mkrelease dashboard-links --env dev 10:00
   Load tests for release v0.9.2-rc1
-  * chbench: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=chbench&var-purpose=load_test&var-env=dev
-  * kinesis: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=kinesis&var-purpose=load_test&var-env=dev
-  * billing-demo: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=billing-demo&var-purpose=load_test&var-env=dev
-  * chaos: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=chaos&var-purpose=chaos&var-env=dev
+  * chbench: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=chbench&var-purpose=load_test&var-env=scratch
+  * kinesis: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=kinesis&var-purpose=load_test&var-env=scratch
+  * chaos: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=chaos&var-purpose=chaos&var-env=scratch
   ```
   </details>
 
 - [ ] Let the tests run for at least 24 hours, with the following success criteria:
 
   - [ ] chbench: The ingest rate should not be slower than the previous release.
-  - [ ] billing-demo: The container should run and finish without error. You can get the exit code
-    from Docker:
-
-    ```bash
-    docker ps -a | grep -E 'STATUS|materialized|billing-demo'
-    ```
-
-    * `materialized` should be `up` (although see #4753 for the current breakage)
-    * `billing-demo` should be `Exited (0)`
-    * Note: it is not necessary to verify the graphs of this test if the above criteria are
-      met. The graph output is dissimilar to the other tests, and can only be compared to historical
-      runs posted in the #release Slack channel.
-
   - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
     have remained at 0ms or similar for the entirety of the run.
 
@@ -186,7 +151,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
   `0` exit code. To check this, SSH into the EC2 instance running the chaos test and run `docker ps
   -a`. You can ssh in using our [teleport cluster][], the chaos test has a `purpose=chaos` label.
 
-- [ ] Remove all load test machines, [documented here][load-instr].
+- [ ] Remove all load test machines:
+
+  ```
+  bin/scratch mine --output-format csv | tail -n +2 | cut -d, -f2 | xargs bin/scratch destroy
+  ```
 
 [teleport cluster]: https://tsh.i.mtrlz.dev/cluster/tsh/nodes
 

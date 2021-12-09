@@ -75,8 +75,8 @@ def new_rc(
     \b
     Arguments:
         level    Which part of the version to change:
-                 * weekly   - The Z in X.Y.Z
-                 * feature  - The Y in X.Y.Z
+                 * patch    - The Z in X.Y.Z
+                 * weekly   - The Y in X.Y.Z
                  * major    - The X in X.Y.Z
                  * rc       - increases the N in -rcN, should only be used if
                               you need to create a second or greater release candidate
@@ -90,9 +90,9 @@ def new_rc(
             )
         next_rc = int(tag.prerelease[2:]) + 1
         new_version = tag.replace(prerelease=f"rc{next_rc}")
-    elif level == "weekly":
+    elif level == "patch":
         new_version = tag.bump_patch().replace(prerelease="rc1")
-    elif level == "feature":
+    elif level == "weekly":
         new_version = tag.bump_minor().replace(prerelease="rc1")
     elif level == "major":
         new_version = tag.bump_major().replace(prerelease="rc1")
@@ -170,7 +170,7 @@ def finish(create_branch: Optional[str], affect_remote: bool) -> None:
 
 @cli.command()
 @click.argument("start-time")
-@click.option("--env", default="dev", type=click.Choice(["dev", "scratch"]))
+@click.option("--env", default="scratch", type=click.Choice(["dev", "scratch"]))
 def dashboard_links(start_time: str, env: str) -> None:
     """
     Create the Grafana dashboard links for the release qualification tests
@@ -204,7 +204,7 @@ def dashboard_links(start_time: str, env: str) -> None:
     purpose = "load_test"
 
     tests = []
-    for test in ("chbench", "perf-kinesis", "billing"):
+    for test in ("chbench", "perf-kinesis"):
         url = template.format(
             time_from=time_from, time_to=time_to, test=test, purpose=purpose, env=env
         )
