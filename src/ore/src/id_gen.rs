@@ -15,17 +15,23 @@
 
 //! ID generation utilities.
 
+use std::marker::PhantomData;
+
 /// Manages the allocation of unique IDs.
 #[derive(Debug, Default)]
-pub struct IdGen {
+pub struct Gen<Id: From<u64> + Default> {
     id: u64,
+    phantom: PhantomData<Id>,
 }
 
-impl IdGen {
-    /// Allocates a new identifier and advances the generator.
-    pub fn allocate_id(&mut self) -> u64 {
+impl<Id: From<u64> + Default> Gen<Id> {
+    /// Allocates a new identifier of type `Id` and advances the generator.
+    pub fn allocate_id(&mut self) -> Id {
         let id = self.id;
         self.id += 1;
-        id
+        id.into()
     }
 }
+
+/// A generator of u64-bit IDs.
+pub type IdGen = Gen<u64>;

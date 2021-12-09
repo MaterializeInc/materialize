@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
-use ore::id_gen::IdGen;
+use ore::id_gen::Gen;
 
 mod dot;
 mod hir;
@@ -23,8 +23,35 @@ mod test;
 
 pub use scalar_expr::*;
 
-pub type QuantifierId = u64;
-pub type BoxId = u64;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct QuantifierId(u64);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BoxId(u64);
+
+impl std::fmt::Display for QuantifierId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Display for BoxId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<u64> for QuantifierId {
+    fn from(value: u64) -> Self {
+        QuantifierId(value)
+    }
+}
+
+impl From<u64> for BoxId {
+    fn from(value: u64) -> Self {
+        BoxId(value)
+    }
+}
+
 pub type QuantifierSet = BTreeSet<QuantifierId>;
 
 /// A Query Graph Model instance represents a SQL query.
@@ -44,11 +71,11 @@ pub struct Model {
     /// All boxes in the query graph model.
     boxes: HashMap<BoxId, Box<RefCell<QueryBox>>>,
     /// Used for assigning unique IDs to query boxes.
-    box_id_gen: IdGen,
+    box_id_gen: Gen<BoxId>,
     /// All quantifiers in the query graph model.
     quantifiers: HashMap<QuantifierId, Box<RefCell<Quantifier>>>,
     /// Used for assigning unique IDs to quantifiers.
-    quantifier_id_gen: IdGen,
+    quantifier_id_gen: Gen<QuantifierId>,
 }
 
 /// A semantic operator within a Query Graph.
@@ -191,7 +218,7 @@ pub struct Values {
 impl Model {
     fn new() -> Self {
         Self {
-            top_box: 0,
+            top_box: BoxId(0),
             boxes: HashMap::new(),
             box_id_gen: Default::default(),
             quantifiers: HashMap::new(),
