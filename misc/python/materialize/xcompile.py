@@ -186,5 +186,5 @@ def _bootstrap_darwin_x86_64() -> None:
         return
     spawn.runv(["brew", "install", "SergioBenitez/osxct/x86_64-unknown-linux-gnu"])
     spawn.runv(["rustup", "target", "add", "x86_64-unknown-linux-gnu"])
-    BOOTSTRAP_FILE.parent.mkdir()
+    BOOTSTRAP_FILE.parent.mkdir(exist_ok=True)
     BOOTSTRAP_FILE.write_text(BOOTSTRAP_VERSION)
