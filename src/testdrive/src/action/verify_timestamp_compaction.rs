@@ -62,19 +62,26 @@ impl Action for VerifyTimestampsAction {
                 .load_timestamp_bindings(item_id)
                 .map_err_to_string()?;
             println!(
-                "Verifying timestamp binding compaction.  Found {:?} vs expected {:?}",
+                "Verifying timestamp binding compaction for {:?}.  Found {:?} vs expected {:?}",
+                self.source,
                 bindings.len(),
                 self.max_size
             );
-            assert!(
-                bindings.len() <= self.max_size,
-                "There are {:?} bindings compared to max size {:?}",
-                bindings.len(),
-                self.max_size
-            );
+            if bindings.len() > self.max_size {
+                Err(format!(
+                    "There are {:?} bindings compared to max size {:?}",
+                    bindings.len(),
+                    self.max_size
+                ))
+            } else {
+                Ok(())
+            }
         } else {
-            println!("Skipping timestamp binding compaction verification.");
+            println!(
+                "Skipping timestamp binding compaction verification for {:?}.",
+                self.source
+            );
+            Ok(())
         }
-        Ok(())
     }
 }
