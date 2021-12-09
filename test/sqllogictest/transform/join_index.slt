@@ -235,7 +235,7 @@ where nullif(foo.a, 0) = -bar.a
 | | implementation = DeltaQuery
 | |   delta %0 %1.(-(#0))
 | |   delta %1 %0.(if (#0 = 0) then {null} else {#0})
-| Filter !(isnull(#2)), !(isnull(if (#0 = 0) then {null} else {#0}))
+| Filter !(isnull(#2))
 | Project (#1, #3)
 
 EOF

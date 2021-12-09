@@ -34,6 +34,15 @@
         composition: redpanda
         run: redpanda-testdrive
 
+- id: redpanda-testdrive-aarch64
+  label: ":panda_face: :racing_car: testdrive aarch64"
+  agents:
+    queue: aarch64
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: redpanda
+        run: redpanda-testdrive
+
 - id: upgrade
   label: "Upgrade testing"
   plugins:

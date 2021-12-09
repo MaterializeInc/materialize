@@ -13,10 +13,14 @@
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Oid(pub i32);
 
+/// A rust type representing a PostgreSQL class type
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct RegClass(pub i32);
+
 /// A rust type representing a PostgreSQL function name
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct RegProc(pub i32);
 
-/// A rust type representing a PostgreSQL function type
+/// A rust type representing a PostgreSQL type of object
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct RegType(pub i32);

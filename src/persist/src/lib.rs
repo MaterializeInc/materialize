@@ -20,6 +20,7 @@ use std::fmt;
 
 pub mod error;
 pub mod file;
+pub mod gen;
 pub mod indexed;
 pub mod mem;
 pub mod operators;

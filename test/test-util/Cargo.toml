@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.50"
+anyhow = "1.0.51"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 kafka-util = { path = "../../src/kafka-util" }
 log = "0.4.13"

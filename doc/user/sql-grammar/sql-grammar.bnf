@@ -118,6 +118,7 @@ create_source_postgres ::=
   'FROM' 'POSTGRES'
   'CONNECTION' connection_info
   'PUBLICATION' publication_name
+  ('WITH timestamp_frequency_ms =' int)?
 create_source_protobuf_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?

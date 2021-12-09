@@ -91,7 +91,7 @@ impl ReductionPushdown {
                 let mut scalars = scalars.clone();
                 for index in 0..scalars.len() {
                     let (lower, upper) = scalars.split_at_mut(index);
-                    upper[0].visit_mut(&mut |e| {
+                    upper[0].visit_mut_post(&mut |e| {
                         if let expr::MirScalarExpr::Column(c) = e {
                             if *c >= arity {
                                 *e = lower[*c - arity].clone();
@@ -100,7 +100,7 @@ impl ReductionPushdown {
                     });
                 }
                 for key in group_key.iter_mut() {
-                    key.visit_mut(&mut |e| {
+                    key.visit_mut_post(&mut |e| {
                         if let expr::MirScalarExpr::Column(c) = e {
                             if *c >= arity {
                                 *e = scalars[*c - arity].clone();
@@ -109,7 +109,7 @@ impl ReductionPushdown {
                     });
                 }
                 for agg in aggregates.iter_mut() {
-                    agg.expr.visit_mut(&mut |e| {
+                    agg.expr.visit_mut_post(&mut |e| {
                         if let expr::MirScalarExpr::Column(c) = e {
                             if *c >= arity {
                                 *e = scalars[*c - arity].clone();

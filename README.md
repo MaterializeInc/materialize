@@ -117,4 +117,4 @@ Contributions are welcome. Prospective code contributors might find the [good fi
 
 ## Credits
 
-Materialize is lovingly crafted by [a team of developers](https://github.com/MaterializeInc/materialize/graphs/contributors) and one bot. [Join us](https://jobs.lever.co/materialize).
+Materialize is lovingly crafted by [a team of developers](https://github.com/MaterializeInc/materialize/graphs/contributors) and one bot. [Join us](https://materialize.com/careers/).

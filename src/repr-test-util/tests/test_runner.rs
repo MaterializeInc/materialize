@@ -17,11 +17,9 @@ mod tests {
     fn build_datum(s: &str) -> Result<String, String> {
         // 1) Convert test spec to the row containing the datum.
         let mut stream_iter = tokenize(s)?.into_iter();
-        let litval = extract_literal_string(
-            &stream_iter.next().ok_or_else(|| "Empty test")?,
-            &mut stream_iter,
-        )?
-        .unwrap();
+        let litval =
+            extract_literal_string(&stream_iter.next().ok_or("Empty test")?, &mut stream_iter)?
+                .unwrap();
         let scalar_type = get_scalar_type_or_default(&litval[..], &mut stream_iter)?;
         let row = test_spec_to_row(std::iter::once((&litval[..], &scalar_type)))?;
         // 2) It should be possible to unpack the row and then convert the datum
@@ -63,7 +61,7 @@ mod tests {
         let roundtrip_litvals = row
             .unpack()
             .into_iter()
-            .map(|d| datum_to_test_spec(d))
+            .map(datum_to_test_spec)
             .collect::<Vec<_>>();
         if roundtrip_litvals != litvals {
             Err(format!(

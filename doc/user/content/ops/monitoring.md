@@ -8,9 +8,11 @@ menu:
     parent: operations
 ---
 
-_This page is a work in progress and will have more detail in the coming months.
-If you have specific questions, feel free to [file a GitHub
-issue](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md)._
+{{< note >}}
+
+This topic describes monitoring for the installed version of Materialize. For information about monitoring Materialize Cloud, see [Monitor Cloud](../../cloud/monitor-cloud).
+
+{{< /note >}}
 
 Materialize supports integration with monitoring tools using both the
 [Prometheus](#prometheus) format and via [SQL interface](#system-catalog-sql-interface)
@@ -145,30 +147,11 @@ The Prometheus metrics are not part of Materialize's stable interface.
 Backwards-incompatible changes to the exposed metrics may be made at any time.
 {{< /warning >}}
 
-Materialize exposes [Prometheus](https://prometheus.io/) metrics at the default
-path, `<materialized host>/metrics`.
+{{% monitoring/prometheus-details %}}
 
-Materialize broadly publishes the following types of data there:
+{{% monitoring/system-catalog-sql-interface %}}
 
-- Materialize-specific data with a `mz_*` prefix. For example,
-  `rate(mz_responses_sent_total[10s])` will show you the number of responses
-  averaged over 10 second windows.
-- Standard process metrics with a `process_*` prefix. For exmple, `process_cpu`.
-
-## System catalog SQL interface
-
-The `mz_catalog` SQL interface provides a variety of ways to introspect Materialize. An
-introduction to this catalog is available as part of our [SQL
-documentation](/sql/system-catalog).
-
-A user guide for debugging a running `materialized` using the system catalog is available
-in the form of a walkthrough of useful [diagnostic queries](/ops/troubleshooting).
-
-## Grafana
-
-Materialize provides a [recommended dashboard][dashboard-json] that you can [import into
-Grafana][graf-import]. It relies on you having configured Prometheus to scrape
-Materialize.
+{{% monitoring/grafana %}}
 
 ## Datadog
 

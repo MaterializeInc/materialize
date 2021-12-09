@@ -16,7 +16,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
 use persist_types::Codec;
-use timely::dataflow::operators::{Concat, Inspect, OkErr, ToStream};
+use timely::dataflow::operators::{Concat, OkErr, ToStream};
 use timely::dataflow::operators::{Map, UnorderedInput};
 use timely::dataflow::Scope;
 
@@ -101,51 +101,54 @@ where
         match src.connector.clone() {
             // Create a new local input (exposed as TABLEs to users). Data is inserted
             // via Command::Insert commands.
-            SourceConnector::Local { .. } => {
+            SourceConnector::Local { persisted_name, .. } => {
                 let ((handle, capability), ok_stream, err_collection) = {
                     let ((handle, capability), ok_stream) = scope.new_unordered_input();
                     let err_collection = Collection::empty(scope);
                     ((handle, capability), ok_stream, err_collection)
                 };
 
-                let (ok_stream, err_collection) =
-                    match (&mut render_state.persist, src.persisted_name) {
-                        (Some(persist), Some(stream_name)) => {
-                            let read = persist
-                                .create_or_load(&stream_name)
-                                .map(|(_write, read)| read);
-                            let (persist_ok_stream, persist_err_stream) =
-                                scope.persisted_source(read).ok_err(|x| match x {
-                                    (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
-                                    (Err(err), ts, diff) => Err((err, ts, diff)),
-                                });
-                            let (persist_ok_stream, decode_err_stream) = persist_ok_stream
-                                .ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
-                            let persist_err_collection = persist_err_stream
-                                .concat(&decode_err_stream)
-                                .map(move |(err, ts, diff)| {
-                                    let err = SourceError::new(
-                                        stream_name.clone(),
-                                        SourceErrorDetails::Persistence(err),
-                                    );
-                                    (err.into(), ts, diff)
-                                })
-                                .as_collection();
-                            (
-                                ok_stream.concat(&persist_ok_stream),
-                                err_collection.concat(&persist_err_collection),
-                            )
-                        }
-                        _ => (ok_stream, err_collection),
-                    };
+                // A local "source" is either fed by a local input handle, or by reading from a
+                // `persisted_source()`.
+                //
+                // For non-persisted sources, values that are to be inserted are sent from the
+                // coordinator and pushed into the handle.
+                //
+                // For persisted sources, the coordinator only writes new values to a persistent
+                // stream. These values will then "show up" here because we read from the same
+                // persistent stream.
+                let (ok_stream, err_collection) = match (&mut render_state.persist, persisted_name)
+                {
+                    (Some(persist), Some(stream_name)) => {
+                        let (_write, read) = persist.create_or_load(&stream_name);
+                        let (persist_ok_stream, persist_err_stream) =
+                            scope.persisted_source(read).ok_err(|x| match x {
+                                (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
+                                (Err(err), ts, diff) => Err((err, ts, diff)),
+                            });
+                        let (persist_ok_stream, decode_err_stream) =
+                            persist_ok_stream.ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
+                        let persist_err_collection = persist_err_stream
+                            .concat(&decode_err_stream)
+                            .map(move |(err, ts, diff)| {
+                                let err = SourceError::new(
+                                    stream_name.clone(),
+                                    SourceErrorDetails::Persistence(err),
+                                );
+                                (err.into(), ts, diff)
+                            })
+                            .as_collection();
+                        (
+                            ok_stream.concat(&persist_ok_stream),
+                            err_collection.concat(&persist_err_collection),
+                        )
+                    }
+                    _ => (ok_stream, err_collection),
+                };
 
-                render_state.local_inputs.insert(
-                    src_id,
-                    LocalInput {
-                        handle: handle,
-                        capability,
-                    },
-                );
+                render_state
+                    .local_inputs
+                    .insert(src_id, LocalInput { handle, capability });
                 let as_of_frontier = self.as_of_frontier.clone();
                 let ok_collection = ok_stream
                     .map_in_place(move |(_, mut time, _)| {
@@ -507,8 +510,9 @@ where
                                     // When persistence is enabled we need to seal up both the
                                     // timestamp bindings and the upsert state. Otherwise, just
                                     // pass through.
-                                    let upsert_ok = if let Some(source_persist_config) =
-                                        source_persist_config
+                                    let (upsert_ok, upsert_err) = if let Some(
+                                        source_persist_config,
+                                    ) = source_persist_config
                                     {
                                         let (sealed_upsert_ok, upsert_seal_err) = upsert_ok
                                             .conditional_seal(
@@ -528,11 +532,21 @@ where
                                         let sealed_upsert_ok =
                                             sealed_upsert_ok.await_frontier(&source_name);
 
-                                        upsert_seal_err.inspect(|e| log::error!("{:?}", e));
+                                        let upsert_seal_err =
+                                            upsert_seal_err.map(move |(err, ts, diff)| {
+                                                let wrapped_error =
+                                                    DataflowError::from(SourceError::new(
+                                                        source_name.clone(),
+                                                        SourceErrorDetails::Persistence(err),
+                                                    ));
+                                                (wrapped_error, ts, diff)
+                                            });
 
-                                        sealed_upsert_ok
+                                        let combined_err = upsert_err.concat(&upsert_seal_err);
+
+                                        (sealed_upsert_ok, combined_err)
                                     } else {
-                                        upsert_ok
+                                        (upsert_ok, upsert_err)
                                     };
 
                                     (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
@@ -696,11 +710,11 @@ fn get_persist_config(
     let persist_bindings_name = format!("{}-timestamp-bindings", persisted_name);
     let persist_data_name = format!("{}", persisted_name);
 
-    let (bindings_write, bindings_read) = persist_client
-        .create_or_load::<SourceTimestamp, AssignedTimestamp>(&persist_bindings_name)?;
+    let (bindings_write, bindings_read) =
+        persist_client.create_or_load::<SourceTimestamp, AssignedTimestamp>(&persist_bindings_name);
 
     let (data_write, data_read) = persist_client
-        .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(&persist_data_name)?;
+        .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(&persist_data_name);
 
     use persist::indexed::runtime::sealed_ts;
     let bindings_seal_ts = sealed_ts(&bindings_read)?;

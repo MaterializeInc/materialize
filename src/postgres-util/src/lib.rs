@@ -23,14 +23,33 @@ use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::Ident;
 use sql_parser::impl_display;
 
+pub struct PgNumericMod {
+    precision: u16,
+    scale: u16,
+}
+
+/// Mirror of PostgreSQL's
+/// [`VARHDRSZ`](https://github.com/postgres/postgres/blob/REL_14_0/src/include/c.h#L627) constant
+const PG_HEADER_SIZE: i32 = 4;
+
 pub enum PgScalarType {
     Simple(PgType),
-    Numeric { precision: u16, scale: u16 },
-    NumericArray { precision: u16, scale: u16 },
-    BPChar { length: i32 },
-    BPCharArray { length: i32 },
-    VarChar { length: i32 },
-    VarCharArray { length: i32 },
+    /// Represents a `numeric` type with optional scale and presicion
+    Numeric(Option<PgNumericMod>),
+    /// Represents a `numeric` array type with optional scale and presicion
+    NumericArray(Option<PgNumericMod>),
+    BPChar {
+        length: i32,
+    },
+    BPCharArray {
+        length: i32,
+    },
+    VarChar {
+        length: i32,
+    },
+    VarCharArray {
+        length: i32,
+    },
 }
 
 impl AstDisplay for PgScalarType {
@@ -39,19 +58,26 @@ impl AstDisplay for PgScalarType {
             Self::Simple(typ) => {
                 f.write_str(typ);
             }
-            Self::Numeric { precision, scale } => {
-                f.write_str("numeric(");
-                f.write_str(precision);
-                f.write_str(", ");
-                f.write_str(scale);
-                f.write_str(")");
+            Self::Numeric(typ_mod) => {
+                f.write_str("numeric");
+                if let Some(typ_mod) = typ_mod {
+                    f.write_str("(");
+                    f.write_str(typ_mod.precision);
+                    f.write_str(", ");
+                    f.write_str(typ_mod.scale);
+                    f.write_str(")");
+                }
             }
-            Self::NumericArray { precision, scale } => {
-                f.write_str("numeric(");
-                f.write_str(precision);
-                f.write_str(", ");
-                f.write_str(scale);
-                f.write_str(")[]");
+            Self::NumericArray(typ_mod) => {
+                f.write_str("numeric");
+                if let Some(typ_mod) = typ_mod {
+                    f.write_str("(");
+                    f.write_str(typ_mod.precision);
+                    f.write_str(", ");
+                    f.write_str(typ_mod.scale);
+                    f.write_str(")");
+                }
+                f.write_str("[]");
             }
             Self::BPChar { length } => {
                 f.write_str("character(");
@@ -234,26 +260,29 @@ pub async fn publication_info(
                 let scalar_type = match pg_type {
                     PgType::NUMERIC | PgType::NUMERIC_ARRAY => {
                         let modifier: i32 = row.get("modifier");
-                        // https://github.com/postgres/postgres/blob/REL_13_3/src/backend/utils/adt/numeric.c#L978-L983
-                        let tmp_mod = modifier - 4;
-                        let scale = (tmp_mod & 0xffff) as u16;
-                        let precision = ((tmp_mod >> 16) & 0xffff) as u16;
+                        // https://github.com/postgres/postgres/blob/REL_13_3/src/backend/utils/adt/numeric.c#L967-L983
+                        let typ_mod = if modifier < PG_HEADER_SIZE {
+                            None
+                        } else {
+                            let tmp_mod = modifier - PG_HEADER_SIZE;
+                            let scale = (tmp_mod & 0xffff) as u16;
+                            let precision = ((tmp_mod >> 16) & 0xffff) as u16;
+                            Some(PgNumericMod { scale, precision })
+                        };
 
                         match pg_type {
-                            PgType::NUMERIC => PgScalarType::Numeric { scale, precision },
-                            PgType::NUMERIC_ARRAY => {
-                                PgScalarType::NumericArray { scale, precision }
-                            }
+                            PgType::NUMERIC => PgScalarType::Numeric(typ_mod),
+                            PgType::NUMERIC_ARRAY => PgScalarType::NumericArray(typ_mod),
                             _ => unreachable!(),
                         }
                     }
                     PgType::BPCHAR | PgType::BPCHAR_ARRAY => {
                         let modifier: i32 = row.get("modifier");
                         // https://github.com/postgres/postgres/blob/REL_14_0/src/backend/utils/adt/varchar.c#L282-L286
-                        let length = if modifier < 4 {
+                        let length = if modifier < PG_HEADER_SIZE {
                             adt::char::MAX_LENGTH
                         } else {
-                            modifier - 4
+                            modifier - PG_HEADER_SIZE
                         };
 
                         match pg_type {
@@ -265,10 +294,10 @@ pub async fn publication_info(
                     PgType::VARCHAR | PgType::VARCHAR_ARRAY => {
                         let modifier: i32 = row.get("modifier");
                         // https://github.com/postgres/postgres/blob/REL_14_0/src/backend/utils/adt/varchar.c#L617
-                        let length = if modifier < 4 {
+                        let length = if modifier < PG_HEADER_SIZE {
                             adt::varchar::MAX_LENGTH
                         } else {
-                            modifier - 4
+                            modifier - PG_HEADER_SIZE
                         };
 
                         match pg_type {

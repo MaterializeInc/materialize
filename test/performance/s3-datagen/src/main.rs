@@ -106,7 +106,7 @@ async fn run() -> anyhow::Result<()> {
         None | Some("us-east-1") => None,
         Some(r) => Some(
             CreateBucketConfiguration::builder()
-                .location_constraint(BucketLocationConstraint::from(r.as_ref()))
+                .location_constraint(BucketLocationConstraint::from(r))
                 .build(),
         ),
     };

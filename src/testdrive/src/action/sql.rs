@@ -11,7 +11,7 @@ use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
-use std::time::Duration;
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use md5::{Digest, Md5};
@@ -128,8 +128,8 @@ impl Action for SqlAction {
 
         match should_retry {
             true => Retry::default()
-                .initial_backoff(Duration::from_millis(50))
-                .factor(1.5)
+                .initial_backoff(self.context.initial_backoff)
+                .factor(self.context.backoff_factor)
                 .max_duration(self.context.timeout),
             false => Retry::default().max_tries(1),
         }
@@ -139,7 +139,13 @@ impl Action for SqlAction {
                     if retry_state.i != 0 {
                         println!();
                     }
-                    println!("rows match; continuing");
+                    println!(
+                        "rows match; continuing at ts {}",
+                        SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64()
+                    );
                     Ok(())
                 }
                 Err(e) => {
@@ -147,8 +153,10 @@ impl Action for SqlAction {
                         print!("rows didn't match; sleeping to see if dataflow catches up");
                     }
                     if let Some(backoff) = retry_state.next_backoff {
-                        print!(" {:.0?}", backoff);
-                        io::stdout().flush().unwrap();
+                        if !backoff.is_zero() {
+                            print!(" {:.0?}", backoff);
+                            io::stdout().flush().unwrap();
+                        }
                     } else {
                         println!();
                     }
@@ -354,8 +362,8 @@ impl Action for FailSqlAction {
 
         match should_retry {
             true => Retry::default()
-                .initial_backoff(Duration::from_millis(50))
-                .factor(1.5)
+                .initial_backoff(self.context.initial_backoff)
+                .factor(self.context.backoff_factor)
                 .max_duration(self.context.timeout),
             false => Retry::default().max_tries(1),
         }.retry(|retry_state| async move {
@@ -420,11 +428,7 @@ impl FailSqlAction {
 }
 
 pub fn print_query(query: &str) {
-    if query.len() > 72 {
-        println!("> {}...", &query[..72]);
-    } else {
-        println!("> {}", &query);
-    }
+    println!("> {}", query);
 }
 
 fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {

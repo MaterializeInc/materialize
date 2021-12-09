@@ -954,7 +954,7 @@ impl Iterator for TimestampRangeStepInclusive {
     }
 }
 
-fn generate_series_ts<'a>(
+fn generate_series_ts(
     start: NaiveDateTime,
     stop: NaiveDateTime,
     step: Interval,
@@ -1145,10 +1145,8 @@ impl TableFunc {
         datums: &'a [Datum<'a>],
         temp_storage: &'a RowArena,
     ) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
-        if self.empty_on_null_input() {
-            if datums.iter().any(|d| d.is_null()) {
-                return Ok(Box::new(vec![].into_iter()));
-            }
+        if self.empty_on_null_input() && datums.iter().any(|d| d.is_null()) {
+            return Ok(Box::new(vec![].into_iter()));
         }
         match self {
             TableFunc::JsonbEach { stringify } => {
@@ -1161,9 +1159,7 @@ impl TableFunc {
                 *stringify,
             ))),
             TableFunc::RegexpExtract(a) => Ok(Box::new(regexp_extract(datums[0], a).into_iter())),
-            TableFunc::CsvExtract(n_cols) => {
-                Ok(Box::new(csv_extract(datums[0], *n_cols).into_iter()))
-            }
+            TableFunc::CsvExtract(n_cols) => Ok(Box::new(csv_extract(datums[0], *n_cols))),
             TableFunc::GenerateSeriesInt32 => {
                 let res = generate_series(
                     datums[0].unwrap_int32(),

@@ -79,13 +79,11 @@ impl Action for VerifySlotAction {
                             &self.slot
                         ));
                     }
-                } else {
-                    if rows.len() != 0 {
-                        return Err(format!(
-                            "expected slot {} to be inactive, is active",
-                            &self.slot
-                        ));
-                    }
+                } else if rows.len() != 0 {
+                    return Err(format!(
+                        "expected slot {} to be inactive, is active",
+                        &self.slot
+                    ));
                 }
                 Ok(())
             })

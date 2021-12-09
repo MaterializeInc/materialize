@@ -24,6 +24,7 @@ use uuid::Uuid;
 use crate::error::Error;
 use crate::indexed::background::{CompactTraceReq, Maintainer};
 use crate::indexed::cache::BlobCache;
+use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
     ArrangementMeta, BlobTraceBatch, TraceBatchMeta, UnsealedBatchMeta,
 };
@@ -216,21 +217,23 @@ impl Arrangement {
         let (ts_upper, ts_lower) = {
             let mut upper_lower = None;
 
-            for (_, ts, _) in batch.updates.iter() {
-                upper_lower = match upper_lower {
-                    None => Some((*ts, *ts)),
-                    Some((mut upper, mut lower)) => {
-                        if *ts > upper {
-                            upper = *ts;
-                        }
+            for updates in batch.updates.iter() {
+                for (_, ts, _) in updates.iter() {
+                    upper_lower = match upper_lower {
+                        None => Some((ts, ts)),
+                        Some((mut upper, mut lower)) => {
+                            if ts > upper {
+                                upper = ts;
+                            }
 
-                        if *ts < lower {
-                            lower = *ts;
-                        }
+                            if ts < lower {
+                                lower = ts;
+                            }
 
-                        Some((upper, lower))
-                    }
-                };
+                            Some((upper, lower))
+                        }
+                    };
+                }
             }
 
             match upper_lower {
@@ -290,12 +293,14 @@ impl Arrangement {
             //   this check even though the seal frontier was already t2 and the
             //   trace's ts upper really should have been t2 as well.
             let trace_ts_upper = self.trace_ts_upper();
-            for (_, ts, _) in batch.updates.iter() {
-                if !trace_ts_upper.less_equal(ts) {
-                    return Err(Error::from(format!(
-                        "batch contains timestamp {:?} before trace ts_upper: {:?}",
-                        ts, trace_ts_upper
-                    )));
+            for updates in batch.updates.iter() {
+                for (_, ts, _) in updates.iter() {
+                    if !trace_ts_upper.less_equal(&ts) {
+                        return Err(Error::from(format!(
+                            "batch contains timestamp {:?} before trace ts_upper: {:?}",
+                            ts, trace_ts_upper
+                        )));
+                    }
                 }
             }
         }
@@ -415,20 +420,18 @@ impl Arrangement {
     ) -> Result<UnsealedBatchMeta, Error> {
         // Sanity check that batch cannot be evicted
         debug_assert!(self.trace_ts_upper().less_equal(&batch.ts_upper));
-        let mut updates = vec![];
-
-        updates.extend(
+        let updates = ColumnarRecords::from_iter(
             blob.get_unsealed_batch_async(&batch.key)
                 .recv()?
                 .updates
                 .iter()
-                .filter(|(_, ts, _)| self.trace_ts_upper().less_equal(ts))
-                .cloned(),
+                .flat_map(|u| u.iter())
+                .filter(|(_, ts, _)| self.trace_ts_upper().less_equal(ts)),
         );
-        debug_assert!(!updates.is_empty());
+        debug_assert!(updates.len() != 0);
         let new_batch = BlobUnsealedBatch {
             desc: batch.desc,
-            updates,
+            updates: vec![updates],
         };
 
         self.unsealed_write_batch(new_batch, blob)
@@ -704,17 +707,20 @@ impl Iterator for UnsealedSnapshotIter {
                     Ok(b) => {
                         // Reverse the updates so we can pop them off the back
                         // in roughly increasing time order. At the same time,
-                        // enforce our filter before we clone them.
+                        // enforce our filter before we clone them. Note that we
+                        // don't reverse the updates within each ColumnarRecords,
+                        // because those are not guaranteed to be in any order.
                         let ts_lower = self.ts_lower.borrow();
                         let ts_upper = self.ts_upper.borrow();
                         self.current_batch.extend(
                             b.updates
                                 .iter()
                                 .rev()
+                                .flat_map(|u| u.iter())
                                 .filter(|(_, ts, _)| {
                                     ts_lower.less_equal(&ts) && !ts_upper.less_equal(&ts)
                                 })
-                                .cloned(),
+                                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d)),
                         );
                         continue;
                     }
@@ -744,7 +750,7 @@ impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
 
     fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
         let mut iters = Vec::with_capacity(num_iters.get());
-        iters.resize_with(num_iters.get(), || TraceSnapshotIter::default());
+        iters.resize_with(num_iters.get(), TraceSnapshotIter::default);
         // TODO: This should probably distribute batches based on size, but for
         // now it's simpler to round-robin them.
         for (i, batch) in self.batches.into_iter().enumerate() {
@@ -922,12 +928,17 @@ mod tests {
             .collect()
     }
 
+    // Generate a ColumnarRecords containing the provided updates
+    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> ColumnarRecords {
+        updates.iter().collect()
+    }
+
     // Generate an unsealed batch spanning the specified sequence numbers with
     // updates at the specified times.
     fn unsealed_batch(lower: u64, upper: u64, update_times: Vec<u64>) -> BlobUnsealedBatch {
         BlobUnsealedBatch {
             desc: SeqNo(lower)..SeqNo(upper),
-            updates: unsealed_updates(update_times),
+            updates: vec![columnar_records(unsealed_updates(update_times))],
         }
     }
 
@@ -955,7 +966,7 @@ mod tests {
         lo: u64,
         hi: Option<u64>,
     ) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, isize)>, Error> {
-        let hi = hi.map_or_else(|| Antichain::new(), |e| Antichain::from_elem(e));
+        let hi = hi.map_or_else(Antichain::new, Antichain::from_elem);
         let snapshot = arrangement.unsealed_snapshot(Antichain::from_elem(lo), hi, &blob)?;
         let updates = snapshot.read_to_end()?;
         Ok(updates)
@@ -1005,7 +1016,7 @@ mod tests {
         // ts < trace_ts_upper is disallowed
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![(("k".into(), "v".into()), 1, 1)],
+            updates: vec![columnar_records(vec![(("k".into(), "v".into()), 1, 1)])],
         };
         assert_eq!(
             f.unsealed_append(batch, &mut blob),
@@ -1017,7 +1028,7 @@ mod tests {
         // ts == trace_ts_upper is allowed
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![(("k".into(), "v".into()), 2, 1)],
+            updates: vec![columnar_records(vec![(("k".into(), "v".into()), 2, 1)])],
         };
         assert_eq!(f.unsealed_append(batch, &mut blob), Ok(()));
 
@@ -1041,10 +1052,10 @@ mod tests {
         // Construct a unsealed batch where the updates are not sorted by time.
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(1),
-            updates: vec![
+            updates: vec![columnar_records(vec![
                 (("k".into(), "v".into()), 3, 1),
                 (("k".into(), "v".into()), 2, 1),
-            ],
+            ])],
         };
 
         assert_eq!(f.unsealed_append(batch, &mut blob), Ok(()));
@@ -1076,9 +1087,9 @@ mod tests {
         assert_eq!(
             cleared_unsealed_keys(&f.unsealed_batches),
             vec![
-                unsealed_batch_meta("KEY", 0, 1, 0, 0, 58),
-                unsealed_batch_meta("KEY", 1, 2, 1, 1, 58),
-                unsealed_batch_meta("KEY", 2, 3, 0, 1, 92),
+                unsealed_batch_meta("KEY", 0, 1, 0, 0, 130),
+                unsealed_batch_meta("KEY", 1, 2, 1, 1, 130),
+                unsealed_batch_meta("KEY", 2, 3, 0, 1, 164),
             ],
         );
 
@@ -1106,8 +1117,8 @@ mod tests {
         assert_eq!(
             cleared_unsealed_keys(&f.unsealed_batches),
             vec![
-                unsealed_batch_meta("KEY", 1, 2, 1, 1, 58),
-                unsealed_batch_meta("KEY", 2, 3, 0, 1, 92),
+                unsealed_batch_meta("KEY", 1, 2, 1, 1, 130),
+                unsealed_batch_meta("KEY", 2, 3, 0, 1, 164),
             ],
         );
 
@@ -1147,7 +1158,7 @@ mod tests {
         ];
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(2),
-            updates: updates.clone(),
+            updates: vec![columnar_records(updates.clone())],
         };
 
         f.unsealed_append(batch, &mut blob)?;
@@ -1200,7 +1211,7 @@ mod tests {
         ];
         let batch = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(2),
-            updates: updates.clone(),
+            updates: vec![columnar_records(updates.clone())],
         };
 
         f.unsealed_append(batch, &mut blob)?;
@@ -1221,7 +1232,7 @@ mod tests {
 
         assert_eq!(
             cleared_unsealed_keys(&f.unsealed_batches),
-            vec![unsealed_batch_meta("KEY", 0, 2, 1, 2, 92)],
+            vec![unsealed_batch_meta("KEY", 0, 2, 1, 2, 164)],
         );
 
         Ok(())

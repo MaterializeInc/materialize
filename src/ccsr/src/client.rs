@@ -38,7 +38,7 @@ impl Client {
         Ok(Client { inner, url, auth })
     }
 
-    fn make_request<'a, P>(&self, method: Method, path: P) -> reqwest::RequestBuilder
+    fn make_request<P>(&self, method: Method, path: P) -> reqwest::RequestBuilder
     where
         P: IntoIterator,
         P::Item: AsRef<str>,

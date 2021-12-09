@@ -237,7 +237,7 @@ impl ConfluentAvroResolver {
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
-        let writer_schemas = config.map(|sr| SchemaCache::new(sr)).transpose()?;
+        let writer_schemas = config.map(SchemaCache::new).transpose()?;
         Ok(Self {
             reader_schema,
             writer_schemas,

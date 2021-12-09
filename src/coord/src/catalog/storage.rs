@@ -125,6 +125,10 @@ const MIGRATIONS: &[&str] = &[
     // Introduced in v0.9.12.
     "INSERT INTO schemas (database_id, name) VALUES
         (NULL, 'information_schema');",
+    // Adds index to timestamp table to more efficiently compact timestamps.
+    //
+    // Introduced in v0.12.0.
+    "CREATE INDEX timestamps_sid_timestamp ON timestamps (sid, timestamp)",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:

@@ -289,9 +289,11 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
             let mut val = match &typ.scalar_type {
                 ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
                 ScalarType::Int16 => Value::Int(i32::from(datum.unwrap_int16())),
-                ScalarType::Int32 | ScalarType::Oid | ScalarType::RegProc | ScalarType::RegType => {
-                    Value::Int(datum.unwrap_int32())
-                }
+                ScalarType::Int32
+                | ScalarType::Oid
+                | ScalarType::RegClass
+                | ScalarType::RegProc
+                | ScalarType::RegType => Value::Int(datum.unwrap_int32()),
                 ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
                 ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
                 ScalarType::Float64 => Value::Double(datum.unwrap_float64()),

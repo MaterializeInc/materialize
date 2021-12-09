@@ -1,0 +1,290 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for
+# bug: https://github.com/MaterializeInc/materialize/issues/9397
+# fix: https://github.com/MaterializeInc/materialize/pull/9398
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER, f2 INTEGER, f3 INTEGER);
+
+statement ok
+CREATE MATERIALIZED VIEW v1 AS SELECT DISTINCT f1, f2, f3 FROM t1;
+
+#
+# The optimization kicks in (no Distinct in final plan) since
+# all parts of the key are accounted for.
+#
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1, f2 FROM v1 WHERE f1 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #2)
+| Project (#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT f1, f2 FROM v1 WHERE f1 = f3 GROUP BY f1, f2;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #2)
+| Project (#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #1)
+| Project (#0, #2)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #1)
+| Project (#0, #2)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1 FROM v1 WHERE f1 = f2 AND f1 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #1), (#0 = #2)
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #1), (#0 = #2)
+| Project (#0, #0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #1), (#0 = #2)
+| Project (#0, #0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f2 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #1), (#1 = #2)
+| Project (#0, #0)
+
+EOF
+
+#
+# No optimization for those cases as not all parts of the key participate in the equality
+#
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #2)
+| Project (#0)
+| Distinct group=(#0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1, f2 FROM v1 WHERE f1 + 1 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#2 = (#0 + 1))
+| Project (#0, #1)
+| Distinct group=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1, f2 FROM v1 WHERE f1 > f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 > #2)
+| Project (#0, #1)
+| Distinct group=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1 + 1, f2 FROM v1 WHERE f1 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #2)
+| Project (#0, #1)
+| Distinct group=((#0 + 1), #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 OR f1 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter ((#0 = #1) || (#0 = #2))
+| Project (#1, #2)
+| Distinct group=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1 + 1 , f2 FROM v1 WHERE f1 + 1 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#2 = (#0 + 1))
+| Project (#1, #2)
+| Distinct group=(#1, #0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
+----
+%0 =
+| Get materialize.public.v1 (u3)
+| Filter (#0 = #2)
+| Project (#0)
+| Distinct group=(#0)
+
+EOF
+
+#
+# Tests with a relation that has columns that do not participate in the key
+#
+
+statement ok
+CREATE TABLE t2 (f1 INTEGER, f2 INTEGER, f3 INTEGER, f4 INTEGER, PRIMARY KEY (f1, f2));
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1, f3 FROM t2 WHERE f2 = f3;
+----
+%0 =
+| Get materialize.public.t2 (u5)
+| Filter (#1 = #2)
+| Project (#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f3 FROM t2 WHERE f1 = f2 AND f2 = f3;
+----
+%0 =
+| Get materialize.public.t2 (u5)
+| Filter (#0 = #1), (#1 = #2)
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f2 FROM t2 WHERE f1 = f3 AND f3 = f2;
+----
+%0 =
+| Get materialize.public.t2 (u5)
+| Filter (#0 = #2), (#1 = #2)
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f1, f2, f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
+----
+%0 =
+| Get materialize.public.t2 (u5)
+| Filter (#0 = #2), (#1 = #3)
+| Project (#0, #1, #0, #1)
+
+EOF
+
+
+query T multiline
+EXPLAIN SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
+----
+%0 =
+| Get materialize.public.t2 (u5)
+| Filter (#0 = #2), (#1 = #3)
+| Project (#0, #1)
+
+EOF
+
+#
+# No optimization for the cases below
+#
+
+query T multiline
+EXPLAIN SELECT DISTINCT f2, f3 FROM t2 WHERE f3 = f4;
+----
+%0 =
+| Get materialize.public.t2 (u5)
+| Filter (#2 = #3)
+| Project (#1, #2)
+| Distinct group=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f2 FROM t2 WHERE f1 = f3;
+----
+%0 =
+| Get materialize.public.t2 (u5)
+| Filter (#0 = #2)
+| Project (#1)
+| Distinct group=(#0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3;
+----
+%0 =
+| Get materialize.public.t2 (u5)
+| Filter (#0 = #2)
+| Project (#0, #3)
+| Distinct group=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT DISTINCT f3 FROM t2 WHERE f1 = f2;
+----
+%0 =
+| Get materialize.public.t2 (u5)
+| Filter (#0 = #1)
+| Project (#2)
+| Distinct group=(#0)
+
+EOF

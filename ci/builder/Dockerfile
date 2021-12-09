@@ -83,6 +83,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     gnupg2 \
     jq \
     libpq-dev \
+    lld \
     make \
     openssh-client \
     pkg-config \
@@ -142,11 +143,10 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=1.33.1" cargo-deb \
     && cargo install --root /usr/local --version "=0.9.1" cargo-deny
 
-# Link Rust's internal lld into the cross-compiling sysroot. This avoids
-# bringing in an extra copy of LLVM via `apt install lld`.
+# Link the system lld into the cross-compiling sysroot.
 
-RUN ln -s /usr/local/lib/rustlib/$ARCH_GCC-unknown-linux-gnu/bin/rust-lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
-    && ln -s /usr/local/lib/rustlib/$ARCH_GCC-unknown-linux-gnu/bin/rust-lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
+RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
+    && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
 
 # Install the Antithesis stub instrumentation library.
 

@@ -140,7 +140,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     }
     let timely_config = create_timely_config(&args)?;
 
-    info!("about to bind to args.listen_addr");
+    info!("about to bind to {:?}", args.listen_addr);
     let listener = TcpListener::bind(args.listen_addr).await?;
 
     info!(
@@ -159,7 +159,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
     })?;
 
-    let mut conn = dataflowd::framed_server(conn);
+    let mut conn = dataflowd::tcp::framed_server(conn);
     loop {
         select! {
             cmd = conn.try_next() => match cmd? {

@@ -107,9 +107,6 @@ impl Retry {
     /// The initial backoff is the amount of time to wait if the first try
     /// fails.
     pub fn initial_backoff(mut self, initial_backoff: Duration) -> Self {
-        if initial_backoff == Duration::from_secs(0) {
-            panic!("initial backoff duration must be greater than zero");
-        }
         self.initial_backoff = initial_backoff;
         self
     }

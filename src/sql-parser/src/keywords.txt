@@ -204,7 +204,6 @@ Raw
 Read
 Real
 References
-Regclass
 Regex
 Registry
 Rename

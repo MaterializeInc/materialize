@@ -63,7 +63,7 @@ where
 
         // Replay the previously persisted data, if any.
         let snapshot = read.snapshot();
-        let (ok_previous, err_previous) = self.replay(snapshot).ok_err(|x| split_ok_err(x));
+        let (ok_previous, err_previous) = self.replay(snapshot).ok_err(split_ok_err);
 
         let ok_previous = ok_previous.map(|((k, _), ts, diff)| (k, ts, diff));
 
@@ -158,7 +158,7 @@ mod tests {
 
         timely::execute_directly(move |worker| {
             let (mut handle, cap) = worker.dataflow(|scope| {
-                let token = p.create_or_load("1").unwrap();
+                let token = p.create_or_load("1");
                 let (input, _, _) = scope.new_persistent_unordered_input(token);
                 input
             });
@@ -177,7 +177,7 @@ mod tests {
         let p = registry.runtime_no_reentrance()?;
         let recv = timely::execute_directly(move |worker| {
             let ((mut handle, cap), recv) = worker.dataflow(|scope| {
-                let token = p.create_or_load("1").unwrap();
+                let token = p.create_or_load("1");
                 let (input, ok_stream, _) = scope.new_persistent_unordered_input(token);
                 // Send the data to be captured by a channel so that we can replay
                 // its contents outside of the dataflow and verify they are correct
@@ -214,7 +214,7 @@ mod tests {
         // Write some data using 3 workers.
         timely::execute(Config::process(3), move |worker| {
             worker.dataflow(|scope| {
-                let token = p.create_or_load("multiple_workers").unwrap();
+                let token = p.create_or_load("multiple_workers");
                 let ((mut handle, cap), _, _) = scope.new_persistent_unordered_input(token);
                 // Write one thing from each worker.
                 handle
@@ -233,7 +233,7 @@ mod tests {
         let tx = Arc::new(Mutex::new(tx));
         timely::execute(Config::process(2), move |worker| {
             worker.dataflow(|scope| {
-                let token = p.create_or_load("multiple_workers").unwrap();
+                let token = p.create_or_load("multiple_workers");
                 let (_, ok_stream, _) = scope.new_persistent_unordered_input(token);
                 // Send the data to be captured by a channel so that we can replay
                 // its contents outside of the dataflow and verify they are correct
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn error_stream() -> Result<(), Error> {
         let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let token = p.create_or_load::<(), ()>("error_stream").unwrap();
+        let token = p.create_or_load::<(), ()>("error_stream");
         p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {

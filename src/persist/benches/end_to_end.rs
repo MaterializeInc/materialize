@@ -22,7 +22,7 @@ use timely::dataflow::ProbeHandle;
 use timely::Config;
 
 use ore::metrics::MetricsRegistry;
-use persist;
+
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamWriteHandle};
 use persist::operators::source::PersistedSource;
@@ -64,9 +64,7 @@ fn write_and_bench_read<M: Measurement>(
     let collection_name = "4b_keys".to_string();
     let mut runtime = create_runtime(temp_dir.path(), &nonce).expect("missing runtime");
 
-    let (mut write, _read) = runtime
-        .create_or_load(&collection_name)
-        .expect("could not create persistent collection");
+    let (mut write, _read) = runtime.create_or_load(&collection_name);
 
     let expected_frontier = write_test_data(
         data_size_mb,
@@ -108,9 +106,7 @@ fn bench_read_persisted_source<M: Measurement>(
             let mut runtime =
                 create_runtime(&persistence_base_path, &nonce).expect("missing runtime");
 
-            let read = runtime
-                .create_or_load::<Vec<u8>, Vec<u8>>(&collection_id)
-                .map(|(_write, read)| read);
+            let (_write, read) = runtime.create_or_load::<Vec<u8>, Vec<u8>>(&collection_id);
 
             let mut probe = ProbeHandle::new();
 

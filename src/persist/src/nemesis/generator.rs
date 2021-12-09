@@ -159,7 +159,7 @@ impl ReqGenerator {
         // This is expected to error so it doesn't matter what diff is.
         let diff = 1;
         Req::Write(WriteReq::Single(WriteReqSingle {
-            stream: stream,
+            stream,
             update: ((key, ()), ts, diff),
         }))
     }
@@ -342,9 +342,8 @@ impl Generator {
                 self.config.storage_available,
                 ReqGenerator::StorageAvailable,
             ))
-            .filter(|_| self.state.storage_available == false),
-            Some((self.config.start_weight, ReqGenerator::Start))
-                .filter(|_| self.state.running == false),
+            .filter(|_| !self.state.storage_available),
+            Some((self.config.start_weight, ReqGenerator::Start)).filter(|_| !self.state.running),
         ];
 
         // Most operations just error if the runtime is down and this is fairly

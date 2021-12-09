@@ -1,7 +1,6 @@
 ---
-title: "Postgres CDC in the Cloud"
+title: "Postgres in the Cloud"
 description: "How to configure Postgres CDC for instances hosted on cloud services"
-weight:
 aliases:
 ---
 

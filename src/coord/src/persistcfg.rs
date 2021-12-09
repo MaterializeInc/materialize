@@ -16,7 +16,7 @@ use std::time::Duration;
 use dataflow_types::{ExternalSourceConnector, SourceConnector, SourceEnvelope};
 use ore::metrics::MetricsRegistry;
 use persist::error::{Error, ErrorLog};
-use persist::indexed::encoding::Id;
+use persist::indexed::encoding::Id as PersistId;
 use persist::s3::{Config as S3Config, S3Blob};
 use persist::storage::LockInfo;
 use repr::Row;
@@ -197,14 +197,18 @@ impl PersisterWithConfig {
         }
     }
 
-    pub fn details(&self, id: GlobalId, pretty: &str) -> Result<Option<PersistDetails>, Error> {
-        self.details_from_name(self.stream_name(id, pretty))
+    pub fn table_details(
+        &self,
+        id: GlobalId,
+        pretty: &str,
+    ) -> Result<Option<TablePersistDetails>, Error> {
+        self.table_details_from_name(self.stream_name(id, pretty))
     }
 
-    pub fn details_from_name(
+    pub fn table_details_from_name(
         &self,
         stream_name: Option<String>,
-    ) -> Result<Option<PersistDetails>, Error> {
+    ) -> Result<Option<TablePersistDetails>, Error> {
         let stream_name = match stream_name {
             Some(x) => x,
             None => return Ok(None),
@@ -213,9 +217,12 @@ impl PersisterWithConfig {
             Some(x) => x,
             None => return Ok(None),
         };
-        let (write_handle, _) = persister.create_or_load(&stream_name)?;
-        Ok(Some(PersistDetails {
+        let (write_handle, _) = persister.create_or_load(&stream_name);
+        Ok(Some(TablePersistDetails {
             stream_name,
+            // We need to get the stream_id now because we cannot get it later since most methods
+            // in the coordinator/catalog aren't fallible.
+            stream_id: write_handle.stream_id()?,
             write_handle,
         }))
     }
@@ -243,14 +250,15 @@ impl PersisterWithConfig {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct PersistDetails {
+pub struct TablePersistDetails {
     pub stream_name: String,
+    pub stream_id: PersistId,
     #[serde(skip)]
     pub write_handle: StreamWriteHandle<Row, ()>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PersistMultiDetails {
-    pub all_table_ids: Vec<Id>,
+pub struct TablePersistMultiDetails {
+    pub all_table_ids: Vec<PersistId>,
     pub write_handle: MultiWriteHandle<Row, ()>,
 }

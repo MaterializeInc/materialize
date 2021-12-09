@@ -461,7 +461,7 @@ impl<'a> Explanation<'a> {
                 write!(f, " over (")?;
                 for (i, e) in expr.partition.iter().enumerate() {
                     if i > 0 {
-                        write!(f, "{}", ", ")?;
+                        write!(f, ", ")?;
                     }
                     self.fmt_scalar_expr(f, e)?;
                 }
@@ -471,7 +471,7 @@ impl<'a> Explanation<'a> {
                     write!(f, " order by (")?;
                     for (i, e) in expr.order_by.iter().enumerate() {
                         if i > 0 {
-                            write!(f, "{}", ", ")?;
+                            write!(f, ", ")?;
                         }
                         self.fmt_scalar_expr(f, e)?;
                     }

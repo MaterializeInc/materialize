@@ -25,6 +25,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::{Branch, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::{Data as TimelyData, PartialOrder};
@@ -395,19 +396,7 @@ where
         // An activator that allows futures to re-schedule this operator when ready.
         let activator = Arc::new(scope.sync_activator_for(&seal_op.operator_info().address[..]));
 
-        // Keep two Vecs around, so that we don't have to keep re-allocating new ones.
-        //
-        // Newly created futures are added to `pending_futures`, which is the place where futures
-        // that are not yet ready will be kept until they are done.
-        //
-        // We use `new_pending` when iterating (and polling) through the list of pending futures to
-        // keep track of the futures that are still pending at the end of one operator invocation.
-        //
-        // We have two invariants that hold at the start and end of an operator invocation:
-        //  - `pending_futures` contains any futures that are not ready.
-        //  - `new_pending` is empty
-        let mut pending_futures = Vec::new();
-        let mut new_pending = Vec::new();
+        let mut pending_futures = VecDeque::new();
 
         seal_op.build(move |mut capabilities| {
             let mut cap_set = if active_seal_operator {
@@ -423,7 +412,7 @@ where
                 primary_data_input.for_each(|cap, data| {
                     data.swap(&mut primary_data_buffer);
 
-                    let as_result = primary_data_buffer.drain(..).map(|update| Ok(update));
+                    let as_result = primary_data_buffer.drain(..).map(Ok);
 
                     let mut session = data_output.session(&cap);
                     session.give_iterator(as_result);
@@ -465,8 +454,8 @@ where
 
                         let future = condition_write.seal(*frontier_element);
 
-                        pending_futures.push(PendingSealFuture::ConditionSeal(SealFuture {
-                            cap: cap_set.delayed(frontier_element),
+                        pending_futures.push_back(PendingSealFuture::ConditionSeal(SealFuture {
+                            time: *frontier_element,
                             future,
                         }));
                     }
@@ -478,7 +467,7 @@ where
                 let waker = futures_util::task::waker_ref(&activator);
                 let mut context = Context::from_waker(&waker);
 
-                while let Some(pending_future) = pending_futures.pop() {
+                while let Some(pending_future) = pending_futures.pop_front() {
                     match pending_future {
                         PendingSealFuture::ConditionSeal(mut pending_future) => {
                             match Pin::new(&mut pending_future.future).poll(&mut context) {
@@ -486,43 +475,78 @@ where
                                     log::trace!(
                                         "In {}, finished sealing condition collection up to {}",
                                         &operator_name,
-                                        pending_future.cap.time(),
+                                        pending_future.time,
                                     );
 
                                     log::trace!(
                                         "In {}, sealing primary collection up to {}...",
                                         &operator_name,
-                                        pending_future.cap.time(),
+                                        pending_future.time,
                                     );
 
-                                    let future = primary_write.seal(*pending_future.cap.time());
+                                    let future = primary_write.seal(pending_future.time);
 
-                                    // It's very important to add this to `pending_futures` and not
-                                    // `new_pending` to ensure that we poll from it at least once,
-                                    // so that it has a reference to the waker/activator.
-                                    pending_futures.push(PendingSealFuture::PrimarySeal(
+                                    pending_futures.push_back(PendingSealFuture::PrimarySeal(
                                         SealFuture {
-                                            cap: pending_future.cap,
+                                            time: pending_future.time,
                                             future,
                                         },
                                     ));
                                 }
                                 std::task::Poll::Ready(Err(e)) => {
-                                    let mut session = data_output.session(&pending_future.cap);
                                     let error = format!(
                                         "Error sealing {} (condition) up to {}: {}",
-                                        &operator_name,
-                                        pending_future.cap.time(),
-                                        e
+                                        &operator_name, pending_future.time, e
                                     );
-                                    log::error!("{}", error);
+                                    log::trace!("{}", error);
 
-                                    // TODO: make error retractable? Probably not...
-                                    session.give(Err((error, *pending_future.cap.time(), 1)));
+                                    // Only retry this seal if there is no other pending conditional
+                                    // seal at a time >= this seal's time.
+                                    let retry = {
+                                        let mut retry = true;
+                                        let seal_ts = pending_future.time;
+                                        for seal_future in pending_futures.iter() {
+                                            match seal_future {
+                                                PendingSealFuture::ConditionSeal(seal_future) => {
+                                                    if seal_future.time >= seal_ts {
+                                                        retry = false;
+                                                        break;
+                                                    }
+                                                }
+                                                PendingSealFuture::PrimarySeal(_) => (),
+                                            };
+                                        }
+
+                                        retry
+                                    };
+
+                                    if retry {
+                                        log::trace!(
+                                            "Adding seal (condition) to queue again: {}",
+                                            pending_future.time
+                                        );
+
+                                        let future = condition_write.seal(pending_future.time);
+                                        pending_futures.push_front(
+                                            PendingSealFuture::ConditionSeal(SealFuture {
+                                                time: pending_future.time,
+                                                future,
+                                            }),
+                                        );
+                                    }
                                 }
                                 std::task::Poll::Pending => {
-                                    new_pending
-                                        .push(PendingSealFuture::ConditionSeal(pending_future));
+                                    // We assume that seal requests are worked off in order and stop
+                                    // trying for the first seal that is not done.
+                                    // Push the future back to the front of the queue. We have to
+                                    // do this dance of popping and pushing because we're modifying
+                                    // the queue while we work on a future. This prevents us from
+                                    // just getting a reference to the front of the queue and then
+                                    // popping once we know that a future is done.
+                                    pending_futures.push_front(PendingSealFuture::ConditionSeal(
+                                        pending_future,
+                                    ));
+                                    break;
                                 }
                             }
                         }
@@ -532,34 +556,78 @@ where
                                     log::trace!(
                                         "In {}, finished sealing primary collection up to {}",
                                         &operator_name,
-                                        pending_future.cap.time(),
+                                        pending_future.time,
                                     );
+
+                                    // Explicitly downgrade the capability to the new time.
+                                    cap_set.downgrade(Some(pending_future.time));
                                 }
                                 std::task::Poll::Ready(Err(e)) => {
-                                    let mut session = data_output.session(&pending_future.cap);
                                     let error = format!(
                                         "Error sealing {} (primary) up to {}: {}",
-                                        &operator_name,
-                                        pending_future.cap.time(),
-                                        e
+                                        &operator_name, pending_future.time, e
                                     );
-                                    log::error!("{}", error);
+                                    log::trace!("{}", error);
 
-                                    // TODO: make error retractable? Probably not...
-                                    session.give(Err((error, *pending_future.cap.time(), 1)));
+                                    // Only retry this seal if there is no other pending primary
+                                    // seal at a time >= this seal's time.
+                                    let retry = {
+                                        let mut retry = true;
+                                        let seal_ts = pending_future.time;
+                                        for seal_future in pending_futures.iter() {
+                                            match seal_future {
+                                                PendingSealFuture::ConditionSeal(_) => (),
+                                                PendingSealFuture::PrimarySeal(seal_future) => {
+                                                    if seal_future.time >= seal_ts {
+                                                        retry = false;
+                                                        break;
+                                                    }
+                                                }
+                                            };
+                                        }
+
+                                        retry
+                                    };
+
+                                    if retry {
+                                        log::trace!(
+                                            "Adding seal (primary) to queue again: {}",
+                                            pending_future.time
+                                        );
+
+                                        let future = primary_write.seal(pending_future.time);
+                                        pending_futures.push_front(PendingSealFuture::PrimarySeal(
+                                            SealFuture {
+                                                time: pending_future.time,
+                                                future,
+                                            },
+                                        ));
+                                    }
                                 }
                                 std::task::Poll::Pending => {
-                                    new_pending
-                                        .push(PendingSealFuture::PrimarySeal(pending_future));
+                                    // We assume that seal requests are worked off in order and stop
+                                    // trying for the first seal that is not done.
+                                    // Push the future back to the front of the queue. We have to
+                                    // do this dance of popping and pushing because we're modifying
+                                    // the queue while we work on a future. This prevents us from
+                                    // just getting a reference to the front of the queue and then
+                                    // popping once we know that a future is done.
+                                    pending_futures
+                                        .push_front(PendingSealFuture::PrimarySeal(pending_future));
+                                    break;
                                 }
                             }
                         }
                     }
                 }
-                pending_futures.append(&mut new_pending);
 
-                input_frontier.clone_from(&mut new_input_frontier);
-                cap_set.downgrade(input_frontier.iter());
+                input_frontier.clone_from(&new_input_frontier);
+                // We need to downgrade when the input frontier is empty. This basically releases
+                // all the capabilities so that downstream operators and eventually the worker can
+                // shut down.
+                if input_frontier.is_empty() {
+                    cap_set.downgrade(input_frontier.iter());
+                }
             }
         });
 
@@ -577,7 +645,7 @@ enum PendingSealFuture<F: Future<Output = Result<SeqNo, Error>>> {
 }
 
 struct SealFuture<F: Future<Output = Result<SeqNo, Error>>> {
-    cap: Capability<u64>,
+    time: u64,
     future: F,
 }
 
@@ -638,83 +706,67 @@ where
 }
 
 /// Extension trait for [`Stream`].
-pub trait RetractFutureUpdates<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
+pub trait RetractUnsealed<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// Passes through each element of the stream and sends retractions to the given
-    /// [`StreamWriteHandle`] for updates that are beyond the given `upper_ts`.
+    /// [`StreamWriteHandle`] for updates that are beyond the given `upper_ts`. In practice,
+    /// the `upper_ts` is the lowest timestamp that is sealed across all persisted streams
+    /// for a source.
     ///
-    /// This does wait on writing each retraction before emitting more data (or advancing the
-    /// frontier).
-    fn filter_and_retract_future_updates(
+    /// This does not wait for retractions to be persisted before passing through the data. We do,
+    /// however, wait for data to be persisted before allowing the frontier to advance. In other
+    /// words, this operator is holding on to capabilities as long as retractions belonging to
+    /// their timestamp is not persisted.
+    fn retract_unsealed(
         &self,
         name: &str,
         write: StreamWriteHandle<K, V>,
         upper_ts: u64,
-    ) -> Stream<G, ((K, V), u64, isize)>;
+    ) -> (
+        Stream<G, ((K, V), u64, isize)>,
+        Stream<G, (String, u64, isize)>,
+    );
 }
 
-impl<G, K, V> RetractFutureUpdates<G, K, V> for Stream<G, ((K, V), u64, isize)>
+impl<G, K, V> RetractUnsealed<G, K, V> for Stream<G, ((K, V), u64, isize)>
 where
     G: Scope<Timestamp = u64>,
     K: TimelyData + Codec + Debug,
     V: TimelyData + Codec + Debug,
 {
-    // TODO: This operator is not optimized at all. For example, instead of waiting for each write
-    // to succeed, we could do the same thing as the persist() operator and batch a bunch of
-    // futures and only wait on them once the frontier advances.
-    // For now, that should be ok because this only causes restarts to be slightly slower but
-    // doesn't affect the steady-state write path.
-    fn filter_and_retract_future_updates(
+    fn retract_unsealed(
         &self,
         name: &str,
         write: StreamWriteHandle<K, V>,
         upper_ts: u64,
-    ) -> Stream<G, ((K, V), u64, isize)> {
-        let operator_name = format!("retract_future_updates({})", name);
-        let mut persist_op = OperatorBuilder::new(operator_name, self.scope());
+    ) -> (
+        Stream<G, ((K, V), u64, isize)>,
+        Stream<G, (String, u64, isize)>,
+    ) {
+        let (pass_through, to_retract) = self.branch(move |_, (_, t, _)| t >= &upper_ts);
 
-        let mut input = persist_op.new_input(&self, Pipeline);
+        let (retract_oks, errs) = to_retract
+            .map(|(data, time, diff)| (data, time, -diff))
+            .persist(&format!("retract_unsealed({})", name), write);
 
-        let (mut data_output, data_output_stream) = persist_op.new_output();
+        // Introduce a data-dependency between pass_through, and retract_oks even
+        // though in reality they operate on disjoint subsets of data and no true
+        // data dependency exists. This way, we ensure that the frontier doesn't
+        // advance for downstreams users until after all retractions have been
+        // persisted.
+        //
+        // TODO: we could have done this with fewer operators by concatenating
+        // pass_through, to_retract, and retract_oks, as to_retract and retract_oks
+        // cancel out. This approach seemed more isolated and safer.
+        //
+        // TODO: this approach also has the downside that this flat_map needs to
+        // go through all of the retractions individually. We could avoid this
+        // extra work by having `persist` take an argument that determines whether
+        // it should pass through outputs or not.
+        let retract_oks = retract_oks.flat_map(|_| None);
 
-        let mut buffer = Vec::new();
+        let oks = pass_through.concat(&retract_oks);
 
-        persist_op.build_async(
-            self.scope(),
-            async_op!(|capabilities, _frontiers| {
-                // Drop initial capabilities
-                capabilities.clear();
-                let mut data_output = data_output.activate();
-
-                // Write out everything and forward, keeping the write futures.
-                while let Some((cap, data)) = input.next() {
-                    // TODO(petrosagg): remove this unconditional retain once this is released:
-                    //     https://github.com/TimelyDataflow/timely-dataflow/pull/429
-                    let cap = cap.retain();
-                    data.swap(&mut buffer);
-
-                    let mut session = data_output.session(&cap);
-                    for update in buffer.drain(..) {
-                        if update.1 >= upper_ts {
-                            log::trace!(
-                                "Update {:?} is beyond upper_ts {}, retracting...",
-                                update,
-                                upper_ts
-                            );
-                            let (data, ts, diff) = update;
-                            let anti_update = (data, ts, -diff);
-                            write
-                                .write(&[anti_update])
-                                .await
-                                .expect("error persisting retraction");
-                            continue;
-                        }
-                        session.give(update);
-                    }
-                }
-            }),
-        );
-
-        data_output_stream
+        (oks, errs)
     }
 }
 
@@ -731,6 +783,7 @@ mod tests {
     use crate::error::Error;
     use crate::indexed::{ListenEvent, ListenFn, SnapshotExt};
     use crate::mem::MemRegistry;
+    use crate::unreliable::UnreliableHandle;
 
     use super::*;
 
@@ -741,7 +794,7 @@ mod tests {
         let p = registry.runtime_no_reentrance()?;
         timely::execute_directly(move |worker| {
             let (mut input, probe) = worker.dataflow(|scope| {
-                let (write, _read) = p.create_or_load("1").unwrap();
+                let (write, _read) = p.create_or_load("1");
                 let mut input = Handle::new();
                 let (ok_stream, _) = input.to_stream(scope).persist("test", write);
                 let probe = ok_stream.probe();
@@ -765,7 +818,7 @@ mod tests {
         ];
 
         let p = registry.runtime_no_reentrance()?;
-        let (_write, read) = p.create_or_load("1")?;
+        let (_write, read) = p.create_or_load("1");
         assert_eq!(read.snapshot()?.read_to_end()?, expected);
 
         Ok(())
@@ -774,7 +827,7 @@ mod tests {
     #[test]
     fn persist_error_stream() -> Result<(), Error> {
         let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let (write, _read) = p.create_or_load::<(), ()>("error_stream").unwrap();
+        let (write, _read) = p.create_or_load::<(), ()>("error_stream");
         p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {
@@ -819,7 +872,7 @@ mod tests {
 
         timely::execute_directly(move |worker| {
             let (mut input, probe) = worker.dataflow(|scope| {
-                let (write, _read) = p.create_or_load::<(), ()>("1").unwrap();
+                let (write, _read) = p.create_or_load::<(), ()>("1");
                 let mut input = Handle::new();
                 let (ok_stream, _) = input.to_stream(scope).seal("test", write);
                 let probe = ok_stream.probe();
@@ -833,7 +886,7 @@ mod tests {
         });
 
         let p = registry.runtime_no_reentrance()?;
-        let (_write, read) = p.create_or_load::<(), ()>("1")?;
+        let (_write, read) = p.create_or_load::<(), ()>("1");
         assert_eq!(read.snapshot()?.get_seal(), Antichain::from_elem(42));
 
         Ok(())
@@ -842,7 +895,7 @@ mod tests {
     #[test]
     fn seal_error_stream() -> Result<(), Error> {
         let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let (write, _read) = p.create_or_load::<(), ()>("error_stream").unwrap();
+        let (write, _read) = p.create_or_load::<(), ()>("error_stream");
         p.stop()?;
 
         let recv = timely::execute_directly(move |worker| {
@@ -884,8 +937,8 @@ mod tests {
 
         // Setup listens for both collections and record seal events. Afterwards, we will verify
         // that we get the expected seals, in the right order.
-        let (_write, primary_read) = p.create_or_load::<(), ()>("primary").unwrap();
-        let (_write, condition_read) = p.create_or_load::<(), ()>("condition").unwrap();
+        let (_write, primary_read) = p.create_or_load::<(), ()>("primary");
+        let (_write, condition_read) = p.create_or_load::<(), ()>("condition");
 
         #[derive(Debug, PartialEq, Eq)]
         enum Sealed {
@@ -921,8 +974,8 @@ mod tests {
 
         timely::execute_directly(move |worker| {
             let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
-                let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
-                let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
+                let (primary_write, _read) = p.create_or_load::<(), ()>("primary");
+                let (condition_write, _read) = p.create_or_load::<(), ()>("condition");
                 let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
                 let mut condition_input = Handle::new();
                 let primary_stream = primary_input.to_stream(scope);
@@ -994,6 +1047,66 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn conditional_seal_frontier_advance_only_on_success() -> Result<(), Error> {
+        ore::test::init_logging_default("trace");
+        let mut registry = MemRegistry::new();
+        let mut unreliable = UnreliableHandle::default();
+        let p = registry.runtime_unreliable(unreliable.clone())?;
+
+        timely::execute_directly(move |worker| {
+            let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
+                let (primary_write, _read) = p.create_or_load::<(), ()>("primary");
+                let (condition_write, _read) = p.create_or_load::<(), ()>("condition");
+                let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
+                let mut condition_input = Handle::new();
+                let primary_stream = primary_input.to_stream(scope);
+                let condition_stream = condition_input.to_stream(scope);
+
+                let (sealed_stream, _) = primary_stream.conditional_seal(
+                    "test",
+                    &condition_stream,
+                    primary_write,
+                    condition_write,
+                );
+
+                let seal_probe = sealed_stream.probe();
+
+                (primary_input, condition_input, seal_probe)
+            });
+
+            condition_input.send((((), ()), 0, 1));
+
+            primary_input.advance_to(1);
+            condition_input.advance_to(1);
+            while seal_probe.less_than(&1) {
+                worker.step();
+            }
+
+            unreliable.make_unavailable();
+
+            primary_input.advance_to(2);
+            condition_input.advance_to(2);
+
+            // This is the best we can do. Wait for a bit, and verify that the frontier didn't
+            // advance. Of course, we cannot rule out that the frontier might advance on the 11th
+            // step, but tests without the fix showed the test to be very unstable on this
+            for _i in 0..10 {
+                worker.step();
+            }
+            assert!(seal_probe.less_than(&2));
+
+            // After we make the runtime available again, sealing will work and the frontier will
+            // advance.
+            unreliable.make_available();
+            while seal_probe.less_than(&2) {
+                worker.step();
+            }
+        });
+
+        Ok(())
+    }
+
     // Test using multiple workers and ensure that `conditional_seal()` doesn't block the
     // frontier for non-active seal operators.
     //
@@ -1006,8 +1119,8 @@ mod tests {
 
         let guards = timely::execute(Config::process(3), move |worker| {
             let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
-                let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
-                let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
+                let (primary_write, _read) = p.create_or_load::<(), ()>("primary");
+                let (condition_write, _read) = p.create_or_load::<(), ()>("condition");
                 let mut primary_input: Handle<u64, ((), u64, isize)> = Handle::new();
                 let mut condition_input: Handle<u64, ((), u64, isize)> = Handle::new();
                 let primary_stream = primary_input.to_stream(scope);
@@ -1039,57 +1152,40 @@ mod tests {
     }
 
     #[test]
-    fn conditional_seal_error_stream() -> Result<(), Error> {
-        let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
-        let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
-        p.stop()?;
+    fn retract_unsealed() -> Result<(), Error> {
+        ore::test::init_logging_default("trace");
+        let mut registry = MemRegistry::new();
+        let p = registry.runtime_no_reentrance()?;
 
-        let recv = timely::execute_directly(move |worker| {
-            let (mut primary_input, mut condition_input, probe, err_stream) =
-                worker.dataflow(|scope| {
-                    let mut primary_input = Handle::new();
-                    let mut condition_input = Handle::new();
-                    let primary_stream = primary_input.to_stream(scope);
-                    let condition_stream = condition_input.to_stream(scope);
+        timely::execute_directly(move |worker| {
+            let (mut input, probe) = worker.dataflow(|scope| {
+                let (write, _read) = p.create_or_load::<(), ()>("test");
+                let mut input = Handle::new();
+                let stream = input.to_stream(scope);
 
-                    let (_, err_stream) = primary_stream.conditional_seal(
-                        "test",
-                        &condition_stream,
-                        primary_write,
-                        condition_write,
-                    );
+                let (output, _) = stream.retract_unsealed("test_retract_unsealed", write, 5);
 
-                    let probe = err_stream.probe();
-                    (primary_input, condition_input, probe, err_stream.capture())
-                });
+                let probe = output.probe();
 
-            primary_input.send((((), ()), 0, 1));
-            condition_input.send((((), ()), 0, 1));
+                (input, probe)
+            });
 
-            primary_input.advance_to(1);
-            condition_input.advance_to(1);
+            for i in 0..=6 {
+                input.send((((), ()), i, 1));
+            }
 
+            // Note that these were all sent at the timely time of 0.
+            input.advance_to(1);
             while probe.less_than(&1) {
                 worker.step();
             }
-
-            err_stream
         });
 
-        let actual = recv
-            .extract()
-            .into_iter()
-            .flat_map(|(_, xs)| xs.into_iter())
-            .collect::<Vec<_>>();
+        let expected = vec![(((), ()), 5, -1), (((), ()), 6, -1)];
 
-        let expected = vec![(
-            "Error sealing conditional_seal(test) (condition) up to 1: runtime shutdown"
-                .to_string(),
-            1,
-            1,
-        )];
-        assert_eq!(actual, expected);
+        let p = registry.runtime_no_reentrance()?;
+        let (_write, read) = p.create_or_load("test");
+        assert_eq!(read.snapshot()?.read_to_end()?, expected);
 
         Ok(())
     }

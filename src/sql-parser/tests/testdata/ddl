@@ -1118,7 +1118,7 @@ CREATE TABLE public.customer (
     active int
 )
 ----
-CREATE TABLE public.customer (customer_id int4 DEFAULT nextval('public.customer_customer_id_seq'::oid) NOT NULL, store_id int2 NOT NULL, first_name varchar(45) NOT NULL, last_name varchar(45) NOT NULL, info text, address_id int2 NOT NULL, activebool bool DEFAULT true NOT NULL, create_date date DEFAULT now()::date NOT NULL, create_date1 date DEFAULT 'now'::text::date NOT NULL, last_update timestamp DEFAULT now(), active int4)
+CREATE TABLE public.customer (customer_id int4 DEFAULT nextval('public.customer_customer_id_seq'::regclass) NOT NULL, store_id int2 NOT NULL, first_name varchar(45) NOT NULL, last_name varchar(45) NOT NULL, info text, address_id int2 NOT NULL, activebool bool DEFAULT true NOT NULL, create_date date DEFAULT now()::date NOT NULL, create_date1 date DEFAULT 'now'::text::date NOT NULL, last_update timestamp DEFAULT now(), active int4)
 
 parse-statement roundtrip
 CREATE TABLE bazaar.settings (

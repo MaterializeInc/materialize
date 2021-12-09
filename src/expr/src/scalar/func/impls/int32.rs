@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use lowertest::MzStructReflect;
 use repr::adt::numeric::{self, Numeric};
-use repr::adt::system::{Oid, RegProc, RegType};
+use repr::adt::system::{Oid, RegClass, RegProc, RegType};
 use repr::{strconv, ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
@@ -124,6 +124,14 @@ sqlfunc!(
     #[preserves_uniqueness = true]
     fn cast_int32_to_oid(a: i32) -> Oid {
         Oid(a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "i32toregclass"]
+    #[preserves_uniqueness = true]
+    fn cast_int32_to_reg_class(a: i32) -> RegClass {
+        RegClass(a)
     }
 );
 

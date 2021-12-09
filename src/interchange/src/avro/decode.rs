@@ -192,15 +192,13 @@ impl Decoder {
             };
             self.packer.push(upstream_time_millis);
             let row = self.packer.finish_and_reuse();
-            if self.reject_non_inserts {
-                if !matches!(row.iter().next(), None | Some(Datum::Null)) {
-                    anyhow::bail!(
-                        "[customer-data] Updates and deletes are not allowed for this source! \
-                         This probably means it was started with `start_offset` \
-                         and without `UPSERT` semantics. Got row: {:?}",
-                        row
-                    )
-                }
+            if self.reject_non_inserts && !matches!(row.iter().next(), None | Some(Datum::Null)) {
+                anyhow::bail!(
+                    "[customer-data] Updates and deletes are not allowed for this source! \
+                     This probably means it was started with `start_offset` \
+                     and without `UPSERT` semantics. Got row: {:?}",
+                    row
+                )
             }
 
             row

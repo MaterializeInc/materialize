@@ -1024,7 +1024,7 @@ pub fn eval_as_of<'a>(
     Ok(match ex.typ(desc.typ()).scalar_type {
         ScalarType::Numeric { .. } => {
             let n = evaled.unwrap_numeric().0;
-            u64::try_from(n)?.try_into()?
+            u64::try_from(n)?
         }
         ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
         ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
@@ -3631,17 +3631,8 @@ fn plan_function<'a>(
         Func::Aggregate(_) => {
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
-        Func::Table(_) => {
-            bail_unsupported!(
-                1546,
-                format!("table function ({}) in scalar position", name)
-            );
-        }
-        Func::Set(_) => {
-            bail_unsupported!(
-                1546,
-                format!("table function ({}) in scalar position", name)
-            );
+        Func::Table(_) | Func::Set(_) => {
+            bail!("table functions are not allowed in {}", ecx.name);
         }
         Func::Scalar(impls) => impls,
         Func::ScalarWindow(impls) => {
@@ -3808,7 +3799,7 @@ fn plan_is_expr<'a>(
         IsExprConstruct::False => UnaryFunc::IsFalse(expr_func::IsFalse),
     };
     let expr = HirScalarExpr::CallUnary {
-        func: func,
+        func,
         expr: Box::new(expr),
     };
 
@@ -4072,6 +4063,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
             bail!("internal error: can't convert from pg record to materialize record")
         }
         pgrepr::Type::Oid => Ok(ScalarType::Oid),
+        pgrepr::Type::RegClass => Ok(ScalarType::RegClass),
         pgrepr::Type::RegProc => Ok(ScalarType::RegProc),
         pgrepr::Type::RegType => Ok(ScalarType::RegType),
         pgrepr::Type::Map { value_type } => Ok(ScalarType::Map {

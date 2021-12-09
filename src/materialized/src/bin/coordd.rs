@@ -84,8 +84,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.dataflowd_addr
     );
 
-    let dataflow_client =
-        dataflowd::RemoteClient::connect(args.workers, &args.dataflowd_addr).await?;
+    let dataflow_client = dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
+
     let mut metrics_registry = MetricsRegistry::new();
     let (coord_handle, coord_client) = coord::serve(coord::Config {
         dataflow_client,
@@ -120,8 +120,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         });
         let http_server = http::Server::new(http::Config {
             tls: None,
-            coord_client: coord_client,
-            metrics_registry: metrics_registry,
+            coord_client,
+            metrics_registry,
             global_metrics: metrics,
             pgwire_metrics: pgwire_server.metrics(),
         });

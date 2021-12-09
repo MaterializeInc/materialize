@@ -31,6 +31,8 @@ use crate::format::avro::{self, Schema};
 use crate::format::bytes;
 use crate::parser::BuiltinCommand;
 
+const INGEST_BATCH_SIZE: isize = 10000;
+
 pub struct IngestAction {
     topic_prefix: String,
     partition: Option<i32>,
@@ -253,6 +255,8 @@ impl Action for IngestAction {
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
         let topic_name = &format!("{}-{}", self.topic_prefix, state.seed);
+        println!("Ingesting data into Kafka topic {}", topic_name);
+
         let ccsr_client = &state.ccsr_client;
         let temp_path = &state.temp_path;
         let make_transcoder = |format, typ| async move {
@@ -342,9 +346,12 @@ impl Action for IngestAction {
                     producer.send(record, timeout).await
                 });
             }
-        }
-        while let Some(res) = futs.next().await {
-            res.map_err(|(e, _message)| e.to_string_alt())?;
+
+            if iteration % INGEST_BATCH_SIZE == 0 || iteration == (self.repeat - 1) {
+                while let Some(res) = futs.next().await {
+                    res.map_err(|(e, _message)| e.to_string_alt())?;
+                }
+            }
         }
         Ok(())
     }

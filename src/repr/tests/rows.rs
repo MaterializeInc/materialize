@@ -57,8 +57,7 @@ fn arb_datum() -> BoxedStrategy<PropertizedDatum> {
         any::<i64>().prop_map(PropertizedDatum::Int64),
         any::<f32>().prop_map(PropertizedDatum::Float32),
         any::<f64>().prop_map(PropertizedDatum::Float64),
-        add_arb_duration(chrono::NaiveDate::from_ymd(2000, 01, 01))
-            .prop_map(PropertizedDatum::Date),
+        add_arb_duration(chrono::NaiveDate::from_ymd(2000, 1, 1)).prop_map(PropertizedDatum::Date),
         add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropertizedDatum::Time),
         add_arb_duration(chrono::NaiveDateTime::from_timestamp(0, 0))
             .prop_map(PropertizedDatum::Timestamp),

@@ -6,16 +6,17 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.50"
+anyhow = "1.0.51"
 async-trait = "0.1.51"
-aws-config = { version = "0.0.26-alpha", default-features = false, features = ["default-provider", "native-tls"] }
-aws-types = { version = "0.0.26-alpha", features = ["hardcoded-credentials"] }
-aws-smithy-http = "0.30.0-alpha"
+aws-config = { version = "0.2.0", default-features = false, features = ["default-provider", "native-tls"] }
+aws-types = { version = "0.2.0", features = ["hardcoded-credentials"] }
+aws-smithy-http = "0.32.0"
 ccsr = { path = "../ccsr" }
 crossbeam-channel = "0.5.1"
 enum-iterator = "0.7.0"
 enum-kinds = "0.5.1"
 expr = { path = "../expr" }
+futures = "0.3.17"
 globset = { version = "0.4.8", features = ["serde1"] }
 interchange = { path = "../interchange" }
 persist-types = { path = "../persist-types" }

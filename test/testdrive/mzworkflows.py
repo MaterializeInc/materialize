@@ -47,11 +47,11 @@ aws_amazon = "--aws-region=us-east-2"
 
 def workflow_testdrive(w: Workflow):
     w.start_and_wait_for_tcp(services=[localstack])
-    test_testdrive(w, mz_default, aws_localstack)
+    test_testdrive(w, mz_default, aws_localstack, tests)
 
 
 def workflow_testdrive_ci(w: Workflow):
-    test_testdrive(w, mz_default, aws_amazon, tests)
+    test_testdrive(w, mz_default, aws_amazon, tests_ci)
 
 
 def workflow_testdrive_ci_workers_1(w: Workflow):

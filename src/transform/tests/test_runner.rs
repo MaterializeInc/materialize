@@ -227,9 +227,6 @@ mod tests {
         // transforms?
         match name {
             "CanonicalizeMfp" => Ok(Box::new(transform::canonicalize_mfp::CanonicalizeMfp)),
-            "ColumnKnowledge" => Ok(Box::new(
-                transform::column_knowledge::ColumnKnowledge::default(),
-            )),
             "Demand" => Ok(Box::new(transform::demand::Demand::default())),
             "FilterFusion" => Ok(Box::new(transform::fusion::filter::Filter)),
             "FoldConstants" => Ok(Box::new(transform::reduction::FoldConstants {
@@ -239,6 +236,9 @@ mod tests {
             "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting::default())),
             "NonNullRequirements" => Ok(Box::new(
                 transform::nonnull_requirements::NonNullRequirements::default(),
+            )),
+            "PredicateKnowledge" => Ok(Box::new(
+                transform::predicate_propagation::PredicateKnowledge::default(),
             )),
             "PredicatePushdown" => Ok(Box::new(
                 transform::predicate_pushdown::PredicatePushdown::default(),
@@ -407,6 +407,24 @@ mod tests {
         result
     }
 
+    /// Applies PredicateKnowledge transform and displaying all the predicates lifted
+    /// all the way up to the root.
+    fn run_predicate_propagation_testcast(
+        s: &str,
+        cat: &TestCatalog,
+        args: &HashMap<String, Vec<String>>,
+    ) -> Result<String, Error> {
+        let mut rel = parse_relation(s, cat, args)?;
+        let transform = transform::predicate_propagation::PredicateKnowledge::default();
+        let predicates = transform.action(&mut rel, &mut Default::default())?;
+        let mut out = String::new();
+        for predicate in predicates {
+            write!(out, "{}\n", predicate)?;
+        }
+
+        Ok(out)
+    }
+
     #[test]
     fn run() {
         datadriven::walk("tests/testdata", |f| {
@@ -468,6 +486,12 @@ mod tests {
                             &s.args,
                             TestType::Build,
                         ) {
+                            Ok(msg) => msg,
+                            Err(err) => format!("error: {}\n", err),
+                        }
+                    }
+                    "predicate-propagation" => {
+                        match run_predicate_propagation_testcast(&s.input, &catalog, &s.args) {
                             Ok(msg) => msg,
                             Err(err) => format!("error: {}\n", err),
                         }

@@ -897,7 +897,7 @@ class Redpanda(PythonService):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v21.10.2",
+        version: str = "v21.11.1",
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
         ports: Optional[List[int]] = None,
@@ -1103,7 +1103,7 @@ class Testdrive(PythonService):
         name: str = "testdrive-svc",
         mzbuild: str = "testdrive",
         no_reset: bool = False,
-        default_timeout: int = 30,
+        default_timeout: str = "30s",
         validate_catalog: bool = True,
         entrypoint: Optional[List[str]] = None,
         shell_eval: Optional[bool] = False,

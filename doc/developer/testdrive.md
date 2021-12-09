@@ -138,7 +138,7 @@ To run a test against the actual S3/SQS service at AWS:
 ```
 export AWS_ACCESS_KEY_ID=XXX
 export AWS_SECRET_ACCESS_KEY=YYY
-target/release/testdrive --aws-region=eu-central-1 --default-timeout=600  test/testdrive/disabled/s3-sqs-notifications.td
+target/release/testdrive --aws-region=eu-central-1 --default-timeout=600s test/testdrive/disabled/s3-sqs-notifications.td
 ```
 
 # Creating tests
@@ -165,9 +165,17 @@ The `testdrive` binary accepts the following command-line options. They are usua
 
 ## Default timeout
 
-####  `--default-timeout <default-timeout>`
+#### `--default-timeout <default-timeout>`
 
-Default timeout in seconds [default: 10]. A timeout at least that long will be applied to all operations.
+Default timeout as a Duration string [default: "10s"]. A timeout at least that long will be applied to all operations.
+
+#### `--initial-backoff <initial-backoff>`
+
+Specifies the initial backoff interval that will be applied as testdrive retries queries. Default is "50ms".
+
+#### `--backoff-factor <backoff-factor>`
+
+Specifies the backoff factor that will be applied to increase the backoff interval between retries. Default is 1.5.
 
 ## Interfacing with services
 

@@ -4,7 +4,6 @@ description: "Learn what features Materialize Cloud offers."
 menu:
   main:
     parent: "cloud"
-    weight: 3
 ---
 
 {{< cloud-notice >}}
@@ -23,22 +22,8 @@ You can find pricing information [here](https://materialize.com/pricing). If you
 
 For the most part, Materialize Cloud offers the same functionality as the self-managed version. The major exceptions to be aware of are:
 
-#### Sources
-
-Materialize Cloud doesn't support using local files as sources; you can otherwise use any other combination of [source type](/sql/create-source/#types-of-sources) and format:
-
-  Sources | Materialize Cloud | Materialize
-  --------|-------------------|--------------------------
-  **Kafka** | Yes | Yes
-  **Kinesis**  | Yes | Yes
-  **S3**  |  Yes | Yes
-  **PubNub**  | Yes | Yes
-  **Local Files**  |  No |  Yes
-  **Postgres**  | Yes | Yes
-
-#### Session termination
-
-We reserve the right to terminate a session in your Cloud deployment. This may happen after prolonged inactivity or in the event of planned maintenance work on Materialize Cloud, and doesn't affect catalog items (which are persisted across sessions).
+- Materialize Cloud doesn't support using local files as sources; you can otherwise use any other combination of source type and format [offered by Materialize](/sql/create-source/).
+- We reserve the right to terminate a session in your Cloud deployment. This may happen after prolonged inactivity or in the event of planned maintenance work on Materialize Cloud, and doesn't affect catalog items (which are persisted across sessions).
 
 ## Related topics
 

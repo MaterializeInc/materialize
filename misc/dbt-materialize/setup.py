@@ -45,4 +45,7 @@ setup(
         ]
     },
     install_requires=["dbt-postgres=={}".format(dbt_postgres_version)],
+    extras_require={
+        "dev": ["pytest-dbt-adapter==0.5.1"],
+    },
 )

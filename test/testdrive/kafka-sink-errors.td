@@ -197,10 +197,13 @@ Unsupported SASL mechanism: FOO
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Invalid WITH option sasl_kerberos_keytab='foo': file does not exist
 
+$ file-append path=invalid-keytab
+nonsense
+
 ! CREATE SINK invalid_sasl_kerberos_keytab FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH  (security_protocol = SASL_SSL, sasl_kerberos_keytab = '/bin/true')
+  WITH  (security_protocol = SASL_SSL, sasl_kerberos_keytab = '${testdrive.temp-dir}/invalid-keytab')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 error registering kafka topic for sink
 

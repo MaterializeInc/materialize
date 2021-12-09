@@ -6,7 +6,6 @@ disable_toc: true
 menu:
   main:
     parent: "cloud"
-    weight:
 ---
 
 {{< cloud-notice >}}
@@ -14,7 +13,7 @@ menu:
 Materialize Cloud secures your connections by enforcing that clients connect via
 [TLS 1.2+](https://en.wikipedia.org/wiki/Transport_Layer_Security), and supports:
 
-* Two-factor authentication
+* Multi-factor authentication
 * Encryption at rest
 * Single sign-on integration (SSO)
 

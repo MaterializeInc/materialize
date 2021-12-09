@@ -4,16 +4,17 @@ description: "Change Materialize Cloud profile or password."
 menu:
   main:
     parent: "cloud"
-    weight: 4
 aliases:
   - account-settings
 ---
 
 {{< cloud-notice >}}
 
-In Account Settings, you can update your personal details and change your password, as well as enable [administrative users](../administer-workspace) to change workspace names and add or remove users.
+In Account Settings, you can update your personal details, change your password, and enable personal security settings.
 
-To go to your Materialize Cloud settings, click on the user icon in the right of the top navbar.
+Administrative users can also manage [workspace memberships](../manage-users) and [security options](../manage-workspaces).
+
+To go to your Materialize Cloud settings, click on the user icon in the right of the top navbar, then select **Account settings**.
 
 ## Profile
 
@@ -29,4 +30,4 @@ If you wish to delete your profile or Materialize account, [reach out to us](../
 
 ## Privacy &amp; security
 
-On the Privacy & Security tab, you can change your password and enable/disable two-factor authentication.
+On the Privacy & Security tab, you can change your password and enable/disable multi-factor authentication.

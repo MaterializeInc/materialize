@@ -156,3 +156,51 @@ build format=types
 | | keys = ()
 ----
 ----
+
+# Key information propagation through Filters
+
+build format=types
+(filter (reduce (get x) [#0 #2] []) [(call_binary eq #0 #1)])
+----
+%0 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+| Distinct group=(#0, #2)
+| | types = (Int32?, Int32?)
+| | keys = ((#0, #1))
+| Filter (#0 = #1)
+| | types = (Int32, Int32)
+| | keys = ((#0), (#1))
+
+cat
+(defsource with_keys ([int32 int32 int32] [[0 1] [1 2]]))
+----
+ok
+
+build format=types
+(filter (get with_keys) [(call_binary eq #0 #2)])
+----
+%0 =
+| Get with_keys (u2)
+| | types = (Int32?, Int32?, Int32?)
+| | keys = ((#0, #1), (#1, #2))
+| Filter (#0 = #2)
+| | types = (Int32, Int32?, Int32)
+| | keys = ((#0, #1), (#1, #2))
+
+cat
+(defsource with_keys2 ([int32 int32 int32 int32] [[0 1] [2 3]]))
+----
+ok
+
+build format=types
+(filter (get with_keys2) [(call_binary eq #0 #2)])
+----
+%0 =
+| Get with_keys2 (u3)
+| | types = (Int32?, Int32?, Int32?, Int32?)
+| | keys = ((#0, #1), (#2, #3))
+| Filter (#0 = #2)
+| | types = (Int32, Int32?, Int32, Int32?)
+| | keys = ((#0, #1), (#0, #3), (#1, #2), (#2, #3))

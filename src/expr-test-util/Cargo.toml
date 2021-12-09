@@ -10,7 +10,7 @@ expr = {path = "../expr"}
 lazy_static = "1.4.0"
 lowertest = {path = "../lowertest"}
 ore = { path = "../ore" }
-proc-macro2 = "1.0.30"
+proc-macro2 = "1.0.33"
 repr = {path = "../repr"}
 repr_test_util = {path = "../repr-test-util"}
 serde = { version = "1.0.130", features = ["derive"] }

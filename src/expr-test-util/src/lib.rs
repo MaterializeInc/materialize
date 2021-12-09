@@ -15,7 +15,8 @@ use serde_json::Value;
 
 use expr::explain::ViewExplanation;
 use expr::func::{
-    CastInt16ToInt32, CastInt32ToInt64, CastInt64ToFloat64, CastInt64ToInt32, IsNull, NegInt32, Not,
+    CastInt16ToInt32, CastInt32ToInt64, CastInt64ToFloat64, CastInt64ToInt32, CastNumericToInt64,
+    CastStringToBool, IsNull, NegInt32, Not,
 };
 use expr::*;
 use lowertest::*;
@@ -45,6 +46,8 @@ gen_reflect_info_func!(
         CastInt32ToInt64,
         CastInt64ToInt32,
         CastInt64ToFloat64,
+        CastNumericToInt64,
+        CastStringToBool,
         ColumnOrder,
         ColumnType,
         RelationType,
@@ -707,10 +710,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                         for _ in 0..diff {
                                             rows.push(format!(
                                                 "[{}]",
-                                                separated(
-                                                    " ",
-                                                    row.iter().map(|d| datum_to_test_spec(d))
-                                                )
+                                                separated(" ", row.iter().map(datum_to_test_spec))
                                             ))
                                         }
                                     }

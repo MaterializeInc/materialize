@@ -22,9 +22,11 @@ use uuid::Uuid;
 use lowertest::MzEnumReflect;
 
 use crate::adt::array::Array;
+use crate::adt::char::Char;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
-use crate::adt::system::{Oid, RegProc, RegType};
+use crate::adt::system::{Oid, RegClass, RegProc, RegType};
+use crate::adt::varchar::VarChar;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
 
@@ -523,6 +525,7 @@ impl<'a> Datum<'a> {
                     (Datum::Int16(_), _) => false,
                     (Datum::Int32(_), ScalarType::Int32) => true,
                     (Datum::Int32(_), ScalarType::Oid) => true,
+                    (Datum::Int32(_), ScalarType::RegClass) => true,
                     (Datum::Int32(_), ScalarType::RegProc) => true,
                     (Datum::Int32(_), ScalarType::RegType) => true,
                     (Datum::Int32(_), _) => false,
@@ -917,6 +920,8 @@ pub enum ScalarType {
     RegProc,
     /// A PostgreSQL type name.
     RegType,
+    /// A PostgreSQL class name.
+    RegClass,
 }
 
 /// Types that implement this trait can be stored in an SQL column with the specified ColumnType
@@ -1017,7 +1022,12 @@ impl_datum_type_copy!(f64, Float64);
 impl_datum_type_copy!(i16, Int16);
 impl_datum_type_copy!(i32, Int32);
 impl_datum_type_copy!(i64, Int64);
+impl_datum_type_copy!(Interval, Interval);
+impl_datum_type_copy!(NaiveDate, Date);
+impl_datum_type_copy!(NaiveTime, Time);
+impl_datum_type_copy!(NaiveDateTime, Timestamp);
 impl_datum_type_copy!(DateTime<Utc>, TimestampTz);
+impl_datum_type_copy!(Uuid, Uuid);
 impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
 
@@ -1192,6 +1202,29 @@ impl<'a, E> DatumType<'a, E> for Oid {
     }
 }
 
+impl AsColumnType for RegClass {
+    fn as_column_type() -> ColumnType {
+        ScalarType::RegClass.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for RegClass {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Int32(a)) => Ok(RegClass(a)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::Int32(self.0))
+    }
+}
+
 impl AsColumnType for RegProc {
     fn as_column_type() -> ColumnType {
         ScalarType::RegProc.nullable(false)
@@ -1235,6 +1268,74 @@ impl<'a, E> DatumType<'a, E> for RegType {
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Int32(self.0))
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for Char<&'a str> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::String(a)) => Ok(Char(a)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(self.0))
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for Char<String> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::String(a)) => Ok(Char(a.to_owned())),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(temp_storage.push_string(self.0)))
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for VarChar<&'a str> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::String(a)) => Ok(VarChar(a)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(self.0))
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for VarChar<String> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::String(a)) => Ok(VarChar(a.to_owned())),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(temp_storage.push_string(self.0)))
     }
 }
 
@@ -1463,12 +1564,12 @@ impl Datum<'static> {
 
 // Verify that bytes for static datums with manually stuffed bytes are correct.
 #[test]
-fn verify_static_datum_bytes<'a>() {
+fn verify_static_datum_bytes() {
     let arena = crate::RowArena::new();
     {
         let empty_array_datum: Datum = arena.make_datum(|packer| {
             packer
-                .push_array::<_, Datum<'a>>(
+                .push_array::<_, Datum<'_>>(
                     &[crate::adt::array::ArrayDimension {
                         lower_bound: 1,
                         length: 0,
@@ -1487,7 +1588,7 @@ fn verify_static_datum_bytes<'a>() {
 
     {
         let empty_list_datum: Datum = arena.make_datum(|packer| {
-            packer.push_list::<_, Datum<'a>>(std::iter::empty());
+            packer.push_list::<_, Datum<'_>>(std::iter::empty());
         });
         if EMPTY_LIST_ROW.iter().next().is_none() || Datum::empty_list() != empty_list_datum {
             panic!(

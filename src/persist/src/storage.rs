@@ -19,7 +19,7 @@ use futures_executor::block_on;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
-use crate::indexed::encoding::BlobMeta;
+use crate::gen::persist::ProtoMeta;
 
 /// Sanity check whether we can decode the Blob's persisted meta object, and delete
 /// all data if the encoded version is less than what the current implementation supports.
@@ -32,8 +32,8 @@ pub fn check_meta_version_maybe_delete_data<B: Blob>(b: &mut B) -> Result<(), Er
         Some(bytes) => bytes,
     };
 
-    let current_version = BlobMeta::version();
-    let persisted_version = BlobMeta::encoded_version(&meta)?;
+    let current_version = ProtoMeta::ENCODING_VERSION;
+    let persisted_version = ProtoMeta::encoded_version(&meta)?;
 
     if current_version == persisted_version {
         // Nothing to do here, everything is working as expected.
@@ -298,6 +298,7 @@ pub mod tests {
     use persist_types::Codec;
 
     use crate::error::Error;
+    use crate::gen::persist::ProtoMeta;
     use crate::mem::MemRegistry;
     use crate::storage::Atomicity::{AllowNonAtomic, RequireAtomic};
 
@@ -570,7 +571,7 @@ pub mod tests {
         let registry = MemRegistry::new();
         let mut blob = registry.blob_no_reentrance()?;
 
-        let meta = BlobMeta::default();
+        let meta = ProtoMeta::default();
         let mut val = Vec::new();
         meta.encode(&mut val);
         let current_version = val[0];

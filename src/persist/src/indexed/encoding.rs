@@ -20,12 +20,17 @@ use std::{fmt, io};
 
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
-use persist_types::Codec;
+use protobuf::MessageField;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
+use crate::gen::persist::{
+    ProtoArrangement, ProtoMeta, ProtoStreamRegistration, ProtoTraceBatchMeta, ProtoU64Antichain,
+    ProtoU64Description, ProtoUnsealedBatchMeta,
+};
+use crate::indexed::ColumnarRecords;
 use crate::storage::SeqNo;
 
 /// An internally unique id for a persisted stream. External users identify
@@ -67,7 +72,7 @@ pub struct LogEntry {
 /// - id_mapping.len() + graveyard.len() is == next_stream_id.
 /// - All of the keys for trace and unsealed batches are unique across all persisted
 ///   streams.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BlobMeta {
     /// Which mutations are included in the represented state.
     ///
@@ -95,7 +100,7 @@ pub struct BlobMeta {
 }
 
 /// Registration information for a single stream.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StreamRegistration {
     /// The external stream name.
     pub name: String,
@@ -117,7 +122,7 @@ pub struct StreamRegistration {
 /// - The compaction level of trace_batches is weakly decreasing when iterating
 ///   from oldest to most recent time intervals.
 /// - Every trace_batch's upper is <= the overall trace's seal frontier.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArrangementMeta {
     /// The stream this unsealed belongs to.
     pub id: Id,
@@ -139,7 +144,7 @@ pub struct ArrangementMeta {
 ///
 /// Invariants:
 /// - The [lower, upper) interval of sequence numbers in desc is non-empty.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnsealedBatchMeta {
     /// The key to retrieve the [BlobUnsealedBatch] from blob storage.
     pub key: String,
@@ -159,7 +164,7 @@ pub struct UnsealedBatchMeta {
 /// Invariants:
 /// - The Description's time interval is non-empty.
 /// - TODO: key invariants?
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraceBatchMeta {
     /// The key to retrieve the batch's data from the blob store.
     pub key: String,
@@ -183,7 +188,12 @@ pub struct BlobUnsealedBatch {
     /// Which updates are included in this batch.
     pub desc: Range<SeqNo>,
     /// The updates themselves.
-    pub updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    ///
+    /// TODO: ideally, these would be a single ColumnarRecords instead of multiple.
+    /// We are keeping it this way for now because it is a optimization on the latency
+    /// sensitive fast path to avoid allocating one large ColumnarRecords and copying
+    /// everything into it.
+    pub updates: Vec<ColumnarRecords>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -259,73 +269,7 @@ impl<'e, E: for<'a> Extend<&'a u8>> io::Write for ExtendWriteAdapter<'e, E> {
     }
 }
 
-// The encoding of BlobMeta is:
-// ```
-// buf[0]          = <BlobMeta::CURRENT_VERSION>
-// buf[1..3]       = <BlobMeta::MAGIC>
-// buf[3..3+N]     = <the N-byte bincode serialization of BlobMeta>
-// buf[3+N..3+N+2] = <BlobMeta::MAGIC>
-// ```
-//
-// This will allow us to gracefully detect changes at startup and react to them.
-// MZ is not (yet) a system of record, so in the short-term (persisting
-// mz_metrics) we are free to simply delete the data. In the medium-term (fast
-// restarts for kafka sources), we'll make an effort to decode old data. In the
-// long-term (1.0), we'll have backward-compatibility guarantees.
-impl Codec for BlobMeta {
-    fn codec_name() -> &'static str {
-        "BlobMeta"
-    }
-
-    fn size_hint(&self) -> usize {
-        0
-    }
-
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-        buf.extend(&[BlobMeta::CURRENT_VERSION]);
-        buf.extend(BlobMeta::MAGIC);
-
-        // See https://github.com/bincode-org/bincode/issues/293 for why the
-        // bincode part of this is infallible.
-        bincode::serialize_into(&mut ExtendWriteAdapter(buf), &self)
-            .expect("infallible for BlobMeta and ExtendWriteAdapter");
-        buf.extend(BlobMeta::MAGIC);
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let version_pos = 0..1;
-        let begin_magic_pos = version_pos.end..version_pos.end + BlobMeta::MAGIC.len();
-        // Avoid panicking when buf is short.
-        let end_magic_start = if begin_magic_pos.end + BlobMeta::MAGIC.len() > buf.len() {
-            begin_magic_pos.end
-        } else {
-            buf.len() - BlobMeta::MAGIC.len()
-        };
-        let end_magic_pos = end_magic_start..buf.len();
-        match buf.get(version_pos.start) {
-            Some(&BlobMeta::CURRENT_VERSION) => {}
-            Some(x) => return Err(format!("unsupported version: {}", x)),
-            None => return Err("unknown version".into()),
-        }
-        match buf.get(begin_magic_pos.clone()) {
-            Some(BlobMeta::MAGIC) => {}
-            _ => return Err("bad magic".into()),
-        }
-        match buf.get(end_magic_pos.clone()) {
-            Some(BlobMeta::MAGIC) => {}
-            _ => return Err("bad magic".into()),
-        }
-        let buf = &buf[begin_magic_pos.end..end_magic_pos.start];
-        let meta: BlobMeta =
-            bincode::deserialize(buf).map_err(|err| format!("invalid meta: {}", err))?;
-        Ok(meta)
-    }
-}
-
 impl BlobMeta {
-    const MAGIC: &'static [u8] = b"mz";
-    const CURRENT_VERSION: u8 = 5;
-
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -444,22 +388,6 @@ impl BlobMeta {
             .map(|s| s.id)
             .max();
         current_highest.map_or(Id(0), |id| Id(id.0 + 1))
-    }
-
-    /// Current encoding version that BlobMeta can be read and written as.
-    pub fn version() -> u8 {
-        BlobMeta::CURRENT_VERSION
-    }
-
-    /// Hint for the encoded version of this previously encoded BlobMeta.
-    ///
-    /// Returns an error if it is not possible to determine the encoding version.
-    pub fn encoded_version(buf: &[u8]) -> Result<u8, Error> {
-        // TODO: should we do further validation here (e.g. check magic, check
-        // that length is some minimum amount).
-        buf.get(0).map(|v| v.to_owned()).ok_or_else(|| {
-            Error::from("unable to determine previously persisted encoding version.")
-        })
     }
 }
 
@@ -705,6 +633,195 @@ impl fmt::Debug for PrettyRecord<'_> {
     }
 }
 
+impl From<ProtoMeta> for BlobMeta {
+    fn from(x: ProtoMeta) -> Self {
+        let mut meta = BlobMeta {
+            seqno: SeqNo(x.seqno),
+            id_mapping: x.id_mapping.into_iter().map(|x| x.into()).collect(),
+            graveyard: x.graveyard.into_iter().map(|x| x.into()).collect(),
+            arrangements: x.arrangements.into_iter().map(|x| x.into()).collect(),
+        };
+        // TODO: Make the types on BlobMeta be HashMaps and remove this sort.
+        meta.id_mapping.sort_by_key(|x| x.id);
+        meta.graveyard.sort_by_key(|x| x.id);
+        meta.arrangements.sort_by_key(|x| x.id);
+        meta
+    }
+}
+
+impl From<(u64, ProtoArrangement)> for ArrangementMeta {
+    fn from(x: (u64, ProtoArrangement)) -> Self {
+        let (id, x) = x;
+        ArrangementMeta {
+            id: Id(id),
+            seal: x
+                .seal
+                .into_option()
+                .map_or_else(|| Antichain::from_elem(u64::minimum()), |x| x.into()),
+            since: x
+                .since
+                .into_option()
+                .map_or_else(|| Antichain::from_elem(u64::minimum()), |x| x.into()),
+            unsealed_batches: x.unsealed_batches.into_iter().map(|x| x.into()).collect(),
+            trace_batches: x.trace_batches.into_iter().map(|x| x.into()).collect(),
+        }
+    }
+}
+
+impl From<(u64, ProtoStreamRegistration)> for StreamRegistration {
+    fn from(x: (u64, ProtoStreamRegistration)) -> Self {
+        let (id, x) = x;
+        StreamRegistration {
+            id: Id(id),
+            name: x.name,
+            key_codec_name: x.key_codec_name,
+            val_codec_name: x.val_codec_name,
+        }
+    }
+}
+
+impl From<ProtoUnsealedBatchMeta> for UnsealedBatchMeta {
+    fn from(x: ProtoUnsealedBatchMeta) -> Self {
+        UnsealedBatchMeta {
+            key: x.key,
+            desc: SeqNo(x.seqno_lower)..SeqNo(x.seqno_upper),
+            ts_upper: x.ts_upper,
+            ts_lower: x.ts_lower,
+            size_bytes: x.size_bytes,
+        }
+    }
+}
+
+impl From<ProtoTraceBatchMeta> for TraceBatchMeta {
+    fn from(x: ProtoTraceBatchMeta) -> Self {
+        TraceBatchMeta {
+            key: x.key,
+            desc: x.desc.into_option().map_or_else(
+                || {
+                    Description::new(
+                        Antichain::from_elem(u64::minimum()),
+                        Antichain::from_elem(u64::minimum()),
+                        Antichain::from_elem(u64::minimum()),
+                    )
+                },
+                |x| x.into(),
+            ),
+            level: x.level,
+            size_bytes: x.size_bytes,
+        }
+    }
+}
+
+impl From<ProtoU64Description> for Description<u64> {
+    fn from(x: ProtoU64Description) -> Self {
+        Description::new(
+            x.lower
+                .into_option()
+                .map_or_else(|| Antichain::from_elem(u64::minimum()), |x| x.into()),
+            x.upper
+                .into_option()
+                .map_or_else(|| Antichain::from_elem(u64::minimum()), |x| x.into()),
+            x.since
+                .into_option()
+                .map_or_else(|| Antichain::from_elem(u64::minimum()), |x| x.into()),
+        )
+    }
+}
+
+impl From<ProtoU64Antichain> for Antichain<u64> {
+    fn from(x: ProtoU64Antichain) -> Self {
+        Antichain::from(x.elements)
+    }
+}
+
+impl From<&BlobMeta> for ProtoMeta {
+    fn from(x: &BlobMeta) -> Self {
+        ProtoMeta {
+            seqno: x.seqno.0,
+            id_mapping: x.id_mapping.iter().map(|x| (x.id.0, x.into())).collect(),
+            graveyard: x.graveyard.iter().map(|x| (x.id.0, x.into())).collect(),
+            arrangements: x.arrangements.iter().map(|x| (x.id.0, x.into())).collect(),
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        }
+    }
+}
+
+impl From<&ArrangementMeta> for ProtoArrangement {
+    fn from(x: &ArrangementMeta) -> Self {
+        ProtoArrangement {
+            since: MessageField::some((&x.since).into()),
+            seal: MessageField::some((&x.seal).into()),
+            unsealed_batches: x.unsealed_batches.iter().map(|x| x.into()).collect(),
+            trace_batches: x.trace_batches.iter().map(|x| x.into()).collect(),
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        }
+    }
+}
+
+impl From<&StreamRegistration> for ProtoStreamRegistration {
+    fn from(x: &StreamRegistration) -> Self {
+        ProtoStreamRegistration {
+            name: x.name.clone(),
+            key_codec_name: x.key_codec_name.clone(),
+            val_codec_name: x.val_codec_name.clone(),
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        }
+    }
+}
+
+impl From<&UnsealedBatchMeta> for ProtoUnsealedBatchMeta {
+    fn from(x: &UnsealedBatchMeta) -> Self {
+        ProtoUnsealedBatchMeta {
+            key: x.key.clone(),
+            seqno_upper: x.desc.end.0,
+            seqno_lower: x.desc.start.0,
+            ts_upper: x.ts_upper,
+            ts_lower: x.ts_lower,
+            size_bytes: x.size_bytes,
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        }
+    }
+}
+
+impl From<&TraceBatchMeta> for ProtoTraceBatchMeta {
+    fn from(x: &TraceBatchMeta) -> Self {
+        ProtoTraceBatchMeta {
+            key: x.key.clone(),
+            desc: MessageField::some((&x.desc).into()),
+            level: x.level,
+            size_bytes: x.size_bytes,
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        }
+    }
+}
+
+impl From<&Antichain<u64>> for ProtoU64Antichain {
+    fn from(x: &Antichain<u64>) -> Self {
+        ProtoU64Antichain {
+            elements: x.elements().to_vec(),
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        }
+    }
+}
+
+impl From<&Description<u64>> for ProtoU64Description {
+    fn from(x: &Description<u64>) -> Self {
+        ProtoU64Description {
+            lower: MessageField::some(x.lower().into()),
+            upper: MessageField::some(x.upper().into()),
+            since: MessageField::some(x.since().into()),
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::error::Error;
@@ -763,12 +880,16 @@ mod tests {
         }
     }
 
+    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>) -> Vec<ColumnarRecords> {
+        vec![updates.iter().collect::<ColumnarRecords>()]
+    }
+
     impl From<(&'_ str, Id)> for StreamRegistration {
         fn from(x: (&'_ str, Id)) -> Self {
             let (name, id) = x;
             StreamRegistration {
                 name: name.to_owned(),
-                id: id,
+                id,
                 key_codec_name: "".into(),
                 val_codec_name: "".into(),
             }
@@ -793,7 +914,7 @@ mod tests {
         // Normal case
         let b = BlobUnsealedBatch {
             desc: SeqNo(0)..SeqNo(2),
-            updates: vec![update_with_ts(0), update_with_ts(1)],
+            updates: columnar_records(vec![update_with_ts(0), update_with_ts(1)]),
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -1371,26 +1492,5 @@ mod tests {
             b.validate(),
             Err(Error::from("duplicate batch key found in trace: "))
         );
-    }
-
-    #[test]
-    fn blob_meta_codec() {
-        // Sanity check that encode/decode roundtrips and that we don't panic
-        // (or erroneously succeed) on invalid data.
-        let original = BlobMeta {
-            seqno: SeqNo(2),
-            // This is not a test of bincode's roundtrip-ability, so don't
-            // bother too much with the test data.
-            id_mapping: vec![],
-            graveyard: vec![],
-            arrangements: vec![],
-        };
-        let mut encoded = Vec::new();
-        original.encode(&mut encoded);
-        let decoded = BlobMeta::decode(&encoded);
-        assert_eq!(decoded, Ok(original));
-        for i in 0..encoded.len() {
-            assert!(BlobMeta::decode(&encoded[0..i]).is_err());
-        }
     }
 }

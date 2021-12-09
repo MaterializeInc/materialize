@@ -23,6 +23,13 @@ pub struct LoggingConfig {
     pub log_logging: bool,
 }
 
+impl LoggingConfig {
+    /// Announce the identifiers the logging config will populate.
+    pub fn log_identifiers<'a>(&'a self) -> impl Iterator<Item = GlobalId> + 'a {
+        self.active_logs.values().cloned()
+    }
+}
+
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub enum LogVariant {
     Timely(TimelyLog),

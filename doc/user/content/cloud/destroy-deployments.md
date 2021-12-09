@@ -7,8 +7,6 @@ aliases:
 
 {{< cloud-notice >}}
 
-This functionality is only available to [administrators](../administer-workspace).
-
 Deleting a deployment destroys all data and catalog items. They cannot be restored.
 
 1. Go to the [Deployments](https://cloud.materialize.com/deployments) page.

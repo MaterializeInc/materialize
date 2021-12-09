@@ -359,50 +359,7 @@ impl DebeziumDeduplicationState {
                 started,
             }) => {
                 *max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
-                if binlog_position.is_none() {
-                    let key_indices = match key_indices.as_ref() {
-                        None => {
-                            // No keys, so we can't do anything sensible for snapshots.
-                            // Return "all OK" and hope their data isn't corrupted.
-                            return true;
-                        }
-                        Some(ki) => ki,
-                    };
-                    let mut after_iter = match update.iter().nth(1) {
-                        Some(Datum::List(after_elts)) => after_elts.iter(),
-                        _ => {
-                            error!(
-                                "Snapshot row at connector offset {:?}, message_time={} source={} was not an insert.",
-                                connector_offset, fmt_timestamp(upstream_time_millis), debug_name);
-                            return false;
-                        }
-                    };
-                    let key = {
-                        let mut cumsum = 0;
-                        for k in key_indices.iter() {
-                            let adjusted_idx = *k - cumsum;
-                            cumsum += adjusted_idx + 1;
-                            key_buf.push(after_iter.nth(adjusted_idx).unwrap());
-                        }
-                        key_buf.finish_and_reuse()
-                    };
-
-                    // Your reaction on reading this code might be:
-                    // "Ugh, we are cloning the key row just to support logging a warning!"
-                    // But don't worry -- since `Row`s use a 24-byte smallvec, the clone
-                    // won't involve an extra allocation unless the key overflows that.
-                    //
-                    // Anyway, TODO: avoid this via `get_or_insert` once rust-lang/rust#60896 is resolved.
-                    let is_new = seen_snapshot_keys.insert(key.clone());
-                    if !is_new {
-                        warn!(
-                                "Snapshot row with key={:?} source={} seen multiple times (most recent message_time={})",
-                                key, debug_name, fmt_timestamp(upstream_time_millis)
-                            );
-                    }
-                    is_new
-                } else {
-                    let position = binlog_position.unwrap();
+                if let Some(position) = binlog_position {
                     // first check if we are in a special case of range-bounded track full
                     if let Some(range) = range {
                         if let Some(upstream_time_millis) = upstream_time_millis {
@@ -478,6 +435,48 @@ impl DebeziumDeduplicationState {
                         max_seen_time,
                     );
 
+                    is_new
+                } else {
+                    let key_indices = match key_indices.as_ref() {
+                        None => {
+                            // No keys, so we can't do anything sensible for snapshots.
+                            // Return "all OK" and hope their data isn't corrupted.
+                            return true;
+                        }
+                        Some(ki) => ki,
+                    };
+                    let mut after_iter = match update.iter().nth(1) {
+                        Some(Datum::List(after_elts)) => after_elts.iter(),
+                        _ => {
+                            error!(
+                                "Snapshot row at connector offset {:?}, message_time={} source={} was not an insert.",
+                                connector_offset, fmt_timestamp(upstream_time_millis), debug_name);
+                            return false;
+                        }
+                    };
+                    let key = {
+                        let mut cumsum = 0;
+                        for k in key_indices.iter() {
+                            let adjusted_idx = *k - cumsum;
+                            cumsum += adjusted_idx + 1;
+                            key_buf.push(after_iter.nth(adjusted_idx).unwrap());
+                        }
+                        key_buf.finish_and_reuse()
+                    };
+
+                    // Your reaction on reading this code might be:
+                    // "Ugh, we are cloning the key row just to support logging a warning!"
+                    // But don't worry -- since `Row`s use a 24-byte smallvec, the clone
+                    // won't involve an extra allocation unless the key overflows that.
+                    //
+                    // Anyway, TODO: avoid this via `get_or_insert` once rust-lang/rust#60896 is resolved.
+                    let is_new = seen_snapshot_keys.insert(key.clone());
+                    if !is_new {
+                        warn!(
+                                "Snapshot row with key={:?} source={} seen multiple times (most recent message_time={})",
+                                key, debug_name, fmt_timestamp(upstream_time_millis)
+                            );
+                    }
                     is_new
                 }
             }
