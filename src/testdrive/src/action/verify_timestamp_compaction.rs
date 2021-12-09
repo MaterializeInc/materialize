@@ -62,7 +62,7 @@ impl Action for VerifyTimestampsAction {
                 .load_timestamp_bindings(item_id)
                 .map_err_to_string()?;
             println!(
-                "Verifying Ttmestamp binding compaction.  Found {:?} vs expected {:?}",
+                "Verifying timestamp binding compaction.  Found {:?} vs expected {:?}",
                 bindings.len(),
                 self.max_size
             );
