@@ -1638,6 +1638,13 @@ lazy_static! {
                      WHERE o.oid = $1)"
                 ), 2079;
             },
+            "pg_type_is_visible" => Scalar {
+                params!(Oid) => sql_impl_func(
+                    "(SELECT s.name = ANY(current_schemas(true))
+                     FROM mz_catalog.mz_types t JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
+                     WHERE t.oid = $1)"
+                ), 2080;
+            },
             "pg_typeof" => Scalar {
                 params!(Any) => Operation::new(|ecx, spec, exprs, params, _order_by| {
                     // pg_typeof reports the type *before* coercion.
