@@ -194,9 +194,9 @@ fn try_push_reduction(
         // constraints connecting the union of the components.
         let mut connected_component = Vec::new();
         let mut all_constraints = vec![equivalence];
-        for (mut componentn, mut constraintsn) in components_to_connect {
-            connected_component.append(&mut componentn);
-            all_constraints.append(&mut constraintsn);
+        for (mut component, mut constraint_set) in components_to_connect {
+            connected_component.append(&mut component);
+            all_constraints.append(&mut constraint_set);
         }
         connected_component.sort();
         connected_component.dedup();
