@@ -179,14 +179,16 @@ List new features before bug fixes.
 
 {{% version-header v0.9.13 %}}
 
-- Add support for `LIST(<subquery>)` constructor.
-
 - Fix a crash or incorrect results when a join consumes data from a distinct
-  operation. {{% gh 9027 %}}
+  operation {{% gh 9027 %}}.
 
-- Support protobuf sources that contain imported messages and enums.
+- In [Protobuf-formatted Kafka sources](/sql/create-source/protobuf-kafka),
+  accept messages whose encoded representation is zero bytes, which occurs when
+  all the fields of the message are set to their default values. Previously
+  these messages were incorrectly dropped.
 
-- Correctly handle protobuf messages where the value is omitted instead of dropping them.
+- Support constructing lists from a subquery via the
+  [`LIST(<subquery>)`](/sql/types/list#construction) expression.
 
 {{% version-header v0.9.12 %}}
 
