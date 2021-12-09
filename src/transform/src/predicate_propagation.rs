@@ -79,6 +79,7 @@ impl PredicateKnowledge {
     ) -> Result<Vec<Constraint>, crate::TransformError> {
         self.checked_recur(|_| {
             let self_type = expr.typ();
+            let mut materialize_predicates = false;
             let mut predicates = match expr {
                 MirRelationExpr::ArrangeBy { input, .. } => self.action(input, let_knowledge)?,
                 MirRelationExpr::DeclareKeys { input, .. } => self.action(input, let_knowledge)?,
@@ -234,6 +235,7 @@ impl PredicateKnowledge {
                     equivalences,
                     ..
                 } => {
+                    materialize_predicates = true;
                     let input_mapper = JoinInputMapper::new(inputs);
 
                     let mut knowledge = Vec::new();
@@ -384,6 +386,16 @@ impl PredicateKnowledge {
                 .any(|p| p.is_literal_false() || p.is_literal_null())
             {
                 expr.take_safely();
+            } else if materialize_predicates && !predicates.is_empty() {
+                *expr = expr
+                    .take_dangerous()
+                    .filter(predicates.iter().flat_map(|c| {
+                        if let Constraint::Predicate(p) = &c {
+                            Some(p.clone())
+                        } else {
+                            None
+                        }
+                    }));
             }
             Ok(predicates)
         })

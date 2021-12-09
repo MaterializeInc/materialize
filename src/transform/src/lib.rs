@@ -272,6 +272,7 @@ impl Optimizer {
                     // Predicate pushdown sets the equivalence classes of joins.
                     Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
                     Box::new(crate::predicate_propagation::PredicateKnowledge::default()),
+                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::redundant_join::RedundantJoin::default()),
                     Box::new(crate::demand::Demand::default()),
@@ -318,9 +319,11 @@ impl Optimizer {
                 transforms: vec![
                     Box::new(crate::join_implementation::JoinImplementation::default()),
                     Box::new(crate::predicate_propagation::PredicateKnowledge::default()),
+                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::map_lifting::LiteralLifting::default()),
+                    Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
             Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
