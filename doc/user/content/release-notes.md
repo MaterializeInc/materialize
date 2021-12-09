@@ -146,13 +146,9 @@ List new features before bug fixes.
 
 {{% version-header v0.10.0 %}}
 
-- Allow ingesting avro schemas whose top node is not a record type.
-
-{{% version-header v0.9.13 %}}
-
-- **Breaking change**: Disallow creating views (materialized or not) with
-  columns of the same name. This change brings views' structure into closer
-  alignment with tables.
+- **Breaking change.** Disallow creating views with columns of the same name
+  {{% gh 9158 %}}. This change brings views' structure into closer alignment
+  with tables.
 
   When creating views whose `SELECT` statements return multiple columns with the
   same identifier, you can use the optional column renaming syntax to provide
@@ -165,6 +161,24 @@ List new features before bug fixes.
 
   For more details, see [`CREATE MATERIALIZED VIEW`] and [`CREATE VIEW`].
 
+- **Breaking change.** Disallow calls to aggregate functions that use
+  `DISTINCT *` as their arguments, e.g. `COUNT(DISTINCT *)` {{% gh 9122 %}}.
+
+- **Breaking change.** Disallow `SELECT DISTINCT` when applied to a 0-column
+  relation, like a table with no columns {{% gh 9122 %}}.
+
+- Allow creating [Avro-formatted sources](/sql/create-source/avro-kafka/#avro-format-details)
+  from Avro schemas whose top-level type is not a record.
+
+- Support invoking a single [table function](/sql/functions/#table-func) in a
+  `SELECT` list {{% gh 9100 %}}.
+
+- Fix a bug that could cause wrong results when a
+  [window function](/sql/functions#window-func) appeared in a subquery
+  {{% gh 9077 %}}.
+
+{{% version-header v0.9.13 %}}
+
 - Add support for `LIST(<subquery>)` constructor.
 
 - Fix a crash or incorrect results when a join consumes data from a distinct
@@ -173,12 +187,6 @@ List new features before bug fixes.
 - Support protobuf sources that contain imported messages and enums.
 
 - Correctly handle protobuf messages where the value is omitted instead of dropping them.
-
-- Disallow calls to functions with using `DISTINCT *` as their arguments, e.g.
-  `COUNT(DISTINCT *)`.
-
-- Disallow `DISTINCT` expressions on 0-column objects, such as tables with no
-  columns.
 
 {{% version-header v0.9.12 %}}
 
