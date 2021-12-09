@@ -318,7 +318,6 @@ pub fn plan_tail(
     let entry = scx.resolve_item(name)?;
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let options = TailOptions::try_from(options)?;
-    let desc = entry.desc()?.clone();
 
     match entry.item_type() {
         CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
@@ -329,7 +328,6 @@ pub fn plan_tail(
                 copy_to,
                 emit_progress: options.progress.unwrap_or(false),
                 object_columns: entry.desc()?.arity(),
-                desc,
             }))
         }
         CatalogItemType::Func

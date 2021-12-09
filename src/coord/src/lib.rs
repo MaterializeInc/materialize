@@ -39,6 +39,7 @@ mod error;
 mod id_alloc;
 mod persistcfg;
 mod sink_connector;
+mod tail;
 mod timestamp;
 mod util;
 

@@ -112,7 +112,7 @@ use dataflow_types::client::TimestampBindingFeedback;
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, DataflowDescription, ExternalSourceConnector, IndexDesc, PeekResponse,
-    PostgresSourceConnector, SinkConnector, SourceConnector, TailResponse, TailSinkConnector,
+    PostgresSourceConnector, SinkConnector, SourceConnector, TailSinkConnector,
     TimestampSourceUpdate, Update,
 };
 use dataflow_types::{SinkAsOf, Timeline};
@@ -165,6 +165,7 @@ use crate::session::{
     TransactionStatus, WriteOp,
 };
 use crate::sink_connector;
+use crate::tail::PendingTail;
 use crate::timestamp::{TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 
@@ -329,10 +330,8 @@ where
     /// A map from pending peeks to the queue into which responses are sent, and
     /// the IDs of workers who have responded.
     pending_peeks: HashMap<u32, mpsc::UnboundedSender<PeekResponse>>,
-    /// A map from pending tails to the queue into which responses are sent.
-    ///
-    /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
-    pending_tails: HashMap<GlobalId, mpsc::UnboundedSender<Vec<Row>>>,
+    /// A map from pending tails to the tail description.
+    pending_tails: HashMap<GlobalId, PendingTail>,
 
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -738,25 +737,10 @@ where
                 // We use an `if let` here because the peek could have been cancelled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
-                if let Some(channel) = self.pending_tails.get_mut(&sink_id) {
-                    match response {
-                        TailResponse::Rows(rows) => {
-                            // TODO(benesch): the lack of backpressure here can result in
-                            // unbounded memory usage.
-                            let result = channel.send(rows);
-                            if result.is_err() {
-                                // TODO(benesch): we should actually drop the sink if the
-                                // receiver has gone away. E.g. form a DROP SINK command?
-                            }
-                        }
-                        TailResponse::Complete => {
-                            // TODO: Indicate this explicitly.
-                            self.pending_tails.remove(&sink_id);
-                        }
-                        TailResponse::Dropped => {
-                            // TODO: Could perhaps do this earlier, in response to DROP SINK.
-                            self.pending_tails.remove(&sink_id);
-                        }
+                if let Some(pending_tail) = self.pending_tails.get_mut(&sink_id) {
+                    let remove = pending_tail.process_response(response);
+                    if remove {
+                        self.pending_tails.remove(&sink_id);
                     }
                 }
             }
@@ -3053,7 +3037,6 @@ where
             copy_to,
             emit_progress,
             object_columns,
-            desc,
         } = plan;
         // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
@@ -3084,15 +3067,12 @@ where
         let sink_id = self.catalog.allocate_id()?;
         session.add_drop_sink(sink_id);
         let (tx, rx) = mpsc::unbounded_channel();
-        self.pending_tails.insert(sink_id, tx);
+        self.pending_tails
+            .insert(sink_id, PendingTail::new(tx, emit_progress, object_columns));
         let sink_description = dataflow_types::SinkDesc {
             from: source_id,
             from_desc: self.catalog.get_by_id(&source_id).desc().unwrap().clone(),
-            connector: SinkConnector::Tail(TailSinkConnector {
-                emit_progress,
-                object_columns,
-                value_desc: desc,
-            }),
+            connector: SinkConnector::Tail(TailSinkConnector::default()),
             envelope: None,
             as_of: SinkAsOf {
                 frontier,

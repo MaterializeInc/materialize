@@ -242,7 +242,6 @@ pub struct TailPlan {
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
     pub object_columns: usize,
-    pub desc: RelationDesc,
 }
 
 #[derive(Debug)]
