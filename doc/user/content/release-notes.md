@@ -107,42 +107,57 @@ List new features before bug fixes.
 
 {{% version-header v0.11.0 %}}
 
-- Accept message names in [Protobuf sources] that do not start with a leading
-  dot. This fixes a regression introduced in v0.9.12.
+- **Breaking change.** Remove the `mz_workers` function {{% gh 9363 %}}.
 
-- Queries that are too big to fit the limits of our intermediate representations
-  no longer panic and will now cause query-level failure with an internal error
-  and a message of the form "exceeded recursion limit of {X}".
+- Provide [pre-compiled binaries](/versions) for the ARM CPU architecture.
+  Support for this CPU architecture is in **beta**.
 
-- **Breaking change.** Remove the `mz_workers` function.
+- Support [`generate_series`](/sql/functions/#table-func) for [`timestamp`]
+  data.
 
-- Correctly autogenerate views from Postgres sources during [`CREATE
-  VIEWS`](/sql/create-source/postgres/#creating-views) when the upstream table
-  contains numeric columns with no specified scale and precision. {{% gh 9268
-  %}}
-
-- Support `generate_series` for [`timestamp`] data.
-
-- Prevent overflow on operations combining [`timestamp`] and [`interval`].
-
-- Support `ROWS FROM` in `FROM` clauses.
+- Support the `ROWS FROM` syntax in `FROM` clauses {{% gh 9076 %}}.
 
 - Improve PostgreSQL compatibility:
 
-  - Added support for `OPERATOR(<schema>.<op>)`. Schema can either be omitted or must be `pg_catalog`.
+  - Support qualified operator names via the `OPERATOR ([<schema>.] <op>)`
+    syntax {{% gh 9255 %}}. If the schema is specified, it must be `pg_catalog`.
+    Referencing operators in other schemas is not yet supported.
 
-  - Support explicit reference to the default collation (`<expr> COLLATE pg_catalog.default`).
-      Other collations are not yet supported.
+  - Support explicit reference to the default collation via the `<expr> COLLATE
+    pg_catalog.default` syntax {{% gh 9280 %}}. Other collations are not yet
+    supported.
 
-  Together these changes enable the `\dt <pattern>` command
-  in the [psql terminal](/connect/cli).
+  - Support multiple identical table function invocations in `SELECT` lists
+    {{% gh 9366 %}}.
 
-- Fix a crash when decoding certain messages from Protobuf-formatted Kafka
-  topics {{% gh 8930 %}}.
+  These changes enable the `\dt <pattern>` command in the
+  [psql terminal](/connect/cli) and PgJDBC's `getPrimaryKeys()` API.
 
-- Improve support for table functions in `SELECT` lists.
+- Fix a query optimization that could produce wrong results when a condition in
+  a `CASE` expression returned `NULL` rather than `FALSE` {{% gh 9287 %}}.
 
-- Support PgJDBC's `getPrimaryKeys()` API.
+- Speed up the creation or restart of a [Kafka sink](/sql/create-sink/)
+  that uses the `reuse_topic` option {{% gh 9094 %}}.
+
+- Accept message names in [Protobuf sources] that do not start with a leading
+  dot {{% gh 9372 %}}. This fixes a regression introduced in v0.9.12.
+
+- Fix decoding of [Protobuf sources] whose type contains a nested message type
+  with one or more integer fields {{% gh 8930 %}}. These messages could
+  cause previous versions of Materialize to crash.
+
+- Avoid crashing when presented with queries that are too big to fit the limits
+  of our intermediate representations. These queries now report an internal
+  error of the form "exceeded recursion limit of {X}".
+
+- Correctly autogenerate views from Postgres sources during [`CREATE
+  VIEWS`](/sql/create-source/postgres/#creating-views) when the upstream table
+  contains numeric columns with no specified scale and precision {{% gh 9268
+  %}}.
+
+- Prevent overflow on operations combining [`timestamp`] and [`interval`]
+  {{% gh 9254 %}}.
+
 
 {{% version-header v0.10.0 %}}
 
