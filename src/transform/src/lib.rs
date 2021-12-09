@@ -290,6 +290,7 @@ impl Optimizer {
                 transforms: vec![
                     // Pushes aggregations down
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
+                    Box::new(crate::redundant_join::RedundantJoin::default()),
                     // Replaces reduces with maps when the group keys are
                     // unique with maps
                     Box::new(crate::reduce_elision::ReduceElision),
