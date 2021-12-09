@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -22,12 +23,12 @@ def str_to_ns(time: str) -> np.timedelta64:
     ns = map(
         lambda t, unit: np.timedelta64(t, unit), [h, m, s, ns], ["h", "m", "s", "ns"]
     )
-    return sum(ns)
+    return cast(np.timedelta64, sum(ns))
 
 
-def results_path(repository: Path, scenario: Scenario, mz_version: str) -> None:
+def results_path(repository: Path, scenario: Scenario, mz_version: str) -> Path:
     mz_version = mz_version.replace(" ", "-")
     mz_version = mz_version.replace("(", "")
     mz_version = mz_version.replace(")", "")
-    file = f"mzbench-opt-{scenario}-{mz_version}.csv"
+    file = f"optbench-{scenario}-{mz_version}.csv"
     return repository / file

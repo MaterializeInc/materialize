@@ -10,11 +10,12 @@
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
+import numpy as np
 import psycopg2
 import psycopg2.extensions
-import sqlparse
+import sqlparse  # type: ignore
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 from . import Scenario, util
@@ -23,7 +24,7 @@ from . import Scenario, util
 class Query:
     """An API for manipulating workload queries."""
 
-    def __init__(self, query) -> None:
+    def __init__(self, query: str) -> None:
         self.query = query
 
     def __str__(self) -> str:
@@ -44,19 +45,19 @@ class Query:
 class ExplainOutput:
     """An API for manipulating 'EXPLAIN ... PLAN FOR' results."""
 
-    def __init__(self, output) -> None:
+    def __init__(self, output: str) -> None:
         self.output = output
 
     def __str__(self) -> str:
         return self.output
 
-    def decorrelation_time(self) -> Optional[int]:
+    def decorrelation_time(self) -> Optional[np.timedelta64]:
         """Optionally, returns the decorrelation_time for an 'EXPLAIN (TIMING true)' output."""
         p = r"Decorrelation time\: (?P<time>[0-9]{2}\:[0-9]{2}\:[0-9]{2}\.[0-9]+)"
         m = re.search(p, self.output, re.MULTILINE)
         return util.str_to_ns(m.group("time")) if m else None
 
-    def optimization_time(self) -> Optional[int]:
+    def optimization_time(self) -> Optional[np.timedelta64]:
         """Optionally, returns the optimization_time time for an 'EXPLAIN (TIMING true)' output."""
         p = r"Optimization time\: (?P<time>[0-9]{2}\:[0-9]{2}\:[0-9]{2}\.[0-9]+)"
         m = re.search(p, self.output, re.MULTILINE)
@@ -79,11 +80,11 @@ class Database:
         )
         logging.debug(f"Initialize Database with connection={kwargs}")
         self.conn = psycopg2.connect(**kwargs)
-        self.conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        self.conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)  # type: ignore
 
     def mz_version(self) -> str:
         result = self.query_one("SELECT mz_version()")
-        return result[0]
+        return cast(str, result[0])
 
     def drop_database(self, scenario: Scenario) -> None:
         logging.debug(f'Drop database "{scenario}"')
@@ -102,28 +103,29 @@ class Database:
         return ExplainOutput(result[0])
 
     def execute(self, statement: str) -> None:
-        cursor = self.conn.cursor()
-        cursor.execute(statement)
+        with self.conn.cursor() as cursor:
+            cursor.execute(statement)
 
     def execute_all(self, statements: List[str]) -> None:
-        for statement in statements:
-            self.execute(statement)
+        with self.conn.cursor() as cursor:
+            for statement in statements:
+                cursor.execute(statement)
 
     def query_one(self, query: str) -> Dict[Any, Any]:
-        cursor = self.conn.cursor()
-        cursor.execute(query)
-        return cursor.fetchone()
+        with self.conn.cursor() as cursor:
+            cursor.execute(query)
+            return cast(Dict[Any, Any], cursor.fetchone())
 
     def query_all(self, query: str) -> Dict[Any, Any]:
-        cursor = self.conn.cursor()
-        cursor.execute(query)
-        return cursor.fetchall()
+        with self.conn.cursor() as cursor:
+            cursor.execute(query)
+            return cast(Dict[Any, Any], cursor.fetchall())
 
 
 # Utility functions
 # -----------------
 
 
-def parse_from_file(path: Path) -> List[Query]:
+def parse_from_file(path: Path) -> List[str]:
     """Parses a *.sql file to a list of queries."""
-    return sqlparse.split(path.read_text())
+    return cast(List[str], sqlparse.split(path.read_text()))
