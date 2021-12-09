@@ -10,7 +10,7 @@
 //! Logic for the Avro representation of the CDCv2 protocol.
 
 use mz_avro::schema::{FullName, SchemaNode};
-use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, Timestamp};
+use repr::{Diff, Row, Timestamp};
 use serde_json::json;
 
 use anyhow::anyhow;
@@ -18,14 +18,11 @@ use avro_derive::AvroDecodable;
 use differential_dataflow::capture::{Message, Progress};
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::schema::Schema;
-use mz_avro::types::Value;
 use mz_avro::{
     define_unexpected, ArrayAsVecDecoder, AvroDecodable, AvroDecode, AvroDeserializer, AvroRead,
     StatefulAvroDecodable,
 };
 use std::{cell::RefCell, rc::Rc};
-
-use crate::encode::column_names_and_types;
 
 use super::RowWrapper;
 
@@ -40,70 +37,6 @@ pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode
         inner: data_schema,
         name: None,
     })
-}
-
-/// Collected state to encode update batches and progress statements.
-#[derive(Debug)]
-pub struct Encoder {
-    columns: Vec<(ColumnName, ColumnType)>,
-}
-
-impl Encoder {
-    /// Creates a new CDCv2 encoder from a relation description.
-    pub fn new(desc: RelationDesc) -> Self {
-        let columns = column_names_and_types(desc);
-        Self { columns }
-    }
-
-    /// Encodes a batch of updates as an Avro value.
-    pub fn encode_updates(&self, updates: &[(Row, i64, i64)]) -> Value {
-        let mut enc_updates = Vec::new();
-        for (data, time, diff) in updates {
-            let enc_data = super::encode_datums_as_avro(&**data, &self.columns);
-            let enc_time = Value::Long(time.clone());
-            let enc_diff = Value::Long(diff.clone());
-            enc_updates.push(Value::Record(vec![
-                ("data".to_string(), enc_data),
-                ("time".to_string(), enc_time),
-                ("diff".to_string(), enc_diff),
-            ]));
-        }
-        Value::Union {
-            index: 0,
-            inner: Box::new(Value::Array(enc_updates)),
-            n_variants: 2,
-            null_variant: None,
-        }
-    }
-
-    /// Encodes the contents of a progress statement as an Avro value.
-    pub fn encode_progress(&self, lower: &[i64], upper: &[i64], counts: &[(i64, i64)]) -> Value {
-        let enc_lower = Value::Array(lower.iter().cloned().map(Value::Long).collect());
-        let enc_upper = Value::Array(upper.iter().cloned().map(Value::Long).collect());
-        let enc_counts = Value::Array(
-            counts
-                .iter()
-                .map(|(time, count)| {
-                    Value::Record(vec![
-                        ("time".to_string(), Value::Long(time.clone())),
-                        ("count".to_string(), Value::Long(count.clone())),
-                    ])
-                })
-                .collect(),
-        );
-        let enc_progress = Value::Record(vec![
-            ("lower".to_string(), enc_lower),
-            ("upper".to_string(), enc_upper),
-            ("counts".to_string(), enc_counts),
-        ]);
-
-        Value::Union {
-            index: 1,
-            inner: Box::new(enc_progress),
-            n_variants: 2,
-            null_variant: None,
-        }
-    }
 }
 
 #[derive(AvroDecodable)]
@@ -256,11 +189,83 @@ pub fn build_schema(row_schema: serde_json::Value) -> Schema {
 mod tests {
 
     use super::*;
+    use crate::avro::encode_datums_as_avro;
+    use crate::encode::column_names_and_types;
+    use mz_avro::types::Value;
     use mz_avro::AvroDeserializer;
     use mz_avro::GeneralDeserializer;
-    use repr::ScalarType;
+    use repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
 
     use crate::json::build_row_schema_json;
+
+    /// Collected state to encode update batches and progress statements.
+    #[derive(Debug)]
+    pub struct Encoder {
+        columns: Vec<(ColumnName, ColumnType)>,
+    }
+
+    impl Encoder {
+        /// Creates a new CDCv2 encoder from a relation description.
+        pub fn new(desc: RelationDesc) -> Self {
+            let columns = column_names_and_types(desc);
+            Self { columns }
+        }
+
+        /// Encodes a batch of updates as an Avro value.
+        pub fn encode_updates(&self, updates: &[(Row, i64, i64)]) -> Value {
+            let mut enc_updates = Vec::new();
+            for (data, time, diff) in updates {
+                let enc_data = encode_datums_as_avro(&**data, &self.columns);
+                let enc_time = Value::Long(time.clone());
+                let enc_diff = Value::Long(diff.clone());
+                enc_updates.push(Value::Record(vec![
+                    ("data".to_string(), enc_data),
+                    ("time".to_string(), enc_time),
+                    ("diff".to_string(), enc_diff),
+                ]));
+            }
+            Value::Union {
+                index: 0,
+                inner: Box::new(Value::Array(enc_updates)),
+                n_variants: 2,
+                null_variant: None,
+            }
+        }
+
+        /// Encodes the contents of a progress statement as an Avro value.
+        pub fn encode_progress(
+            &self,
+            lower: &[i64],
+            upper: &[i64],
+            counts: &[(i64, i64)],
+        ) -> Value {
+            let enc_lower = Value::Array(lower.iter().cloned().map(Value::Long).collect());
+            let enc_upper = Value::Array(upper.iter().cloned().map(Value::Long).collect());
+            let enc_counts = Value::Array(
+                counts
+                    .iter()
+                    .map(|(time, count)| {
+                        Value::Record(vec![
+                            ("time".to_string(), Value::Long(time.clone())),
+                            ("count".to_string(), Value::Long(count.clone())),
+                        ])
+                    })
+                    .collect(),
+            );
+            let enc_progress = Value::Record(vec![
+                ("lower".to_string(), enc_lower),
+                ("upper".to_string(), enc_upper),
+                ("counts".to_string(), enc_counts),
+            ]);
+
+            Value::Union {
+                index: 1,
+                inner: Box::new(enc_progress),
+                n_variants: 2,
+                null_variant: None,
+            }
+        }
+    }
 
     #[test]
     fn test_roundtrip() {
