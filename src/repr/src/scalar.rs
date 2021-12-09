@@ -235,6 +235,26 @@ impl TryFrom<Datum<'_>> for Option<i64> {
     }
 }
 
+impl TryFrom<Datum<'_>> for NaiveDateTime {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Timestamp(dt) => Ok(dt),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for DateTime<Utc> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::TimestampTz(dt_tz) => Ok(dt_tz),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {
