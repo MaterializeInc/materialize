@@ -949,6 +949,19 @@ lazy_static! {
         // for this to be persisted.
         persistent: true,
     };
+    pub static ref MZ_ACCESS_METHODS: BuiltinTable = BuiltinTable {
+        name: "mz_ams",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+                .with_named_column("oid", ScalarType::Oid.nullable(false))
+                .with_named_column("amname", ScalarType::String.nullable(false))
+                .with_named_column("amhandler", ScalarType::RegProc.nullable(false))
+                .with_named_column("amtype", ScalarType::Char{length: Some(1)}.nullable(false))
+                .with_key(vec![0]),
+        id: GlobalId::System(4049),
+        index_id: GlobalId::System(4050),
+        persistent: false,
+    };
 }
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
@@ -1231,6 +1244,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     mz_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
     NULL::pg_catalog.oid AS relowner,
+    0::pg_catalog.oid AS relam,
     CASE
         WHEN mz_objects.type = 'table' THEN 'r'
         WHEN mz_objects.type = 'source' THEN 'r'
@@ -1616,7 +1630,16 @@ WHERE c.relkind = ANY (ARRAY['r','p'])",
     needs_logs: false,
 };
 
-// Next id BuiltinView: 5036
+pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
+    name: "pg_am",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_am AS
+SELECT * from mz_catalog.mz_ams",
+    id: GlobalId::System(5036),
+    needs_logs: false,
+};
+
+// Next id BuiltinView: 5037
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
@@ -1723,6 +1746,7 @@ lazy_static! {
             Builtin::Table(&MZ_PROMETHEUS_READINGS),
             Builtin::Table(&MZ_PROMETHEUS_HISTOGRAMS),
             Builtin::Table(&MZ_PROMETHEUS_METRICS),
+            Builtin::Table(&MZ_ACCESS_METHODS),
             Builtin::View(&MZ_CATALOG_NAMES),
             Builtin::View(&MZ_ARRANGEMENT_SHARING),
             Builtin::View(&MZ_ARRANGEMENT_SIZES),
@@ -1758,6 +1782,7 @@ lazy_static! {
             Builtin::View(&PG_SETTINGS),
             Builtin::View(&PG_CONSTRAINT),
             Builtin::View(&PG_TABLES),
+            Builtin::View(&PG_ACCESS_METHODS),
         ];
 
         // TODO(sploiselle): assign static global IDs to functions
