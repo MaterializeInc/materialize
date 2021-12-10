@@ -17,7 +17,7 @@ harness = false
 anyhow = "1.0.51"
 byteorder = "1.4.3"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
-chrono-tz = { version = "0.6.0", features = ["serde", "case-insensitive"] }
+chrono-tz = { version = "0.6.1", features = ["serde", "case-insensitive"] }
 dec = "0.4.5"
 enum-kinds = "0.5.1"
 fast-float = "0.2.0"
