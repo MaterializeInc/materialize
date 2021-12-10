@@ -16,7 +16,6 @@
 
 default:
   outputs:
-
     dev:
       type: materialize
       threads: 1
