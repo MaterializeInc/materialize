@@ -82,6 +82,13 @@ macro_rules! bail_unsupported {
     };
 }
 
+// TODO(benesch): delete this once we use structured errors everywhere.
+macro_rules! sql_bail {
+    ($($e:expr),* $(,)?) => {
+        return Err(crate::plan::error::PlanError::Unstructured(format!($($e),*)))
+    }
+}
+
 pub mod ast;
 pub mod catalog;
 pub mod func;

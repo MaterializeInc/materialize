@@ -15,13 +15,13 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
 
-use anyhow::bail;
 use lazy_static::lazy_static;
 
 use expr::func;
 use expr::VariadicFunc;
 use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
+use super::error::PlanError;
 use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
@@ -674,7 +674,7 @@ pub fn plan_coerce<'a>(
     ecx: &'a ExprContext,
     e: CoercibleScalarExpr,
     coerce_to: &ScalarType,
-) -> Result<HirScalarExpr, anyhow::Error> {
+) -> Result<HirScalarExpr, PlanError> {
     use CoercibleScalarExpr::*;
 
     Ok(match e {
@@ -792,7 +792,7 @@ pub fn plan_cast<D>(
     ccx: CastContext,
     expr: HirScalarExpr,
     cast_to: &ScalarType,
-) -> Result<HirScalarExpr, anyhow::Error>
+) -> Result<HirScalarExpr, PlanError>
 where
     D: fmt::Display,
 {
@@ -804,7 +804,7 @@ where
     // face of intermediate expressions.
     let cast_inner = |from, to, expr| match get_cast(ecx, ccx, from, to) {
         Some(cast) => Ok(cast(expr)),
-        None => bail!(
+        None => sql_bail!(
             "{} does not support {}casting from {} to {}",
             caller_name,
             if ccx == CastContext::Implicit {

@@ -254,7 +254,7 @@ pub fn plan_copy_from(
     columns: Vec<usize>,
     rows: Vec<repr::Row>,
 ) -> Result<super::HirRelationExpr, anyhow::Error> {
-    query::plan_copy_from_rows(pcx, catalog, id, columns, rows)
+    Ok(query::plan_copy_from_rows(pcx, catalog, id, columns, rows)?)
 }
 
 /// Whether a SQL object type can be interpreted as matching the type of the given catalog item.
