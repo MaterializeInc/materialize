@@ -1537,6 +1537,20 @@ fn plan_view_select(
             plan_table_with_joins(qcx, left, left_scope, twj)
         })?;
 
+    // Checks if an unknown column error was the result of not including that
+    // column in the GROUP BY clause and produces a friendlier error instead.
+    let check_ungrouped_col = |e| match e {
+        PlanError::UnknownColumn { table, column } => {
+            match from_scope.resolve(table.as_ref(), &column) {
+                Ok((ColumnRef { level: 0, column }, _)) => {
+                    PlanError::ungrouped_column(&from_scope.items[column])
+                }
+                _ => PlanError::UnknownColumn { table, column },
+            }
+        }
+        e => e,
+    };
+
     // Step 2. Handle WHERE clause.
     if let Some(selection) = &selection {
         let ecx = &ExprContext {
@@ -1680,7 +1694,9 @@ fn plan_view_select(
             allow_aggregates: true,
             allow_subqueries: true,
         };
-        let expr = plan_expr(ecx, having)?.type_as(ecx, &ScalarType::Bool)?;
+        let expr = plan_expr(ecx, having)
+            .map_err(check_ungrouped_col)?
+            .type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
@@ -1703,10 +1719,12 @@ fn plan_view_select(
                     if let Some(column) = select_all_mapping.get(&i).copied() {
                         HirScalarExpr::Column(ColumnRef { level: 0, column })
                     } else {
-                        sql_bail!("column {} must appear in the GROUP BY clause or be used in an aggregate function", from_scope.items[*i].short_display_name().quoted());
+                        return Err(PlanError::ungrouped_column(&from_scope.items[*i]));
                     }
                 }
-                ExpandedSelectItem::Expr(expr) => plan_expr(ecx, &expr)?.type_as_any(ecx)?,
+                ExpandedSelectItem::Expr(expr) => plan_expr(ecx, &expr)
+                    .map_err(check_ungrouped_col)?
+                    .type_as_any(ecx)?,
             };
             if let HirScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
                 project_key.push(column);
@@ -1754,7 +1772,8 @@ fn plan_view_select(
             },
             order_by_exprs,
             &project_key,
-        )?;
+        )
+        .map_err(check_ungrouped_col)?;
 
         match distinct {
             None => relation_expr = relation_expr.map(map_exprs),
@@ -1789,7 +1808,8 @@ fn plan_view_select(
 
                 let mut distinct_exprs = vec![];
                 for expr in exprs {
-                    let expr = plan_order_by_or_distinct_expr(ecx, expr, &project_key)?;
+                    let expr = plan_order_by_or_distinct_expr(ecx, expr, &project_key)
+                        .map_err(check_ungrouped_col)?;
                     distinct_exprs.push(expr);
                 }
 
@@ -1907,22 +1927,27 @@ fn plan_group_by_expr<'a>(
     // The `foo` can refer to *either* an input column or an output column. If
     // both exist, the input column is preferred.
     match group_expr {
-        Expr::Identifier(names) if names.len() == 1 => match plan_identifier(ecx, names) {
-            Err(e @ PlanError::UnknownColumn(_)) => {
+        Expr::Identifier(names) => match plan_identifier(ecx, names) {
+            Err(PlanError::UnknownColumn {
+                table: None,
+                column,
+            }) => {
                 // The expression was a simple identifier that did not match an
                 // input column. See if it matches an output column.
-                let name = Some(normalize::column_name(names[0].clone()));
                 let mut iter = projection.iter().map(|(_expr, name)| name);
-                if let Some(column) = iter.position(|n| *n == name) {
-                    if iter.any(|n| *n == name) {
-                        Err(PlanError::AmbiguousColumn(names[0].to_string()))
+                if let Some(i) = iter.position(|n| n.as_ref() == Some(&column)) {
+                    if iter.any(|n| n.as_ref() == Some(&column)) {
+                        Err(PlanError::AmbiguousColumn(column))
                     } else {
-                        plan_projection(column)
+                        plan_projection(i)
                     }
                 } else {
                     // The name didn't match an output column either. Return the
                     // "unknown column" error.
-                    Err(e)
+                    Err(PlanError::UnknownColumn {
+                        table: None,
+                        column,
+                    })
                 }
             }
             res => Ok((Some(group_expr), res?)),
@@ -3537,7 +3562,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
     // If the name is unqualified, first check if it refers to a column.
     match ecx.scope.resolve_column(&col_name) {
         Ok((i, _name)) => return Ok(HirScalarExpr::Column(i)),
-        Err(PlanError::UnknownColumn(_)) => (),
+        Err(PlanError::UnknownColumn { .. }) => (),
         Err(e) => return Err(e),
     }
 
@@ -3578,7 +3603,10 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         });
     }
 
-    Err(PlanError::UnknownColumn(col_name.to_string()))
+    Err(PlanError::UnknownColumn {
+        table: None,
+        column: col_name,
+    })
 }
 
 fn plan_op(

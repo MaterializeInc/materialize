@@ -73,7 +73,7 @@ $ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflict
 #   INCLUDE KEY
 
 # ! SELECT id, b FROM avro_data_conflict
-# column name "id" is ambiguous
+# column reference "id" is ambiguous
 
 # > SELECT * FROM avro_data_conflict
 # id id b

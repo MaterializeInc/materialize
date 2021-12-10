@@ -16,8 +16,11 @@ use expr::EvalError;
 use ore::stack::RecursionLimitError;
 use ore::str::StrExt;
 use repr::strconv::ParseError;
+use repr::ColumnName;
 
 use crate::catalog::CatalogError;
+use crate::names::PartialName;
+use crate::plan::scope::ScopeItem;
 
 #[derive(Debug)]
 pub enum PlanError {
@@ -25,8 +28,15 @@ pub enum PlanError {
         feature: String,
         issue_no: Option<usize>,
     },
-    UnknownColumn(String),
-    AmbiguousColumn(String),
+    UnknownColumn {
+        table: Option<PartialName>,
+        column: ColumnName,
+    },
+    UngroupedColumn {
+        table: Option<PartialName>,
+        column: ColumnName,
+    },
+    AmbiguousColumn(ColumnName),
     MisqualifiedName(String),
     OverqualifiedDatabaseName(String),
     OverqualifiedSchemaName(String),
@@ -42,6 +52,19 @@ pub enum PlanError {
     Unstructured(String),
 }
 
+impl PlanError {
+    pub(crate) fn ungrouped_column(item: &ScopeItem) -> PlanError {
+        let name = &item.names[0];
+        PlanError::UngroupedColumn {
+            table: name.table_name.clone(),
+            column: name
+                .column_name
+                .clone()
+                .unwrap_or_else(|| ColumnName::from("?column?")),
+        }
+    }
+}
+
 impl fmt::Display for PlanError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -52,8 +75,21 @@ impl fmt::Display for PlanError {
                 }
                 Ok(())
             }
-            Self::UnknownColumn(name) => write!(f, "column {} does not exist", name.quoted()),
-            Self::AmbiguousColumn(name) => write!(f, "column name {} is ambiguous", name.quoted()),
+            Self::UnknownColumn { table, column } => write!(
+                f,
+                "column {} does not exist",
+                ColumnDisplay { table, column }
+            ),
+            Self::UngroupedColumn { table, column } => write!(
+                f,
+                "column {} must appear in the GROUP BY clause or be used in an aggregate function",
+                ColumnDisplay { table, column },
+            ),
+            Self::AmbiguousColumn(column) => write!(
+                f,
+                "column reference {} is ambiguous",
+                column.as_str().quoted()
+            ),
             Self::MisqualifiedName(name) => write!(
                 f,
                 "qualified name did not have between 1 and 3 components: {}",
@@ -123,5 +159,20 @@ impl From<ParseIntError> for PlanError {
 impl From<EvalError> for PlanError {
     fn from(e: EvalError) -> PlanError {
         PlanError::Unstructured(format!("{:#}", e))
+    }
+}
+
+struct ColumnDisplay<'a> {
+    table: &'a Option<PartialName>,
+    column: &'a ColumnName,
+}
+
+impl<'a> fmt::Display for ColumnDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Some(table) = &self.table {
+            format!("{}.{}", table.item, self.column).quoted().fmt(f)
+        } else {
+            self.column.as_str().quoted().fmt(f)
+        }
     }
 }

@@ -131,22 +131,6 @@ impl ScopeItem {
             .map(|n| n.matches(table_name))
             .unwrap_or(false)
     }
-
-    pub fn short_display_name(&self) -> String {
-        match self.names.get(0) {
-            None => "?".into(),
-            Some(name) => {
-                let column_name = match &name.column_name {
-                    None => "?column?",
-                    Some(column_name) => column_name.as_str(),
-                };
-                match &name.table_name {
-                    None => column_name.into(),
-                    Some(table_name) => format!("{}.{}", table_name.item, column_name),
-                }
-            }
-        }
-    }
 }
 
 impl Scope {
@@ -217,10 +201,11 @@ impl Scope {
         items
     }
 
-    fn resolve<'a, M>(
+    fn resolve_internal<'a, M>(
         &'a self,
         mut matches: M,
-        name_in_error: &str,
+        table_name: Option<&PartialName>,
+        column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError>
     where
         M: FnMut(usize, &ScopeItemName) -> bool,
@@ -236,7 +221,10 @@ impl Scope {
             .filter(|(level, _column, item, name)| (matches)(*level, name) && item.nameable)
             .sorted_by_key(|(level, _column, _item, name)| (*level, !name.priority));
         match results.next() {
-            None => Err(PlanError::UnknownColumn(name_in_error.to_owned())),
+            None => Err(PlanError::UnknownColumn {
+                table: table_name.cloned(),
+                column: column_name.clone(),
+            }),
             Some((level, column, _item, name)) => {
                 if results
                     .find(|(level2, column2, item, name2)| {
@@ -249,7 +237,7 @@ impl Scope {
                 {
                     Ok((ColumnRef { level, column }, name))
                 } else {
-                    Err(PlanError::AmbiguousColumn(name_in_error.to_owned()))
+                    Err(PlanError::AmbiguousColumn(column_name.clone()))
                 }
             }
         }
@@ -259,9 +247,11 @@ impl Scope {
         &'a self,
         column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
-        self.resolve(
+        let table_name = None;
+        self.resolve_internal(
             |_level, item| item.column_name.as_ref() == Some(column_name),
-            column_name.as_str(),
+            table_name,
+            column_name,
         )
     }
 
@@ -271,7 +261,7 @@ impl Scope {
         column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
         let mut seen_at_level = None;
-        self.resolve(
+        self.resolve_internal(
             |level, item| {
                 // Once we've matched a table name at a level, even if the
                 // column name did not match, we can never match an item from
@@ -288,8 +278,20 @@ impl Scope {
                     false
                 }
             },
-            &format!("{}.{}", table_name, column_name),
+            Some(table_name),
+            column_name,
         )
+    }
+
+    pub fn resolve<'a>(
+        &'a self,
+        table_name: Option<&PartialName>,
+        column_name: &ColumnName,
+    ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
+        match table_name {
+            None => self.resolve_column(column_name),
+            Some(table_name) => self.resolve_table_column(table_name, column_name),
+        }
     }
 
     /// Look to see if there is an already-calculated instance of this expr.

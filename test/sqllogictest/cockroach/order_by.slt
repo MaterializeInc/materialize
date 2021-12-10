@@ -95,7 +95,7 @@ SELECT a AS foo, b FROM t ORDER BY foo DESC
 1 9
 
 # Check that ambiguous references to renders are properly reported.
-query error column name "foo" is ambiguous
+query error column reference "foo" is ambiguous
 SELECT a AS foo, b AS foo FROM t ORDER BY foo
 
 # Check that no ambiguity is reported if the ORDER BY name refers

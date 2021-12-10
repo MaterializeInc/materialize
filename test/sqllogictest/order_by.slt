@@ -114,7 +114,7 @@ two
 zero
 
 # ...unless the shadowed name is ambiguous.
-query error column name "a" is ambiguous
+query error column reference "a" is ambiguous
 SELECT 1 AS a, b AS a FROM foo ORDER BY a
 
 statement ok

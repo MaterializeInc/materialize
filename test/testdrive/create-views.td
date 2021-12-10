@@ -24,7 +24,7 @@ column "b" specified more than once
 column "a" specified more than once
 
 ! CREATE VIEW t_v AS SELECT a, b FROM t AS t(a, a);
-column name "a" is ambiguous
+column reference "a" is ambiguous
 
 > CREATE VIEW t_v AS SELECT a, b FROM t;
 > SELECT * FROM t_v;
@@ -44,7 +44,7 @@ column "b" specified more than once
 column "a" specified more than once
 
 ! CREATE MATERIALIZED VIEW t_m_v AS SELECT a, b FROM t AS t(a, a);
-column name "a" is ambiguous
+column reference "a" is ambiguous
 
 > CREATE MATERIALIZED VIEW t_m_v AS SELECT a, b FROM t;
 > SELECT * FROM t_v;
