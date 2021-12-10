@@ -20,6 +20,6 @@ types-psutil==5.8.15
 types-psycopg2==2.9.1
 types-PyMYSQL==1.0.2
 types-PyYAML==6.0.1
-types-requests==2.25.11
+types-requests==2.26.1
 types-toml==0.10.1
 types-pkg-resources==0.1.3
