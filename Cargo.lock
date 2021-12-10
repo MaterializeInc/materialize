@@ -920,7 +920,6 @@ dependencies = [
  "rdkafka",
  "regex",
  "repr",
- "rusoto_kinesis",
  "rusqlite",
  "semver",
  "serde",
@@ -1116,16 +1115,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "567569e659735adb39ff2d4c20600f7cd78be5471f8c58ab162bce3c03fdbc5f"
 dependencies = [
  "generic-array",
-]
-
-[[package]]
-name = "crypto-mac"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25fab6889090c8133f3deb8f73ba3c65a7f456f66436fc012a1b1e272b1e103e"
-dependencies = [
- "generic-array",
- "subtle",
 ]
 
 [[package]]
@@ -1429,27 +1418,7 @@ dependencies = [
  "block-buffer 0.10.0",
  "crypto-common",
  "generic-array",
-]
-
-[[package]]
-name = "dirs-next"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b98cf8ebf19c3d1b223e151f99a4f9f0690dca41414773390fc824184ac833e1"
-dependencies = [
- "cfg-if",
- "dirs-sys-next",
-]
-
-[[package]]
-name = "dirs-sys-next"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ebda144c4fe02d1f7ea1a7d9641b6fc6b580adcfa024ae48797ecdeb6825b4d"
-dependencies = [
- "libc",
- "redox_users",
- "winapi",
+ "subtle",
 ]
 
 [[package]]
@@ -1701,8 +1670,8 @@ dependencies = [
  "repr",
  "serde",
  "serde_json",
- "sha-1",
- "sha2 0.10.0",
+ "sha-1 0.10.0",
+ "sha2",
  "uncased",
  "uuid",
 ]
@@ -2087,7 +2056,7 @@ dependencies = [
  "http",
  "httpdate",
  "mime",
- "sha-1",
+ "sha-1 0.9.8",
 ]
 
 [[package]]
@@ -2131,12 +2100,11 @@ checksum = "7ebdb29d2ea9ed0083cd8cece49bbd968021bd99b0849edb4a9a7ee0fdf6a4e0"
 
 [[package]]
 name = "hmac"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a2a2320eb7ec0ebe8da8f744d7812d9fc4cb4d09344ac01898dbcb6a20ae69b"
+checksum = "ddca131f3e7f2ce2df364b57949a9d47915cfbd35e46cfee355ccebbf794d6a2"
 dependencies = [
- "crypto-mac",
- "digest 0.9.0",
+ "digest 0.10.0",
 ]
 
 [[package]]
@@ -2383,7 +2351,7 @@ dependencies = [
  "repr",
  "serde",
  "serde_json",
- "sha2 0.10.0",
+ "sha2",
  "smallvec",
  "sql-parser",
  "tempfile",
@@ -2673,7 +2641,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2 0.10.0",
+ "sha2",
  "shell-words",
  "sql",
  "structopt",
@@ -2714,13 +2682,11 @@ dependencies = [
 
 [[package]]
 name = "md-5"
-version = "0.9.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5a279bb9607f9f53c22d496eade00d138d1bdcccd07d74650387cf94942a15"
+checksum = "e6a38fc55c8bbc10058782919516f88826e70320db6d206aebc49611d24216ae"
 dependencies = [
- "block-buffer 0.9.0",
- "digest 0.9.0",
- "opaque-debug",
+ "digest 0.10.0",
 ]
 
 [[package]]
@@ -2848,7 +2814,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "sha2 0.10.0",
+ "sha2",
  "snap",
  "uuid",
 ]
@@ -3555,7 +3521,7 @@ dependencies = [
 [[package]]
 name = "postgres"
 version = "0.19.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#f10382c8e71cd21133ea6f987dd23d42a4055cee"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#4320cb7a1fedb1b6157f0dec51f84f4c990f4d98"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -3568,7 +3534,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#f10382c8e71cd21133ea6f987dd23d42a4055cee"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#4320cb7a1fedb1b6157f0dec51f84f4c990f4d98"
 dependencies = [
  "futures",
  "openssl",
@@ -3580,7 +3546,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#f10382c8e71cd21133ea6f987dd23d42a4055cee"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#4320cb7a1fedb1b6157f0dec51f84f4c990f4d98"
 dependencies = [
  "base64",
  "byteorder",
@@ -3590,14 +3556,14 @@ dependencies = [
  "md-5",
  "memchr",
  "rand",
- "sha2 0.9.8",
+ "sha2",
  "stringprep",
 ]
 
 [[package]]
 name = "postgres-types"
 version = "0.2.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#f10382c8e71cd21133ea6f987dd23d42a4055cee"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#4320cb7a1fedb1b6157f0dec51f84f4c990f4d98"
 dependencies = [
  "bytes",
  "chrono",
@@ -3853,7 +3819,7 @@ dependencies = [
 [[package]]
 name = "pubnub-core"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#3e3b90e3173550bf670186ba35625b1851991c28"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#6fafab79c869ebe8a9f7cacde3c887b06e6095d9"
 dependencies = [
  "async-trait",
  "bitflags",
@@ -3871,7 +3837,7 @@ dependencies = [
 [[package]]
 name = "pubnub-hyper"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#3e3b90e3173550bf670186ba35625b1851991c28"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#6fafab79c869ebe8a9f7cacde3c887b06e6095d9"
 dependencies = [
  "async-trait",
  "derive_builder",
@@ -3891,11 +3857,11 @@ dependencies = [
 [[package]]
 name = "pubnub-util"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#3e3b90e3173550bf670186ba35625b1851991c28"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#6fafab79c869ebe8a9f7cacde3c887b06e6095d9"
 dependencies = [
  "base64",
  "hmac",
- "sha2 0.9.8",
+ "sha2",
  "uritemplate-next",
 ]
 
@@ -4039,16 +4005,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "redox_users"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "528532f3d801c87aec9def2add9ca802fe569e44a544afe633765267840abe64"
-dependencies = [
- "getrandom",
- "redox_syscall",
-]
-
-[[package]]
 name = "regex"
 version = "1.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4187,89 +4143,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc0bf25554376fd362f54332b8410a625c71f15445bca32ffdfdf4ec9ac91726"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "rusoto_core"
-version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b4f000e8934c1b4f70adde180056812e7ea6b1a247952db8ee98c94cd3116cc"
-dependencies = [
- "async-trait",
- "base64",
- "bytes",
- "crc32fast",
- "futures",
- "http",
- "hyper",
- "hyper-tls",
- "lazy_static",
- "log",
- "rusoto_credential",
- "rusoto_signature",
- "rustc_version",
- "serde",
- "serde_json",
- "tokio",
- "xml-rs",
-]
-
-[[package]]
-name = "rusoto_credential"
-version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a46b67db7bb66f5541e44db22b0a02fed59c9603e146db3a9e633272d3bac2f"
-dependencies = [
- "async-trait",
- "chrono",
- "dirs-next",
- "futures",
- "hyper",
- "serde",
- "serde_json",
- "shlex",
- "tokio",
- "zeroize",
-]
-
-[[package]]
-name = "rusoto_kinesis"
-version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9060c90faec6784573af8379107ff26de934206231f4431dfa878382e5584e1b"
-dependencies = [
- "async-trait",
- "bytes",
- "futures",
- "rusoto_core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rusoto_signature"
-version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6264e93384b90a747758bcc82079711eacf2e755c3a8b5091687b5349d870bcc"
-dependencies = [
- "base64",
- "bytes",
- "chrono",
- "digest 0.9.0",
- "futures",
- "hex",
- "hmac",
- "http",
- "hyper",
- "log",
- "md-5",
- "percent-encoding",
- "pin-project-lite",
- "rusoto_credential",
- "rustc_version",
- "serde",
- "sha2 0.9.8",
- "tokio",
 ]
 
 [[package]]
@@ -4469,16 +4342,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "sha2"
-version = "0.9.8"
+name = "sha-1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b69f9a4c9740d74c5baa3fd2e547f9525fa8088a8a958e0ca2409a514e33f5fa"
+checksum = "028f48d513f9678cda28f6e4064755b3fbb2af6acd672f2c209b62323f7aea0f"
 dependencies = [
- "block-buffer 0.9.0",
  "cfg-if",
  "cpufeatures",
- "digest 0.9.0",
- "opaque-debug",
+ "digest 0.10.0",
 ]
 
 [[package]]
@@ -4516,12 +4387,6 @@ name = "shell-words"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6fa3938c99da4914afedd13bf3d79bcb6c277d1b2c398d23257a304d9e1b074"
-
-[[package]]
-name = "shlex"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42a568c8f2cd051a4d283bd6eb0343ac214c1b0f1ac19f93e1175b2dee38c73d"
 
 [[package]]
 name = "signal-hook-registry"
@@ -4750,9 +4615,9 @@ dependencies = [
 
 [[package]]
 name = "subtle"
-version = "2.2.3"
+version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "502d53007c02d7605a05df1c1a73ee436952781653da5d0bf57ad608f66932c1"
+checksum = "6bdef32e8150c2a081110b42772ffe7d7c9032b606bc226c8260fd97e0976601"
 
 [[package]]
 name = "symbolic-common"
@@ -5194,7 +5059,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.2"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#f10382c8e71cd21133ea6f987dd23d42a4055cee"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#4320cb7a1fedb1b6157f0dec51f84f4c990f4d98"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -5690,12 +5555,6 @@ checksum = "244c3741f4240ef46274860397c7c74e50eb23624996930e484c16679633a54c"
 dependencies = [
  "libc",
 ]
-
-[[package]]
-name = "xml-rs"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 
 [[package]]
 name = "xmlparser"
