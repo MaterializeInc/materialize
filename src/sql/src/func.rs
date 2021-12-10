@@ -14,7 +14,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 
-use anyhow::{bail, Context};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 
@@ -25,6 +24,7 @@ use repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, Sca
 
 use crate::ast::{SelectStatement, Statement};
 use crate::names::PartialName;
+use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
     NullaryFunc, ScalarWindowFunc, TableFunc, UnaryFunc, VariadicFunc,
@@ -154,7 +154,7 @@ struct Operation<R>(
                 Vec<CoercibleScalarExpr>,
                 &ParamList,
                 Vec<ColumnOrder>,
-            ) -> Result<R, anyhow::Error>
+            ) -> Result<R, PlanError>
             + Send
             + Sync,
     >,
@@ -176,7 +176,7 @@ impl<R> Operation<R> {
                 Vec<CoercibleScalarExpr>,
                 &ParamList,
                 Vec<ColumnOrder>,
-            ) -> Result<R, anyhow::Error>
+            ) -> Result<R, PlanError>
             + Send
             + Sync
             + 'static,
@@ -187,7 +187,7 @@ impl<R> Operation<R> {
     /// Builds an operation that takes no arguments.
     fn nullary<F>(f: F) -> Operation<R>
     where
-        F: Fn(&ExprContext) -> Result<R, anyhow::Error> + Send + Sync + 'static,
+        F: Fn(&ExprContext) -> Result<R, PlanError> + Send + Sync + 'static,
     {
         Self::variadic(move |ecx, exprs| {
             assert!(exprs.is_empty());
@@ -198,7 +198,7 @@ impl<R> Operation<R> {
     /// Builds an operation that takes one argument.
     fn unary<F>(f: F) -> Operation<R>
     where
-        F: Fn(&ExprContext, HirScalarExpr) -> Result<R, anyhow::Error> + Send + Sync + 'static,
+        F: Fn(&ExprContext, HirScalarExpr) -> Result<R, PlanError> + Send + Sync + 'static,
     {
         Self::variadic(move |ecx, exprs| f(ecx, exprs.into_element()))
     }
@@ -206,7 +206,7 @@ impl<R> Operation<R> {
     /// Builds an operation that takes one argument and an order_by.
     fn unary_ordered<F>(f: F) -> Operation<R>
     where
-        F: Fn(&ExprContext, HirScalarExpr, Vec<ColumnOrder>) -> Result<R, anyhow::Error>
+        F: Fn(&ExprContext, HirScalarExpr, Vec<ColumnOrder>) -> Result<R, PlanError>
             + Send
             + Sync
             + 'static,
@@ -220,7 +220,7 @@ impl<R> Operation<R> {
     /// Builds an operation that takes two arguments.
     fn binary<F>(f: F) -> Operation<R>
     where
-        F: Fn(&ExprContext, HirScalarExpr, HirScalarExpr) -> Result<R, anyhow::Error>
+        F: Fn(&ExprContext, HirScalarExpr, HirScalarExpr) -> Result<R, PlanError>
             + Send
             + Sync
             + 'static,
@@ -237,12 +237,7 @@ impl<R> Operation<R> {
     /// Builds an operation that takes two arguments and an order_by.
     fn binary_ordered<F>(f: F) -> Operation<R>
     where
-        F: Fn(
-                &ExprContext,
-                HirScalarExpr,
-                HirScalarExpr,
-                Vec<ColumnOrder>,
-            ) -> Result<R, anyhow::Error>
+        F: Fn(&ExprContext, HirScalarExpr, HirScalarExpr, Vec<ColumnOrder>) -> Result<R, PlanError>
             + Send
             + Sync
             + 'static,
@@ -260,7 +255,7 @@ impl<R> Operation<R> {
     /// Builds an operation that takes any number of arguments.
     fn variadic<F>(f: F) -> Operation<R>
     where
-        F: Fn(&ExprContext, Vec<HirScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
+        F: Fn(&ExprContext, Vec<HirScalarExpr>) -> Result<R, PlanError> + Send + Sync + 'static,
     {
         Self::new(move |ecx, spec, cexprs, params, _order_by| {
             let exprs = coerce_args_to_types(ecx, spec, cexprs, params)?;
@@ -273,7 +268,7 @@ impl<R> Operation<R> {
 /// functions for details.
 pub fn sql_impl(
     expr: &'static str,
-) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, anyhow::Error> {
+) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, PlanError> {
     let expr =
         sql_parser::parser::parse_expr(expr).expect("static function definition failed to parse");
     move |qcx, types| {
@@ -354,7 +349,7 @@ fn sql_impl_table_func(sql: &'static str) -> Operation<(HirRelationExpr, Scope)>
     };
     let invoke = move |qcx: &QueryContext,
                        types: Vec<ScalarType>|
-          -> Result<(HirRelationExpr, Scope), anyhow::Error> {
+          -> Result<(HirRelationExpr, Scope), PlanError> {
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
         let mut scx = qcx.scx.clone();
@@ -922,12 +917,12 @@ pub fn select_impl<R>(
     impls: &[FuncImpl<R>],
     args: Vec<CoercibleScalarExpr>,
     order_by: Vec<ColumnOrder>,
-) -> Result<R, anyhow::Error>
+) -> Result<R, PlanError>
 where
     R: fmt::Debug,
 {
     let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
-    select_impl_inner(ecx, spec, impls, args, &types, order_by).with_context(|| {
+    select_impl_inner(ecx, spec, impls, args, &types, order_by).map_err(|e| {
         let types: Vec<_> = types
             .into_iter()
             .map(|ty| match ty {
@@ -935,7 +930,7 @@ where
                 None => "unknown".to_string(),
             })
             .collect();
-        match (spec, types.as_slice()) {
+        let context = match (spec, types.as_slice()) {
             (FuncSpec::Func(name), _) => {
                 format!("Cannot call function {}({})", name, types.join(", "))
             }
@@ -944,7 +939,8 @@ where
                 format!("no overload for {} {} {}", ltyp, name, rtyp)
             }
             (FuncSpec::Op(_), [..]) => unreachable!("non-unary non-binary operator"),
-        }
+        };
+        PlanError::Unstructured(format!("{}: {}", context, e))
     })
 }
 
@@ -955,7 +951,7 @@ fn select_impl_inner<R>(
     cexprs: Vec<CoercibleScalarExpr>,
     types: &[Option<ScalarType>],
     order_by: Vec<ColumnOrder>,
-) -> Result<R, anyhow::Error>
+) -> Result<R, PlanError>
 where
     R: fmt::Debug,
 {
@@ -982,7 +978,7 @@ fn find_match<'a, R: std::fmt::Debug>(
     ecx: &ExprContext,
     types: &[Option<ScalarType>],
     impls: Vec<&'a FuncImpl<R>>,
-) -> Result<&'a FuncImpl<R>, anyhow::Error> {
+) -> Result<&'a FuncImpl<R>, PlanError> {
     let all_types_known = types.iter().all(|t| t.is_some());
 
     // Check for exact match.
@@ -1048,7 +1044,7 @@ fn find_match<'a, R: std::fmt::Debug>(
     }
 
     if candidates.is_empty() {
-        bail!(
+        sql_bail!(
             "arguments cannot be implicitly cast to any implementation's parameters; \
             try providing explicit casts"
         )
@@ -1074,7 +1070,7 @@ fn find_match<'a, R: std::fmt::Debug>(
     maybe_get_last_candidate!();
 
     if all_types_known {
-        bail!(
+        sql_bail!(
             "unable to determine which implementation to use; try providing \
             explicit casts to match parameter types"
         )
@@ -1176,7 +1172,7 @@ fn find_match<'a, R: std::fmt::Debug>(
         maybe_get_last_candidate!();
     }
 
-    bail!(
+    sql_bail!(
         "unable to determine which implementation to use; try providing \
         explicit casts to match parameter types"
     )
@@ -1192,7 +1188,7 @@ fn coerce_args_to_types(
     spec: FuncSpec,
     args: Vec<CoercibleScalarExpr>,
     params: &ParamList,
-) -> Result<Vec<HirScalarExpr>, anyhow::Error> {
+) -> Result<Vec<HirScalarExpr>, PlanError> {
     let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
     let get_constrained_ty = || {
         params
@@ -1228,7 +1224,7 @@ fn coerce_args_to_types(
             // are accepted, but uncoerced parameters are rejected.
             ParamType::Any => match arg {
                 CoercibleScalarExpr::Parameter(n) => {
-                    bail!("could not determine data type of parameter ${}", n)
+                    sql_bail!("could not determine data type of parameter ${}", n)
                 }
                 _ => arg.type_as_any(ecx)?,
             },
@@ -1384,7 +1380,7 @@ lazy_static! {
             "concat" => Scalar {
                 params!(Any...) => Operation::variadic(|ecx, cexprs| {
                     if cexprs.is_empty() {
-                        bail!("No function matches the given name and argument types. \
+                        sql_bail!("No function matches the given name and argument types. \
                         You might need to add explicit type casts.")
                     }
                     let mut exprs = vec![];
@@ -1509,7 +1505,7 @@ lazy_static! {
                 params!() => VariadicFunc::JsonbBuildObject, 3274;
                 params!(Any...) => Operation::variadic(|ecx, exprs| {
                     if exprs.len() % 2 != 0 {
-                        bail!("argument list must have even number of elements")
+                        sql_bail!("argument list must have even number of elements")
                     }
                     Ok(HirScalarExpr::CallVariadic {
                         func: VariadicFunc::JsonbBuildObject,
@@ -1600,7 +1596,7 @@ lazy_static! {
                 params!(Any) => Operation::unary(|ecx, e| {
                     let s = ecx.scalar_type(&e);
                     if !matches!(s, ScalarType::Record{..}) {
-                        bail!("mz_row_size requires a record type");
+                        sql_bail!("mz_row_size requires a record type");
                     }
                     Ok(e.call_unary(UnaryFunc::MzRowSize(func::MzRowSize)))
                 }), oid::FUNC_MZ_ROW_SIZE;
@@ -1756,7 +1752,7 @@ lazy_static! {
                             let wall_time = pcx.wall_time.naive_utc();
                             Ok(lhs.call_binary(rhs, BinaryFunc::TimezoneTime{wall_time}))
                         },
-                        QueryLifetime::Static => bail!("timezone cannot be used in static queries"),
+                        QueryLifetime::Static => sql_bail!("timezone cannot be used in static queries"),
                     }
                 }), 2037;
                 params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp, 2070;
@@ -2090,7 +2086,7 @@ lazy_static! {
                 params!(Int64, String) => Operation::binary(move |_ecx, ncols, input| {
                     let ncols = match ncols.into_literal_int64() {
                         None | Some(i64::MIN..=0) => {
-                            bail!("csv_extract number of columns must be a positive integer literal");
+                            sql_bail!("csv_extract number of columns must be a positive integer literal");
                         },
                         Some(ncols) => ncols,
                     };
@@ -2166,8 +2162,8 @@ lazy_static! {
             "regexp_extract" => Table {
                 params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
                     let regex = match regex.into_literal_string() {
-                        None => bail!("regex_extract requires a string literal as its first argument"),
-                        Some(regex) => expr::AnalyzedRegex::new(&regex)?,
+                        None => sql_bail!("regex_extract requires a string literal as its first argument"),
+                        Some(regex) => expr::AnalyzedRegex::new(&regex).map_err(|e| PlanError::Unstructured(format!("analyzing regex: {}", e)))?,
                     };
                     let column_names = regex
                         .capture_groups_iter()
@@ -2280,43 +2276,44 @@ lazy_static! {
     };
 }
 
-fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<HirScalarExpr, anyhow::Error> {
+fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<HirScalarExpr, PlanError> {
     match ecx.qcx.lifetime {
         QueryLifetime::OneShot(pcx) => Ok(HirScalarExpr::literal(
             Datum::from(pcx.wall_time),
             ScalarType::TimestampTz,
         )),
-        QueryLifetime::Static => bail!("{} cannot be used in static queries", name),
+        QueryLifetime::Static => sql_bail!("{} cannot be used in static queries", name),
     }
 }
 
-fn mz_cluster_id(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+fn mz_cluster_id(ecx: &ExprContext) -> Result<HirScalarExpr, PlanError> {
     Ok(HirScalarExpr::literal(
         Datum::from(ecx.catalog().config().cluster_id),
         ScalarType::Uuid,
     ))
 }
 
-fn mz_session_id(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+fn mz_session_id(ecx: &ExprContext) -> Result<HirScalarExpr, PlanError> {
     Ok(HirScalarExpr::literal(
         Datum::from(ecx.catalog().config().session_id),
         ScalarType::Uuid,
     ))
 }
 
-fn mz_uptime(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+fn mz_uptime(ecx: &ExprContext) -> Result<HirScalarExpr, PlanError> {
+    let uptime = ecx.catalog().config().start_instant.elapsed();
+    let uptime = chrono::Duration::from_std(uptime)
+        .map_err(|e| PlanError::Unstructured(format!("converting uptime to duration: {}", e)))?;
     match ecx.qcx.lifetime {
         QueryLifetime::OneShot(_) => Ok(HirScalarExpr::literal(
-            Datum::from(chrono::Duration::from_std(
-                ecx.catalog().config().start_instant.elapsed(),
-            )?),
+            Datum::from(uptime),
             ScalarType::Interval,
         )),
-        QueryLifetime::Static => bail!("mz_uptime cannot be used in static queries"),
+        QueryLifetime::Static => sql_bail!("mz_uptime cannot be used in static queries"),
     }
 }
 
-fn pg_postmaster_start_time(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+fn pg_postmaster_start_time(ecx: &ExprContext) -> Result<HirScalarExpr, PlanError> {
     Ok(HirScalarExpr::literal(
         Datum::from(ecx.catalog().config().start_time),
         ScalarType::TimestampTz,
@@ -2326,7 +2323,7 @@ fn pg_postmaster_start_time(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::
 fn array_to_string(
     ecx: &ExprContext,
     exprs: Vec<HirScalarExpr>,
-) -> Result<HirScalarExpr, anyhow::Error> {
+) -> Result<HirScalarExpr, PlanError> {
     let elem_type = match ecx.scalar_type(&exprs[0]) {
         ScalarType::Array(elem_type) => *elem_type,
         _ => unreachable!("array_to_string is guaranteed to receive array as first argument"),
@@ -2810,7 +2807,7 @@ lazy_static! {
 }
 
 /// Resolves the operator to a set of function implementations.
-pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], anyhow::Error> {
+pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], PlanError> {
     match OP_IMPLS.get(op) {
         Some(Func::Scalar(impls)) => Ok(&impls),
         Some(_) => unreachable!("all operators must be scalar functions"),

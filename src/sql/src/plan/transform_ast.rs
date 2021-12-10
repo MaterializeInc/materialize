@@ -13,7 +13,6 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
-use anyhow::bail;
 use uuid::Uuid;
 
 use ore::stack::{CheckedRecursion, RecursionGuard};
@@ -25,16 +24,16 @@ use sql_parser::ast::{
 
 use crate::func::Func;
 use crate::normalize;
-use crate::plan::StatementContext;
+use crate::plan::{PlanError, StatementContext};
 
 pub fn transform_query<'a>(
     scx: &StatementContext,
     query: &'a mut Query<Raw>,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     run_transforms(scx, |t, query| t.visit_query_mut(query), query)
 }
 
-pub fn transform_expr(scx: &StatementContext, expr: &mut Expr<Raw>) -> Result<(), anyhow::Error> {
+pub fn transform_expr(scx: &StatementContext, expr: &mut Expr<Raw>) -> Result<(), PlanError> {
     run_transforms(scx, |t, expr| t.visit_expr_mut(expr), expr)
 }
 
@@ -42,7 +41,7 @@ pub(crate) fn run_transforms<F, A>(
     scx: &StatementContext,
     mut f: F,
     ast: &mut A,
-) -> Result<(), anyhow::Error>
+) -> Result<(), PlanError>
 where
     F: for<'ast> FnMut(&mut dyn VisitMut<'ast, Raw>, &'ast mut A),
 {
@@ -77,7 +76,7 @@ where
 // TODO(sploiselle): rewrite these in terms of func::sql_op!
 struct FuncRewriter<'a> {
     scx: &'a StatementContext<'a>,
-    status: Result<(), anyhow::Error>,
+    status: Result<(), PlanError>,
 }
 
 impl<'a> FuncRewriter<'a> {
@@ -299,7 +298,7 @@ impl<'ast> VisitMut<'ast, Raw> for FuncRewriter<'_> {
 /// (<subquery>)`.
 struct Desugarer<'a> {
     scx: &'a StatementContext<'a>,
-    status: Result<(), anyhow::Error>,
+    status: Result<(), PlanError>,
     recursion_guard: RecursionGuard,
 }
 
@@ -322,7 +321,7 @@ impl<'ast> VisitMut<'ast, Raw> for Desugarer<'_> {
 impl<'a> Desugarer<'a> {
     fn visit_internal<F, X>(&mut self, f: F, x: X)
     where
-        F: Fn(&mut Self, X) -> Result<(), anyhow::Error>,
+        F: Fn(&mut Self, X) -> Result<(), PlanError>,
     {
         if self.status.is_ok() {
             // self.status could have changed from a deeper call, so don't blindly
@@ -342,7 +341,7 @@ impl<'a> Desugarer<'a> {
         }
     }
 
-    fn visit_select_mut_internal(&mut self, node: &mut Select<Raw>) -> Result<(), anyhow::Error> {
+    fn visit_select_mut_internal(&mut self, node: &mut Select<Raw>) -> Result<(), PlanError> {
         // `SELECT .., $table_func, .. FROM x`
         // =>
         // `SELECT .., table_func, .. FROM x, LATERAL $table_func`
@@ -386,7 +385,7 @@ impl<'a> Desugarer<'a> {
         Ok(())
     }
 
-    fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), anyhow::Error> {
+    fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), PlanError> {
         // `($expr)` => `$expr`
         while let Expr::Nested(e) = expr {
             *expr = e.take();
@@ -583,11 +582,11 @@ impl<'a> Desugarer<'a> {
             {
                 if matches!(op.op_str(), "=" | "<>" | "<" | "<=" | ">" | ">=") {
                     if left.len() != right.len() {
-                        bail!("unequal number of entries in row expressions");
+                        sql_bail!("unequal number of entries in row expressions");
                     }
                     if left.is_empty() {
                         assert!(right.is_empty());
-                        bail!("cannot compare rows of zero length");
+                        sql_bail!("cannot compare rows of zero length");
                     }
                 }
                 match op.op_str() {
@@ -635,7 +634,7 @@ struct TableFuncRewriter<'a> {
     scx: &'a StatementContext<'a>,
     disallowed_context: Vec<&'static str>,
     table_func: Option<(Function<Raw>, Ident)>,
-    status: Result<(), anyhow::Error>,
+    status: Result<(), PlanError>,
 }
 
 impl<'ast> VisitMut<'ast, Raw> for TableFuncRewriter<'_> {
@@ -661,7 +660,7 @@ impl<'a> TableFuncRewriter<'a> {
 
     fn visit_internal<F, X>(&mut self, f: F, x: X)
     where
-        F: Fn(&mut Self, X) -> Result<(), anyhow::Error>,
+        F: Fn(&mut Self, X) -> Result<(), PlanError>,
     {
         if self.status.is_ok() {
             // self.status could have changed from a deeper call, so don't blindly
@@ -673,7 +672,7 @@ impl<'a> TableFuncRewriter<'a> {
         }
     }
 
-    fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), anyhow::Error> {
+    fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), PlanError> {
         // This block does two things:
         // - Check if expr is a context where table functions are disallowed.
         // - Check if expr is a table function, and attempt to replace if so.
@@ -686,7 +685,7 @@ impl<'a> TableFuncRewriter<'a> {
                         Func::Aggregate(_) => Some("aggregate function calls"),
                         Func::Set(_) | Func::Table(_) => {
                             if let Some(context) = self.disallowed_context.last() {
-                                bail!("table functions are not allowed in {}", context);
+                                sql_bail!("table functions are not allowed in {}", context);
                             }
                             let name = Ident::new(item.name().item.clone());
                             let ident = Expr::Identifier(vec![name.clone()]);

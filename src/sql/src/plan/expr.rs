@@ -25,6 +25,7 @@ use ore::collections::CollectionExt;
 use ore::stack;
 use repr::*;
 
+use crate::plan::error::PlanError;
 use crate::plan::query::ExprContext;
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::Params;
@@ -347,15 +348,11 @@ pub enum CoercibleScalarExpr {
 }
 
 impl CoercibleScalarExpr {
-    pub fn type_as(
-        self,
-        ecx: &ExprContext,
-        ty: &ScalarType,
-    ) -> Result<HirScalarExpr, anyhow::Error> {
+    pub fn type_as(self, ecx: &ExprContext, ty: &ScalarType) -> Result<HirScalarExpr, PlanError> {
         let expr = typeconv::plan_coerce(ecx, self, ty)?;
         let expr_ty = ecx.scalar_type(&expr);
         if ty != &expr_ty {
-            bail!(
+            sql_bail!(
                 "{} must have type {}, not type {}",
                 ecx.name,
                 ecx.humanize_scalar_type(ty),
@@ -365,7 +362,7 @@ impl CoercibleScalarExpr {
         Ok(expr)
     }
 
-    pub fn type_as_any(self, ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+    pub fn type_as_any(self, ecx: &ExprContext) -> Result<HirScalarExpr, PlanError> {
         typeconv::plan_coerce(ecx, self, &ScalarType::String)
     }
 
@@ -375,7 +372,7 @@ impl CoercibleScalarExpr {
         ecx: &ExprContext,
         ccx: CastContext,
         ty: &ScalarType,
-    ) -> Result<HirScalarExpr, anyhow::Error> {
+    ) -> Result<HirScalarExpr, PlanError> {
         let expr = typeconv::plan_coerce(ecx, self, ty)?;
         typeconv::plan_cast(op, ecx, ccx, expr, ty)
     }

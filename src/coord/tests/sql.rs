@@ -84,7 +84,7 @@ async fn datadriven() {
                     let resolved = resolve_names(&mut qcx, q);
                     match resolved {
                         Ok(q) => format!("{}\n", q),
-                        Err(e) => format!("error: {:?}\n", e),
+                        Err(e) => format!("error: {}\n", e),
                     }
                 }
                 dir => panic!("unhandled directive {}", dir),
