@@ -14,14 +14,16 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-query error pg_get_constraintdef not yet supported
+query T
 SELECT pg_get_constraintdef(pg_constraint.oid) FROM pg_constraint
+----
 
-query error pg_get_constraintdef not yet supported
+query error pg_get_constraintdef is not yet implemented
 SELECT pg_get_constraintdef(885)
 
-query error pg_get_constraintdef not yet supported
+query T
 SELECT pg_get_constraintdef(pg_constraint.oid, true) FROM pg_constraint
+----
 
-query error pg_get_constraintdef not yet supported
+query error pg_get_constraintdef is not yet implemented
 SELECT pg_get_constraintdef(885, true)
