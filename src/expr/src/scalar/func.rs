@@ -4041,7 +4041,7 @@ impl UnaryFunc {
             | TrimTrailingWhitespace
             | Upper
             | Lower => false,
-            NotImplemented { .. } => true,
+            NotImplemented { .. } => false,
             CastJsonbToNumeric(_) => false,
             CastTimestampToDate | CastTimestampTzToDate => false,
             CastIntervalToTime | TimezoneTime { .. } => false,
