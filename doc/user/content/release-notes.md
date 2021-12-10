@@ -103,6 +103,9 @@ List new features before bug fixes.
 
 {{% version-header v0.12.0 %}}
 
+- Support [`PREPARE`](/sql/prepare/), [`EXECUTE`](/sql/execute/), and [`DEALLOCATE`](/sql/deallocate/)
+for SQL statements.
+
 - Added the `pg_type_is_visible` [compatibility function](/sql/functions#postgresql-compatibility-func).
 
 {{% version-header v0.11.0 %}}

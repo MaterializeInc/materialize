@@ -240,6 +240,8 @@ create_views ::=
 create_table ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'TABLE' table_name
   '(' ((col_name col_type col_option*) (',' col_name col_type col_option*)*)? ')'
+deallocate ::=
+  'DEALLOCATE' ('PREPARE')?  (name | 'ALL')?
 declare ::=
   'DECLARE' cursor_name 'CURSOR' ('WITHOUT' 'HOLD')? 'FOR' query
 insert ::=
@@ -275,6 +277,8 @@ drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
 drop_user ::=
     'DROP' 'USER' ('IF EXISTS')? role_name
+execute ::=
+  'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain ::=
   'EXPLAIN'
   'TYPED'? ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN FOR' )?
@@ -351,6 +355,8 @@ lit_cast ::=
   type val
 op_cast ::=
   val '::' type
+prepare ::=
+  'PREPARE' name 'AS' statement
 rollback ::=
   'ROLLBACK'
 select_stmt ::=
