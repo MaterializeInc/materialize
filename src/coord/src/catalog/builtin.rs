@@ -1566,6 +1566,8 @@ GROUP BY operator, worker",
     needs_logs: true,
 };
 
+// NOTE: If you add real data to this implementation, then please update
+// the related `pg_` function implementations (like `pg_get_constraintdef`)
 pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
     name: "pg_constraint",
     schema: PG_CATALOG_SCHEMA,

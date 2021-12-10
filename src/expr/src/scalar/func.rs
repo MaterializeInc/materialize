@@ -3118,6 +3118,9 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
     Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
 )]
 pub enum UnaryFunc {
+    NotImplemented {
+        function_name: String,
+    },
     Not(Not),
     IsNull(IsNull),
     IsTrue(IsTrue),
@@ -3579,6 +3582,9 @@ impl UnaryFunc {
             | CastStringToVarChar(_)
             | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
+            NotImplemented { function_name } => Err(EvalError::NotImplemented {
+                function_name: function_name.clone(),
+            }),
             NegInterval => Ok(neg_interval(a)),
             CastVarCharToString => Ok(a),
             CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
@@ -3799,7 +3805,8 @@ impl UnaryFunc {
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace
             | Upper
-            | Lower => ScalarType::String.nullable(nullable),
+            | Lower
+            | NotImplemented { .. } => ScalarType::String.nullable(nullable),
 
             CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
 
@@ -4034,6 +4041,7 @@ impl UnaryFunc {
             | TrimTrailingWhitespace
             | Upper
             | Lower => false,
+            NotImplemented { .. } => false,
             CastJsonbToNumeric(_) => false,
             CastTimestampToDate | CastTimestampTzToDate => false,
             CastIntervalToTime | TimezoneTime { .. } => false,
@@ -4235,6 +4243,11 @@ impl UnaryFunc {
             | CastStringToVarChar(_)
             | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
+            NotImplemented { function_name } => {
+                // NotImplemented is not implemented using `sqlfunc!` so is not
+                // `unreachable!` here
+                f.write_str(function_name)
+            }
             NegInterval => f.write_str("-"),
             CastVarCharToString => f.write_str("varchartostr"),
             CastDateToTimestamp => f.write_str("datetots"),

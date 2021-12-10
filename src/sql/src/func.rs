@@ -1606,6 +1606,20 @@ lazy_static! {
                 // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
                 params!(Int64) => sql_impl_func("CASE WHEN $1 = 6 THEN 'UTF8' ELSE NULL END"), 1597;
             },
+            // pg_get_constraintdef gives more info about a constraint with in the `pg_constraint`
+            // view. It currently returns no information as the `pg_constraint` view is empty in
+            // materialize
+            "pg_get_constraintdef" => Scalar {
+                params!(Oid) => {
+                    UnaryFunc::NotImplemented{function_name:"pg_get_constraintdef".to_string()}}, 1387;
+                params!(Oid, Bool) => Operation::binary(|_ecx, e, _| {
+                    Ok(
+                        e.call_unary(
+                            UnaryFunc::NotImplemented{function_name: "pg_get_constraintdef".to_string()}
+                        )
+                    )
+                }), 2508;
+            },
             // pg_get_expr is meant to convert the textual version of
             // pg_node_tree data into parseable expressions. However, we don't
             // use the pg_get_expr structure anywhere and the equivalent columns

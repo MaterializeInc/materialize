@@ -107,6 +107,7 @@ List new features before bug fixes.
 for SQL statements.
 
 - Added the `pg_type_is_visible` [compatibility function](/sql/functions#postgresql-compatibility-func).
+- ensure `pg_get_constraintdef` ([compatibility function](/sql/functions#postgresql-compatibility-func) parses, though it remains unimplemented.
 
 {{% version-header v0.11.0 %}}
 

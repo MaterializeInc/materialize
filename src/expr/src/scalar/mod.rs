@@ -1160,6 +1160,9 @@ pub enum EvalError {
         target_type: String,
         length: usize,
     },
+    NotImplemented {
+        function_name: String,
+    },
 }
 
 impl fmt::Display for EvalError {
@@ -1252,6 +1255,9 @@ impl fmt::Display for EvalError {
                 length,
             } => {
                 write!(f, "value too long for type {}({})", target_type, length)
+            }
+            EvalError::NotImplemented { function_name } => {
+                write!(f, "{} is not yet implemented", function_name)
             }
         }
     }
