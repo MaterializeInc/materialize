@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Exchange;
+use timely::container::columnation::TimelyStack;
+use timely::dataflow::channels::pact::ExchangeCore;
 use timely::dataflow::operators::capture::EventLink;
 use timely::logging::WorkerIdentifier;
 
@@ -80,7 +81,7 @@ pub fn construct<A: Allocate>(
             use timely::dataflow::channels::pact::Pipeline;
             let mut input = flatten.new_input(&logs, Pipeline);
 
-            let (mut updates_out, updates) = flatten.new_output();
+            let (mut updates_out, updates) = flatten.new_output::<TimelyStack<_>>();
 
             let mut buffer = Vec::new();
             flatten.build(move |_capability| {
@@ -99,7 +100,7 @@ pub fn construct<A: Allocate>(
                                 updates_session.give(
                                     &cap,
                                     (
-                                        (update_type, addr.clone(), source, port, worker, ts),
+                                        ((update_type, addr.clone(), source, port, worker, ts), ()),
                                         time_ms,
                                         diff,
                                     ),
@@ -113,8 +114,22 @@ pub fn construct<A: Allocate>(
             let mut row_packer = Row::default();
             updates
                 .as_collection()
-                .arrange_core::<_, RowSpine<_, _, _, _>>(
-                    Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| *w as u64),
+                .arrange_core::<_, RowSpine<
+                    (
+                        bool,
+                        Vec<usize>,
+                        usize,
+                        usize,
+                        WorkerIdentifier,
+                        Option<Timestamp>,
+                    ),
+                    _,
+                    _,
+                    _,
+                    usize,
+                    _,
+                >>(
+                    ExchangeCore::new(|(((_, _, _, _, w, _), ()), _, _)| *w as u64),
                     "PreArrange Timely reachability",
                 )
                 .as_collection(move |(update_type, addr, source, port, worker, ts), _| {

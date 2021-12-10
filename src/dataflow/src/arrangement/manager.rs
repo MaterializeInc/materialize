@@ -28,7 +28,8 @@ use dataflow_types::DataflowError;
 use expr::GlobalId;
 use repr::{Diff, Row, Timestamp};
 
-pub type RowSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
+pub type RowSpine<K, V, T, R, O = usize, C = Vec<((K, V), T, R)>, CK = Vec<K>, CV = Vec<V>> =
+    OrdValSpine<K, V, T, R, O, C, CK, CV>;
 pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;
 
 pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;

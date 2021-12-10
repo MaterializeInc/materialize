@@ -15,7 +15,8 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Exchange;
+use timely::container::columnation::TimelyStack;
+use timely::dataflow::channels::pact::{Exchange, ExchangeCore};
 use timely::dataflow::operators::capture::EventLink;
 use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
@@ -64,14 +65,14 @@ pub fn construct<A: Allocate>(
         use timely::dataflow::channels::pact::Pipeline;
         let mut input = demux.new_input(&logs, Pipeline);
 
-        let (mut operates_out, operates) = demux.new_output();
-        let (mut channels_out, channels) = demux.new_output();
-        let (mut addresses_out, addresses) = demux.new_output();
-        let (mut parks_out, parks) = demux.new_output();
-        let (mut messages_sent_out, messages_sent) = demux.new_output();
-        let (mut messages_received_out, messages_received) = demux.new_output();
-        let (mut schedules_duration_out, schedules_duration) = demux.new_output();
-        let (mut schedules_histogram_out, schedules_histogram) = demux.new_output();
+        let (mut operates_out, operates) = demux.new_output::<TimelyStack<_>>();
+        let (mut channels_out, channels) = demux.new_output::<Vec<_>>();
+        let (mut addresses_out, addresses) = demux.new_output::<TimelyStack<_>>();
+        let (mut parks_out, parks) = demux.new_output::<Vec<_>>();
+        let (mut messages_sent_out, messages_sent) = demux.new_output::<Vec<_>>();
+        let (mut messages_received_out, messages_received) = demux.new_output::<Vec<_>>();
+        let (mut schedules_duration_out, schedules_duration) = demux.new_output::<Vec<_>>();
+        let (mut schedules_histogram_out, schedules_histogram) = demux.new_output::<Vec<_>>();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -123,7 +124,7 @@ pub fn construct<A: Allocate>(
                                     .give(&cap, (((event.id, worker), event.name), time_ms, 1));
 
                                 let address_row = (event.id as i64, worker as i64, event.addr);
-                                addresses_session.give(&cap, (address_row, time_ms, 1));
+                                addresses_session.give(&cap, ((address_row, ()), time_ms, 1));
                             }
                             TimelyEvent::Channels(event) => {
                                 // Record channel information so that we can replay a negated
@@ -141,11 +142,11 @@ pub fn construct<A: Allocate>(
                                     event.target.0,
                                     event.target.1,
                                 );
-                                channels_session.give(&cap, (d, time_ms, 1));
+                                channels_session.give(&cap, ((d, ()), time_ms, 1));
 
                                 let address_row =
                                     (event.id as i64, worker as i64, event.scope_addr);
-                                addresses_session.give(&cap, (address_row, time_ms, 1));
+                                addresses_session.give(&cap, ((address_row, ()), time_ms, 1));
                             }
                             TimelyEvent::Shutdown(event) => {
                                 // Dropped operators should result in a negative record for
@@ -168,12 +169,11 @@ pub fn construct<A: Allocate>(
                                         {
                                             schedules_duration_session.give(
                                                 &cap,
-                                                ((event.id, worker), time_ms, -elapsed_ns),
+                                                (((event.id, worker), ()), time_ms, -elapsed_ns),
                                             );
-                                            schedules_histogram_session.give(
-                                                &cap,
-                                                ((event.id, worker, 1 << index), time_ms, -pow),
-                                            );
+                                            let d = (event.id, worker, 1 << index);
+                                            schedules_histogram_session
+                                                .give(&cap, ((d, ()), time_ms, -pow));
                                         }
                                     }
 
@@ -193,14 +193,14 @@ pub fn construct<A: Allocate>(
                                                     event.target.0,
                                                     event.target.1,
                                                 );
-                                                channels_session.give(&cap, (d, time_ms, -1));
+                                                channels_session.give(&cap, ((d, ()), time_ms, -1));
 
                                                 if let Some(sent) =
                                                     messages_sent_data.remove(&(event.id, worker))
                                                 {
                                                     for (index, count) in sent.iter().enumerate() {
                                                         let data = (
-                                                            ((event.id, worker), index),
+                                                            (((event.id, worker), index), ()),
                                                             time_ms,
                                                             -count,
                                                         );
@@ -214,7 +214,7 @@ pub fn construct<A: Allocate>(
                                                         received.iter().enumerate()
                                                     {
                                                         let data = (
-                                                            ((event.id, worker), index),
+                                                            (((event.id, worker), index), ()),
                                                             time_ms,
                                                             -count,
                                                         );
@@ -228,13 +228,13 @@ pub fn construct<A: Allocate>(
                                                     event.scope_addr,
                                                 );
                                                 addresses_session
-                                                    .give(&cap, (address_row, time_ms, -1));
+                                                    .give(&cap, ((address_row, ()), time_ms, -1));
                                             }
                                         }
                                     }
 
                                     let address_row = (event.id as i64, worker as i64, event.addr);
-                                    addresses_session.give(&cap, (address_row, time_ms, -1));
+                                    addresses_session.give(&cap, ((address_row, ()), time_ms, -1));
                                 }
                             }
                             TimelyEvent::Park(event) => match event {
@@ -250,7 +250,7 @@ pub fn construct<A: Allocate>(
                                         let pow = duration_ns.next_power_of_two();
                                         parks_sesssion.give(
                                             &cap,
-                                            ((worker, pow as i64, requested), time_ms, 1),
+                                            (((worker, pow as i64, requested), ()), time_ms, 1),
                                         );
                                     } else {
                                         panic!("Park data not found!");
@@ -266,7 +266,7 @@ pub fn construct<A: Allocate>(
                                         .entry((event.channel, event.source))
                                         .or_insert_with(|| vec![0; peers])[event.target] +=
                                         event.length as isize;
-                                    let d = ((event.channel, event.source), event.target);
+                                    let d = (((event.channel, event.source), event.target), ());
                                     messages_sent_session
                                         .give(&cap, (d, time_ms, event.length as isize));
                                 } else {
@@ -276,7 +276,7 @@ pub fn construct<A: Allocate>(
                                         .entry((event.channel, event.target))
                                         .or_insert_with(|| vec![0; peers])[event.source] +=
                                         event.length as isize;
-                                    let d = ((event.channel, event.target), event.source);
+                                    let d = (((event.channel, event.target), event.source), ());
                                     messages_received_session
                                         .give(&cap, (d, time_ms, event.length as isize));
                                 }
@@ -310,10 +310,11 @@ pub fn construct<A: Allocate>(
 
                                         schedules_duration_session.give(
                                             &cap,
-                                            ((key.1, worker), time_ms, elapsed_ns as isize),
+                                            (((key.1, worker), ()), time_ms, elapsed_ns as isize),
                                         );
                                         let d = (key.1, worker, elapsed_ns.next_power_of_two());
-                                        schedules_histogram_session.give(&cap, (d, time_ms, 1));
+                                        schedules_histogram_session
+                                            .give(&cap, ((d, ()), time_ms, 1));
                                     }
                                 }
                             }
@@ -327,9 +328,9 @@ pub fn construct<A: Allocate>(
         // Accumulate the durations of each operator.
         let elapsed = schedules_duration
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .arrange_core::<_, RowSpine<(usize, WorkerIdentifier), _, _, _>>(
                 Exchange::new(|(((_, w), ()), _, _)| *w as u64),
-                "PreArrange Timely duration",
+                "Arrange Timely duration",
             )
             .as_collection(|(op, worker), _| {
                 Row::pack_slice(&[Datum::Int64(*op as i64), Datum::Int64(*worker as i64)])
@@ -340,7 +341,7 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(|(((_, w, _), ()), _, _)| *w as u64),
-                "PreArrange Timely histogram",
+                "Arrange Timely histogram",
             )
             .as_collection(|(op, worker, pow), _| {
                 let row = Row::pack_slice(&[
@@ -353,11 +354,11 @@ pub fn construct<A: Allocate>(
 
         let operates = operates
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|((((_, w), _), ()), _, _)| *w as u64),
-                "PreArrange Timely operates",
+            .arrange_core::<_, RowSpine<_, String, _, _, usize, _>>(
+                ExchangeCore::new(|(((_, w), _), _, _)| *w as u64),
+                "Arrange Timely operates",
             )
-            .as_collection(move |((id, worker), name), _| {
+            .as_collection(move |(id, worker), name| {
                 Row::pack_slice(&[
                     Datum::Int64(*id as i64),
                     Datum::Int64(*worker as i64),
@@ -367,11 +368,11 @@ pub fn construct<A: Allocate>(
 
         let addresses = addresses
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|(((_, w, _), ()), _, _)| *w as u64),
-                "PreArrange Timely addresses",
+            .arrange_core::<_, RowSpine<(i64, i64, Vec<usize>), _, _, _, usize, _>>(
+                ExchangeCore::new(|(((_, w, _), ()), _, _)| *w as u64),
+                "Arrange Timely addresses",
             )
-            .as_collection(|(event_id, worker, addr), _| {
+            .as_collection(|(event_id, worker, addr): &(i64, i64, Vec<usize>), _| {
                 create_address_row(*event_id as i64, *worker as i64, &addr)
             });
 
@@ -379,7 +380,7 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(|(((w, _, _), ()), _, _)| *w as u64),
-                "PreArrange Timely parks",
+                "Arrange Timely parks",
             )
             .as_collection(|(worker, duration_ns, requested), ()| {
                 Row::pack_slice(&[
@@ -393,9 +394,9 @@ pub fn construct<A: Allocate>(
 
         let messages_received = messages_received
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .arrange_core::<_, RowSpine<((usize, WorkerIdentifier), usize), _, _, _>>(
                 Exchange::new(|((((_, w), _), ()), _, _)| *w as u64),
-                "PreArrange Timely messages received",
+                "Arrange Timely messages received",
             )
             .as_collection(move |((channel, source), target), ()| {
                 Row::pack_slice(&[
@@ -407,9 +408,9 @@ pub fn construct<A: Allocate>(
 
         let messages_sent = messages_sent
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .arrange_core::<_, RowSpine<((usize, WorkerIdentifier), usize), _, _, _>>(
                 Exchange::new(|((((_, w), _), ()), _, _)| *w as u64),
-                "PreArrange Timely messages sent",
+                "Arrange Timely messages sent",
             )
             .as_collection(move |((channel, source), target), ()| {
                 Row::pack_slice(&[
@@ -423,7 +424,7 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(|((((_, w), _, _, _, _), ()), _, _)| *w as u64),
-                "PreArrange Timely operates",
+                "Arrange Timely operates",
             )
             .as_collection(
                 move |((id, worker), source_node, source_port, target_node, target_port), ()| {
@@ -471,7 +472,7 @@ pub fn construct<A: Allocate>(
                             (row_key, row_packer.finish_and_reuse())
                         }
                     })
-                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
+                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
                     .trace;
                 result.insert(variant, (trace, permutation));
             }

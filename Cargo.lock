@@ -891,6 +891,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "columnation"
+version = "0.1.0"
+source = "git+https://github.com/antiguru/columnation?branch=container#e55750ac95d8ebc02835c7523b5c9bf8dfd0225b"
+dependencies = [
+ "paste",
+]
+
+[[package]]
 name = "compile-time-run"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1429,7 +1437,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c696ec0400d8dd4d0d855d43204737a1190a379d"
+source = "git+https://github.com/antiguru/differential-dataflow?branch=columnation-container#f8e2bf551c30f84084735ba74797b39628327136"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1484,7 +1492,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c696ec0400d8dd4d0d855d43204737a1190a379d"
+source = "git+https://github.com/antiguru/differential-dataflow?branch=columnation-container#f8e2bf551c30f84084735ba74797b39628327136"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -5197,7 +5205,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#fa63c3a2cea19a95b52a0edf27810a76dde2ba08"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=container_stream_rework#9e2b5c37a5bd9f06aa48705436ec73a109291bfe"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -5208,18 +5216,19 @@ dependencies = [
  "serde_derive",
  "timely_bytes",
  "timely_communication",
+ "timely_container",
  "timely_logging",
 ]
 
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#fa63c3a2cea19a95b52a0edf27810a76dde2ba08"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=container_stream_rework#9e2b5c37a5bd9f06aa48705436ec73a109291bfe"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#fa63c3a2cea19a95b52a0edf27810a76dde2ba08"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=container_stream_rework#9e2b5c37a5bd9f06aa48705436ec73a109291bfe"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -5233,9 +5242,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "timely_container"
+version = "0.12.0"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=container_stream_rework#9e2b5c37a5bd9f06aa48705436ec73a109291bfe"
+dependencies = [
+ "columnation",
+ "serde",
+]
+
+[[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#fa63c3a2cea19a95b52a0edf27810a76dde2ba08"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=container_stream_rework#9e2b5c37a5bd9f06aa48705436ec73a109291bfe"
 
 [[package]]
 name = "tinytemplate"

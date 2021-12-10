@@ -93,6 +93,7 @@ where
 pub trait CollectionExt<G, D1, R>
 where
     G: Scope,
+    D1: Data,
     R: Semigroup,
 {
     /// Creates a new empty collection in `scope`.
