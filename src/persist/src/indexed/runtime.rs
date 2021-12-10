@@ -132,10 +132,15 @@ where
         impl_handle,
         ticker_handle,
     }));
-    let core = RuntimeCore {
+    let sender = CmdReadSender::Full(tx.clone());
+    let read = RuntimeCoreRead {
         handles,
-        tx,
+        sender,
         metrics,
+    };
+    let core = RuntimeCore {
+        read: Arc::new(read),
+        tx,
     };
     let client = RuntimeClient {
         id,
@@ -166,9 +171,9 @@ struct RuntimeHandles {
 }
 
 #[derive(Debug)]
-struct RuntimeCore {
+struct RuntimeCoreRead {
     handles: Mutex<Option<RuntimeHandles>>,
-    tx: crossbeam_channel::Sender<RuntimeCmd>,
+    sender: CmdReadSender,
     metrics: Metrics,
 }
 
@@ -202,22 +207,16 @@ fn fill_runtime_cmd_res_runtime_shutdown(cmd: RuntimeCmd) {
     }
 }
 
-impl RuntimeCore {
-    fn send(&self, cmd: RuntimeCmd) {
+impl RuntimeCoreRead {
+    fn send(&self, cmd: CmdRead) {
         self.metrics.cmd_queue_in.inc();
-        if let Err(crossbeam_channel::SendError(cmd)) = self.tx.send(cmd) {
-            // According to the docs, a SendError can only happen if the
-            // receiver has hung up, which in this case only happens if the
-            // thread has exited. The thread only exits if we send it a
-            // Cmd::Stop (or it panics).
-            fill_runtime_cmd_res_runtime_shutdown(cmd)
-        }
+        self.sender.send(cmd);
     }
 
     fn stop(&self) -> Result<(), Error> {
         if let Some(handles) = self.handles.lock()?.take() {
             let (tx, rx) = PFuture::new();
-            self.send(RuntimeCmd::Stop(tx));
+            self.sender.stop(tx);
             // NB: Make sure there are no early returns before this `join`,
             // otherwise the runtime thread might still be cleaning up when this
             // returns (flushing out final writes, cleaning up LOCK files, etc).
@@ -244,10 +243,29 @@ impl RuntimeCore {
     }
 }
 
-impl Drop for RuntimeCore {
+impl Drop for RuntimeCoreRead {
     fn drop(&mut self) {
         if let Err(err) = self.stop() {
             log::error!("error while stopping dropped persist runtime: {}", err);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RuntimeCore {
+    read: Arc<RuntimeCoreRead>,
+    tx: crossbeam_channel::Sender<RuntimeCmd>,
+}
+
+impl RuntimeCore {
+    fn send(&self, cmd: RuntimeCmd) {
+        self.read.metrics.cmd_queue_in.inc();
+        if let Err(crossbeam_channel::SendError(cmd)) = self.tx.send(cmd) {
+            // According to the docs, a SendError can only happen if the
+            // receiver has hung up, which in this case only happens if the
+            // thread has exited. The thread only exits if we send it a
+            // Cmd::Stop (or it panics).
+            fill_runtime_cmd_res_runtime_shutdown(cmd)
         }
     }
 }
@@ -304,7 +322,7 @@ impl RuntimeClient {
         )));
         let id = rx.recv();
         let write = StreamWriteHandle::new(name.to_owned(), id.clone(), self.clone());
-        let meta = StreamReadHandle::new(name.to_owned(), id, self.clone());
+        let meta = StreamReadHandle::new(name.to_owned(), id, self.core.read.clone());
         (write, meta)
     }
 
@@ -355,36 +373,12 @@ impl RuntimeClient {
         )))
     }
 
-    /// Asynchronously returns a [crate::indexed::Snapshot] for the stream
-    /// with the given id.
-    ///
-    /// This snapshot is guaranteed to include any previous writes.
-    ///
-    /// The id must have previously been registered.
-    fn snapshot(&self, id: Id, res: PFutureHandle<ArrangementSnapshot>) {
-        self.core
-            .send(RuntimeCmd::Cmd(Cmd::CmdRead(CmdRead::Snapshot(id, res))))
-    }
-
-    /// Asynchronously registers a callback to be invoked on successful writes
-    /// and seals.
-    fn listen(
-        &self,
-        id: Id,
-        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-        res: PFutureHandle<ArrangementSnapshot>,
-    ) {
-        self.core.send(RuntimeCmd::Cmd(Cmd::CmdRead(CmdRead::Listen(
-            id, listen_fn, res,
-        ))))
-    }
-
     /// Synchronously closes the runtime, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
     /// This method is idempotent.
     pub fn stop(&mut self) -> Result<(), Error> {
-        self.core.stop()
+        self.core.read.stop()
     }
 
     /// Synchronously remove the persisted stream.
@@ -752,13 +746,50 @@ impl<K: Codec, V: Codec> Iterator for DecodedSnapshotIter<K, V> {
     }
 }
 
+#[derive(Debug, Clone)]
+enum CmdReadSender {
+    Full(crossbeam_channel::Sender<RuntimeCmd>),
+}
+
+impl CmdReadSender {
+    fn send(&self, cmd: CmdRead) {
+        match self {
+            CmdReadSender::Full(tx) => {
+                if let Err(crossbeam_channel::SendError(cmd)) =
+                    tx.send(RuntimeCmd::Cmd(Cmd::CmdRead(cmd)))
+                {
+                    // According to the docs, a SendError can only happen if the
+                    // receiver has hung up, which in this case only happens if the
+                    // thread has exited. The thread only exits if we send it a
+                    // Cmd::Stop (or it panics).
+                    fill_runtime_cmd_res_runtime_shutdown(cmd)
+                }
+            }
+        }
+    }
+
+    fn stop(&self, tx: PFutureHandle<()>) {
+        match self {
+            CmdReadSender::Full(cmd_tx) => {
+                if let Err(crossbeam_channel::SendError(cmd)) = cmd_tx.send(RuntimeCmd::Stop(tx)) {
+                    // According to the docs, a SendError can only happen if the
+                    // receiver has hung up, which in this case only happens if the
+                    // thread has exited. The thread only exits if we send it a
+                    // Cmd::Stop (or it panics).
+                    fill_runtime_cmd_res_runtime_shutdown(cmd)
+                }
+            }
+        }
+    }
+}
+
 /// A handle for a persisted stream of ((Key, Value), Time, Diff) updates backed
 /// by an [crate::indexed::Indexed] via a [RuntimeClient].
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct StreamReadHandle<K, V> {
     name: String,
     id: Result<Id, Error>,
-    runtime: RuntimeClient,
+    runtime: Arc<RuntimeCoreRead>,
     _phantom: PhantomData<(K, V)>,
 }
 
@@ -775,7 +806,7 @@ impl<K, V> Clone for StreamReadHandle<K, V> {
 
 impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     /// Returns a new [StreamReadHandle] for the given stream.
-    pub fn new(name: String, id: Result<Id, Error>, runtime: RuntimeClient) -> Self {
+    fn new(name: String, id: Result<Id, Error>, runtime: Arc<RuntimeCoreRead>) -> Self {
         StreamReadHandle {
             name,
             id,
@@ -798,7 +829,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
 
         // TODO: Make snapshot signature non-blocking.
         let (tx, rx) = PFuture::new();
-        self.runtime.snapshot(id, tx);
+        self.runtime.send(CmdRead::Snapshot(id, tx));
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))
     }
@@ -819,7 +850,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
         };
 
         let (tx, rx) = PFuture::new();
-        self.runtime.listen(id, listen_fn, tx);
+        self.runtime.send(CmdRead::Listen(id, listen_fn, tx));
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))
     }

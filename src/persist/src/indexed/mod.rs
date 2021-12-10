@@ -68,6 +68,9 @@ pub enum CmdRead {
 }
 
 /// An input to the persist state machine.
+//
+// NB: The set of these that aren't in the CmdRead variant is exactly the set of
+// things that we'll serialize to Log when we add that back in.
 #[derive(Debug)]
 pub enum Cmd {
     /// Creates, if necessary, a new unsealed and trace with the given external
