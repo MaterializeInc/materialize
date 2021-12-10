@@ -4243,7 +4243,11 @@ impl UnaryFunc {
             | CastStringToVarChar(_)
             | CastCharToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            NotImplemented { function_name } => f.write_str(function_name),
+            NotImplemented { function_name } => {
+                // NotImplemented is not implemented using `sqlfunc!` so is not
+                // `unreachable!` here
+                f.write_str(function_name)
+            }
             NegInterval => f.write_str("-"),
             CastVarCharToString => f.write_str("varchartostr"),
             CastDateToTimestamp => f.write_str("datetots"),
