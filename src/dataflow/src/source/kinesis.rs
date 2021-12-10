@@ -217,7 +217,7 @@ impl SourceReader for KinesisSourceReader {
                         }
                     };
 
-                    for record in get_records_output.records.unwrap_or_else(Default::default) {
+                    for record in get_records_output.records.unwrap_or(vec![]) {
                         let data = record
                             .data
                             .map(|blob| blob.into_inner())

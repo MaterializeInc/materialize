@@ -182,6 +182,9 @@ where
 
     // XXX(guswynn): file an minimization bug report for the logic flat_map
     // false positive here
+    // TODO(guswynn): remove this after https://github.com/rust-lang/rust-clippy/issues/8098 is
+    // resolved. The `logic` `FnMut` needs to be borrowed in the `flat_map` call, not moved in
+    // so the simple `|d1| logic(d1)` closure is load-bearing
     #[allow(clippy::redundant_closure)]
     fn flat_map_fallible<D2, E, I, L>(
         &self,
