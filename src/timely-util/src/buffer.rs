@@ -13,19 +13,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use differential_dataflow::consolidation::consolidate_updates;
+use differential_dataflow::consolidation::Consolidation;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::layers::BatchContainer;
 use differential_dataflow::ExchangeData;
 use timely::communication::Push;
-use timely::dataflow::channels::Bundle;
-use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::channels::BundleCore;
+use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::{Capability, CapabilityRef};
 use timely::progress::Timestamp;
+use timely::Container;
 
 /// A buffer that consolidates updates
 ///
-/// The buffer implements a wrapper around [OutputHandle] consolidating elements pushed to it. It is
+/// The buffer implements a wrapper around [OutputHandleCore] consolidating elements pushed to it. It is
 /// backed by a capacity-limited buffer, which means that compaction only occurs within the
 /// dimensions of the buffer, i.e. the number of unique keys is less than half of the buffer's
 /// capacity.
@@ -39,35 +41,39 @@ use timely::progress::Timestamp;
 ///
 /// The buffer retains a capability to send data on flush. It will flush all data once dropped, if
 /// time changes, or if the buffer capacity is reached.
-pub struct ConsolidateBuffer<'a, T, D: ExchangeData, R: Semigroup, P>
+pub struct ConsolidateBuffer<'a, T, D, R, P, C = Vec<(D, T, R)>>
 where
-    P: Push<Bundle<T, (D, T, R)>> + 'a,
+    P: Push<BundleCore<T, C>> + 'a,
     T: Clone + Lattice + Ord + Timestamp + 'a,
     D: 'a,
+    D: ExchangeData,
+    R: Semigroup,
+    C: Container<Item = (D, T, R)> + Consolidation + BatchContainer<Item = (D, T, R)>,
 {
     // a buffer for records, to send at self.cap
     // Invariant: Buffer only contains data if cap is Some.
-    buffer: Vec<(D, T, R)>,
-    output_handle: OutputHandle<'a, T, (D, T, R), P>,
+    buffer: C,
+    output_handle: OutputHandleCore<'a, T, C, P>,
     cap: Option<Capability<T>>,
     port: usize,
 }
 
-impl<'a, T, D: ExchangeData, R: Semigroup, P> ConsolidateBuffer<'a, T, D, R, P>
+impl<'a, T, D: ExchangeData, R: Semigroup, P, C> ConsolidateBuffer<'a, T, D, R, P, C>
 where
     T: Clone + Lattice + Ord + Timestamp + 'a,
-    P: Push<Bundle<T, (D, T, R)>> + 'a,
+    P: Push<BundleCore<T, C>> + 'a,
+    C: Container<Item = (D, T, R)> + Consolidation + BatchContainer<Item = (D, T, R)>,
 {
     /// Create a new [ConsolidateBuffer], wrapping the provided session.
     ///
     /// * `output_handle`: The output to send data to.
     /// * 'port': The output port to retain capabilities for.
-    pub fn new(output_handle: OutputHandle<'a, T, (D, T, R), P>, port: usize) -> Self {
+    pub fn new(output_handle: OutputHandleCore<'a, T, C, P>, port: usize) -> Self {
         Self {
             output_handle,
             port,
             cap: None,
-            buffer: Vec::with_capacity(::timely::container::buffer::default_capacity::<(D, T, R)>()),
+            buffer: C::with_capacity(::timely::container::buffer::default_capacity::<(D, T, R)>()),
         }
     }
 
@@ -83,7 +89,7 @@ where
         self.buffer.push(data);
         if self.buffer.len() == self.buffer.capacity() {
             // Consolidate while the consolidation frees at least half the buffer
-            consolidate_updates(&mut self.buffer);
+            self.buffer.consolidate();
             if self.buffer.len() > self.buffer.capacity() / 2 {
                 self.flush();
             }
@@ -93,18 +99,22 @@ where
     /// Flush the internal buffer to the underlying session
     pub fn flush(&mut self) {
         if let Some(cap) = &self.cap {
-            self.output_handle.session(cap).give_vec(&mut self.buffer);
-            self.buffer
-                .reserve_exact(::timely::container::buffer::default_capacity::<(D, T, R)>());
+            self.output_handle
+                .session(cap)
+                .give_container(&mut self.buffer);
+            self.buffer =
+                C::with_capacity(::timely::container::buffer::default_capacity::<(D, T, R)>());
         }
     }
 }
 
-impl<'a, T, D: ExchangeData, R: Semigroup, P> Drop for ConsolidateBuffer<'a, T, D, R, P>
+impl<'a, T, D, R, P, C> Drop for ConsolidateBuffer<'a, T, D, R, P, C>
 where
-    P: Push<Bundle<T, (D, T, R)>> + 'a,
+    P: Push<BundleCore<T, C>> + 'a,
     T: Clone + Lattice + Ord + Timestamp + 'a,
-    D: 'a,
+    D: ExchangeData + 'a,
+    R: Semigroup,
+    C: Container<Item = (D, T, R)> + Consolidation + BatchContainer<Item = (D, T, R)>,
 {
     fn drop(&mut self) {
         self.flush();

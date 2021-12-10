@@ -209,4 +209,9 @@ allow-git = [
     # Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
     # it into a release.
     "https://github.com/MaterializeInc/rust-server-sdk",
+
+    # Moritz' private repos
+    "https://github.com/antiguru/timely-dataflow",
+    "https://github.com/antiguru/differential-dataflow",
+    "https://github.com/antiguru/columnation",
 ]

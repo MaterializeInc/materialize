@@ -162,7 +162,7 @@ where
     //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
     let collection = match sink.envelope {
         Some(SinkEnvelope::Debezium) => {
-            let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
+            let combined = combine_at_timestamp(keyed.arrange_by_key());
 
             // if there is no user-specified key, remove the synthetic
             // distribution key again
@@ -188,7 +188,7 @@ where
             collection
         }
         Some(SinkEnvelope::Upsert) => {
-            let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
+            let combined = combine_at_timestamp(keyed.arrange_by_key());
 
             let from = sink.from;
             let collection = combined.map(move |(k, v)| {
