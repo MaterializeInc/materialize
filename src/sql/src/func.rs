@@ -2029,15 +2029,7 @@ lazy_static! {
                         column_names: vec![Some("generate_subscripts".into())],
                     })
                 }), 1192;
-                params!(ListAny, Int32) => Operation::variadic(move |_ecx, exprs| {
-                    Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSubscriptsList,
-                        exprs,
-                        column_names: vec![Some("generate_subscripts".into())],
-                    })
-                }), oid::FUNC_GENERATE_SUBSCRIPTS_LIST_OID;
             },
-
 
             "jsonb_array_elements" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {

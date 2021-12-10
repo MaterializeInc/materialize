@@ -1004,33 +1004,6 @@ fn generate_subscripts_array(
     }
 }
 
-fn generate_subscripts_list(
-    a: Datum,
-    dim: i32,
-) -> Result<Box<dyn Iterator<Item = (Row, Diff)>>, EvalError> {
-    a.unwrap_list().iter().try_for_each(|e| match e {
-        Datum::Array(_) | Datum::List(_) => Err(EvalError::InvalidParameterValue(
-            "parsing multi-dimensional lists is not supported".to_owned(),
-        )),
-        _ => Ok(()),
-    })?;
-
-    if dim != 1 {
-        return Ok(Box::new(iter::empty()));
-    }
-
-    generate_series::<i32>(
-        1,
-        a.unwrap_list()
-            .iter()
-            .count()
-            .try_into()
-            .expect("list dimensions must be a usize"),
-        1,
-    )
-    .map(|e| Box::new(e) as Box<dyn Iterator<Item = _>>)
-}
-
 fn unnest_array<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_array()
         .elements()
@@ -1191,7 +1164,6 @@ pub enum TableFunc {
         width: usize,
     },
     GenerateSubscriptsArray,
-    GenerateSubscriptsList,
 }
 
 impl TableFunc {
@@ -1259,10 +1231,6 @@ impl TableFunc {
                 let res = generate_subscripts_array(datums[0], datums[1].unwrap_int32())?;
                 Ok(Box::new(res))
             }
-            TableFunc::GenerateSubscriptsList => {
-                let res = generate_subscripts_list(datums[0], datums[1].unwrap_int32())?;
-                Ok(Box::new(res))
-            }
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
@@ -1305,9 +1273,6 @@ impl TableFunc {
             TableFunc::GenerateSubscriptsArray => {
                 vec![ScalarType::Int32.nullable(false)]
             }
-            TableFunc::GenerateSubscriptsList => {
-                vec![ScalarType::Int32.nullable(false)]
-            }
             TableFunc::Repeat => vec![],
             TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
@@ -1327,7 +1292,6 @@ impl TableFunc {
             TableFunc::GenerateSeriesTimestamp => 1,
             TableFunc::GenerateSeriesTimestampTz => 1,
             TableFunc::GenerateSubscriptsArray => 1,
-            TableFunc::GenerateSubscriptsList => 1,
             TableFunc::Repeat => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
@@ -1345,7 +1309,6 @@ impl TableFunc {
             | TableFunc::GenerateSeriesTimestamp
             | TableFunc::GenerateSeriesTimestampTz
             | TableFunc::GenerateSubscriptsArray
-            | TableFunc::GenerateSubscriptsList
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
@@ -1370,7 +1333,6 @@ impl TableFunc {
             TableFunc::GenerateSeriesTimestamp => true,
             TableFunc::GenerateSeriesTimestampTz => true,
             TableFunc::GenerateSubscriptsArray => true,
-            TableFunc::GenerateSubscriptsList => true,
             TableFunc::Repeat => false,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
@@ -1392,7 +1354,6 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesTimestamp => f.write_str("generate_series"),
             TableFunc::GenerateSeriesTimestampTz => f.write_str("generate_series"),
             TableFunc::GenerateSubscriptsArray => f.write_str("generate_subscripts"),
-            TableFunc::GenerateSubscriptsList => f.write_str("generate_subscripts"),
             TableFunc::Repeat => f.write_str("repeat_row"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
