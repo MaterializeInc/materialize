@@ -17,7 +17,7 @@ sqlparse==0.4.2
 twine==3.7.1
 types-prettytable==2.1.0
 types-psutil==5.8.15
-types-psycopg2==2.9.1
+types-psycopg2==2.9.4
 types-PyMYSQL==1.0.2
 types-PyYAML==6.0.1
 types-requests==2.25.11
