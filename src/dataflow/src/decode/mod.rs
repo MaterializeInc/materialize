@@ -28,8 +28,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, IncludeRequests,
-    IncludedColumnSource, KeyEnvelope, LinearOperator, RegexEncoding, SourceEnvelope,
+    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, IncludedColumnSource,
+    KeyEnvelope, LinearOperator, RegexEncoding, SourceEnvelope,
 };
 use interchange::avro::ConfluentAvroResolver;
 use log::error;
@@ -442,7 +442,7 @@ pub fn render_decode_delimited<G>(
     value_encoding: DataEncoding,
     debug_name: &str,
     envelope: &SourceEnvelope,
-    metadata_items: IncludeRequests,
+    metadata_items: Vec<IncludedColumnSource>,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
@@ -528,8 +528,8 @@ where
                             key,
                             value,
                             position: *position,
-                            metadata: to_kafka_metadata(
-                                metadata_items,
+                            metadata: to_metadata_row(
+                                &metadata_items,
                                 partition.clone(),
                                 *position,
                                 *upstream_time,
@@ -570,7 +570,7 @@ pub fn render_decode<G>(
     value_encoding: DataEncoding,
     debug_name: &str,
     envelope: &SourceEnvelope,
-    metadata_items: IncludeRequests,
+    metadata_items: Vec<IncludedColumnSource>,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
@@ -600,6 +600,7 @@ where
     // Historically, non-delimited sources have their offset start at 1
     let mut n_seen = 1..;
     let results = stream.unary_frontier(Pipeline, &op_name, move |_, _| {
+        let metadata_items = metadata_items;
         move |input, output| {
             let mut n_errors = 0;
             let mut n_successes = 0;
@@ -637,8 +638,8 @@ where
                                         n_successes += 1;
                                     }
                                     let position = n_seen.next();
-                                    let metadata = to_kafka_metadata(
-                                        metadata_items,
+                                    let metadata = to_metadata_row(
+                                        &metadata_items,
                                         partition.clone(),
                                         position,
                                         *upstream_time_millis,
@@ -666,8 +667,8 @@ where
                     };
 
                     if value.is_empty() {
-                        let metadata = to_kafka_metadata(
-                            metadata_items,
+                        let metadata = to_metadata_row(
+                            &metadata_items,
                             partition.clone(),
                             None,
                             *upstream_time_millis,
@@ -710,8 +711,8 @@ where
                                 n_successes += 1;
                             }
                             let position = n_seen.next();
-                            let metadata = to_kafka_metadata(
-                                metadata_items,
+                            let metadata = to_metadata_row(
+                                &metadata_items,
                                 partition.clone(),
                                 position,
                                 *upstream_time_millis,
@@ -755,8 +756,8 @@ where
     (results, None)
 }
 
-fn to_kafka_metadata(
-    metadata_items: IncludeRequests,
+fn to_metadata_row(
+    metadata_items: &[IncludedColumnSource],
     partition: PartitionId,
     position: Option<i64>,
     upstream_time_millis: Option<i64>,
