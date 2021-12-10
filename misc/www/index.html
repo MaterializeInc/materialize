@@ -43,12 +43,12 @@ by the Apache License, Version 2.0.
 
     <p>Linux one-liner:</p>
     <div class="code">
-      $ curl -L https://binaries.materialize.com/materialized-latest-$(arch)-unknown-linux-gnu.tar.gz | sudo tar -xzC /usr/local --strip-components=1
+      $ curl -L https://binaries.materialize.com/materialized-latest-$(uname -m)-unknown-linux-gnu.tar.gz | sudo tar -xzC /usr/local --strip-components=1
     </div>
 
     <p>macOS one-liner:</p>
     <div class="code">
-      $ curl -L https://binaries.materialize.com/materialized-latest-$(arch)-apple-darwin.tar.gz | sudo tar -xzC /usr/local --strip-components=1
+      $ curl -L https://binaries.materialize.com/materialized-latest-$(uname -m)-apple-darwin.tar.gz | sudo tar -xzC /usr/local --strip-components=1
     </div>
 
     <p>Resources:</p>
