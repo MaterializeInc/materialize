@@ -1,0 +1,27 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/9504
+
+statement ok
+CREATE TABLE tableA(happened_at TIMESTAMP, json_col JSON, offs NUMERIC, id INTEGER);
+
+statement ok
+CREATE INDEX a ON tablea(id);
+
+statement ok
+CREATE MATERIALIZED VIEW foobar26 AS
+  SELECT tableA.id
+    FROM tableA
+   WHERE ((1000 * cast(extract(epoch FROM tableA.happened_at) AS numeric)) <= mz_logical_timestamp()
+     AND mz_logical_timestamp() <= (1000 * cast(extract(epoch FROM tableA.happened_at) AS numeric) + offs ))
+     AND id = 10;
+
+statement ok
+INSERT INTO tableA VALUES (now(), null, 10, 10);

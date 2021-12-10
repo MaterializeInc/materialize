@@ -625,7 +625,6 @@ impl MapFilterProject {
     /// instance, and so we should ensure that `self` is optimized to not reference
     /// columns that are not demanded.
     pub fn permute(&mut self, mut shuffle: HashMap<usize, usize>, new_input_arity: usize) {
-        self.remove_undemanded();
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
         for index in 0..map.len() {
             // Intermediate columns are just shifted.
@@ -1287,11 +1286,16 @@ pub mod plan {
         pub fn permute(&mut self, permutation: &[usize]) {
             let (map, new_arity) = permutation_to_map_and_new_arity(permutation);
             self.mfp.mfp.permute(map, new_arity);
+            let permutation = permutation
+                .iter()
+                .cloned()
+                .chain(new_arity..(new_arity + self.mfp.mfp.expressions.len()))
+                .collect::<Vec<_>>();
             for lb in &mut self.lower_bounds {
-                lb.permute(permutation);
+                lb.permute(&permutation);
             }
             for ub in &mut self.upper_bounds {
-                ub.permute(permutation);
+                ub.permute(&permutation);
             }
         }
         /// Partitions `predicates` into non-temporal, and lower and upper temporal bounds.
