@@ -2837,7 +2837,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "crc32fast",
- "digest 0.9.0",
+ "digest 0.10.0",
  "enum-kinds",
  "flate2",
  "itertools",
