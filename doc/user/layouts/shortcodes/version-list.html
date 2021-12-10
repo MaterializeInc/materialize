@@ -18,8 +18,8 @@
             {{range $j, $target := $version.targets}}
               {{if gt $j 0}}/{{end}}
               <a href="https://binaries.materialize.com/materialized-{{$version.name}}-{{$target}}.tar.gz">
-                {{if eq $target "x86_64-unknown-linux"}}Linux Intel{{end}}
-                {{if eq $target "aarch64-unknown-linux"}}Linux ARM{{end}}
+                {{if eq $target "x86_64-unknown-linux-gnu"}}Linux Intel{{end}}
+                {{if eq $target "aarch64-unknown-linux-gnu"}}Linux ARM{{end}}
                 {{if eq $target "x86_64-apple-darwin"}}macOS Intel{{end}}
                 {{if eq $target "aarch64-apple-darwin"}}macOS ARM{{end}}
               </a>

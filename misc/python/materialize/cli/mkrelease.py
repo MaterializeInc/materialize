@@ -310,7 +310,11 @@ def release(
 def update_versions_list(released_version: Version) -> None:
     """Update the doc config with the passed-in version"""
     today = date.today().strftime("%d %B %Y")
-    toml_line = f'  {{ name = "v{released_version}", date = "{today}", targets = ["x86_64-unknown-linux", "aarch64-unknown-linux", "x86_64-apple-darwin", "aarch64-apple-darwin"] }},\n'
+    toml_line = (
+        f'  {{ name = "v{released_version}", date = "{today}", '
+        + 'targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", '
+        + '"x86_64-apple-darwin", "aarch64-apple-darwin"] }},\n'
+    )
     with open(USER_DOC_CONFIG) as fh:
         docs = fh.readlines()
     wrote_line = False
