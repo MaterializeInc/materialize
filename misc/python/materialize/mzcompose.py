@@ -2188,7 +2188,12 @@ class WaitStep(WorkflowStep):
 
     def run(self, workflow: Workflow) -> None:
         say(f"Waiting for the service {self._service} to exit")
-        ps_proc = workflow.run_compose(["ps", "-q", self._service], capture=True)
+        # We need to supply "-a" on recent versions of docker-compose because
+        # it wouldn't print containers started by "run" otherwise. We add
+        # "--status running" to make sure that we only get the latest running
+        # incarnation of a service. This could lead to a race condition where a
+        # service finishes before we start waiting, though.
+        ps_proc = workflow.run_compose(["ps", "-a", "--status", "running", "-q", self._service], capture=True)
         container_ids = [c for c in ps_proc.stdout.strip().split("\n")]
         if len(container_ids) > 1:
             raise errors.Failed(
