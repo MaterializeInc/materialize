@@ -27,15 +27,7 @@ use persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
 use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 use crate::operator::StreamExt;
-use crate::source::SourceData;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct UpsertData {
-    pub key: Option<Result<Row, DecodeError>>,
-    pub value: Option<Result<Row, DecodeError>>,
-    pub offset: i64,
-    pub metadata: Row,
-}
+use crate::source::{DecodeResult, SourceData};
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 struct UpsertSourceData {
@@ -55,7 +47,7 @@ struct UpsertSourceData {
 /// is the responsibility of the caller to ensure that the collection is sealed up.
 pub(crate) fn upsert<G>(
     source_name: &str,
-    stream: &Stream<G, UpsertData>,
+    stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
     operators: &mut Option<LinearOperator>,
     source_arity: usize,
@@ -175,7 +167,7 @@ where
                     error!("Encountered empty key in: {:?}", decode_result);
                     return None;
                 }
-                let offset = decode_result.offset;
+                let offset = decode_result.position;
                 Some((decode_result.key.unwrap(), decode_result.value, offset))
             });
 
@@ -282,7 +274,7 @@ fn evaluate(
 
 /// Internal core upsert logic.
 fn upsert_core<G>(
-    stream: &Stream<G, UpsertData>,
+    stream: &Stream<G, DecodeResult>,
     source_arity: usize,
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
@@ -292,7 +284,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let result_stream = stream.unary_frontier(
-        Exchange::new(move |UpsertData { key, .. }| key.hashed()),
+        Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
         "Upsert",
         move |_cap, _info| {
             // This is a map of (time) -> (capability, ((key) -> (value with max // offset)))
@@ -313,10 +305,10 @@ where
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
                     data.swap(&mut vector);
-                    for UpsertData {
+                    for DecodeResult {
                         key,
                         value: new_value,
-                        offset: new_position,
+                        position: new_position,
                         metadata,
                     } in vector.drain(..)
                     {
@@ -337,7 +329,7 @@ where
                         let new_entry = UpsertSourceData {
                             raw_data: SourceData {
                                 value: new_value.map(ResultExt::err_into),
-                                position: Some(new_position),
+                                position: new_position,
                                 // upsert sources don't have a column for this, so setting it to
                                 // `None` is fine.
                                 upstream_time_millis: None,
@@ -348,7 +340,7 @@ where
                         if let Some(offset) = entry.raw_data.position {
                             // If the time is equal, toss out the row with the
                             // lower offset
-                            if offset < new_position {
+                            if offset < new_position.expect("Kafka must always have an offset") {
                                 *entry = new_entry;
                             }
                         } else {

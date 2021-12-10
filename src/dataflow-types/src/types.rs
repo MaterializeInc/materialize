@@ -873,7 +873,7 @@ impl ExternalSourceConnector {
     ///
     /// The columns declared here must be kept in sync with the actual source
     /// implementations that produce these columns.
-    pub fn metadata_columns<'a>(&'a self, include_defaults: bool) -> Vec<(&'a str, ColumnType)> {
+    pub fn metadata_columns(&self, include_defaults: bool) -> Vec<(&str, ColumnType)> {
         let mut columns = Vec::new();
         let default_col = |name| (name, ScalarType::Int64.nullable(false));
         match self {

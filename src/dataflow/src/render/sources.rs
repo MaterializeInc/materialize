@@ -38,16 +38,15 @@ use crate::decode::rewrite_for_upsert;
 use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
-use crate::render::upsert::UpsertData;
 use crate::render::{RelevantTokens, RenderState};
 use crate::server::LocalInput;
+use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
-use crate::source::SourceConfig;
 use crate::source::{
-    self, metrics::SourceBaseMetrics, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
-    PostgresSourceReader, PubNubSourceReader, S3SourceReader,
+    self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
+    PersistentTimestampBindingsConfig, PostgresSourceReader, PubNubSourceReader, S3SourceReader,
+    SourceConfig,
 };
-use crate::source::{DecodeResult, PersistentTimestampBindingsConfig};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -427,8 +426,6 @@ where
                             match &envelope {
                                 SourceEnvelope::Debezium(dedupe_strategy, mode) => {
                                     // TODO: this needs to happen separately from trackstate
-                                    let data = append_metadata_to_value_upsert(results);
-
                                     let results = match mode {
                                         DebeziumMode::Upsert => {
                                             let mut trackstate = (
@@ -438,12 +435,12 @@ where
                                                     self.dataflow_id,
                                                 ),
                                             );
-                                            data.flat_map(move |data| {
-                                                let UpsertData {
+                                            results.flat_map(move |data| {
+                                                let DecodeResult {
                                                     key,
                                                     value,
                                                     metadata,
-                                                    offset: _,
+                                                    position: _,
                                                 } = data;
                                                 let (keys, metrics) = &mut trackstate;
                                                 value.map(|value| match key {
@@ -458,7 +455,7 @@ where
                                                 })
                                             })
                                         }
-                                        DebeziumMode::Plain => data.flat_map(|data| {
+                                        DebeziumMode::Plain => results.flat_map(|data| {
                                             data.value.map(|res| {
                                                 res.map(|mut val| {
                                                     val.extend(data.metadata.into_iter());
@@ -506,8 +503,6 @@ where
                                     // TODO: use the key envelope to figure out when to add keys.
                                     // The opeator currently does it unconditionally
                                     let upsert_operator_name = format!("{}-upsert", source_name);
-
-                                    let results = append_metadata_to_value_upsert(results);
 
                                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                                         &upsert_operator_name,
@@ -780,24 +775,6 @@ where
         });
 
         KV { val, key: res.key }
-    })
-}
-
-fn append_metadata_to_value_upsert<G>(
-    results: timely::dataflow::Stream<G, DecodeResult>,
-) -> timely::dataflow::Stream<G, UpsertData>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    results.map(move |res| {
-        UpsertData {
-            key: res.key,
-            value: res.value,
-            // TODO: turn this into a bail. Need to handle persistence and other upsert things that
-            // don't have any error handling.
-            offset: res.position.expect("Kafka must have offset"),
-            metadata: res.metadata,
-        }
     })
 }
 

@@ -28,8 +28,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, IncludedColumnSource,
-    KeyEnvelope, LinearOperator, IncludeRequests, RegexEncoding, SourceEnvelope,
+    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, IncludeRequests,
+    IncludedColumnSource, KeyEnvelope, LinearOperator, RegexEncoding, SourceEnvelope,
 };
 use interchange::avro::ConfluentAvroResolver;
 use log::error;
@@ -101,7 +101,7 @@ pub fn rewrite_for_upsert(
 }
 
 fn concat_datum_list<'a, 'b: 'a>(arena: &'a mut Row, left: Datum<'b>, extra: Row) -> Datum<'a> {
-    if matches!(left, Datum::Null) {
+    if left.is_null() {
         return left;
     }
     let left = left.unwrap_list();

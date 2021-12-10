@@ -345,11 +345,6 @@ impl RelationDesc {
         self
     }
 
-    /// Drops all existing keys.
-    pub fn clear_keys(&mut self) {
-        self.typ.keys.clear();
-    }
-
     /// Builds a new relation description with the column names replaced with
     /// new names.
     ///

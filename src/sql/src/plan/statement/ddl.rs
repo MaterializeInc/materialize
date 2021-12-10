@@ -811,8 +811,8 @@ pub fn plan_create_source(
 
     // TODO(petrosagg): remove this inconsistency once INCLUDE (offset)
     // syntax is implemented
-    let default_metadata = provide_default_metadata(&envelope, encoding.value_ref());
-    let metadata_columns = external_connector.metadata_columns(default_metadata);
+    let include_defaults = provide_default_metadata(&envelope, encoding.value_ref());
+    let metadata_columns = external_connector.metadata_columns(include_defaults);
     let (key_desc, value_desc) = encoding.desc()?;
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let mut bare_desc = envelope.desc(key_desc.clone(), value_desc, metadata_desc)?;
@@ -828,7 +828,7 @@ pub fn plan_create_source(
     // TODO: probably we should just migrate to pg semantics and allow specifying fewer columns than
     // actually exist?
     let tmp_col;
-    let col_names = if default_metadata
+    let col_names = if include_defaults
         && !col_names.is_empty()
         && metadata_columns.len() + col_names.len() == bare_desc.arity()
     {
@@ -850,7 +850,7 @@ pub fn plan_create_source(
     };
 
     if ignore_source_keys {
-        bare_desc.clear_keys();
+        bare_desc = bare_desc.without_keys();
     }
 
     let post_transform_key = if let SourceEnvelope::Debezium(_, _) = &envelope {

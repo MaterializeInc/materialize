@@ -1016,11 +1016,6 @@ impl Row {
         // SAFETY: iterator offsets always lie on a datum boundary.
         unsafe { self.truncate(offset) }
     }
-
-    /// True iff there is no data in this Row
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
 }
 
 impl RowRef {
@@ -1064,6 +1059,11 @@ impl RowRef {
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+
+    /// True iff there is no data in this Row
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
     }
 }
 
