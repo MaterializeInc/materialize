@@ -19,7 +19,7 @@ use chrono::{
     DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
     Utc,
 };
-use hmac::{Hmac, Mac, NewMac};
+use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use regex::RegexBuilder;

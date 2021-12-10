@@ -186,10 +186,10 @@ impl NpmPackage {
             vec![]
         };
         Ok(Sha256::new()
-            .chain(&Sha256::digest(&css_data))
-            .chain(&Sha256::digest(&js_prod_data))
-            .chain(&Sha256::digest(&js_dev_data))
-            .chain(&Sha256::digest(&extra_data))
+            .chain_update(&Sha256::digest(&css_data))
+            .chain_update(&Sha256::digest(&js_prod_data))
+            .chain_update(&Sha256::digest(&js_dev_data))
+            .chain_update(&Sha256::digest(&extra_data))
             .finalize()
             .as_slice()
             .into())
