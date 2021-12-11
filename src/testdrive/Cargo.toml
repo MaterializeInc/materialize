@@ -23,7 +23,7 @@ flate2 = "1.0.22"
 futures = "0.3.18"
 http = "0.2.5"
 interchange = { path = "../interchange" }
-itertools = "0.10.1"
+itertools = "0.10.3"
 kafka-util = { path = "../kafka-util" }
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"

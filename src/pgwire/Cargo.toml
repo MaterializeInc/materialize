@@ -16,7 +16,7 @@ csv = "1.1.6"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 futures = "0.3.18"
-itertools = "0.10.1"
+itertools = "0.10.3"
 lazy_static = "1.4.0"
 log = "0.4.13"
 openssl = { version = "0.10.38", features = ["vendored"] }
