@@ -22,6 +22,7 @@ oid          false     oid
 relname      false     text
 relnamespace false     oid
 relowner     true      oid
+relam        false     oid
 relkind      true      text
 
 > SHOW COLUMNS FROM pg_database
