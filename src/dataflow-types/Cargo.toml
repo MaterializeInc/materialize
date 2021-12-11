@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.51"
-async-trait = "0.1.51"
+async-trait = "0.1.52"
 aws-config = { version = "0.2.0", default-features = false, features = ["default-provider", "native-tls"] }
 aws-types = { version = "0.2.0", features = ["hardcoded-credentials"] }
 aws-smithy-http = "0.32.0"
