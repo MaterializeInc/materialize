@@ -17,7 +17,7 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.5.4"
 repr = { path = "../repr" }
-serde = { version = "1.0.130", features = ["derive"] }
+serde = { version = "1.0.131", features = ["derive"] }
 structopt = "0.3.25"
 tokio = { version = "1.13.0", features = ["rt-multi-thread"] }
 toml = "0.5.8"
