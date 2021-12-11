@@ -227,30 +227,30 @@ lazy_static! {
             (Float64, String) => Assignment: CastFloat64ToString(func::CastFloat64ToString),
 
             // DATE
-            (Date, Timestamp) => Implicit: CastDateToTimestamp,
-            (Date, TimestampTz) => Implicit: CastDateToTimestampTz,
-            (Date, String) => Assignment: CastDateToString,
+            (Date, Timestamp) => Implicit: CastDateToTimestamp(func::CastDateToTimestamp),
+            (Date, TimestampTz) => Implicit: CastDateToTimestampTz(func::CastDateToTimestampTz),
+            (Date, String) => Assignment: CastDateToString(func::CastDateToString),
 
             // TIME
-            (Time, Interval) => Implicit: CastTimeToInterval,
-            (Time, String) => Assignment: CastTimeToString,
+            (Time, Interval) => Implicit: CastTimeToInterval(func::CastTimeToInterval),
+            (Time, String) => Assignment: CastTimeToString(func::CastTimeToString),
 
             // TIMESTAMP
-            (Timestamp, Date) => Assignment: CastTimestampToDate,
-            (Timestamp, TimestampTz) => Implicit: CastTimestampToTimestampTz,
-            (Timestamp, String) => Assignment: CastTimestampToString,
+            (Timestamp, Date) => Assignment: CastTimestampToDate(func::CastTimestampToDate),
+            (Timestamp, TimestampTz) => Implicit: CastTimestampToTimestampTz(func::CastTimestampToTimestampTz),
+            (Timestamp, String) => Assignment: CastTimestampToString(func::CastTimestampToString),
 
             // TIMESTAMPTZ
-            (TimestampTz, Date) => Assignment: CastTimestampTzToDate,
-            (TimestampTz, Timestamp) => Assignment: CastTimestampTzToTimestamp,
-            (TimestampTz, String) => Assignment: CastTimestampTzToString,
+            (TimestampTz, Date) => Assignment: CastTimestampTzToDate(func::CastTimestampTzToDate),
+            (TimestampTz, Timestamp) => Assignment: CastTimestampTzToTimestamp(func::CastTimestampTzToTimestamp),
+            (TimestampTz, String) => Assignment: CastTimestampTzToString(func::CastTimestampTzToString),
 
             // INTERVAL
-            (Interval, Time) => Assignment: CastIntervalToTime,
-            (Interval, String) => Assignment: CastIntervalToString,
+            (Interval, Time) => Assignment: CastIntervalToTime(func::CastIntervalToTime),
+            (Interval, String) => Assignment: CastIntervalToString(func::CastIntervalToString),
 
             // BYTES
-            (Bytes, String) => Assignment: CastBytesToString,
+            (Bytes, String) => Assignment: CastBytesToString(func::CastBytesToString),
 
             // STRING
             (String, Bool) => Explicit: CastStringToBool(func::CastStringToBool),
@@ -373,7 +373,7 @@ lazy_static! {
             }),
 
             // VARCHAR
-            (VarChar, String) => Implicit: CastVarCharToString,
+            (VarChar, String) => Implicit: CastVarCharToString(func::CastVarCharToString),
             (VarChar, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
@@ -431,7 +431,7 @@ lazy_static! {
             (Jsonb, String) => Assignment: CastJsonbToString,
 
             // UUID
-            (Uuid, String) => Assignment: CastUuidToString,
+            (Uuid, String) => Assignment: CastUuidToString(func::CastUuidToString),
 
             // Numeric
             (Numeric, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {

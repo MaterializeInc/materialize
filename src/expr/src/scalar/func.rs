@@ -111,103 +111,6 @@ pub fn or<'a>(
     }
 }
 
-fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::Timestamp(a.unwrap_date().and_hms(0, 0, 0))
-}
-
-fn cast_date_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::TimestampTz(DateTime::<Utc>::from_utc(
-        a.unwrap_date().and_hms(0, 0, 0),
-        Utc,
-    ))
-}
-
-fn cast_date_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_date(&mut buf, a.unwrap_date());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_time_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_time(&mut buf, a.unwrap_time());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_time_to_interval<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let t = a.unwrap_time();
-    match Interval::new(
-        0,
-        t.num_seconds_from_midnight() as i64,
-        t.nanosecond() as i64,
-    ) {
-        Ok(i) => Ok(Datum::Interval(i)),
-        Err(_) => Err(EvalError::IntervalOutOfRange),
-    }
-}
-
-fn cast_timestamp_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::Date(a.unwrap_timestamp().date())
-}
-
-fn cast_timestamp_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::TimestampTz(DateTime::<Utc>::from_utc(a.unwrap_timestamp(), Utc))
-}
-
-fn cast_timestamp_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_timestamp(&mut buf, a.unwrap_timestamp());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_timestamptz_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::Date(a.unwrap_timestamptz().naive_utc().date())
-}
-
-fn cast_timestamptz_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::Timestamp(a.unwrap_timestamptz().naive_utc())
-}
-
-fn cast_timestamptz_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_timestamptz(&mut buf, a.unwrap_timestamptz());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_interval_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_interval(&mut buf, a.unwrap_interval());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_interval_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut i = a.unwrap_interval();
-
-    // Negative durations have their HH::MM::SS.NS values subtracted from 1 day.
-    if i.duration < 0 {
-        i = Interval::new(0, 86400, 0)
-            .unwrap()
-            .checked_add(
-                &Interval::new(0, i.dur_as_secs() % (24 * 60 * 60), i.nanoseconds() as i64)
-                    .unwrap(),
-            )
-            .unwrap();
-    }
-
-    Datum::Time(NaiveTime::from_hms_nano(
-        i.hours() as u32,
-        i.minutes() as u32,
-        i.seconds() as u32,
-        i.nanoseconds() as u32,
-    ))
-}
-
-fn cast_bytes_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_bytes(&mut buf, a.unwrap_bytes());
-    Datum::String(temp_storage.push_string(buf))
-}
-
 // TODO(jamii): it would be much more efficient to skip the intermediate
 // repr::jsonb::Jsonb.
 fn cast_string_to_jsonb<'a>(
@@ -336,12 +239,6 @@ fn jsonb_type(d: Datum<'_>) -> &'static str {
         Datum::Map(_) => "object",
         _ => unreachable!("jsonb_type called on invalid datum {:?}", d),
     }
-}
-
-fn cast_uuid_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_uuid(&mut buf, a.unwrap_uuid());
-    Datum::String(temp_storage.push_string(buf))
 }
 
 /// Casts between two list types by casting each element of `a` ("list1") using
@@ -3134,7 +3031,7 @@ pub enum UnaryFunc {
     NegFloat32(NegFloat32),
     NegFloat64(NegFloat64),
     NegNumeric(NegNumeric),
-    NegInterval,
+    NegInterval(NegInterval),
     SqrtFloat64(SqrtFloat64),
     SqrtNumeric(SqrtNumeric),
     CbrtFloat64(CbrtFloat64),
@@ -3217,21 +3114,21 @@ pub enum UnaryFunc {
     PadChar(PadChar),
     CastStringToVarChar(CastStringToVarChar),
     CastCharToString(CastCharToString),
-    CastVarCharToString,
-    CastDateToTimestamp,
-    CastDateToTimestampTz,
-    CastDateToString,
-    CastTimeToInterval,
-    CastTimeToString,
-    CastTimestampToDate,
-    CastTimestampToTimestampTz,
-    CastTimestampToString,
-    CastTimestampTzToDate,
-    CastTimestampTzToTimestamp,
-    CastTimestampTzToString,
-    CastIntervalToString,
-    CastIntervalToTime,
-    CastBytesToString,
+    CastVarCharToString(CastVarCharToString),
+    CastDateToTimestamp(CastDateToTimestamp),
+    CastDateToTimestampTz(CastDateToTimestampTz),
+    CastDateToString(CastDateToString),
+    CastTimeToInterval(CastTimeToInterval),
+    CastTimeToString(CastTimeToString),
+    CastIntervalToString(CastIntervalToString),
+    CastIntervalToTime(CastIntervalToTime),
+    CastTimestampToDate(CastTimestampToDate),
+    CastTimestampToTimestampTz(CastTimestampToTimestampTz),
+    CastTimestampToString(CastTimestampToString),
+    CastTimestampTzToDate(CastTimestampTzToDate),
+    CastTimestampTzToTimestamp(CastTimestampTzToTimestamp),
+    CastTimestampTzToString(CastTimestampTzToString),
+    CastBytesToString(CastBytesToString),
     CastStringToJsonb,
     CastJsonbToString,
     CastJsonbOrNullToJsonb,
@@ -3242,7 +3139,7 @@ pub enum UnaryFunc {
     CastJsonbToFloat64,
     CastJsonbToNumeric(Option<u8>),
     CastJsonbToBool,
-    CastUuidToString,
+    CastUuidToString(CastUuidToString),
     CastRecordToString {
         ty: ScalarType,
     },
@@ -3330,6 +3227,7 @@ derive_unary!(
     NegInt16,
     NegInt32,
     NegInt64,
+    NegInterval,
     AbsFloat32,
     AbsFloat64,
     AbsInt16,
@@ -3344,6 +3242,7 @@ derive_unary!(
     CeilFloat64,
     FloorFloat32,
     FloorFloat64,
+    CastDateToString,
     CastFloat32ToInt16,
     CastFloat32ToInt32,
     CastFloat32ToInt64,
@@ -3430,9 +3329,14 @@ derive_unary!(
     CastStringToList,
     CastStringToMap,
     CastStringToChar,
+    CastTimeToString,
+    CastTimeToInterval,
+    CastIntervalToString,
+    CastIntervalToTime,
     PadChar,
     CastStringToVarChar,
     CastCharToString,
+    CastUuidToString,
     Cos,
     Cosh,
     Sin,
@@ -3444,7 +3348,17 @@ derive_unary!(
     Ln,
     Exp,
     SqrtFloat64,
-    CbrtFloat64
+    CbrtFloat64,
+    CastTimestampToString,
+    CastTimestampTzToString,
+    CastTimestampToDate,
+    CastTimestampTzToDate,
+    CastTimestampToTimestampTz,
+    CastTimestampTzToTimestamp,
+    CastDateToTimestamp,
+    CastDateToTimestampTz,
+    CastBytesToString,
+    CastVarCharToString
 );
 
 impl UnaryFunc {
@@ -3581,27 +3495,28 @@ impl UnaryFunc {
             | PadChar(_)
             | CastStringToVarChar(_)
             | CastCharToString(_)
-            | CastFloat32ToFloat64(_) => unreachable!(),
+            | CastFloat32ToFloat64(_)
+            | CastDateToString(_)
+            | CastTimeToString(_)
+            | CastTimeToInterval(_)
+            | CastIntervalToString(_)
+            | CastIntervalToTime(_)
+            | NegInterval(_)
+            | CastUuidToString(_)
+            | CastTimestampToString(_)
+            | CastTimestampTzToString(_)
+            | CastTimestampToDate(_)
+            | CastTimestampTzToDate(_)
+            | CastTimestampToTimestampTz(_)
+            | CastTimestampTzToTimestamp(_)
+            | CastDateToTimestamp(_)
+            | CastDateToTimestampTz(_)
+            | CastBytesToString(_)
+            | CastVarCharToString(_) => unreachable!(),
             NotImplemented { function_name } => Err(EvalError::NotImplemented {
                 function_name: function_name.clone(),
             }),
-            NegInterval => Ok(neg_interval(a)),
-            CastVarCharToString => Ok(a),
             CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
-            CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
-            CastDateToTimestampTz => Ok(cast_date_to_timestamptz(a)),
-            CastDateToString => Ok(cast_date_to_string(a, temp_storage)),
-            CastTimeToInterval => cast_time_to_interval(a),
-            CastTimeToString => Ok(cast_time_to_string(a, temp_storage)),
-            CastTimestampToDate => Ok(cast_timestamp_to_date(a)),
-            CastTimestampToTimestampTz => Ok(cast_timestamp_to_timestamptz(a)),
-            CastTimestampToString => Ok(cast_timestamp_to_string(a, temp_storage)),
-            CastTimestampTzToDate => Ok(cast_timestamptz_to_date(a)),
-            CastTimestampTzToTimestamp => Ok(cast_timestamptz_to_timestamp(a)),
-            CastTimestampTzToString => Ok(cast_timestamptz_to_string(a, temp_storage)),
-            CastIntervalToString => Ok(cast_interval_to_string(a, temp_storage)),
-            CastIntervalToTime => Ok(cast_interval_to_time(a)),
-            CastBytesToString => Ok(cast_bytes_to_string(a, temp_storage)),
             CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
             CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
             CastJsonbToInt16 => cast_jsonb_to_int16(a),
@@ -3611,7 +3526,6 @@ impl UnaryFunc {
             CastJsonbToFloat64 => cast_jsonb_to_float64(a),
             CastJsonbToNumeric(scale) => cast_jsonb_to_numeric(a, *scale),
             CastJsonbToBool => cast_jsonb_to_bool(a),
-            CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
             CastRecordToString { ty }
             | CastArrayToString { ty }
             | CastListToString { ty }
@@ -3779,25 +3693,33 @@ impl UnaryFunc {
             | PadChar(_)
             | CastStringToVarChar(_)
             | CastCharToString(_)
-            | CastFloat32ToFloat64(_) => unreachable!(),
+            | CastFloat32ToFloat64(_)
+            | CastDateToString(_)
+            | CastTimeToString(_)
+            | CastTimeToInterval(_)
+            | CastIntervalToString(_)
+            | CastIntervalToTime(_)
+            | NegInterval(_)
+            | CastUuidToString(_)
+            | CastTimestampToString(_)
+            | CastTimestampTzToString(_)
+            | CastTimestampToDate(_)
+            | CastTimestampTzToDate(_)
+            | CastTimestampToTimestampTz(_)
+            | CastTimestampTzToTimestamp(_)
+            | CastDateToTimestamp(_)
+            | CastDateToTimestampTz(_)
+            | CastBytesToString(_)
+            | CastVarCharToString(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(nullable),
 
             IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
 
-            CastTimeToInterval => ScalarType::Interval.nullable(nullable),
             CastStringToJsonb => ScalarType::Jsonb.nullable(nullable),
 
-            CastVarCharToString
-            | CastDateToString
-            | CastTimeToString
-            | CastTimestampToString
-            | CastTimestampTzToString
-            | CastIntervalToString
-            | CastBytesToString
-            | CastUuidToString
-            | CastRecordToString { .. }
+            CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
             | CastMapToString { .. }
@@ -3810,17 +3732,11 @@ impl UnaryFunc {
 
             CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
 
-            CastTimestampToDate | CastTimestampTzToDate => ScalarType::Date.nullable(nullable),
+            TimezoneTime { .. } => ScalarType::Time.nullable(nullable),
 
-            CastIntervalToTime | TimezoneTime { .. } => ScalarType::Time.nullable(nullable),
+            TimezoneTimestampTz(_) => ScalarType::Timestamp.nullable(nullable),
 
-            CastDateToTimestamp | CastTimestampTzToTimestamp | TimezoneTimestampTz(_) => {
-                ScalarType::Timestamp.nullable(nullable)
-            }
-
-            CastDateToTimestampTz | CastTimestampToTimestampTz | TimezoneTimestamp(_) => {
-                ScalarType::TimestampTz.nullable(nullable)
-            }
+            TimezoneTimestamp(_) => ScalarType::TimestampTz.nullable(nullable),
 
             // converts null to jsonnull
             CastJsonbOrNullToJsonb => ScalarType::Jsonb.nullable(nullable),
@@ -3838,8 +3754,6 @@ impl UnaryFunc {
             CastList1ToList2 { return_ty, .. } => {
                 return_ty.default_embedded_value().nullable(false)
             }
-
-            NegInterval => input_type,
 
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
                 ScalarType::Float64.nullable(nullable)
@@ -4008,7 +3922,24 @@ impl UnaryFunc {
             | PadChar(_)
             | CastStringToVarChar(_)
             | CastCharToString(_)
-            | CastFloat32ToFloat64(_) => unreachable!(),
+            | CastFloat32ToFloat64(_)
+            | CastDateToString(_)
+            | CastTimeToString(_)
+            | CastTimeToInterval(_)
+            | CastIntervalToString(_)
+            | CastIntervalToTime(_)
+            | NegInterval(_)
+            | CastUuidToString(_)
+            | CastTimestampToString(_)
+            | CastTimestampTzToString(_)
+            | CastTimestampToDate(_)
+            | CastTimestampTzToDate(_)
+            | CastTimestampToTimestampTz(_)
+            | CastTimestampTzToTimestamp(_)
+            | CastDateToTimestamp(_)
+            | CastDateToTimestampTz(_)
+            | CastBytesToString(_)
+            | CastVarCharToString(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
             | CastJsonbToFloat32 | CastJsonbToFloat64 | CastJsonbToBool => true,
@@ -4023,16 +3954,8 @@ impl UnaryFunc {
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => false,
             IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
-            CastTimeToInterval | CastStringToJsonb => false,
-            CastVarCharToString
-            | CastDateToString
-            | CastTimeToString
-            | CastTimestampToString
-            | CastTimestampTzToString
-            | CastIntervalToString
-            | CastBytesToString
-            | CastUuidToString
-            | CastRecordToString { .. }
+            CastStringToJsonb => false,
+            CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
             | CastMapToString { .. }
@@ -4043,15 +3966,13 @@ impl UnaryFunc {
             | Lower => false,
             NotImplemented { .. } => false,
             CastJsonbToNumeric(_) => false,
-            CastTimestampToDate | CastTimestampTzToDate => false,
-            CastIntervalToTime | TimezoneTime { .. } => false,
-            CastDateToTimestamp | CastTimestampTzToTimestamp | TimezoneTimestampTz(_) => false,
-            CastDateToTimestampTz | CastTimestampToTimestampTz | TimezoneTimestamp(_) => false,
+            TimezoneTime { .. } => false,
+            TimezoneTimestampTz(_) => false,
+            TimezoneTimestamp(_) => false,
             CastList1ToList2 { .. } | CastInPlace { .. } => false,
             JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
-            NegInterval => false,
             RescaleNumeric(_) => false,
         }
     }
@@ -4108,13 +4029,14 @@ impl UnaryFunc {
             | Exp(_)
             | SqrtFloat64(_)
             | CbrtFloat64(_)
-            | CastFloat32ToFloat64(_) => unreachable!(),
-            CastVarCharToString
-            | CastDateToTimestamp
-            | CastDateToTimestampTz
-            | CastDateToString
-            | CastTimeToInterval
-            | CastTimeToString => true,
+            | CastFloat32ToFloat64(_)
+            | CastDateToString(_)
+            | CastTimeToString(_)
+            | CastTimeToInterval(_)
+            | CastIntervalToString(_)
+            | CastIntervalToTime(_)
+            | NegInterval(_)
+            | CastVarCharToString(_) => unreachable!(),
             _ => false,
         }
     }
@@ -4242,28 +4164,29 @@ impl UnaryFunc {
             | PadChar(_)
             | CastStringToVarChar(_)
             | CastCharToString(_)
-            | CastFloat32ToFloat64(_) => unreachable!(),
+            | CastFloat32ToFloat64(_)
+            | CastDateToString(_)
+            | CastTimeToString(_)
+            | CastTimeToInterval(_)
+            | CastIntervalToString(_)
+            | CastIntervalToTime(_)
+            | NegInterval(_)
+            | CastUuidToString(_)
+            | CastTimestampToString(_)
+            | CastTimestampTzToString(_)
+            | CastTimestampToDate(_)
+            | CastTimestampTzToDate(_)
+            | CastTimestampToTimestampTz(_)
+            | CastTimestampTzToTimestamp(_)
+            | CastDateToTimestamp(_)
+            | CastDateToTimestampTz(_)
+            | CastBytesToString(_)
+            | CastVarCharToString(_) => unreachable!(),
             NotImplemented { function_name } => {
                 // NotImplemented is not implemented using `sqlfunc!` so is not
                 // `unreachable!` here
                 f.write_str(function_name)
             }
-            NegInterval => f.write_str("-"),
-            CastVarCharToString => f.write_str("varchartostr"),
-            CastDateToTimestamp => f.write_str("datetots"),
-            CastDateToTimestampTz => f.write_str("datetotstz"),
-            CastDateToString => f.write_str("datetostr"),
-            CastTimeToInterval => f.write_str("timetoiv"),
-            CastTimeToString => f.write_str("timetostr"),
-            CastTimestampToDate => f.write_str("tstodate"),
-            CastTimestampToTimestampTz => f.write_str("tstotstz"),
-            CastTimestampToString => f.write_str("tstostr"),
-            CastTimestampTzToDate => f.write_str("tstodate"),
-            CastTimestampTzToTimestamp => f.write_str("tstztots"),
-            CastTimestampTzToString => f.write_str("tstztostr"),
-            CastIntervalToString => f.write_str("ivtostr"),
-            CastIntervalToTime => f.write_str("ivtotime"),
-            CastBytesToString => f.write_str("bytestostr"),
             CastStringToJsonb => f.write_str("strtojsonb"),
             CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
             CastJsonbToString => f.write_str("jsonbtostr"),
@@ -4274,7 +4197,6 @@ impl UnaryFunc {
             CastJsonbToFloat64 => f.write_str("jsonbtof64"),
             CastJsonbToBool => f.write_str("jsonbtobool"),
             CastJsonbToNumeric(_) => f.write_str("jsonbtonumeric"),
-            CastUuidToString => f.write_str("uuidtostr"),
             CastRecordToString { .. } => f.write_str("recordtostr"),
             CastArrayToString { .. } => f.write_str("arraytostr"),
             CastListToString { .. } => f.write_str("listtostr"),

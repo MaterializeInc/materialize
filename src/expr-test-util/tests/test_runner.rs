@@ -49,7 +49,7 @@ mod test {
     }
 
     #[test]
-    fn run() {
+    fn run_roundtrip_tests() {
         datadriven::walk("tests/testdata", |f| {
             let mut catalog = TestCatalog::default();
             f.run(move |s| -> String {

@@ -11,6 +11,7 @@
 
 #![allow(missing_docs)]
 
+use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt;
 use std::str::FromStr;
@@ -20,7 +21,6 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
-use std::cmp::Ordering;
 
 /// Units of measurements associated with dates and times.
 ///
