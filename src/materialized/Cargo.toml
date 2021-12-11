@@ -48,7 +48,7 @@ futures = "0.3.18"
 hex = "0.4.3"
 hyper = { version = "0.14.16", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"
-include_dir = "0.7.1"
+include_dir = "0.7.2"
 itertools = "0.10.1"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
