@@ -22,7 +22,7 @@ expr = { path = "../expr" }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.18"
 interchange = { path = "../interchange" }
-itertools = "0.10.1"
+itertools = "0.10.3"
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }

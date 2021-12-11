@@ -27,9 +27,9 @@ expr = { path = "../expr" }
 flate2 = "1.0.22"
 futures = "0.3.18"
 globset = "0.4.8"
-inotify = "0.9.6"
+inotify = "0.10.0"
 interchange = { path = "../interchange" }
-itertools = "0.10.1"
+itertools = "0.10.3"
 kafka-util = { path = "../kafka-util" }
 lazy_static = "1.4.0"
 log = "0.4.13"

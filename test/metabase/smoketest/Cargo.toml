@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.51"
-itertools = "0.10.1"
+itertools = "0.10.3"
 log = "0.4.13"
 metabase = { path = "../../../src/metabase" }
 ore = { path = "../../../src/ore" }
