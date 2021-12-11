@@ -12,7 +12,7 @@ version: '3.7'
 mzworkflows:
   kafka-exactly-once:
     env:
-      KAFKA_VERSION: latest
+      KAFKA_VERSION: "5.5.4"
       # when testing this on your local machine update SEED
       # when running this repeatedly to ensure topics don't clash
       SEED: ${SEED:-1}
