@@ -367,6 +367,7 @@ mz_source_info                                system true          volatile    l
 mz_worker_materialization_frontiers           system true          volatile    local
 
 > SHOW TABLES FROM mz_catalog
+mz_ams
 mz_array_types
 mz_avro_ocf_sinks
 mz_base_types
@@ -395,6 +396,7 @@ mz_views
 > SHOW FULL TABLES FROM mz_catalog
 name                  type
 ----------------------------
+mz_ams                system
 mz_array_types        system
 mz_avro_ocf_sinks     system
 mz_base_types         system
@@ -425,6 +427,7 @@ mz_views              system
 > SHOW TABLES FROM tester
 
 > SHOW EXTENDED tables FROM tester
+mz_ams
 mz_array_types
 mz_avro_ocf_sinks
 mz_base_types
@@ -456,6 +459,7 @@ mz_views
 test_table
 
 > SHOW EXTENDED tables FROM tester
+mz_ams
 mz_array_types
 mz_avro_ocf_sinks
 mz_base_types
@@ -484,11 +488,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-24
+25
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-43
+44
 
 > SHOW VIEWS FROM mz_catalog
 mz_arrangement_sharing
