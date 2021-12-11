@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.51"
-async-trait = "0.1.51"
+async-trait = "0.1.52"
 build-info = { path = "../build-info" }
 coord = { path = "../coord" }
 datadriven = "0.6.0"
