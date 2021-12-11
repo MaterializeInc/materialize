@@ -2334,9 +2334,9 @@ dependencies = [
 
 [[package]]
 name = "include_dir"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fe7734d776eb702d33f1b68730696db57c87facfd526d2044a308a0c8466318"
+checksum = "482a2e29200b7eed25d7fdbd14423326760b7f6658d21a4cf12d55a50713c69f"
 dependencies = [
  "include_dir_macros",
 ]
@@ -3800,13 +3800,12 @@ dependencies = [
 
 [[package]]
 name = "procfs"
-version = "0.11.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7718b88dae7b9b9be183ee274b10554b9aded035539230245275d7bc543fc0a4"
+checksum = "0941606b9934e2d98a3677759a971756eb821f75764d0e0d26946d08e74d9104"
 dependencies = [
  "bitflags",
  "byteorder",
- "flate2",
  "hex",
  "lazy_static",
  "libc",
