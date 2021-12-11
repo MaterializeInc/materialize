@@ -31,7 +31,7 @@ ordered-float = { version = "2.8.0", features = ["serde"] }
 ore = { path = "../ore", features = ["bytes", "smallvec"] }
 persist-types = { path = "../persist-types" }
 regex = "1.5.4"
-ryu = "1.0.6"
+ryu = "1.0.7"
 serde = { version = "1.0.130", features = ["derive"] }
 serde_json = "1.0.72"
 serde_regex = "1.1.0"
