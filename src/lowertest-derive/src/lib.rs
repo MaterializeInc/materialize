@@ -16,28 +16,41 @@ use proc_macro2::Span;
 use quote::{quote, ToTokens};
 use syn::{parse, Data, DeriveInput, Fields};
 
-/// Macro generating an implementation for the trait MzEnumReflect
-#[proc_macro_derive(MzEnumReflect)]
-pub fn mzenumreflect_derive(input: TokenStream) -> TokenStream {
+/// Macro generating an implementation for the trait MzReflect
+#[proc_macro_derive(MzReflect)]
+pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
     // The intended trait implementation is
     // ```
-    // impl MzEnumReflect for #name {
-    //    fn mz_enum_reflect() ->
-    //    std::collections::HashMap<
-    //        &'static str,
-    //        (Vec<&'static str>, Vec<&'static str>)
-    //    >
+    // impl MzReflect for #name {
+    //    /// Adds the information required to create an object of this type
+    //    /// to `enum_dict` if it is an enum and to `struct_dict` if it is a
+    //    /// struct.
+    //    fn add_to_reflected_type_info(
+    //        rti: &mut lowertest::ReflectedTypeInfo
+    //    )
     //    {
+    //       // if the object is an enum
+    //       if rti.enum_dict.contains_key(#name) { return; }
     //       use std::collections::HashMap;
     //       let mut result = HashMap::new();
     //       // repeat line below for all variants
-    //       result.add(variant_name, (<field_names>, <field_types>))
-    //       result
+    //       result.insert(variant_name, (<field_names>, <field_types>));
+    //       rti.enum_dist.insert(<enum_name>, result);
+    //
+    //       // if the object is a struct
+    //       if rti.struct_dict.contains_key(#name) { return ; }
+    //       rti.struct_dict.insert(#name, (<field_names>, <field_types>));
+    //
+    //       // for all object types, repeat line below for each field type
+    //       // that should be recursively added to the reflected type info
+    //       <field_type>::add_reflect_type_info(enum_dict, struct_dict);
     //    }
     // }
     // ```
     let ast: DeriveInput = parse(input).unwrap();
 
+    let object_name = &ast.ident;
+    let object_name_as_string = object_name.to_string();
     let method_impl = if let Data::Enum(enumdata) = &ast.data {
         let variants = enumdata
             .variants
@@ -51,57 +64,28 @@ pub fn mzenumreflect_derive(input: TokenStream) -> TokenStream {
             })
             .collect::<Vec<_>>();
         quote! {
-          use std::collections::HashMap;
-          let mut result = HashMap::new();
-          #(#variants)*
-          result
+            if rti.enum_dict.contains_key(#object_name_as_string) { return; }
+            use std::collections::HashMap;
+            let mut result = HashMap::new();
+            #(#variants)*
+            rti.enum_dict.insert(#object_name_as_string, result);
         }
-    } else {
-        unreachable!("Not an enum")
-    };
-
-    let name = &ast.ident;
-    let gen = quote! {
-      impl lowertest::MzEnumReflect for #name {
-        fn mz_enum_reflect() ->
-            std::collections::HashMap<
-                &'static str,
-                (Vec<&'static str>, Vec<&'static str>)
-            >
-        {
-           #method_impl
-        }
-      }
-    };
-    gen.into()
-}
-
-/// Macro generating an implementation for the trait MzStructReflect
-#[proc_macro_derive(MzStructReflect)]
-pub fn mzstructreflect_derive(input: TokenStream) -> TokenStream {
-    // The intended trait implementation is
-    // ```
-    // impl MzStructReflect for #name {
-    //    fn mz_struct_reflect() -> (Vec<&'static str>, Vec<&'static str>)
-    //    {
-    //       (<field_names>, <field_types>))
-    //    }
-    // }
-    // ```
-    let ast: DeriveInput = parse(input).unwrap();
-    let method_impl = if let Data::Struct(structdata) = &ast.data {
+    } else if let Data::Struct(structdata) = &ast.data {
         let (names, types) = get_field_names_types(&structdata.fields);
         quote! {
-            (vec![#(#names),*], vec![#(#types),*])
+            if rti.struct_dict.contains_key(#object_name_as_string) { return; }
+            rti.struct_dict.insert(#object_name_as_string,
+                (vec![#(#names),*], vec![#(#types),*]));
         }
     } else {
-        unreachable!("Not a struct")
+        unreachable!("Not a struct or enum")
     };
 
-    let name = &ast.ident;
     let gen = quote! {
-      impl lowertest::MzStructReflect for #name {
-        fn mz_struct_reflect() -> (Vec<&'static str>, Vec<&'static str>)
+      impl lowertest::MzReflect for #object_name {
+        fn add_to_reflected_type_info(
+            rti: &mut lowertest::ReflectedTypeInfo
+        )
         {
            #method_impl
         }
@@ -112,13 +96,10 @@ pub fn mzstructreflect_derive(input: TokenStream) -> TokenStream {
 
 /// Generates a function that generates `ReflectedTypeInfo`
 ///
-/// Accepts three comma-separated arguments:
+/// Accepts two comma-separated arguments:
 /// * first is the name of the function to generate
-/// * second is a list of enums that can be looked up in the
+/// * second is a list of enums or structs that can be looked up in the
 /// `ReflectedTypeInfo`
-/// * third is a list of enums that can be looked up in the
-/// `ReflectedTypeInfo`
-/// The latter two arguments are optional
 #[proc_macro]
 pub fn gen_reflect_info_func(input: TokenStream) -> TokenStream {
     let mut input_iter = input.into_iter();
@@ -141,7 +122,7 @@ pub fn gen_reflect_info_func(input: TokenStream) -> TokenStream {
                 if let TokenTree::Ident(ident) = tt {
                     let type_name = ident.to_string();
                     let typ = syn::Ident::new(&type_name, Span::call_site());
-                    Some(quote! { enum_dict.insert(#type_name, #typ::mz_enum_reflect()) })
+                    Some(quote! { #typ::add_to_reflect_type_info(&mut result) })
                 } else {
                     None
                 }
@@ -158,7 +139,7 @@ pub fn gen_reflect_info_func(input: TokenStream) -> TokenStream {
                 if let TokenTree::Ident(ident) = tt {
                     let type_name = ident.to_string();
                     let typ = syn::Ident::new(&type_name, Span::call_site());
-                    Some(quote! { struct_dict.insert(#type_name, #typ::mz_struct_reflect()) })
+                    Some(quote! { #typ::add_to_reflect_type_info(&mut result) })
                 } else {
                     None
                 }
@@ -171,12 +152,13 @@ pub fn gen_reflect_info_func(input: TokenStream) -> TokenStream {
         fn #func_name () -> ReflectedTypeInfo {
             let mut enum_dict = std::collections::HashMap::new();
             let mut struct_dict = std::collections::HashMap::new();
-            #(#add_enums);* ;
-            #(#add_structs);* ;
-            ReflectedTypeInfo {
+            let mut result =  ReflectedTypeInfo {
                 enum_dict,
                 struct_dict
-            }
+            };
+            #(#add_enums);* ;
+            #(#add_structs);* ;
+            result
         }
     };
     gen.into()
