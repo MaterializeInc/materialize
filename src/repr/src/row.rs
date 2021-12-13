@@ -1060,6 +1060,11 @@ impl RowRef {
     pub fn data(&self) -> &[u8] {
         &self.data
     }
+
+    /// True iff there is no data in this Row
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 impl std::ops::Deref for Row {

@@ -105,7 +105,9 @@ List new features before bug fixes.
 
 - Support [`PREPARE`](/sql/prepare/), [`EXECUTE`](/sql/execute/), and [`DEALLOCATE`](/sql/deallocate/)
 for SQL statements.
-
+- Add support for including Kafka message partition, offset, and timestamp in
+  sources by extending the [`INCLUDE` syntax](/sql/create-source/avro-kafka/)
+  to understand `PARTITION`, `OFFSET`, and `TIMESTAMP` keywords.
 - Added the `pg_type_is_visible` [compatibility function](/sql/functions#postgresql-compatibility-func).
 - ensure `pg_get_constraintdef` ([compatibility function](/sql/functions#postgresql-compatibility-func) parses, though it remains unimplemented.
 

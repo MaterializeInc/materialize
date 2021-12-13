@@ -112,6 +112,13 @@ $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
 {"status":"END","id":"2","event_count":{"long": 3},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}}
 
+> SELECT * FROM data_foo;
+a  b
+----
+1  1
+2  2
+
+
 > SELECT * FROM foo;
 b  sum
 ------

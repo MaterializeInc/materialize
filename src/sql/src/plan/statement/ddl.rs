@@ -27,13 +27,13 @@ use regex::Regex;
 use reqwest::Url;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, ColumnSpec,
-    Consistency, CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat,
-    KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
-    ProtobufEncoding, PubNubSourceConnector, RegexEncoding, S3SourceConnector,
-    SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceDataEncoding, SourceEnvelope,
-    Timeline,
+    included_column_desc, provide_default_metadata, AvroEncoding, AvroOcfEncoding,
+    AvroOcfSinkConnectorBuilder, BringYourOwn, ColumnSpec, Consistency, CsvEncoding, DataEncoding,
+    DebeziumMode, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
+    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat, KafkaSourceConnector,
+    KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
+    PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
+    SourceConnector, SourceDataEncoding, SourceEnvelope, Timeline,
 };
 use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
@@ -41,7 +41,7 @@ use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
-use sql_parser::ast::CsrSeedCompiledOrLegacy;
+use sql_parser::ast::{CsrSeedCompiledOrLegacy, SourceIncludeMetadata};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -464,7 +464,7 @@ pub fn plan_create_source(
 
             let encoding = get_encoding(format, envelope, with_options_original)?;
 
-            let connector = KafkaSourceConnector {
+            let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
                 topic: topic.clone(),
                 config_options,
@@ -474,7 +474,53 @@ pub fn plan_create_source(
                 include_timestamp: None,
                 include_partition: None,
                 include_topic: None,
+                include_offset: None,
             };
+
+            let unwrap_name = |alias: Option<Ident>, default, pos| {
+                Some(IncludedColumnPos {
+                    name: alias
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| String::from(default)),
+                    pos,
+                })
+            };
+
+            if !include_metadata.is_empty()
+                && matches!(envelope, Envelope::Debezium(DbzMode::Plain))
+            {
+                for kind in include_metadata {
+                    if !matches!(kind.ty, SourceIncludeMetadataType::Key) {
+                        bail!(
+                            "INCLUDE {} with Debezium requires UPSERT semantics",
+                            kind.ty
+                        );
+                    }
+                }
+            }
+
+            for (pos, item) in include_metadata.iter().cloned().enumerate() {
+                match item.ty {
+                    SourceIncludeMetadataType::Timestamp => {
+                        connector.include_timestamp = unwrap_name(item.alias, "timestamp", pos);
+                    }
+                    SourceIncludeMetadataType::Partition => {
+                        connector.include_partition = unwrap_name(item.alias, "partition", pos);
+                    }
+                    SourceIncludeMetadataType::Topic => {
+                        // TODO(bwm): This requires deeper thought, the current structure of the
+                        // code requires us to clone the topic name around all over the place
+                        // whether or not anyone ever uses it. Considering we expect the
+                        // overwhelming majority of people will *not* want topics in dataflows that
+                        // is an unnacceptable cost.
+                        bail_unsupported!("INCLUDE TOPIC");
+                    }
+                    SourceIncludeMetadataType::Offset => {
+                        connector.include_offset = unwrap_name(item.alias, "offset", pos);
+                    }
+                    SourceIncludeMetadataType::Key => {} // handled below
+                }
+            }
 
             let connector = ExternalSourceConnector::Kafka(connector);
 
@@ -652,6 +698,7 @@ pub fn plan_create_source(
             (connector, encoding)
         }
     };
+    let key_envelope = get_key_envelope(&include_metadata, envelope, &encoding)?;
 
     // TODO (materialize#2537): cleanup format validation
     // Avro format validation is different for the Debezium envelope
@@ -667,27 +714,6 @@ pub fn plan_create_source(
     // the key schema, if it exists, over to the value schema position
     // in the Upsert envelope's key_format so it can be validated like
     // a schema used to decode records.
-
-    let mut key_envelope = None;
-    for item in include_metadata {
-        match item.ty {
-            SourceIncludeMetadataType::Key => {
-                key_envelope = Some(get_key_envelope(item.alias.clone(), envelope, &encoding)?);
-            }
-            SourceIncludeMetadataType::Timestamp => {
-                bail_unsupported!("INCLUDE TIMESTAMP")
-            }
-            SourceIncludeMetadataType::Partition => {
-                bail_unsupported!("INCLUDE PARTITION")
-            }
-            SourceIncludeMetadataType::Topic => {
-                bail_unsupported!("INCLUDE TOPIC")
-            }
-            SourceIncludeMetadataType::Offset => {
-                bail_unsupported!("INCLUDE OFFSET")
-            }
-        }
-    }
 
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
@@ -783,14 +809,46 @@ pub fn plan_create_source(
         }
     };
 
+    // TODO(petrosagg): remove this inconsistency once INCLUDE (offset)
+    // syntax is implemented
+    let include_defaults = provide_default_metadata(&envelope, encoding.value_ref());
+    let metadata_columns = external_connector.metadata_columns(include_defaults);
     let (key_desc, value_desc) = encoding.desc()?;
-    let mut bare_desc = envelope.desc(key_desc.clone(), value_desc)?;
+    let metadata_desc = included_column_desc(metadata_columns.clone());
+    let mut bare_desc = envelope.desc(key_desc.clone(), value_desc, metadata_desc)?;
+
+    // Append default metadata columns if column aliases were provided but do not include them.
+    //
+    // This is a confusing hack due to two combined facts:
+    //
+    // * we used to not allow users to refer to/alias the metadata columns because they were
+    //   specified in render, instead of here in plan
+    // * we don't follow postgres semantics and allow a shorter rename list than total column list
+    //
+    // TODO: probably we should just migrate to pg semantics and allow specifying fewer columns than
+    // actually exist?
+    let tmp_col;
+    let col_names = if include_defaults
+        && !col_names.is_empty()
+        && metadata_columns.len() + col_names.len() == bare_desc.arity()
+    {
+        let mut tmp = Vec::with_capacity(bare_desc.arity());
+        tmp.extend(col_names.iter().cloned());
+        tmp.push(Ident::from(
+            external_connector.default_metadata_column_name().unwrap(),
+        ));
+        tmp_col = tmp;
+        &tmp_col
+    } else {
+        col_names
+    };
 
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
         Some(Value::Boolean(b)) => b,
         Some(_) => bail!("ignore_source_keys must be a boolean"),
     };
+
     if ignore_source_keys {
         bare_desc = bare_desc.without_keys();
     }
@@ -859,16 +917,6 @@ pub fn plan_create_source(
             return Err(key_constraint_err(&bare_desc, &key_columns));
         } else {
             bare_desc = bare_desc.with_key(key_indices);
-        }
-    }
-
-    // TODO(brennan): They should not depend on the envelope either. Figure out a way to
-    // make all of this more tasteful.
-    if !matches!(encoding.value_ref(), DataEncoding::Avro { .. })
-        && !matches!(envelope, SourceEnvelope::Debezium(_, _))
-    {
-        for (name, ty) in external_connector.metadata_columns() {
-            bare_desc = bare_desc.with_named_column(name, ty);
         }
     }
 
@@ -1122,43 +1170,51 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
     }))
 }
 
+/// Extract the key envelope, if it is requested
 fn get_key_envelope(
-    name: Option<Ident>,
+    included_items: &[SourceIncludeMetadata],
     envelope: &Envelope,
     encoding: &SourceDataEncoding,
-) -> Result<KeyEnvelope, anyhow::Error> {
-    if matches!(envelope, Envelope::Debezium { .. }) {
+) -> Result<Option<KeyEnvelope>, anyhow::Error> {
+    let key_definition = included_items
+        .iter()
+        .find(|i| i.ty == SourceIncludeMetadataType::Key);
+    if matches!(envelope, Envelope::Debezium { .. }) && key_definition.is_some() {
         bail!("Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.");
     }
-    Ok(match name {
-        Some(name) => KeyEnvelope::Named(name.into_string()),
-        None if matches!(envelope, Envelope::Upsert { .. }) => KeyEnvelope::LegacyUpsert,
-        None => {
-            // If the key is requested but comes from an unnamed type then it gets the name "key"
-            //
-            // Otherwise it gets the names of the columns in the type
-            if let SourceDataEncoding::KeyValue { key, value: _ } = encoding {
-                let is_composite = match key {
-                    DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
-                        bail!("{} sources cannot use INCLUDE KEY", key.op_name())
-                    }
-                    DataEncoding::Bytes | DataEncoding::Text => false,
-                    DataEncoding::Avro(_)
-                    | DataEncoding::Csv(_)
-                    | DataEncoding::Protobuf(_)
-                    | DataEncoding::Regex { .. } => true,
-                };
+    if let Some(kd) = key_definition {
+        Ok(Some(match &kd.alias {
+            Some(name) => KeyEnvelope::Named(name.as_str().to_string()),
+            None if matches!(envelope, Envelope::Upsert { .. }) => KeyEnvelope::LegacyUpsert,
+            None => {
+                // If the key is requested but comes from an unnamed type then it gets the name "key"
+                //
+                // Otherwise it gets the names of the columns in the type
+                if let SourceDataEncoding::KeyValue { key, value: _ } = encoding {
+                    let is_composite = match key {
+                        DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
+                            bail!("{} sources cannot use INCLUDE KEY", key.op_name())
+                        }
+                        DataEncoding::Bytes | DataEncoding::Text => false,
+                        DataEncoding::Avro(_)
+                        | DataEncoding::Csv(_)
+                        | DataEncoding::Protobuf(_)
+                        | DataEncoding::Regex { .. } => true,
+                    };
 
-                if is_composite {
-                    KeyEnvelope::Flattened
+                    if is_composite {
+                        KeyEnvelope::Flattened
+                    } else {
+                        KeyEnvelope::Named("key".to_string())
+                    }
                 } else {
-                    KeyEnvelope::Named("key".to_string())
+                    bail!("INCLUDE KEY requires an explicit or implicit KEY FORMAT")
                 }
-            } else {
-                bail!("INCLUDE KEY requires an explicit or implicit KEY FORMAT")
             }
-        }
-    })
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 pub fn describe_create_view(

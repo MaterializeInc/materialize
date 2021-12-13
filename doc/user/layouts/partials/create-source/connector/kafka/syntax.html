@@ -1,3 +1,6 @@
 **KAFKA BROKER** _host_ | The Kafka broker's host name without the security protocol, which is specified by the [`WITH` options](#with-options).) If you wish to specify multiple brokers (bootstrap servers) as an additional safeguard, use a comma-separated list. For example: `localhost:9092, localhost:9093`.
 **TOPIC** _topic_ | The Kafka topic you want to subscribe to.
 **INCLUDE KEY** | Make the key portion of Kafka events available to Materialize SQL. If the key is encoded using a format that includes schemas it will take its name from the schema, for unnamed formats (e.g. `TEXT`) it will be named `key`. The key can be renamed with the optional **AS** *name* statement.
+**INCLUDE PARTITION** | Make the Kafka partition of Kafka events available to Materialize SQL. The partition can be renamed with the optional **AS** *name* statement.
+**INCLUDE OFFSET** | Make the Kafka offset of Kafka events available to Materialize SQL. The offset can be renamed with the optional **AS** *name* statement.
+**INCLUDE TIMESTAMP** | Make the Kafka event timestamp available to Materialize SQL. The timestamp can be renamed with the optional **AS** *name* statement. Note that the exact timestamp of a Kafka message depends on how the topic and its producers are configured. See the [Confluent documentation](https://docs.confluent.io/3.0.0/streams/concepts.html?#time) for details.

@@ -117,6 +117,24 @@ creature
 --------
 moros
 
+! CREATE MATERIALIZED SOURCE doin_upsert_metadata
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE OFFSET
+  ENVELOPE DEBEZIUM
+INCLUDE OFFSET with Debezium requires UPSERT semantics
+
+> CREATE MATERIALIZED SOURCE doin_upsert_metadata
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE PARTITION, OFFSET AS test_kafka_offset
+  ENVELOPE DEBEZIUM UPSERT
+
+> SELECT * FROM doin_upsert_metadata WHERE id = 4
+id creature partition test_kafka_offset
+---------------------------------------
+4  moros    0         9
+
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=6
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": null}
 
@@ -167,5 +185,35 @@ id creature
   WITH (deduplication = 'full')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT
-
 Debezium deduplication does not make sense with upsert sources
+
+
+# test include metadata
+> CREATE MATERIALIZED SOURCE upsert_metadata
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE OFFSET, PARTITION
+  ENVELOPE DEBEZIUM UPSERT
+
+> SELECT * FROM upsert_metadata
+id   creature      offset  partition
+------------------------------------
+1    dino          4       0
+2    velociraptor  6       0
+3    triceratops   8       0
+4    chicken       11      0
+
+# test include metadata respects metadata order
+> CREATE MATERIALIZED SOURCE upsert_metadata_reordered
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INCLUDE PARTITION, OFFSET
+  ENVELOPE DEBEZIUM UPSERT
+
+> SELECT * FROM upsert_metadata_reordered
+id   creature      partition  offset
+------------------------------------
+1    dino          0          4
+2    velociraptor  0          6
+3    triceratops   0          8
+4    chicken       0          11

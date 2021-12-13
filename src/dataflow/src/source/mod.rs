@@ -122,8 +122,8 @@ pub struct SourceConfig<'a, G> {
     pub base_metrics: &'a SourceBaseMetrics,
 }
 
-#[derive(Clone, Serialize, Debug, Deserialize)]
 /// A record produced by a source
+#[derive(Clone, Serialize, Debug, Deserialize)]
 pub struct SourceOutput<K, V>
 where
     K: Data,
@@ -137,9 +137,11 @@ where
     pub position: Option<i64>,
     /// The time the record was created in the upstream systsem, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
+    /// The partition of this message, present iff the partition comes from Kafka
+    pub partition: PartitionId,
 }
 
-/// The data that we send from sources to the decode process
+/// The data that we send from Upsert to the decode process
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub(crate) struct SourceData {
     /// The actual value
@@ -155,8 +157,8 @@ pub(crate) struct SourceData {
     pub(crate) upstream_time_millis: Option<i64>,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 /// The output of the decoding operator
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub struct DecodeResult {
     /// The decoded key
     pub key: Option<Result<Row, DecodeError>>,
@@ -164,6 +166,21 @@ pub struct DecodeResult {
     pub value: Option<Result<Row, DecodeError>>,
     /// The index of the decoded value in the stream
     pub position: Option<i64>,
+    /// If this is a Kafka stream, the appropriate metadata
+    // TODO(bwm): This should probably be statically different for different streams, or we should
+    // propagate whether metadata is requested into the decoder
+    pub metadata: Row,
+}
+
+/// Kafka-specific information about the event
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub struct KafkaMetadata {
+    /// The Partition within the Kafka Topic
+    pub partition: i32,
+    /// The message offset within the given partition
+    pub offset: i64,
+    /// The message timestamp, expressed as a Unix Milliseconds Timestamp
+    pub timestamp: i64,
 }
 
 impl<K, V> SourceOutput<K, V>
@@ -177,12 +194,14 @@ where
         value: V,
         position: Option<i64>,
         upstream_time_millis: Option<i64>,
+        partition: PartitionId,
     ) -> SourceOutput<K, V> {
         SourceOutput {
             key,
             value,
             position,
             upstream_time_millis,
+            partition,
         }
     }
 }
@@ -1880,6 +1899,7 @@ fn handle_message<S: SourceReader>(
                 out,
                 Some(offset.offset),
                 message.upstream_time_millis,
+                message.partition,
             )));
 
             // Update ingestion metrics

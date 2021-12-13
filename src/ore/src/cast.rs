@@ -45,6 +45,9 @@ macro_rules! cast_from {
 }
 
 #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+cast_from!(u8, usize);
+
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 cast_from!(u32, usize);
 
 #[cfg(target_pointer_width = "64")]

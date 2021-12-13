@@ -12,9 +12,11 @@ use std::collections::HashMap;
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use ::regex::Regex;
+use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
+use expr::PartitionId;
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use prometheus::UIntGauge;
@@ -26,8 +28,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, KeyEnvelope,
-    LinearOperator, RegexEncoding, SourceEnvelope,
+    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, IncludedColumnSource,
+    KeyEnvelope, LinearOperator, RegexEncoding, SourceEnvelope,
 };
 use interchange::avro::ConfluentAvroResolver;
 use log::error;
@@ -38,8 +40,7 @@ use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::protobuf::ProtobufDecoderState;
 use crate::metrics::Metrics;
-use crate::source::DecodeResult;
-use crate::source::SourceOutput;
+use crate::source::{DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;
@@ -48,6 +49,7 @@ mod protobuf;
 /// Update row to blank out retractions of rows that we have never seen
 pub fn rewrite_for_upsert(
     val: Result<Row, DecodeError>,
+    metadata: Row,
     keys: &mut HashMap<Row, Row>,
     key: Row,
     metrics: &UIntGauge,
@@ -58,9 +60,13 @@ pub fn rewrite_for_upsert(
 
         let entry = keys.entry(key);
 
+        // Upsert-shaped data must be of shape Row[[before_row_as_list], [after_row_as_list]]
         let mut rowiter = row.iter();
         let before = rowiter.next().expect("must have a before list");
         let after = rowiter.next().expect("must have an after list");
+
+        let mut arena = Row::default();
+        let after_md = concat_datum_list(&mut arena, after, metadata);
 
         assert!(
             matches!(before, Datum::List { .. } | Datum::Null),
@@ -72,40 +78,35 @@ pub fn rewrite_for_upsert(
             Entry::Vacant(vacant) => {
                 // if the key is new, then we know that we always need to ignore the "before" part,
                 // so zero it out
-                vacant.insert(Row::pack_slice(&[after]));
+                vacant.insert(Row::pack_slice(&[after_md]));
 
-                if before.is_null() {
-                    Ok(row)
-                } else {
-                    Ok(Row::pack_slice(&[Datum::Null, after]))
-                }
+                Ok(Row::pack_slice(&[Datum::Null, after_md]))
             }
             Entry::Occupied(mut occupied) => {
-                if occupied.get().iter().next() == Some(before) {
-                    if after.is_null() {
-                        occupied.remove_entry();
-                    } else {
-                        occupied.insert(Row::pack_slice(&[after]));
-                    }
-                    // this matches the modifications we'd make in the next step
-                    Ok(row)
+                let previous_insert = if after.is_null() {
+                    // We are trying to retract something that doesn't exist, so just assume
+                    // that the key is supposed to be empty at this point
+                    let (_k, v) = occupied.remove_entry();
+                    v
                 } else {
-                    let previous_insert = if after.is_null() {
-                        // We are trying to retract something that doesn't exist, so just assume
-                        // that the key is supposed to be empty at this point
-                        let (_k, v) = occupied.remove_entry();
-                        v
-                    } else {
-                        occupied.insert(Row::pack_slice(&[after]))
-                    };
+                    occupied.insert(Row::pack_slice(&[after_md]))
+                };
 
-                    Ok(Row::pack_slice(&[previous_insert.unpack_first(), after]))
-                }
+                Ok(Row::pack_slice(&[previous_insert.unpack_first(), after_md]))
             }
         }
     } else {
         val
     }
+}
+
+fn concat_datum_list<'a, 'b: 'a>(arena: &'a mut Row, left: Datum<'b>, extra: Row) -> Datum<'a> {
+    if left.is_null() {
+        return left;
+    }
+    let left = left.unwrap_list();
+    arena.push_list(left.into_iter().chain(extra.into_iter()));
+    arena.into_iter().next().unwrap()
 }
 
 pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
@@ -441,6 +442,7 @@ pub fn render_decode_delimited<G>(
     value_encoding: DataEncoding,
     debug_name: &str,
     envelope: &SourceEnvelope,
+    metadata_items: Vec<IncludedColumnSource>,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
@@ -507,6 +509,7 @@ where
                         value,
                         position,
                         upstream_time_millis: upstream_time,
+                        partition,
                     } in data.iter()
                     {
                         let key = key_decoder
@@ -520,10 +523,17 @@ where
                         } else if matches!(&value, Some(Ok(_))) {
                             n_successes += 1;
                         }
+
                         session.give(DecodeResult {
                             key,
                             value,
                             position: *position,
+                            metadata: to_metadata_row(
+                                &metadata_items,
+                                partition.clone(),
+                                *position,
+                                *upstream_time,
+                            ),
                         });
                     }
                 });
@@ -560,6 +570,7 @@ pub fn render_decode<G>(
     value_encoding: DataEncoding,
     debug_name: &str,
     envelope: &SourceEnvelope,
+    metadata_items: Vec<IncludedColumnSource>,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
@@ -589,16 +600,20 @@ where
     // Historically, non-delimited sources have their offset start at 1
     let mut n_seen = 1..;
     let results = stream.unary_frontier(Pipeline, &op_name, move |_, _| {
+        let metadata_items = metadata_items;
         move |input, output| {
             let mut n_errors = 0;
             let mut n_successes = 0;
             input.for_each(|cap, data| {
+                // Currently Kafka is the only kind of source that can have metadata, and it is
+                // always delimited, so we will never have metadata in `render_decode`
                 let mut session = output.session(&cap);
                 for SourceOutput {
                     key: _,
                     value,
                     position: _,
                     upstream_time_millis,
+                    partition,
                 } in data.iter()
                 {
                     let value = match value {
@@ -622,10 +637,19 @@ where
                                     } else if matches!(&value, Ok(_)) {
                                         n_successes += 1;
                                     }
+                                    let position = n_seen.next();
+                                    let metadata = to_metadata_row(
+                                        &metadata_items,
+                                        partition.clone(),
+                                        position,
+                                        *upstream_time_millis,
+                                    );
+
                                     session.give(DecodeResult {
                                         key: None,
                                         value: Some(value),
-                                        position: n_seen.next(),
+                                        position,
+                                        metadata,
                                     });
                                 }
                             }
@@ -643,10 +667,17 @@ where
                     };
 
                     if value.is_empty() {
+                        let metadata = to_metadata_row(
+                            &metadata_items,
+                            partition.clone(),
+                            None,
+                            *upstream_time_millis,
+                        );
                         session.give(DecodeResult {
                             key: None,
                             value: None,
                             position: None,
+                            metadata,
                         });
                     } else {
                         let value_bytes_remaining = &mut value.as_slice();
@@ -679,11 +710,20 @@ where
                             } else if matches!(&value, Ok(_)) {
                                 n_successes += 1;
                             }
+                            let position = n_seen.next();
+                            let metadata = to_metadata_row(
+                                &metadata_items,
+                                partition.clone(),
+                                position,
+                                *upstream_time_millis,
+                            );
+
                             if value_bytes_remaining.is_empty() {
                                 session.give(DecodeResult {
                                     key: None,
                                     value: Some(value),
-                                    position: n_seen.next(),
+                                    position,
+                                    metadata,
                                 });
                                 value_buf = vec![];
                                 break;
@@ -691,7 +731,8 @@ where
                                 session.give(DecodeResult {
                                     key: None,
                                     value: Some(value),
-                                    position: n_seen.next(),
+                                    position,
+                                    metadata,
                                 });
                             }
                             if is_err {
@@ -713,4 +754,51 @@ where
         }
     });
     (results, None)
+}
+
+fn to_metadata_row(
+    metadata_items: &[IncludedColumnSource],
+    partition: PartitionId,
+    position: Option<i64>,
+    upstream_time_millis: Option<i64>,
+) -> Row {
+    let mut row = Row::default();
+    match partition {
+        PartitionId::Kafka(partition) => {
+            for item in metadata_items.iter() {
+                match item {
+                    IncludedColumnSource::Partition => row.push(Datum::from(partition)),
+                    IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => row
+                        .push(Datum::from(
+                            position.expect("kafka sources always have position"),
+                        )),
+                    IncludedColumnSource::Timestamp => {
+                        let ts =
+                            upstream_time_millis.expect("kafka sources always have upstream_time");
+                        let (secs, mut millis) = (ts / 1000, (ts.abs() % 1000) as u32);
+                        if secs < 0 {
+                            millis = 1000 - millis;
+                        }
+
+                        row.push(Datum::from(NaiveDateTime::from_timestamp(
+                            secs,
+                            millis * 1_000_000,
+                        )))
+                    }
+                    IncludedColumnSource::Topic => unreachable!("Topic is not implemented yet"),
+                }
+            }
+        }
+        PartitionId::None => {
+            for item in metadata_items.iter() {
+                match item {
+                    IncludedColumnSource::DefaultPosition => row.push(Datum::from(
+                        position.expect("kafka sources always have position"),
+                    )),
+                    _ => unreachable!("Only Kafka supports non-defaultposition metadata items"),
+                }
+            }
+        }
+    }
+    row
 }

@@ -54,6 +54,22 @@ product_detail_id  true      text
 code               true      text
 mz_line_no         false     bigint
 
+# verify metadata column renaming
+> CREATE MATERIALIZED SOURCE regex_source_renamed_cols (ip, ts, path, search_kw, product_detail_id, code, lineno)
+  FROM FILE '${testdrive.temp-dir}/request.log'
+  FORMAT REGEX '(?P<foo1>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<foo2>[^]]+)\] "(?P<foo3>(?:GET /search/\?kw=(?P<foo4>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<foo5>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<foo6>\d{3}) -'
+
+> SHOW COLUMNS FROM regex_source_renamed_cols
+name               nullable  type
+---------------------------------
+ip                 true      text
+ts                 true      text
+path               true      text
+search_kw          true      text
+product_detail_id  true      text
+code               true      text
+lineno             false     bigint
+
 > SELECT * FROM regex_source_named_cols ORDER BY mz_line_no
 ip            ts                      path                                           search_kw           product_detail_id  code  mz_line_no
 --------------------------------------------------------------------------------------------------------------------------------------------

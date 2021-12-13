@@ -16,8 +16,8 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
 use persist_types::Codec;
-use timely::dataflow::operators::{Concat, OkErr, ToStream};
-use timely::dataflow::operators::{Map, UnorderedInput};
+use serde::{Deserialize, Serialize};
+use timely::dataflow::operators::{Concat, Map, OkErr, ToStream, UnorderedInput};
 use timely::dataflow::Scope;
 
 use persist::operators::source::PersistedSource;
@@ -29,7 +29,7 @@ use expr::{GlobalId, Id, SourceInstanceId};
 use ore::cast::CastFrom;
 use ore::now::NowFn;
 use ore::result::ResultExt;
-use repr::{Datum, RelationDesc, Row, ScalarType, Timestamp};
+use repr::{RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -40,13 +40,13 @@ use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
 use crate::server::LocalInput;
+use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
-use crate::source::SourceConfig;
 use crate::source::{
-    self, metrics::SourceBaseMetrics, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
-    PostgresSourceReader, PubNubSourceReader, S3SourceReader,
+    self, DecodeResult, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
+    PersistentTimestampBindingsConfig, PostgresSourceReader, PubNubSourceReader, S3SourceReader,
+    SourceConfig,
 };
-use crate::source::{DecodeResult, PersistentTimestampBindingsConfig};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -355,7 +355,11 @@ where
 
                         // TODO(petrosagg): remove this inconsistency once INCLUDE (offset)
                         // syntax is implemented
-                        let push_metadata = !matches!(value_encoding, DataEncoding::Avro(_));
+                        //
+                        // Default metadata is mostly configured in planning, but we need it here for upsert
+                        let default_metadata = provide_default_metadata(&envelope, &value_encoding);
+
+                        let metadata_columns = connector.metadata_column_types(default_metadata);
 
                         // CDCv2 can't quite be slotted in to the below code, since it determines
                         // its own diffs/timestamps as part of decoding.
@@ -394,6 +398,7 @@ where
                                     value_encoding,
                                     &self.debug_name,
                                     &envelope,
+                                    metadata_columns,
                                     &mut linear_operators,
                                     fast_forwarded,
                                     render_state.metrics.clone(),
@@ -403,6 +408,7 @@ where
                                     value_encoding,
                                     &self.debug_name,
                                     &envelope,
+                                    metadata_columns,
                                     &mut linear_operators,
                                     fast_forwarded,
                                     render_state.metrics.clone(),
@@ -419,6 +425,7 @@ where
                             // render envelopes
                             match &envelope {
                                 SourceEnvelope::Debezium(dedupe_strategy, mode) => {
+                                    // TODO: this needs to happen separately from trackstate
                                     let results = match mode {
                                         DebeziumMode::Upsert => {
                                             let mut trackstate = (
@@ -428,24 +435,36 @@ where
                                                     self.dataflow_id,
                                                 ),
                                             );
-                                            results.flat_map(move |result| {
+                                            results.flat_map(move |data| {
+                                                let DecodeResult {
+                                                    key,
+                                                    value,
+                                                    metadata,
+                                                    position: _,
+                                                } = data;
                                                 let (keys, metrics) = &mut trackstate;
-                                                result.value.map(|value| match result.key {
+                                                value.map(|value| match key {
                                                     None => Err(DecodeError::Text(
                                                         "All upsert keys should decode to a value."
                                                             .into(),
                                                     )),
                                                     Some(Err(e)) => Err(e),
                                                     Some(Ok(key)) => rewrite_for_upsert(
-                                                        value, keys, key, metrics,
+                                                        value, metadata, keys, key, metrics,
                                                     ),
                                                 })
                                             })
                                         }
-                                        DebeziumMode::Plain => {
-                                            results.flat_map(|DecodeResult { value, .. }| value)
-                                        }
+                                        DebeziumMode::Plain => results.flat_map(|data| {
+                                            data.value.map(|res| {
+                                                res.map(|mut val| {
+                                                    val.extend(data.metadata.into_iter());
+                                                    val
+                                                })
+                                            })
+                                        }),
                                     };
+
                                     let (stream, errors) = results.ok_err(ResultExt::err_into);
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
@@ -472,7 +491,8 @@ where
                                         stream,
                                         self.debug_name.to_string(),
                                         scope.index(),
-                                        // Debezium decoding has produced two extra fields, with the dedupe information and the upstream time in millis
+                                        // Debezium decoding has produced two extra fields, with the
+                                        // dedupe information and the upstream time in millis
                                         src.bare_desc.arity() + 2,
                                         dbz_key_indices,
                                     );
@@ -483,18 +503,6 @@ where
                                     // TODO: use the key envelope to figure out when to add keys.
                                     // The opeator currently does it unconditionally
                                     let upsert_operator_name = format!("{}-upsert", source_name);
-
-                                    // append position metadata to the output row
-                                    let results = if push_metadata {
-                                        results.map(|mut d| {
-                                            if let Some(Ok(ref mut row)) = d.value {
-                                                row.push(Datum::from(d.position));
-                                            }
-                                            d
-                                        })
-                                    } else {
-                                        results
-                                    };
 
                                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                                         &upsert_operator_name,
@@ -552,8 +560,10 @@ where
                                     (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                                 }
                                 SourceEnvelope::None(key_envelope) => {
+                                    let results = append_metadata_to_value(results);
+
                                     let (stream, errors) =
-                                        flatten_results(key_envelope, push_metadata, results)
+                                        flatten_results_prepend_keys(key_envelope, results)
                                             .ok_err(ResultExt::err_into);
                                     let stream = stream.pass_through("decode-ok").as_collection();
                                     let errors =
@@ -740,72 +750,80 @@ fn get_persist_config(
     Ok(PersistentSourceConfig::new(bindings_config, upsert_config))
 }
 
-/// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
-fn flatten_results<G>(
-    key_envelope: &KeyEnvelope,
-    push_metadata: bool,
+/// After handling metadata insertion, we split streams into key/value parts for convenience
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
+struct KV {
+    key: Option<Result<Row, DecodeError>>,
+    val: Option<Result<Row, DecodeError>>,
+}
+
+fn append_metadata_to_value<G>(
     results: timely::dataflow::Stream<G, DecodeResult>,
+) -> timely::dataflow::Stream<G, KV>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    results.map(move |res| {
+        let val = res.value.map(|val_result| {
+            val_result.map(|mut val| {
+                if !res.metadata.is_empty() {
+                    val.extend(res.metadata.into_iter());
+                }
+
+                val
+            })
+        });
+
+        KV { val, key: res.key }
+    })
+}
+
+/// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
+fn flatten_results_prepend_keys<G>(
+    key_envelope: &KeyEnvelope,
+    results: timely::dataflow::Stream<G, KV>,
 ) -> timely::dataflow::Stream<G, Result<Row, DecodeError>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     match key_envelope {
-        KeyEnvelope::None => results.flat_map(move |res| {
-            if push_metadata {
-                res.value.map(|result| {
-                    let mut row = result?;
-                    row.push(Datum::from(res.position));
-                    Ok(row)
-                })
-            } else {
-                res.value
-            }
-        }),
-        KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => {
-            results.flat_map(flatten_key_value).map(move |maybe_kv| {
-                maybe_kv.map(|(mut key, value, position)| {
+        KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),
+        KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
+            .flat_map(raise_key_value_errors)
+            .map(move |maybe_kv| {
+                maybe_kv.map(|(mut key, value)| {
                     key.extend_by_row(&value);
-                    if push_metadata {
-                        key.push(Datum::from(position));
-                    }
                     key
                 })
-            })
-        }
+            }),
         KeyEnvelope::Named(_) => {
-            results.flat_map(flatten_key_value).map(move |maybe_kv| {
-                maybe_kv.map(|(mut key, value, position)| {
-                    // Named semantics rename a key that is a single column, and encode a
-                    // multi-column field as a struct with that name
-                    let mut row = if key.iter().nth(1).is_none() {
-                        key.extend_by_row(&value);
-                        key
-                    } else {
-                        let mut new_row = Row::default();
-                        new_row.push_list(key.iter());
-                        new_row.extend_by_row(&value);
-                        new_row
-                    };
-                    if push_metadata {
-                        row.push(Datum::from(position));
-                    }
-                    row
+            results
+                .flat_map(raise_key_value_errors)
+                .map(move |maybe_kv| {
+                    maybe_kv.map(|(mut key, value)| {
+                        // Named semantics rename a key that is a single column, and encode a
+                        // multi-column field as a struct with that name
+                        let row = if key.iter().nth(1).is_none() {
+                            key.extend_by_row(&value);
+                            key
+                        } else {
+                            let mut new_row = Row::default();
+                            new_row.push_list(key.iter());
+                            new_row.extend_by_row(&value);
+                            new_row
+                        };
+                        row
+                    })
                 })
-            })
         }
     }
 }
 
 /// Handle possibly missing key or value portions of messages
-fn flatten_key_value(result: DecodeResult) -> Option<Result<(Row, Row, Option<i64>), DecodeError>> {
-    let DecodeResult {
-        key,
-        value,
-        position,
-    } = result;
-    match (key, value) {
+fn raise_key_value_errors(KV { key, val }: KV) -> Option<Result<(Row, Row), DecodeError>> {
+    match (key, val) {
         (Some(key), Some(value)) => match (key, value) {
-            (Ok(key), Ok(value)) => Some(Ok((key, value, position))),
+            (Ok(key), Ok(value)) => Some(Ok((key, value))),
             // always prioritize the value error if either or both have an error
             (_, Err(e)) => Some(Err(e)),
             (Err(e), _) => Some(Err(e)),
