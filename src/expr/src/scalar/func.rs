@@ -1749,7 +1749,10 @@ fn date_part_interval_inner(
         | DateTimeUnits::DayOfWeek
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+            feature: format!("'{}' timestamp units", units),
+            issue_no: None,
+        }),
     }
 }
 
@@ -1789,7 +1792,10 @@ where
         DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+            feature: format!("'{}' timestamp units", units),
+            issue_no: None,
+        }),
     }
 }
 
@@ -1798,16 +1804,16 @@ where
     T: TimestampLike,
 {
     let stride_ns = if stride.months != 0 {
-        Err(EvalError::FeatureNotSupported(
+        Err(EvalError::DateBinOutOfRange(
             "timestamps cannot be binned into intervals containing months or years".to_string(),
         ))
     } else if stride.duration <= 0 {
-        Err(EvalError::FeatureNotSupported(
+        Err(EvalError::DateBinOutOfRange(
             "stride must be greater than zero".to_string(),
         ))
     } else {
         i64::try_from(stride.duration).map_err(|_| {
-            EvalError::FeatureNotSupported("stride cannot exceed 2^63 nanoseconds".to_string())
+            EvalError::DateBinOutOfRange("stride cannot exceed 2^63 nanoseconds".to_string())
         })
     }?;
 
@@ -1817,7 +1823,7 @@ where
     let sub_stride = origin > source;
 
     let tm_diff = (source - origin.clone()).num_nanoseconds().ok_or_else(|| {
-        EvalError::FeatureNotSupported(
+        EvalError::DateBinOutOfRange(
             "source and origin must not differ more than 2^63 nanoseconds".to_string(),
         )
     })?;
@@ -1868,7 +1874,10 @@ where
         | DateTimeUnits::DayOfWeek
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+            feature: format!("'{}' timestamp units", units),
+            issue_no: None,
+        }),
     }
 }
 
