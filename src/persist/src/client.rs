@@ -24,9 +24,9 @@ use crate::error::Error;
 use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use crate::indexed::encoding::Id;
-use crate::indexed::{ListenEvent, Snapshot};
+use crate::indexed::{Cmd, ListenEvent, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
-use crate::runtime::{Cmd, RuntimeCore, RuntimeId};
+use crate::runtime::{RuntimeCmd, RuntimeCore, RuntimeId};
 use crate::storage::SeqNo;
 
 /// A clone-able handle to the persistence runtime.
@@ -78,11 +78,11 @@ impl RuntimeClient {
         name: &str,
     ) -> (StreamWriteHandle<K, V>, StreamReadHandle<K, V>) {
         let (tx, rx) = PFuture::new();
-        self.core.send(Cmd::Register(
+        self.core.send(RuntimeCmd::IndexedCmd(Cmd::Register(
             name.to_owned(),
             (K::codec_name(), V::codec_name()),
             tx,
-        ));
+        )));
         let id = rx.recv();
         let write = StreamWriteHandle::new(name.to_owned(), id.clone(), self.clone());
         let meta = StreamReadHandle::new(name.to_owned(), id, self.clone());
@@ -96,7 +96,10 @@ impl RuntimeClient {
     // tuple or create our own Description-like return type for this.
     pub fn get_description(&self, id_str: &str) -> Result<Description<u64>, Error> {
         let (tx, rx) = PFuture::new();
-        self.core.send(Cmd::GetDescription(id_str.to_owned(), tx));
+        self.core.send(RuntimeCmd::IndexedCmd(Cmd::GetDescription(
+            id_str.to_owned(),
+            tx,
+        )));
         let seal_frontier = rx.recv()?;
         Ok(seal_frontier)
     }
@@ -106,7 +109,8 @@ impl RuntimeClient {
     ///
     /// The ids must have previously been registered.
     pub(crate) fn write(&self, updates: Vec<(Id, ColumnarRecords)>, res: PFutureHandle<SeqNo>) {
-        self.core.send(Cmd::Write(updates, res))
+        self.core
+            .send(RuntimeCmd::IndexedCmd(Cmd::Write(updates, res)))
     }
 
     /// Asynchronously advances the "sealed" frontier for the streams with the
@@ -115,7 +119,8 @@ impl RuntimeClient {
     ///
     /// The ids must have previously been registered.
     fn seal(&self, ids: &[Id], ts: u64, res: PFutureHandle<SeqNo>) {
-        self.core.send(Cmd::Seal(ids.to_vec(), ts, res))
+        self.core
+            .send(RuntimeCmd::IndexedCmd(Cmd::Seal(ids.to_vec(), ts, res)))
     }
 
     /// Asynchronously advances the compaction frontier for the streams with the
@@ -125,8 +130,10 @@ impl RuntimeClient {
     ///
     /// The ids must have previously been registered.
     fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)], res: PFutureHandle<SeqNo>) {
-        self.core
-            .send(Cmd::AllowCompaction(id_sinces.to_vec(), res))
+        self.core.send(RuntimeCmd::IndexedCmd(Cmd::AllowCompaction(
+            id_sinces.to_vec(),
+            res,
+        )))
     }
 
     /// Asynchronously returns a [crate::indexed::Snapshot] for the stream
@@ -136,7 +143,8 @@ impl RuntimeClient {
     ///
     /// The id must have previously been registered.
     fn snapshot(&self, id: Id, res: PFutureHandle<ArrangementSnapshot>) {
-        self.core.send(Cmd::Snapshot(id, res))
+        self.core
+            .send(RuntimeCmd::IndexedCmd(Cmd::Snapshot(id, res)))
     }
 
     /// Asynchronously registers a callback to be invoked on successful writes
@@ -147,7 +155,8 @@ impl RuntimeClient {
         sender: crossbeam_channel::Sender<ListenEvent>,
         res: PFutureHandle<ArrangementSnapshot>,
     ) {
-        self.core.send(Cmd::Listen(id, sender, res))
+        self.core
+            .send(RuntimeCmd::IndexedCmd(Cmd::Listen(id, sender, res)))
     }
 
     /// Synchronously closes the runtime, releasing exclusive-writer locks and
@@ -164,7 +173,8 @@ impl RuntimeClient {
     /// destroyed, false if the stream had already been destroyed previously.
     pub fn destroy(&mut self, id: &str) -> Result<bool, Error> {
         let (tx, rx) = PFuture::new();
-        self.core.send(Cmd::Destroy(id.to_owned(), tx));
+        self.core
+            .send(RuntimeCmd::IndexedCmd(Cmd::Destroy(id.to_owned(), tx)));
         rx.recv()
     }
 }

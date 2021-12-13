@@ -17,43 +17,36 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use build_info::BuildInfo;
-use differential_dataflow::trace::Description;
 use ore::metrics::MetricsRegistry;
-use timely::progress::Antichain;
 use tokio::runtime::Runtime as AsyncRuntime;
 use tokio::time;
 
 use crate::client::RuntimeClient;
 use crate::error::Error;
-use crate::indexed::arrangement::ArrangementSnapshot;
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::columnar::ColumnarRecords;
-use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Indexed, ListenEvent};
-use crate::pfuture::{PFuture, PFutureHandle};
-use crate::storage::{Blob, Log, SeqNo};
+use crate::indexed::{Cmd, Indexed};
+use crate::pfuture::PFuture;
+use crate::storage::{Blob, Log};
 use futures_executor::block_on;
 
-#[derive(Debug)]
-pub(crate) enum Cmd {
-    Register(String, (String, String), PFutureHandle<Id>),
-    Destroy(String, PFutureHandle<bool>),
-    Write(Vec<(Id, ColumnarRecords)>, PFutureHandle<SeqNo>),
-    Seal(Vec<Id>, u64, PFutureHandle<SeqNo>),
-    GetDescription(String, PFutureHandle<Description<u64>>),
-    AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
-    Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
-    Listen(
-        Id,
-        crossbeam_channel::Sender<ListenEvent>,
-        PFutureHandle<ArrangementSnapshot>,
-    ),
-    Stop(PFutureHandle<()>),
+pub(crate) enum RuntimeCmd {
+    /// A command passed directly to [Indexed] for application.
+    IndexedCmd(Cmd),
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
     Tick,
+}
+
+impl RuntimeCmd {
+    /// Fills self's response, if applicable, with Error::RuntimeShutdown.
+    pub fn fill_err_runtime_shutdown(self) {
+        match self {
+            RuntimeCmd::IndexedCmd(cmd) => cmd.fill_err_runtime_shutdown(),
+            RuntimeCmd::Tick => {}
+        }
+    }
 }
 
 /// Starts the runtime in a [std::thread].
@@ -113,7 +106,7 @@ where
         let mut interval = time::interval(config.min_step_interval / 10);
         loop {
             interval.tick().await;
-            match ticker_tx.send(Cmd::Tick) {
+            match ticker_tx.send(RuntimeCmd::Tick) {
                 Ok(_) => {}
                 Err(_) => {
                     // Runtime has shut down, we can stop ticking.
@@ -160,40 +153,26 @@ struct RuntimeHandles {
 #[derive(Debug)]
 pub(crate) struct RuntimeCore {
     handles: Mutex<Option<RuntimeHandles>>,
-    tx: crossbeam_channel::Sender<Cmd>,
+    tx: crossbeam_channel::Sender<RuntimeCmd>,
     metrics: Arc<Metrics>,
 }
 
 impl RuntimeCore {
-    pub(crate) fn send(&self, cmd: Cmd) {
+    pub(crate) fn send(&self, cmd: RuntimeCmd) {
         self.metrics.cmd_queue_in.inc();
         if let Err(crossbeam_channel::SendError(cmd)) = self.tx.send(cmd) {
             // According to the docs, a SendError can only happen if the
             // receiver has hung up, which in this case only happens if the
             // thread has exited. The thread only exits if we send it a
             // Cmd::Stop (or it panics).
-            match cmd {
-                Cmd::Stop(res) => {
-                    // Already stopped: no-op.
-                    res.fill(Ok(()))
-                }
-                Cmd::Register(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Destroy(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Write(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Seal(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::GetDescription(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::AllowCompaction(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Tick => {}
-            }
+            cmd.fill_err_runtime_shutdown();
         }
     }
 
     pub(crate) fn stop(&self) -> Result<(), Error> {
         if let Some(handles) = self.handles.lock()?.take() {
             let (tx, rx) = PFuture::new();
-            self.send(Cmd::Stop(tx));
+            self.send(RuntimeCmd::IndexedCmd(Cmd::Stop(tx)));
             // NB: Make sure there are no early returns before this `join`,
             // otherwise the runtime thread might still be cleaning up when this
             // returns (flushing out final writes, cleaning up LOCK files, etc).
@@ -230,7 +209,7 @@ impl Drop for RuntimeCore {
 
 struct RuntimeImpl<L: Log, B: Blob> {
     indexed: Indexed<L, B>,
-    rx: crossbeam_channel::Receiver<Cmd>,
+    rx: crossbeam_channel::Receiver<RuntimeCmd>,
     metrics: Arc<Metrics>,
     prev_step: Instant,
     min_step_interval: Duration,
@@ -272,7 +251,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
     fn new(
         config: RuntimeConfig,
         indexed: Indexed<L, B>,
-        rx: crossbeam_channel::Receiver<Cmd>,
+        rx: crossbeam_channel::Receiver<RuntimeCmd>,
         metrics: Arc<Metrics>,
     ) -> Self {
         RuntimeImpl {
@@ -321,42 +300,16 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         let run_start = Instant::now();
         for cmd in cmds {
             match cmd {
-                Cmd::Stop(res) => {
-                    // Finish up any pending work that we can before closing.
-                    self.indexed.step_or_log();
-                    res.fill(self.indexed.close());
-                    return false;
-                }
-                Cmd::Register(id, (key_codec_name, val_codec_name), res) => {
-                    self.indexed
-                        .register(&id, &key_codec_name, &val_codec_name, res);
-                }
-                Cmd::Destroy(id, res) => {
-                    self.indexed.destroy(&id, res);
-                }
-                Cmd::Write(updates, res) => {
-                    self.metrics.cmd_write_count.inc();
-                    self.indexed.write(updates, res);
-                }
-                Cmd::Seal(ids, ts, res) => {
-                    self.indexed.seal(ids, ts, res);
-                }
-                Cmd::GetDescription(id_str, res) => {
-                    self.indexed.get_description(&id_str, res);
-                }
-                Cmd::AllowCompaction(id_sinces, res) => {
-                    self.indexed.allow_compaction(id_sinces, res);
-                }
-                Cmd::Snapshot(id, res) => {
-                    self.indexed.snapshot(id, res);
-                }
-                Cmd::Listen(id, sender, res) => {
-                    self.indexed.listen(id, sender, res);
-                }
-                Cmd::Tick => {
+                RuntimeCmd::Tick => {
                     // This is a no-op. It's only here to give us the
                     // opportunity to hit the step logic below on some minimum
                     // interval, even when no other commands are coming in.
+                }
+                RuntimeCmd::IndexedCmd(cmd) => {
+                    if !self.indexed.apply(cmd) {
+                        more_work = false;
+                        break;
+                    }
                 }
             }
             self.metrics.cmd_run_count.inc()
@@ -428,6 +381,7 @@ mod tests {
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, OkErr, Probe};
     use timely::dataflow::ProbeHandle;
+    use timely::progress::Antichain;
 
     use crate::client::MultiWriteHandle;
     use crate::indexed::SnapshotExt;
