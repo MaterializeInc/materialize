@@ -107,6 +107,11 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- Detect and reject multiple materializations of sources that would silently
+  lose data when materialized more than once. This enables safe use of
+  unmaterialized PostgreSQL and S3 with SQS notifications sources. {{% gh 8203
+  %}}
+
 - Fix a bug in the `ILIKE` operator where matching against a [`char`] value did
   not take any trailing spaces into account {{% gh 10075 %}}. The new behavior
   matches the behavior of the `LIKE` operator.
