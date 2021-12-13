@@ -194,6 +194,26 @@ impl CatalogState {
         (indexes, unmaterialized)
     }
 
+    /// Computes the IDs of any indexes that transitively depend on this catalog
+    /// entry.
+    pub fn dependent_indexes(&self, id: GlobalId) -> Vec<GlobalId> {
+        let mut out = Vec::new();
+        self.dependent_indexes_inner(id, &mut out);
+        out
+    }
+
+    fn dependent_indexes_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
+        let entry = self.get_by_id(&id);
+        match entry.item() {
+            CatalogItem::Index(_) => out.push(id),
+            _ => {
+                for id in entry.used_by() {
+                    self.dependent_indexes_inner(*id, out)
+                }
+            }
+        }
+    }
+
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         match self.get_by_id(&id).item() {
             CatalogItem::Table(_) => true,
@@ -208,6 +228,10 @@ impl CatalogState {
 
     pub fn get_by_id(&self, id: &GlobalId) -> &CatalogEntry {
         &self.by_id[id]
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.by_id.values()
     }
 
     pub fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
@@ -766,6 +790,18 @@ impl CatalogItem {
             }
         }
     }
+
+    pub fn requires_single_materialization(&self) -> bool {
+        if let CatalogItem::Source(Source {
+            connector: SourceConnector::External { ref connector, .. },
+            ..
+        }) = self
+        {
+            connector.requires_single_materialization()
+        } else {
+            false
+        }
+    }
 }
 
 impl CatalogEntry {
@@ -777,6 +813,14 @@ impl CatalogEntry {
     /// Returns the [`sql::func::Func`] associated with this `CatalogEntry`.
     pub fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
         self.item.func(&self.name)
+    }
+
+    /// Return the [`Index`] if this entry is an Index, else None.
+    pub fn index(&self) -> Option<&Index> {
+        match self.item() {
+            CatalogItem::Index(idx) => Some(idx),
+            _ => None,
+        }
     }
 
     /// Returns the [`dataflow_types::SourceConnector`] associated with

@@ -139,7 +139,7 @@ use sql::plan::{
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
     ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
     MutationKind, Params, PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    SetVariablePlan, ShowVariablePlan, TailPlan,
 };
 use sql::plan::{OptimizerConfig, StatementDesc, View};
 use transform::Optimizer;
@@ -573,7 +573,7 @@ where
                                 name,
                                 index_id,
                                 description,
-                            );
+                            )?;
                             self.ship_dataflow(df).await?;
                         }
                     }
@@ -1715,7 +1715,7 @@ where
                     envelope: Some(sink.envelope),
                     as_of,
                 };
-                Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description))
+                Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description)?)
             })
             .await?;
 
@@ -2120,7 +2120,7 @@ where
                     if let Some((name, description)) =
                         Self::prepare_index_build(builder.catalog, &index_id)
                     {
-                        let df = builder.build_index_dataflow(name, index_id, description);
+                        let df = builder.build_index_dataflow(name, index_id, description)?;
                         Ok(Some(df))
                     } else {
                         Ok(None)
@@ -2163,24 +2163,6 @@ where
         session: &mut Session,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        // TODO(petrosagg): remove this check once postgres sources are properly supported
-        if matches!(
-            plan,
-            CreateSourcePlan {
-                source: Source {
-                    connector: SourceConnector::External {
-                        connector: ExternalSourceConnector::Postgres(_),
-                        ..
-                    },
-                    ..
-                },
-                materialized: false,
-                ..
-            }
-        ) {
-            coord_bail!("Unmaterialized Postgres sources are not supported yet");
-        }
-
         let since_ts = {
             match &plan {
                 CreateSourcePlan {
@@ -2207,7 +2189,7 @@ where
                         if let Some((name, description)) =
                             Self::prepare_index_build(builder.catalog, &index_id)
                         {
-                            let df = builder.build_index_dataflow(name, index_id, description);
+                            let df = builder.build_index_dataflow(name, index_id, description)?;
                             dfs.push(df);
                         }
                     }
@@ -2484,7 +2466,7 @@ where
         let (ops, index_id) = self.generate_view_ops(
             session,
             plan.name,
-            plan.view,
+            plan.view.clone(),
             plan.replace,
             plan.materialize,
         )?;
@@ -2493,9 +2475,10 @@ where
             .catalog_transact(ops, |mut builder| {
                 if let Some(index_id) = index_id {
                     if let Some((name, description)) =
-                        Self::prepare_index_build(builder.catalog, &index_id)
+                        Self::prepare_index_build(&builder.catalog, &index_id)
                     {
-                        let df = builder.build_index_dataflow(name, index_id, description);
+                        let df = builder.build_index_dataflow(name, index_id, description)?;
+                        //single_materialization::validate(&previous_catalog, &view.depends_on)?;
                         return Ok(Some(df));
                     }
                 }
@@ -2541,7 +2524,10 @@ where
                     if let Some((name, description)) =
                         Self::prepare_index_build(builder.catalog, &index_id)
                     {
-                        let df = builder.build_index_dataflow(name, index_id, description);
+                        // for (_name, view) in &views {
+                        //     single_materialization::validate(previous_catalog, &view.depends_on)?;
+                        // }
+                        let df = builder.build_index_dataflow(name, index_id, description)?;
                         dfs.push(df);
                     }
                 }
@@ -2591,7 +2577,7 @@ where
         match self
             .catalog_transact(vec![op], |mut builder| {
                 if let Some((name, description)) = Self::prepare_index_build(builder.catalog, &id) {
-                    let df = builder.build_index_dataflow(name, id, description);
+                    let df = builder.build_index_dataflow(name, id, description)?;
                     Ok(Some(df))
                 } else {
                     Ok(None)
@@ -3089,7 +3075,7 @@ where
         let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
         dataflow.set_as_of(Antichain::from_elem(timestamp));
         self.dataflow_builder()
-            .import_view_into_dataflow(&view_id, &source, &mut dataflow);
+            .import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
         dataflow.export_index(
             index_id,
             IndexDesc {
@@ -3173,9 +3159,9 @@ where
                 strict: !with_snapshot,
             },
         };
-        let df = self
-            .dataflow_builder()
-            .build_sink_dataflow(sink_name, sink_id, sink_description);
+        let df =
+            self.dataflow_builder()
+                .build_sink_dataflow(sink_name, sink_id, sink_description)?;
         self.ship_dataflow(df).await?;
 
         let resp = ExecuteResponse::Tailing { rx };
@@ -3445,7 +3431,7 @@ where
                     &GlobalId::Explain,
                     &optimized_plan,
                     &mut dataflow,
-                );
+                )?;
                 transform::optimize_dataflow(&mut dataflow, coord.catalog.enabled_indexes())?;
                 timings.optimization = Some(start.elapsed());
                 Ok(dataflow)
@@ -3891,7 +3877,7 @@ where
                 .catalog_transact(ops, |mut builder| {
                     let (name, description) = Self::prepare_index_build(builder.catalog, &plan.id)
                         .expect("index enabled");
-                    let df = builder.build_index_dataflow(name, plan.id, description);
+                    let df = builder.build_index_dataflow(name, plan.id, description)?;
                     Ok(df)
                 })
                 .await?;

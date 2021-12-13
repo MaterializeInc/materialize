@@ -351,6 +351,7 @@ impl ErrorResponse {
             CoordError::Eval(_) => SqlState::INTERNAL_ERROR,
             CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             CoordError::IncompleteTimestamp(_) => SqlState::SQL_STATEMENT_NOT_YET_COMPLETE,
+            CoordError::InvalidMultipleMaterialization { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,

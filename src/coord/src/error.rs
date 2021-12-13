@@ -44,6 +44,12 @@ pub enum CoordError {
     IncompleteTimestamp(Vec<expr::GlobalId>),
     /// Specified index is disabled, but received non-enabling update request
     InvalidAlterOnDisabledIndex(String),
+    /// Attempted to build a materialization on a source that does not allow multiple materializatons
+    InvalidMultipleMaterialization {
+        base_source: String,
+        existing_index: String,
+        count: usize,
+    },
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
     /// The value of the specified parameter is incorrect
@@ -246,6 +252,17 @@ impl fmt::Display for CoordError {
             ),
             CoordError::InvalidAlterOnDisabledIndex(name) => {
                 write!(f, "invalid ALTER on disabled index {}", name.quoted())
+            }
+            CoordError::InvalidMultipleMaterialization {
+                base_source,
+                existing_index,
+                count,
+            } => {
+                write!(
+                    f,
+                    "Cannot create second materialization on {}, already materialized by {} (and {} other items)",
+                    base_source, existing_index, count - 1
+                )
             }
             CoordError::InvalidParameterType(p) => write!(
                 f,

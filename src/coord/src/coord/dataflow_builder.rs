@@ -66,11 +66,15 @@ where
 impl<'a> DataflowBuilder<'a> {
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
-    fn import_into_dataflow(&mut self, id: &GlobalId, dataflow: &mut DataflowDesc) {
+    fn import_into_dataflow(
+        &mut self,
+        id: &GlobalId,
+        dataflow: &mut DataflowDesc,
+    ) -> Result<(), CoordError> {
         maybe_grow(|| {
             // Avoid importing the item redundantly.
             if dataflow.is_imported(id) {
-                return;
+                return Ok(());
             }
 
             // A valid index is any index on `id` that is known to the dataflow
@@ -115,6 +119,28 @@ impl<'a> DataflowBuilder<'a> {
                         );
                     }
                     CatalogItem::Source(source) => {
+                        if source.connector.requires_single_materialization() {
+                            let dependent_indexes = self.catalog.dependent_indexes(*id);
+                            // If this source relies on any pre-existing indexes (i.e., indexes
+                            // that we're not building as part of this `DataflowBuilder`), we're
+                            // attempting to reinstantiate a single-use source.
+                            let intersection = self.indexes.intersection(dependent_indexes);
+                            if !intersection.is_empty() {
+                                eprintln!("intersection {:?}", intersection);
+                                for i in &intersection {
+                                    eprintln!("    {:?}", self.catalog.get_by_id(i));
+                                }
+                                let existing_index = self.catalog.get_by_id(&intersection[0]);
+
+                                //let base = catalog.get_by_id(intersection[0]).name().item.clone();
+                                return Err(CoordError::InvalidMultipleMaterialization {
+                                    base_source: entry.name().item.clone(),
+                                    existing_index: existing_index.name().item.clone(),
+                                    count: intersection.len(),
+                                });
+                            }
+                        }
+
                         let source_connector = dataflow_types::SourceDesc {
                             name: entry.name().to_string(),
                             connector: source.connector.clone(),
@@ -140,16 +166,17 @@ impl<'a> DataflowBuilder<'a> {
                                     _ => {}
                                 };
                             });
-                            self.import_view_into_dataflow(id, &transformation, dataflow);
+                            self.import_view_into_dataflow(id, &transformation, dataflow)?;
                         }
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();
-                        self.import_view_into_dataflow(id, &expr, dataflow);
+                        self.import_view_into_dataflow(id, &expr, dataflow)?;
                     }
                     _ => unreachable!(),
                 }
             }
+            Ok(())
         })
     }
 
@@ -160,10 +187,10 @@ impl<'a> DataflowBuilder<'a> {
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
-    ) {
+    ) -> Result<(), CoordError> {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
         for get_id in view.global_uses() {
-            self.import_into_dataflow(&get_id, dataflow);
+            self.import_into_dataflow(&get_id, dataflow)?;
 
             // TODO: indexes should be imported after the optimization process, and only those
             // actually used by the optimized plan
@@ -185,6 +212,7 @@ impl<'a> DataflowBuilder<'a> {
             }
         }
         dataflow.insert_view(*view_id, view.clone());
+        Ok(())
     }
 
     /// Builds a dataflow description for the index with the specified ID.
@@ -193,13 +221,13 @@ impl<'a> DataflowBuilder<'a> {
         name: String,
         id: GlobalId,
         index_description: dataflow_types::IndexDesc,
-    ) -> DataflowDesc {
+    ) -> Result<DataflowDesc, CoordError> {
         let on_entry = self.catalog.get_by_id(&index_description.on_id);
         let on_type = on_entry.desc().unwrap().typ().clone();
         let mut dataflow = DataflowDesc::new(name);
-        self.import_into_dataflow(&index_description.on_id, &mut dataflow);
+        self.import_into_dataflow(&index_description.on_id, &mut dataflow)?;
         dataflow.export_index(id, index_description, on_type);
-        dataflow
+        Ok(dataflow)
     }
 
     /// Builds a dataflow description for the sink with the specified name,
@@ -212,11 +240,11 @@ impl<'a> DataflowBuilder<'a> {
         name: String,
         id: GlobalId,
         sink_description: dataflow_types::SinkDesc,
-    ) -> DataflowDesc {
+    ) -> Result<DataflowDesc, CoordError> {
         let mut dataflow = DataflowDesc::new(name);
         dataflow.set_as_of(sink_description.as_of.frontier.clone());
-        self.import_into_dataflow(&sink_description.from, &mut dataflow);
+        self.import_into_dataflow(&sink_description.from, &mut dataflow)?;
         dataflow.export_sink(id, sink_description);
-        dataflow
+        Ok(dataflow)
     }
 }
