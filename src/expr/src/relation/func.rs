@@ -992,7 +992,7 @@ fn generate_subscripts_array(
             .expect("array dimensions must be a usize"),
     ) {
         Some(requested_dim) => generate_series::<i32>(
-            1,
+            requested_dim.lower_bound,
             requested_dim
                 .length
                 .try_into()

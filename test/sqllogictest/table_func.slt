@@ -1133,3 +1133,8 @@ SELECT generate_subscripts('{{1,2,3,4}, {5,6,7,8}}'::int[], 1) AS s;
 
 query error multiple table functions in select projections not yet supported, see https://github.com/MaterializeInc/materialize/issues/1546 for more details
 SELECT generate_subscripts('{1,2,3,4}'::int[], 1), repeat_row(generate_series) AS s;
+
+# test lower bound, this should return indices 2,3,4
+# but currently we dont support this syntax
+query error invalid input syntax for type array
+SELECT generate_subscripts('[2:4]={1,2,3,4}'::int[], 1) AS s;
