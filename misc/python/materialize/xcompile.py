@@ -83,11 +83,8 @@ def cargo(arch: Arch, subcommand: str, rustflags: List[str]) -> List[str]:
     ldflags = []
     rustflags += ["-Clink-arg=-Wl,--compress-debug-sections=zlib"]
 
-    if not (arch == Arch.X86_64 and sys.platform == "darwin"):
-        # The cross-compiling toolchain that bin/xcompile installs on macOS
-        # does not support lld.
-        #
-        # TODO(benesch): use a newer cross toolchain.
+    if not sys.platform == "darwin":
+        # lld is not yet easy to install on macOS.
         ldflags += ["-fuse-ld=lld"]
         rustflags += ["-Clink-arg=-fuse-ld=lld"]
 
@@ -160,23 +157,19 @@ def _enter_builder(arch: Arch) -> List[str]:
     ), f"target architecture {arch} does not match host architecture {Arch.host()}"
     if "MZ_DEV_CI_BUILDER" in os.environ:
         return []
-    elif arch == Arch.X86_64 and sys.platform == "darwin":
-        # Building in Docker for Mac is painfully slow, so for x86_64 we
-        # install a cross-compiling toolchain on the host and use that
-        # instead.
-        _bootstrap_darwin_x86_64()
+    elif sys.platform == "darwin":
+        # Building in Docker for Mac is painfully slow, so we install a
+        # cross-compiling toolchain on the host and use that instead.
+        _bootstrap_darwin(arch)
         return []
     else:
         return ["bin/ci-builder", "run", "stable"]
 
 
-def _bootstrap_darwin_x86_64() -> None:
-    BOOTSTRAP_VERSION = "1"
+def _bootstrap_darwin(arch: Arch) -> None:
+    BOOTSTRAP_VERSION = "2"
     BOOTSTRAP_FILE = (
-        Path(os.environ["MZ_ROOT"])
-        / "target"
-        / "x86_64-unknown-linux-gnu"
-        / ".xcompile-bootstrap"
+        Path(os.environ["MZ_ROOT"]) / "target" / target(arch) / ".xcompile-bootstrap"
     )
     try:
         contents = BOOTSTRAP_FILE.read_text()
@@ -184,7 +177,7 @@ def _bootstrap_darwin_x86_64() -> None:
         contents = ""
     if contents == BOOTSTRAP_VERSION:
         return
-    spawn.runv(["brew", "install", "SergioBenitez/osxct/x86_64-unknown-linux-gnu"])
-    spawn.runv(["rustup", "target", "add", "x86_64-unknown-linux-gnu"])
+    spawn.runv(["brew", "install", f"messense/macos-cross-toolchains/{target(arch)}"])
+    spawn.runv(["rustup", "target", "add", target(arch)])
     BOOTSTRAP_FILE.parent.mkdir(exist_ok=True)
     BOOTSTRAP_FILE.write_text(BOOTSTRAP_VERSION)
