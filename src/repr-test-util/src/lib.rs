@@ -16,8 +16,8 @@ use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
 
 use lowertest::{
-    deserialize_optional, gen_reflect_info_func, GenericTestDeserializeContext, MzEnumReflect,
-    MzStructReflect, ReflectedTypeInfo,
+    deserialize_optional, gen_reflect_info_func, GenericTestDeserializeContext, MzReflect,
+    ReflectedTypeInfo,
 };
 use ore::str::StrExt;
 use repr::adt::numeric::Numeric;

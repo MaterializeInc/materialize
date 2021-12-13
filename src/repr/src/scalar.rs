@@ -19,7 +19,7 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use lowertest::MzEnumReflect;
+use lowertest::MzReflect;
 
 use crate::adt::array::Array;
 use crate::adt::char::Char;
@@ -828,17 +828,7 @@ impl fmt::Display for Datum<'_> {
 /// There is a direct correspondence between `Datum` variants and `ScalarType`
 /// variants.
 #[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    Ord,
-    PartialOrd,
-    Hash,
-    EnumKind,
-    MzEnumReflect,
+    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, EnumKind, MzReflect,
 )]
 #[enum_kind(ScalarBaseType, derive(Hash))]
 pub enum ScalarType {

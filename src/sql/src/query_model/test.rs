@@ -268,7 +268,7 @@ impl ExprHumanizer for TestCatalog {
 /// Contains the arguments for a command for [TestCatalog].
 ///
 /// See [lowertest] for the command syntax.
-#[derive(Debug, Serialize, Deserialize, MzEnumReflect)]
+#[derive(Debug, Serialize, Deserialize, MzReflect)]
 pub enum TestCatalogCommand {
     /// Insert a source into the catalog.
     Defsource {
