@@ -22,7 +22,7 @@ use crate::indexed::arrangement::Arrangement;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{BlobTraceBatch, TraceBatchMeta};
 use crate::pfuture::PFuture;
-use crate::storage::Blob;
+use crate::storage::{Blob, BlobRead};
 
 /// A request to merge two trace batches and write the results to blob storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,7 +59,7 @@ pub struct Maintainer<B> {
     runtime: Arc<Runtime>,
 }
 
-impl<B: Blob> Maintainer<B> {
+impl<B: BlobRead> Maintainer<B> {
     /// Returns a new [Maintainer].
     pub fn new(blob: BlobCache<B>, runtime: Arc<Runtime>) -> Self {
         Maintainer {
@@ -67,7 +67,9 @@ impl<B: Blob> Maintainer<B> {
             runtime,
         }
     }
+}
 
+impl<B: Blob> Maintainer<B> {
     /// Asynchronously runs the requested compaction on the work pool provided
     /// at construction time.
     pub fn compact_trace(&self, req: CompactTraceReq) -> PFuture<CompactTraceRes> {

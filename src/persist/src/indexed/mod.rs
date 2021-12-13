@@ -46,6 +46,8 @@ use crate::storage::{Blob, BlobRead, Log, SeqNo};
 /// WIP
 #[derive(Debug)]
 pub enum CmdRead {
+    /// WIP
+    Load(String, (String, String), PFutureHandle<Option<Id>>),
     /// Returns a [Description] of the stream identified by `id_str`.
     //
     // TODO: We might want to think about returning only the compaction frontier
@@ -221,12 +223,12 @@ struct AppliedState {
     arrangements: BTreeMap<Id, Arrangement>,
 }
 
-impl<L: Log, B: Blob> Indexed<L, B> {
+impl<L: Log, B: BlobRead> Indexed<L, B> {
     /// Returns a new Indexed, initializing each Unsealed and Trace with the
     /// existing data for them in the blob storage, if any.
     pub fn new(
         mut log: L,
-        mut blob: BlobCache<B>,
+        blob: BlobCache<B>,
         maintainer: Maintainer<B>,
         metrics: Metrics,
     ) -> Result<Self, Error> {
@@ -242,9 +244,10 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 if let Err(err) = log.close() {
                     log::warn!("error closing log: {}", err);
                 }
-                if let Err(err) = blob.close() {
-                    log::warn!("error closing blob: {}", err);
-                }
+                // WIP
+                // if let Err(err) = blob.close() {
+                //     log::warn!("error closing blob: {}", err);
+                // }
                 err
             })?
             .unwrap_or_default();
@@ -472,6 +475,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 self.apply_unbatched_cmd(|state, _, _| state.do_destroy(&name))
             })()),
 
+            Cmd::CmdRead(CmdRead::Load(name, (key_codec_name, val_codec_name), res)) => {
+                res.fill((|| {
+                    self.drain_pending()?;
+                    self.state.do_load(&name, &key_codec_name, &val_codec_name)
+                })())
+            }
             Cmd::CmdRead(CmdRead::GetDescription(name, res)) => res.fill((|| {
                 self.drain_pending()?;
                 self.state.do_get_description(&name)
@@ -511,6 +520,11 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
     pub fn apply_read(&mut self, cmd: CmdRead) {
         debug_assert_eq!(self.validate_pending_empty(), Ok(()));
         match cmd {
+            CmdRead::Load(name, (key_codec_name, val_codec_name), res) => res.fill((|| {
+                self.validate_pending_empty()?;
+                self.state.do_load(&name, &key_codec_name, &val_codec_name)
+            })(
+            )),
             CmdRead::GetDescription(name, res) => res.fill((|| {
                 self.validate_pending_empty()?;
                 self.state.do_get_description(&name)
@@ -528,12 +542,12 @@ impl<L: Log, B: BlobRead> Indexed<L, B> {
 }
 
 impl AppliedState {
-    fn do_register(
+    fn do_load(
         &mut self,
         id_str: &str,
         key_codec_name: &str,
         val_codec_name: &str,
-    ) -> Result<Id, Error> {
+    ) -> Result<Option<Id>, Error> {
         if self.graveyard.iter().any(|r| r.name == id_str) {
             return Err(Error::from(format!(
                 "invalid registration: stream {} already destroyed",
@@ -556,8 +570,21 @@ impl AppliedState {
                         val_codec_name, s.val_codec_name
                     )));
                 }
-                s.id
+                Some(s.id)
             }
+            None => None,
+        };
+        Ok(id)
+    }
+
+    fn do_register(
+        &mut self,
+        id_str: &str,
+        key_codec_name: &str,
+        val_codec_name: &str,
+    ) -> Result<Id, Error> {
+        let id = match self.do_load(id_str, key_codec_name, val_codec_name)? {
+            Some(id) => id,
             None => {
                 let id = self.serialize_meta().next_stream_id();
                 self.id_mapping.push(StreamRegistration {

@@ -30,7 +30,7 @@ use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 use tokio::time;
 
-use crate::error::Error;
+use crate::error::{Error, ErrorLog};
 use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
@@ -39,7 +39,7 @@ use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::{Cmd, CmdRead, Indexed, ListenFn, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
-use crate::storage::{Blob, Log, SeqNo};
+use crate::storage::{Blob, BlobRead, Log, SeqNo};
 use futures_executor::block_on;
 
 enum RuntimeCmd {
@@ -48,6 +48,12 @@ enum RuntimeCmd {
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
     Tick,
+}
+
+#[derive(Debug)]
+enum RuntimeReadCmd {
+    CmdRead(CmdRead),
+    Stop(PFutureHandle<()>),
 }
 
 /// Starts the runtime in a [std::thread].
@@ -128,10 +134,7 @@ where
     });
 
     // Construct the client.
-    let handles = Mutex::new(Some(RuntimeHandles {
-        impl_handle,
-        ticker_handle,
-    }));
+    let handles = Mutex::new(Some(RuntimeHandles::Full(impl_handle, ticker_handle)));
     let sender = CmdReadSender::Full(tx.clone());
     let read = RuntimeCoreRead {
         handles,
@@ -143,6 +146,64 @@ where
         tx,
     };
     let client = RuntimeClient {
+        id,
+        core: Arc::new(core),
+    };
+
+    // Explictly drop the pool guard so the lifetime is obvious.
+    drop(pool_guard);
+
+    Ok(client)
+}
+
+/// WIP
+pub fn start_read<L, B>(
+    blob: B,
+    build: BuildInfo,
+    reg: &MetricsRegistry,
+    pool: Option<Arc<Runtime>>,
+) -> Result<RuntimeReadClient, Error>
+where
+    B: BlobRead + Send + 'static,
+{
+    // TODO: Is an unbounded channel the right thing to do here?
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let metrics = Metrics::register_with(reg);
+
+    // Any usage of S3Blob requires a runtime context to be set. `Indexed::new`
+    // use the blob impl to start the recovery process, so make sure this stays
+    // early.
+    let pool = match pool {
+        Some(pool) => pool,
+        None => Arc::new(Runtime::new()?),
+    };
+    let pool_guard = pool.enter();
+
+    // Start up the runtime.
+    let blob = BlobCache::new(build, metrics.clone(), blob);
+    let maintainer = Maintainer::new(blob.clone(), pool.clone());
+    let indexed = Indexed::new(ErrorLog, blob, maintainer, metrics.clone())?;
+    let mut runtime = RuntimeReadImpl::new(indexed, rx, metrics.clone());
+    let id = RuntimeId::new();
+    let runtime_pool = pool.clone();
+    let impl_handle = thread::Builder::new()
+        .name("persist:runtime".into())
+        .spawn(move || {
+            let pool_guard = runtime_pool.enter();
+            while runtime.work() {}
+            // Explictly drop the pool guard so the lifetime is obvious.
+            drop(pool_guard);
+        })?;
+
+    // Construct the client.
+    let handles = Mutex::new(Some(RuntimeHandles::Read(impl_handle)));
+    let sender = CmdReadSender::Read(tx.clone());
+    let core = RuntimeCoreRead {
+        handles,
+        sender,
+        metrics,
+    };
+    let client = RuntimeReadClient {
         id,
         core: Arc::new(core),
     };
@@ -165,9 +226,41 @@ impl RuntimeId {
 }
 
 #[derive(Debug)]
-struct RuntimeHandles {
-    impl_handle: JoinHandle<()>,
-    ticker_handle: tokio::task::JoinHandle<()>,
+enum RuntimeHandles {
+    Full(JoinHandle<()>, tokio::task::JoinHandle<()>),
+    Read(JoinHandle<()>),
+}
+
+impl RuntimeHandles {
+    fn join(self) {
+        match self {
+            RuntimeHandles::Full(impl_handle, ticker_handle) => {
+                if let Err(_) = impl_handle.join() {
+                    // If the thread panic'd, then by definition it has been
+                    // stopped, so we can return an Ok. This is surprising, though,
+                    // so log a message. Unfortunately, there isn't really a way to
+                    // put the panic message in this log.
+                    log::error!("persist runtime thread panic'd");
+                }
+                if let Err(_) = block_on(ticker_handle) {
+                    // If the thread panic'd, then by definition it has been
+                    // stopped, so we can return an Ok. This is surprising, though,
+                    // so log a message. Unfortunately, there isn't really a way to
+                    // put the panic message in this log.
+                    log::error!("persist ticker thread panic'd");
+                }
+            }
+            RuntimeHandles::Read(impl_handle) => {
+                if let Err(_) = impl_handle.join() {
+                    // If the thread panic'd, then by definition it has been
+                    // stopped, so we can return an Ok. This is surprising, though,
+                    // so log a message. Unfortunately, there isn't really a way to
+                    // put the panic message in this log.
+                    log::error!("persist runtime thread panic'd");
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -179,6 +272,7 @@ struct RuntimeCoreRead {
 
 fn fill_cmd_read_res_runtime_shutdown(cmd: CmdRead) {
     match cmd {
+        CmdRead::Load(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
         CmdRead::GetDescription(_, res) => res.fill(Err(Error::RuntimeShutdown)),
         CmdRead::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
         CmdRead::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
@@ -207,6 +301,16 @@ fn fill_runtime_cmd_res_runtime_shutdown(cmd: RuntimeCmd) {
     }
 }
 
+fn fill_runtime_read_cmd_res_runtime_shutdown(cmd: RuntimeReadCmd) {
+    match cmd {
+        RuntimeReadCmd::Stop(res) => {
+            // Already stopped: no-op.
+            res.fill(Ok(()))
+        }
+        RuntimeReadCmd::CmdRead(cmd) => fill_cmd_read_res_runtime_shutdown(cmd),
+    }
+}
+
 impl RuntimeCoreRead {
     fn send(&self, cmd: CmdRead) {
         self.metrics.cmd_queue_in.inc();
@@ -222,20 +326,7 @@ impl RuntimeCoreRead {
             // returns (flushing out final writes, cleaning up LOCK files, etc).
             //
             // TODO: Regression test for this.
-            if let Err(_) = handles.impl_handle.join() {
-                // If the thread panic'd, then by definition it has been
-                // stopped, so we can return an Ok. This is surprising, though,
-                // so log a message. Unfortunately, there isn't really a way to
-                // put the panic message in this log.
-                log::error!("persist runtime thread panic'd");
-            }
-            if let Err(_) = block_on(handles.ticker_handle) {
-                // If the thread panic'd, then by definition it has been
-                // stopped, so we can return an Ok. This is surprising, though,
-                // so log a message. Unfortunately, there isn't really a way to
-                // put the panic message in this log.
-                log::error!("persist ticker thread panic'd");
-            }
+            handles.join();
             rx.recv()
         } else {
             Ok(())
@@ -267,6 +358,75 @@ impl RuntimeCore {
             // Cmd::Stop (or it panics).
             fill_runtime_cmd_res_runtime_shutdown(cmd)
         }
+    }
+}
+
+/// A clone-able handle to the persistence runtime.
+///
+/// The runtime is stopped when any client calls [RuntimeClient::stop] or when
+/// all clients have been dropped, whichever comes first.
+///
+/// NB: The methods below are executed concurrently. For a some call X to be
+/// guaranteed as "previous" to another call Y, X's response must have been
+/// received before Y's call started.
+#[derive(Clone)]
+pub struct RuntimeReadClient {
+    id: RuntimeId,
+    core: Arc<RuntimeCoreRead>,
+}
+
+impl fmt::Debug for RuntimeReadClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuntimeClient")
+            .field(&"id", &self.id)
+            .field(&"core", &"..")
+            .finish()
+    }
+}
+
+impl PartialEq for RuntimeReadClient {
+    fn eq(&self, other: &Self) -> bool {
+        self.id.eq(&other.id)
+    }
+}
+
+impl Eq for RuntimeReadClient {}
+
+impl RuntimeReadClient {
+    /// Synchronously registers a new stream for writes and reads.
+    ///
+    /// This method is idempotent. Returns read and write handles used to
+    /// construct a persisted stream operator.
+    ///
+    /// TODO: This description seems outdated? Or at least only half true.
+    /// If data was written by a previous [RuntimeClient] for this id, it's
+    /// loaded and replayed into the stream once constructed.
+    pub fn load<K: Codec, V: Codec>(&self, name: &str) -> StreamReadHandle<K, V> {
+        let (tx, rx) = PFuture::new();
+        self.core.send(CmdRead::Load(
+            name.to_owned(),
+            (K::codec_name().to_string(), V::codec_name().to_string()),
+            tx,
+        ));
+        let id = match rx.recv() {
+            Ok(Some(id)) => Ok(id),
+            Ok(None) => Err(format!("unregistered collection: {}", name).into()),
+            Err(err) => Err(err),
+        };
+        StreamReadHandle::new(name.to_owned(), id, self.core.clone())
+    }
+
+    /// Returns a [Description] of the stream identified by `id_str`.
+    // TODO: We might want to think about returning only the compaction frontier (since) and seal
+    // timestamp (upper) here. Description seems more oriented towards describing batches, and in
+    // our case the lower is always `Antichain::from_elem(Timestamp::minimum())`. We could return a
+    // tuple or create our own Description-like return type for this.
+    pub fn get_description(&self, id_str: &str) -> Result<Description<u64>, Error> {
+        let (tx, rx) = PFuture::new();
+        self.core
+            .send(CmdRead::GetDescription(id_str.to_owned(), tx));
+        let seal_frontier = rx.recv()?;
+        Ok(seal_frontier)
     }
 }
 
@@ -749,6 +909,7 @@ impl<K: Codec, V: Codec> Iterator for DecodedSnapshotIter<K, V> {
 #[derive(Debug, Clone)]
 enum CmdReadSender {
     Full(crossbeam_channel::Sender<RuntimeCmd>),
+    Read(crossbeam_channel::Sender<RuntimeReadCmd>),
 }
 
 impl CmdReadSender {
@@ -765,6 +926,17 @@ impl CmdReadSender {
                     fill_runtime_cmd_res_runtime_shutdown(cmd)
                 }
             }
+            CmdReadSender::Read(tx) => {
+                if let Err(crossbeam_channel::SendError(cmd)) =
+                    tx.send(RuntimeReadCmd::CmdRead(cmd))
+                {
+                    // According to the docs, a SendError can only happen if the
+                    // receiver has hung up, which in this case only happens if the
+                    // thread has exited. The thread only exits if we send it a
+                    // Cmd::Stop (or it panics).
+                    fill_runtime_read_cmd_res_runtime_shutdown(cmd)
+                }
+            }
         }
     }
 
@@ -777,6 +949,17 @@ impl CmdReadSender {
                     // thread has exited. The thread only exits if we send it a
                     // Cmd::Stop (or it panics).
                     fill_runtime_cmd_res_runtime_shutdown(cmd)
+                }
+            }
+            CmdReadSender::Read(cmd_tx) => {
+                if let Err(crossbeam_channel::SendError(cmd)) =
+                    cmd_tx.send(RuntimeReadCmd::Stop(tx))
+                {
+                    // According to the docs, a SendError can only happen if the
+                    // receiver has hung up, which in this case only happens if the
+                    // thread has exited. The thread only exits if we send it a
+                    // Cmd::Stop (or it panics).
+                    fill_runtime_read_cmd_res_runtime_shutdown(cmd)
                 }
             }
         }
@@ -853,6 +1036,55 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
         self.runtime.send(CmdRead::Listen(id, listen_fn, tx));
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))
+    }
+}
+
+struct RuntimeReadImpl<L: Log, B: BlobRead> {
+    indexed: Indexed<L, B>,
+    rx: crossbeam_channel::Receiver<RuntimeReadCmd>,
+    metrics: Metrics,
+}
+
+impl<L: Log, B: BlobRead> RuntimeReadImpl<L, B> {
+    fn new(
+        indexed: Indexed<L, B>,
+        rx: crossbeam_channel::Receiver<RuntimeReadCmd>,
+        metrics: Metrics,
+    ) -> Self {
+        RuntimeReadImpl {
+            indexed,
+            rx,
+            metrics,
+        }
+    }
+
+    /// Synchronously waits for the next command, executes it, and responds.
+    ///
+    /// Returns false to indicate a graceful shutdown, true otherwise.
+    fn work(&mut self) -> bool {
+        let cmd = match self.rx.recv() {
+            Ok(cmd) => cmd,
+            Err(crossbeam_channel::RecvError) => {
+                // All Runtime handles hung up. Drop should have shut things down
+                // nicely, so this is unexpected.
+                return false;
+            }
+        };
+
+        let run_start = Instant::now();
+        match cmd {
+            RuntimeReadCmd::Stop(res) => {
+                res.fill(Ok(()));
+                return false;
+            }
+            RuntimeReadCmd::CmdRead(cmd_read) => self.indexed.apply_read(cmd_read),
+        }
+        self.metrics.cmd_run_count.inc();
+        self.metrics
+            .cmd_run_seconds
+            .inc_by(run_start.elapsed().as_secs_f64());
+
+        return true;
     }
 }
 
