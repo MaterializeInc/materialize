@@ -44,6 +44,11 @@ impl<T: Timestamp> ArrangementFrontiers<T> {
     pub fn contains_key(&self, id: GlobalId) -> bool {
         self.index.contains_key(&id)
     }
+    pub fn intersection(&self, ids: impl IntoIterator<Item = GlobalId>) -> Vec<GlobalId> {
+        ids.into_iter()
+            .filter(|id| self.contains_key(*id))
+            .collect()
+    }
     pub fn insert(&mut self, id: GlobalId, state: Frontiers<T>) -> Option<Frontiers<T>> {
         self.index.insert(id, state)
     }

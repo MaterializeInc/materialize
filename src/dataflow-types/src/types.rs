@@ -886,6 +886,14 @@ impl SourceConnector {
             SourceConnector::Local { timeline, .. } => timeline.clone(),
         }
     }
+
+    pub fn requires_single_materialization(&self) -> bool {
+        if let SourceConnector::External { connector, .. } = self {
+            connector.requires_single_materialization()
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1055,6 +1063,19 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::S3(_) => None,
             ExternalSourceConnector::Postgres(_) => None,
             ExternalSourceConnector::PubNub(_) => None,
+        }
+    }
+
+    pub fn requires_single_materialization(&self) -> bool {
+        match self {
+            ExternalSourceConnector::S3(c) => c.requires_single_materialization(),
+            ExternalSourceConnector::Postgres(_) => true,
+
+            ExternalSourceConnector::Kafka(_)
+            | ExternalSourceConnector::Kinesis(_)
+            | ExternalSourceConnector::File(_)
+            | ExternalSourceConnector::AvroOcf(_)
+            | ExternalSourceConnector::PubNub(_) => false,
         }
     }
 }
@@ -1269,6 +1290,16 @@ pub struct S3SourceConnector {
     pub pattern: Option<Glob>,
     pub aws: AwsConfig,
     pub compression: Compression,
+}
+
+impl S3SourceConnector {
+    fn requires_single_materialization(&self) -> bool {
+        // SQS Notifications are not durable, multiple sources depending on them will get
+        // non-intersecting subsets of objects to read
+        self.key_sources
+            .iter()
+            .any(|s| matches!(s, S3KeySource::SqsNotifications { .. }))
+    }
 }
 
 /// A Source of Object Key names, the argument of the `DISCOVER OBJECTS` clause
