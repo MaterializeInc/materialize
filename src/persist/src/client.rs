@@ -24,7 +24,7 @@ use crate::error::Error;
 use crate::indexed::arrangement::{ArrangementSnapshot, ArrangementSnapshotIter};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use crate::indexed::encoding::Id;
-use crate::indexed::{Cmd, ListenEvent, Snapshot};
+use crate::indexed::{Cmd, CmdRead, ListenEvent, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::runtime::{RuntimeCmd, RuntimeCore, RuntimeId};
 use crate::storage::SeqNo;
@@ -96,10 +96,11 @@ impl RuntimeClient {
     // tuple or create our own Description-like return type for this.
     pub fn get_description(&self, id_str: &str) -> Result<Description<u64>, Error> {
         let (tx, rx) = PFuture::new();
-        self.core.send(RuntimeCmd::IndexedCmd(Cmd::GetDescription(
-            id_str.to_owned(),
-            tx,
-        )));
+        self.core
+            .send(RuntimeCmd::IndexedCmd(Cmd::Read(CmdRead::GetDescription(
+                id_str.to_owned(),
+                tx,
+            ))));
         let seal_frontier = rx.recv()?;
         Ok(seal_frontier)
     }
@@ -144,7 +145,9 @@ impl RuntimeClient {
     /// The id must have previously been registered.
     fn snapshot(&self, id: Id, res: PFutureHandle<ArrangementSnapshot>) {
         self.core
-            .send(RuntimeCmd::IndexedCmd(Cmd::Snapshot(id, res)))
+            .send(RuntimeCmd::IndexedCmd(Cmd::Read(CmdRead::Snapshot(
+                id, res,
+            ))))
     }
 
     /// Asynchronously registers a callback to be invoked on successful writes
@@ -156,7 +159,9 @@ impl RuntimeClient {
         res: PFutureHandle<ArrangementSnapshot>,
     ) {
         self.core
-            .send(RuntimeCmd::IndexedCmd(Cmd::Listen(id, sender, res)))
+            .send(RuntimeCmd::IndexedCmd(Cmd::Read(CmdRead::Listen(
+                id, sender, res,
+            ))))
     }
 
     /// Synchronously closes the runtime, releasing exclusive-writer locks and

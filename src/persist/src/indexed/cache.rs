@@ -28,7 +28,7 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFuture;
-use crate::storage::{Atomicity, Blob};
+use crate::storage::{Atomicity, Blob, BlobRead};
 
 /// A disk-backed cache for objects in [Blob] storage.
 ///
@@ -44,7 +44,7 @@ use crate::storage::{Atomicity, Blob};
 /// the soft limit does some alerting and the hard limit starts blocking (or
 /// erroring) until disk space frees up.
 #[derive(Debug)]
-pub struct BlobCache<B: Blob> {
+pub struct BlobCache<B> {
     build_version: Version,
     metrics: Arc<Metrics>,
     blob: Arc<Mutex<B>>,
@@ -55,7 +55,7 @@ pub struct BlobCache<B: Blob> {
     prev_meta_len: u64,
 }
 
-impl<B: Blob> Clone for BlobCache<B> {
+impl<B> Clone for BlobCache<B> {
     fn clone(&self) -> Self {
         BlobCache {
             build_version: self.build_version.clone(),
@@ -69,7 +69,7 @@ impl<B: Blob> Clone for BlobCache<B> {
     }
 }
 
-impl<B: Blob> BlobCache<B> {
+impl<B: BlobRead> BlobCache<B> {
     const META_KEY: &'static str = "META";
 
     /// Returns a new, empty cache for the given [Blob] storage.
@@ -273,7 +273,9 @@ impl<B: Blob> BlobCache<B> {
     pub fn list_keys(&self) -> Result<Vec<String>, Error> {
         block_on(self.blob.lock()?.list_keys())
     }
+}
 
+impl<B: Blob> BlobCache<B> {
     /// Writes a batch to backing [Blob] storage.
     ///
     /// Returns the size of the encoded blob value in bytes.

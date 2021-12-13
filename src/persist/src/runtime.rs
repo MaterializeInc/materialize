@@ -26,7 +26,7 @@ use crate::error::Error;
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Cmd, Indexed};
+use crate::indexed::{Cmd, CmdRead, Indexed};
 use crate::pfuture::PFuture;
 use crate::storage::{Blob, Log};
 use futures_executor::block_on;
@@ -172,7 +172,7 @@ impl RuntimeCore {
     pub(crate) fn stop(&self) -> Result<(), Error> {
         if let Some(handles) = self.handles.lock()?.take() {
             let (tx, rx) = PFuture::new();
-            self.send(RuntimeCmd::IndexedCmd(Cmd::Stop(tx)));
+            self.send(RuntimeCmd::IndexedCmd(Cmd::Read(CmdRead::Stop(tx))));
             // NB: Make sure there are no early returns before this `join`,
             // otherwise the runtime thread might still be cleaning up when this
             // returns (flushing out final writes, cleaning up LOCK files, etc).
