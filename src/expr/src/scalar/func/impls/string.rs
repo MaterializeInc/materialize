@@ -14,7 +14,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use lowertest::MzStructReflect;
+use lowertest::MzReflect;
 use ore::result::ResultExt;
 use repr::adt::char::{format_str_trim, Char};
 use repr::adt::interval::Interval;
@@ -75,9 +75,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToNumeric(pub Option<u8>);
 
 impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
@@ -147,9 +145,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToArray {
     // Target array's type.
     pub return_ty: ScalarType,
@@ -211,9 +207,7 @@ impl fmt::Display for CastStringToArray {
     }
 }
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToList {
     // Target list's type
     pub return_ty: ScalarType,
@@ -280,9 +274,7 @@ impl fmt::Display for CastStringToList {
     }
 }
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToMap {
     // Target map's value type
     pub return_ty: ScalarType,
@@ -357,9 +349,7 @@ impl fmt::Display for CastStringToMap {
     }
 }
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToChar {
     pub length: Option<usize>,
     pub fail_on_len: bool,
@@ -395,9 +385,7 @@ impl fmt::Display for CastStringToChar {
     }
 }
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToVarChar {
     pub length: Option<usize>,
     pub fail_on_len: bool,

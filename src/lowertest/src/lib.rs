@@ -19,39 +19,34 @@ use serde_json::Value;
 
 use ore::{result::ResultExt, str::separated, str::StrExt};
 
-pub use lowertest_derive::{gen_reflect_info_func, MzEnumReflect, MzStructReflect};
+pub use lowertest_derive::{gen_reflect_info_func, MzReflect};
 
-/// A trait for listing the variants of an enum and the fields of each variant.
-///
-/// The information listed about the fields help build a JSON string that can
-/// be correctly deserialized into the enum.
-pub trait MzEnumReflect {
-    /// Returns a mapping of the variants of an enum to its fields.
+/* #region Parts of the public interface related to collecting information
+about the fields of structs and enums. */
+
+/// For [`to_json`] to create deserializable JSON for an instance of an type,
+/// the type must derive this trait.
+pub trait MzReflect {
+    /// Adds names and types of the fields of the struct or enum to `rti`.
     ///
-    /// The first vector comprises the names of the variant's fields. It is
-    /// empty if the variant has no fields or if the variant's fields are
-    /// unnamed.
-    ///
-    /// The second vector comprises the types of the variant's fields. It is
-    /// empty if the variant has no fields.
-    fn mz_enum_reflect() -> HashMap<&'static str, (Vec<&'static str>, Vec<&'static str>)>;
+    /// The corresponding implementation of this method will be recursively
+    /// called for each type referenced by the struct or enum.
+    /// Check out the crate README for more details.
+    fn add_to_reflected_type_info(rti: &mut ReflectedTypeInfo);
 }
 
-/// A trait for listing the fields of a struct.
+/// Info that must be combined with a spec to form deserializable JSON.
 ///
-/// The information listed about the fields help build a JSON string that can
-/// be correctly deserialized into the struct.
-pub trait MzStructReflect {
-    /// Returns the fields of a struct.
-    ///
-    /// The first vector comprises the names of the struct's fields. It is
-    /// empty if the struct has no fields or if the struct's fields are
-    /// unnamed.
-    ///
-    /// The second vector comprises the types of the struct's fields. It is
-    /// empty if the struct has no fields.
-    fn mz_struct_reflect() -> (Vec<&'static str>, Vec<&'static str>);
+/// To add information required to construct a struct or enum,
+/// call `Type::add_to_reflected_type_info(enum_dict, struct_dict)`
+#[derive(Debug)]
+pub struct ReflectedTypeInfo {
+    pub enum_dict:
+        HashMap<&'static str, HashMap<&'static str, (Vec<&'static str>, Vec<&'static str>)>>,
+    pub struct_dict: HashMap<&'static str, (Vec<&'static str>, Vec<&'static str>)>,
 }
+
+/* #endregion */
 
 /* #region Utilities */
 
@@ -258,19 +253,6 @@ where
     } else {
         Ok(None)
     }
-}
-
-/// Info that must be combined with a spec to form deserializable JSON.
-///
-/// To add information about an enum, call
-/// `enum_dict.insert("EnumType", EnumType::mz_enum_reflect())`
-/// To add information about a struct, call
-/// `struct_dict.insert("StructType", StructType::mz_struct_reflect())`
-#[derive(Debug)]
-pub struct ReflectedTypeInfo {
-    pub enum_dict:
-        HashMap<&'static str, HashMap<&'static str, (Vec<&'static str>, Vec<&'static str>)>>,
-    pub struct_dict: HashMap<&'static str, (Vec<&'static str>, Vec<&'static str>)>,
 }
 
 /// A trait for extending and/or overriding the default test case syntax.

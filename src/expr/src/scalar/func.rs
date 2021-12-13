@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
-use lowertest::MzEnumReflect;
+use lowertest::MzReflect;
 use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
 use ore::str::StrExt;
@@ -51,9 +51,7 @@ mod impls;
 
 pub use impls::*;
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum NullaryFunc {
     MzLogicalTimestamp,
 }
@@ -2066,9 +2064,7 @@ fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(buf))
 }
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     And,
     Or,
@@ -3080,9 +3076,7 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
     }
 }
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum UnaryFunc {
     Not(Not),
     IsNull(IsNull),
@@ -5316,9 +5310,7 @@ fn mz_render_typemod<'a>(
     Datum::String(inner)
 }
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum VariadicFunc {
     Coalesce,
     Concat,

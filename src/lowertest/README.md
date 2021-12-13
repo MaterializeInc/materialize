@@ -87,8 +87,8 @@ recommended that the object also implement `serde::Serialize`.
 In order to translate the text syntax into a correctly-deserializable JSON
 string, we need information about enums and structs being created that are not
 specified in the test syntax.
-Thus, you need to derive the trait `MzEnumReflect` (resp. `MzStructReflect`) for
-each enum (resp. struct) that you will need to construct your object.
+Thus, you need to derive the trait `MzReflect` for
+each enum or struct that you will need to construct your object.
 
 Default values are supported as long as the default fields are last. Put
 `#[serde(default)]` over any fields you want to be default and make sure those

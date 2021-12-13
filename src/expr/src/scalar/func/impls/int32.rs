@@ -11,7 +11,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzStructReflect;
+use lowertest::MzReflect;
 use repr::adt::numeric::{self, Numeric};
 use repr::adt::system::{Oid, RegClass, RegProc, RegType};
 use repr::{strconv, ColumnType, ScalarType};
@@ -88,9 +88,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastInt32ToNumeric(pub Option<u8>);
 
 impl<'a> EagerUnaryFunc<'a> for CastInt32ToNumeric {
