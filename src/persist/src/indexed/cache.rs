@@ -27,7 +27,7 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFuture;
-use crate::storage::{Atomicity, Blob};
+use crate::storage::{Atomicity, Blob, BlobRead};
 
 /// A disk-backed cache for objects in [Blob] storage.
 ///
@@ -43,7 +43,7 @@ use crate::storage::{Atomicity, Blob};
 /// the soft limit does some alerting and the hard limit starts blocking (or
 /// erroring) until disk space frees up.
 #[derive(Debug)]
-pub struct BlobCache<B: Blob> {
+pub struct BlobCache<B> {
     build_version: Version,
     metrics: Metrics,
     blob: Arc<Mutex<B>>,
@@ -53,7 +53,7 @@ pub struct BlobCache<B: Blob> {
     prev_meta_len: u64,
 }
 
-impl<B: Blob> Clone for BlobCache<B> {
+impl<B> Clone for BlobCache<B> {
     fn clone(&self) -> Self {
         BlobCache {
             build_version: self.build_version.clone(),
@@ -66,7 +66,7 @@ impl<B: Blob> Clone for BlobCache<B> {
     }
 }
 
-impl<B: Blob> BlobCache<B> {
+impl<B: BlobRead> BlobCache<B> {
     const META_KEY: &'static str = "META";
 
     /// Returns a new, empty cache for the given [Blob] storage.
@@ -80,7 +80,9 @@ impl<B: Blob> BlobCache<B> {
             prev_meta_len: 0,
         }
     }
+}
 
+impl<B: Blob> BlobCache<B> {
     /// Synchronously closes the cache, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
@@ -89,7 +91,9 @@ impl<B: Blob> BlobCache<B> {
     pub fn close(&mut self) -> Result<bool, Error> {
         block_on(self.blob.lock()?.close())
     }
+}
 
+impl<B: BlobRead> BlobCache<B> {
     /// Synchronously fetches the batch for the given key.
     fn fetch_unsealed_batch_sync(&self, key: &str) -> Result<Arc<BlobUnsealedBatch>, Error> {
         let bytes = block_on(self.blob.lock()?.get(key))?
@@ -142,7 +146,9 @@ impl<B: Blob> BlobCache<B> {
         });
         rx
     }
+}
 
+impl<B: Blob> BlobCache<B> {
     /// Writes a batch to backing [Blob] storage.
     ///
     /// Returns the size of the encoded blob value in bytes.
@@ -196,7 +202,9 @@ impl<B: Blob> BlobCache<B> {
 
         Ok(())
     }
+}
 
+impl<B: BlobRead> BlobCache<B> {
     /// Synchronously fetches the batch for the given key.
     fn fetch_trace_batch_sync(&self, key: &str) -> Result<Arc<BlobTraceBatch>, Error> {
         let bytes = block_on(self.blob.lock()?.get(key))?
@@ -248,7 +256,9 @@ impl<B: Blob> BlobCache<B> {
         });
         rx
     }
+}
 
+impl<B: Blob> BlobCache<B> {
     /// Writes a batch to backing [Blob] storage.
     ///
     /// Returns the size of the encoded blob value in bytes.
@@ -294,7 +304,9 @@ impl<B: Blob> BlobCache<B> {
 
         Ok(())
     }
+}
 
+impl<B: BlobRead> BlobCache<B> {
     /// Fetches metadata about what batches are in [Blob] storage.
     pub fn get_meta(&self) -> Result<Option<BlobMeta>, Error> {
         let blob = self.blob.lock()?;
@@ -310,7 +322,9 @@ impl<B: Blob> BlobCache<B> {
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
         Ok(Some(meta))
     }
+}
 
+impl<B: Blob> BlobCache<B> {
     /// Overwrites metadata about what batches are in [Blob] storage.
     pub fn set_meta(&mut self, meta: &BlobMeta) -> Result<(), Error> {
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
@@ -349,7 +363,9 @@ impl<B: Blob> BlobCache<B> {
         // Don't bother caching meta, nothing reads it after startup.
         Ok(())
     }
+}
 
+impl<B: BlobRead> BlobCache<B> {
     fn check_meta_build_version(&self, meta: &ProtoMeta) -> Result<(), Error> {
         // TODO: After ENCODING_VERSION is bumped to 8 or higher, this can be
         // removed.

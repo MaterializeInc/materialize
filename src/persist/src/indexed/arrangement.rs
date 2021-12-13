@@ -30,7 +30,7 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::{BlobUnsealedBatch, Id, Snapshot};
 use crate::pfuture::PFuture;
-use crate::storage::{Blob, SeqNo};
+use crate::storage::{Blob, BlobRead, SeqNo};
 
 /// A persistent, compacting data structure containing indexed `(Key, Value,
 /// Time, Diff)` entries.
@@ -191,7 +191,7 @@ impl Arrangement {
 
     /// Returns a consistent read of all the updates contained in this
     /// arrangement.
-    pub fn snapshot<L: Blob>(
+    pub fn snapshot<L: BlobRead>(
         &self,
         seqno: SeqNo,
         blob: &BlobCache<L>,
@@ -312,7 +312,7 @@ impl Arrangement {
 
     /// Returns a consistent read of the updates contained in this unsealed
     /// matching the given filters (in practice, everything not in Trace).
-    pub fn unsealed_snapshot<L: Blob>(
+    pub fn unsealed_snapshot<L: BlobRead>(
         &self,
         ts_lower: Antichain<u64>,
         ts_upper: Antichain<u64>,
@@ -572,7 +572,7 @@ impl Arrangement {
     }
 
     /// Returns a consistent read of all the updates contained in this trace.
-    pub fn trace_snapshot<B: Blob>(&self, blob: &BlobCache<B>) -> TraceSnapshot {
+    pub fn trace_snapshot<B: BlobRead>(&self, blob: &BlobCache<B>) -> TraceSnapshot {
         let ts_upper = self.trace_ts_upper();
         let since = self.since();
         let mut batches = Vec::with_capacity(self.trace_batches.len());

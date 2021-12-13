@@ -37,7 +37,7 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Cmd, Indexed, ListenFn, Snapshot};
+use crate::indexed::{Cmd, CmdRead, Indexed, ListenFn, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 use futures_executor::block_on;
@@ -172,21 +172,33 @@ struct RuntimeCore {
     metrics: Metrics,
 }
 
-fn fill_cmd_res_runtime_shutdown(cmd: RuntimeCmd) {
+fn fill_cmd_read_res_runtime_shutdown(cmd: CmdRead) {
+    match cmd {
+        CmdRead::GetDescription(_, res) => res.fill(Err(Error::RuntimeShutdown)),
+        CmdRead::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
+        CmdRead::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
+    }
+}
+
+fn fill_cmd_res_runtime_shutdown(cmd: Cmd) {
+    match cmd {
+        Cmd::Register(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
+        Cmd::Destroy(_, res) => res.fill(Err(Error::RuntimeShutdown)),
+        Cmd::Write(_, res) => res.fill(Err(Error::RuntimeShutdown)),
+        Cmd::Seal(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
+        Cmd::AllowCompaction(_, res) => res.fill(Err(Error::RuntimeShutdown)),
+        Cmd::CmdRead(cmd_read) => fill_cmd_read_res_runtime_shutdown(cmd_read),
+    }
+}
+
+fn fill_runtime_cmd_res_runtime_shutdown(cmd: RuntimeCmd) {
     match cmd {
         RuntimeCmd::Stop(res) => {
             // Already stopped: no-op.
             res.fill(Ok(()))
         }
-        RuntimeCmd::Cmd(Cmd::Register(_, _, res)) => res.fill(Err(Error::RuntimeShutdown)),
-        RuntimeCmd::Cmd(Cmd::Destroy(_, res)) => res.fill(Err(Error::RuntimeShutdown)),
-        RuntimeCmd::Cmd(Cmd::Write(_, res)) => res.fill(Err(Error::RuntimeShutdown)),
-        RuntimeCmd::Cmd(Cmd::Seal(_, _, res)) => res.fill(Err(Error::RuntimeShutdown)),
-        RuntimeCmd::Cmd(Cmd::GetDescription(_, res)) => res.fill(Err(Error::RuntimeShutdown)),
-        RuntimeCmd::Cmd(Cmd::AllowCompaction(_, res)) => res.fill(Err(Error::RuntimeShutdown)),
-        RuntimeCmd::Cmd(Cmd::Snapshot(_, res)) => res.fill(Err(Error::RuntimeShutdown)),
-        RuntimeCmd::Cmd(Cmd::Listen(_, _, res)) => res.fill(Err(Error::RuntimeShutdown)),
         RuntimeCmd::Tick => {}
+        RuntimeCmd::Cmd(cmd) => fill_cmd_res_runtime_shutdown(cmd),
     }
 }
 
@@ -198,7 +210,7 @@ impl RuntimeCore {
             // receiver has hung up, which in this case only happens if the
             // thread has exited. The thread only exits if we send it a
             // Cmd::Stop (or it panics).
-            fill_cmd_res_runtime_shutdown(cmd)
+            fill_runtime_cmd_res_runtime_shutdown(cmd)
         }
     }
 
@@ -304,7 +316,10 @@ impl RuntimeClient {
     pub fn get_description(&self, id_str: &str) -> Result<Description<u64>, Error> {
         let (tx, rx) = PFuture::new();
         self.core
-            .send(RuntimeCmd::Cmd(Cmd::GetDescription(id_str.to_owned(), tx)));
+            .send(RuntimeCmd::Cmd(Cmd::CmdRead(CmdRead::GetDescription(
+                id_str.to_owned(),
+                tx,
+            ))));
         let seal_frontier = rx.recv()?;
         Ok(seal_frontier)
     }
@@ -347,7 +362,8 @@ impl RuntimeClient {
     ///
     /// The id must have previously been registered.
     fn snapshot(&self, id: Id, res: PFutureHandle<ArrangementSnapshot>) {
-        self.core.send(RuntimeCmd::Cmd(Cmd::Snapshot(id, res)))
+        self.core
+            .send(RuntimeCmd::Cmd(Cmd::CmdRead(CmdRead::Snapshot(id, res))))
     }
 
     /// Asynchronously registers a callback to be invoked on successful writes
@@ -358,8 +374,9 @@ impl RuntimeClient {
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
         res: PFutureHandle<ArrangementSnapshot>,
     ) {
-        self.core
-            .send(RuntimeCmd::Cmd(Cmd::Listen(id, listen_fn, res)))
+        self.core.send(RuntimeCmd::Cmd(Cmd::CmdRead(CmdRead::Listen(
+            id, listen_fn, res,
+        ))))
     }
 
     /// Synchronously closes the runtime, releasing exclusive-writer locks and

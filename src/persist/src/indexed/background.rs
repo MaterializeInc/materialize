@@ -50,7 +50,7 @@ pub struct CompactTraceRes {
 // TODO: Add migrating records from unsealed to trace as well as deletion of
 // batches.
 #[derive(Debug)]
-pub struct Maintainer<B: Blob> {
+pub struct Maintainer<B> {
     // TODO: It feels like a smell to wrap BlobCache in an Arc when most of its
     // internals are already wrapped in Arcs. As of when this was written, the
     // only exception is prev_meta_len, which really is only used from a single

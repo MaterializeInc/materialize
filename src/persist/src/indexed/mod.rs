@@ -41,7 +41,31 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFutureHandle;
-use crate::storage::{Blob, Log, SeqNo};
+use crate::storage::{Blob, BlobRead, Log, SeqNo};
+
+/// WIP
+#[derive(Debug)]
+pub enum CmdRead {
+    /// Returns a [Description] of the stream identified by `id_str`.
+    //
+    // TODO: We might want to think about returning only the compaction frontier
+    // (since) and seal timestamp (upper) here. Description seems more oriented
+    // towards describing batches, and in our case the lower is always
+    // `Antichain::from_elem(Timestamp::minimum())`. We could return a tuple or
+    // create our own Description-like return type for this.
+    GetDescription(String, PFutureHandle<Description<u64>>),
+    /// Returns a [Snapshot] for the given id.
+    Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
+    /// Registers a callback to be invoked on successful writes and seals.
+    ///
+    /// Also returns a copy of the snapshot so that users can, if they want,
+    /// apply their logic to a consistent read of the entire stream.
+    Listen(
+        Id,
+        ListenFn<Vec<u8>, Vec<u8>>,
+        PFutureHandle<ArrangementSnapshot>,
+    ),
+}
 
 /// An input to the persist state machine.
 #[derive(Debug)]
@@ -71,25 +95,8 @@ pub enum Cmd {
     /// frontier. It is also an error to advance the compaction frontier beyond the
     /// current sealed frontier.
     AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
-    /// Returns a [Description] of the stream identified by `id_str`.
-    //
-    // TODO: We might want to think about returning only the compaction frontier
-    // (since) and seal timestamp (upper) here. Description seems more oriented
-    // towards describing batches, and in our case the lower is always
-    // `Antichain::from_elem(Timestamp::minimum())`. We could return a tuple or
-    // create our own Description-like return type for this.
-    GetDescription(String, PFutureHandle<Description<u64>>),
-    /// Returns a [Snapshot] for the given id.
-    Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
-    /// Registers a callback to be invoked on successful writes and seals.
-    ///
-    /// Also returns a copy of the snapshot so that users can, if they want,
-    /// apply their logic to a consistent read of the entire stream.
-    Listen(
-        Id,
-        ListenFn<Vec<u8>, Vec<u8>>,
-        PFutureHandle<ArrangementSnapshot>,
-    ),
+    /// WIP
+    CmdRead(CmdRead),
 }
 
 #[derive(Debug)]
@@ -181,7 +188,7 @@ impl Pending {
 ///   AppliedState (which has no knowledge of storage, etc). Then, if this was
 ///   successful, Indexed will serialize AppliedState and durably write it down.
 #[derive(Debug)]
-pub struct Indexed<L: Log, B: Blob> {
+pub struct Indexed<L: Log, B: BlobRead> {
     // NB: we are not using Log for anything at the moment and instead have
     // all writes going directly to trace. At some point we'll need to revisit
     // what we want to do with Log, and whether we want it to live inside of
@@ -444,11 +451,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             }),
             Cmd::AllowCompaction(id_sinces, res) => self.apply_batched_cmd(|state, pending| {
                 let seqno = state.assign_seqno();
-                let response = state
+                let resp = state
                     .do_allow_compaction(id_sinces)
                     .map(|_| seqno)
                     .map_err(|err| Error::Noop(seqno, err));
-                pending.add_response(PendingResponse::SeqNo(res, response));
+                pending.add_response(PendingResponse::SeqNo(res, resp));
             }),
 
             Cmd::Register(id, (key_codec_name, val_codec_name), res) => res.fill((|| {
@@ -461,15 +468,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 self.drain_pending()?;
                 self.apply_unbatched_cmd(|state, _, _| state.do_destroy(&name))
             })()),
-            Cmd::GetDescription(name, res) => res.fill((|| {
+
+            Cmd::CmdRead(CmdRead::GetDescription(name, res)) => res.fill((|| {
                 self.drain_pending()?;
-                self.apply_unbatched_cmd(|state, _, _| state.do_get_description(&name))
+                self.state.do_get_description(&name)
             })()),
-            Cmd::Snapshot(id, res) => res.fill((|| {
+            Cmd::CmdRead(CmdRead::Snapshot(id, res)) => res.fill((|| {
                 self.drain_pending()?;
                 self.state.do_snapshot(id, &self.blob)
             })()),
-            Cmd::Listen(id, listen_fn, res) => res.fill((|| {
+            Cmd::CmdRead(CmdRead::Listen(id, listen_fn, res)) => res.fill((|| {
                 self.drain_pending()?;
                 self.do_listen(id, listen_fn)
             })()),
@@ -490,6 +498,29 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             (key_codec_name.to_owned(), val_codec_name.to_owned()),
             res,
         ))
+    }
+}
+
+impl<L: Log, B: BlobRead> Indexed<L, B> {
+    /// Applies the given read-only input to the state machine.
+    //
+    // WIP naming bikeshed: eval? run? cmd? do?
+    pub fn apply_read(&mut self, cmd: CmdRead) {
+        debug_assert_eq!(self.validate_pending_empty(), Ok(()));
+        match cmd {
+            CmdRead::GetDescription(name, res) => res.fill((|| {
+                self.validate_pending_empty()?;
+                self.state.do_get_description(&name)
+            })()),
+            CmdRead::Snapshot(id, res) => res.fill((|| {
+                self.validate_pending_empty()?;
+                self.state.do_snapshot(id, &self.blob)
+            })()),
+            CmdRead::Listen(id, listen_fn, res) => res.fill((|| {
+                self.validate_pending_empty()?;
+                self.do_listen(id, listen_fn)
+            })()),
+        }
     }
 }
 
@@ -578,7 +609,7 @@ impl AppliedState {
     }
 }
 
-impl<L: Log, B: Blob> Indexed<L, B> {
+impl<L: Log, B: BlobRead> Indexed<L, B> {
     fn validate(&self) -> Result<(), Error> {
         if let Some(pending) = self.pending.as_ref() {
             Self::validate_matches_storage(&self.blob, &pending.durable_meta)?;
@@ -658,7 +689,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             .as_ref()
             .map_or(false, |p| !p.responses.is_empty())
     }
+}
 
+impl<L: Log, B: Blob> Indexed<L, B> {
     /// Commit any pending in-memory changes to persistent storage, respond to clients
     /// and notify any listeners.
     fn drain_pending(&mut self) -> Result<(), Error> {
@@ -820,8 +853,8 @@ impl AppliedState {
 
     /// Drain pending writes to unsealed.
     ///
-    /// The caller is responsible for commiting metadata after this succeeds, and
-    /// restoring metadata if this fails.
+    /// The caller is responsible for committing metadata after this succeeds,
+    /// and restoring metadata if this fails.
     fn drain_pending_writes<B: Blob>(
         &mut self,
         mut writes_by_id: HashMap<Id, Vec<ColumnarRecords>>,
@@ -1056,7 +1089,7 @@ impl AppliedState {
         }
     }
 
-    fn do_snapshot<B: Blob>(
+    fn do_snapshot<B: BlobRead>(
         &self,
         id: Id,
         blob: &BlobCache<B>,
@@ -1070,7 +1103,7 @@ impl AppliedState {
     }
 }
 
-impl<L: Log, B: Blob> Indexed<L, B> {
+impl<L: Log, B: BlobRead> Indexed<L, B> {
     fn do_listen(
         &mut self,
         id: Id,
@@ -1185,7 +1218,7 @@ mod tests {
 
         // Empty things are empty.
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, vec![]);
         assert_eq!(seqno.0, 0);
@@ -1203,7 +1236,7 @@ mod tests {
             }
             ListenEvent::Sealed(_) => {}
         }));
-        block_on(|res| i.apply(Cmd::Listen(id, listen_fn, res)))?;
+        block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Listen(id, listen_fn, res))))?;
 
         // After a write, all data is in the unsealed.
         block_on_drain(&mut i, |i, handle| {
@@ -1213,11 +1246,11 @@ mod tests {
             ))
         })?;
         assert_eq!(
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?.read_to_end()?,
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?.read_to_end()?,
             updates
         );
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?;
         assert_eq!(unsealed.read_to_end()?, updates);
         assert_eq!(trace.read_to_end()?, vec![]);
         assert_eq!(seqno.0, 1);
@@ -1227,11 +1260,11 @@ mod tests {
         // yet.
         i.step()?;
         assert_eq!(
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?.read_to_end()?,
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?.read_to_end()?,
             updates
         );
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?;
         assert_eq!(unsealed.read_to_end()?, updates);
         assert_eq!(trace.read_to_end()?, vec![]);
         assert_eq!(seqno.0, 1);
@@ -1243,11 +1276,11 @@ mod tests {
         block_on_drain(&mut i, |i, handle| i.apply(Cmd::Seal(vec![id], 2, handle)))?;
         i.step()?;
         assert_eq!(
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?.read_to_end()?,
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?.read_to_end()?,
             updates
         );
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?;
         assert_eq!(unsealed.read_to_end()?, updates[1..]);
         assert_eq!(trace.read_to_end()?, updates[..1]);
         assert_eq!(seqno.0, 2);
@@ -1257,11 +1290,11 @@ mod tests {
         block_on_drain(&mut i, |i, handle| i.apply(Cmd::Seal(vec![id], 3, handle)))?;
         i.step()?;
         assert_eq!(
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?.read_to_end()?,
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?.read_to_end()?,
             updates
         );
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, updates);
         assert_eq!(seqno.0, 3);
@@ -1317,7 +1350,7 @@ mod tests {
 
         // Sanity check that all the data made it into trace as expected.
         let ArrangementSnapshot(unsealed, trace, _, _) =
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, updates);
         Ok(())
@@ -1352,7 +1385,7 @@ mod tests {
 
         // Sanity check that the data is all in unsealed and none of it is in trace.
         let ArrangementSnapshot(unsealed, trace, _, _) =
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?;
         assert_eq!(
             unsealed.read_to_end()?,
             vec![
@@ -1372,7 +1405,7 @@ mod tests {
 
         // Sanity check that all the data made it into trace as expected.
         let ArrangementSnapshot(unsealed, trace, _, _) =
-            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
+            block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, vec![(("1".into(), "".into()), 1, 4)]);
 
@@ -1579,7 +1612,7 @@ mod tests {
                 res,
             ))
         })?;
-        let snap = block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
+        let snap = block_on(|res| i.apply(Cmd::CmdRead(CmdRead::Snapshot(id, res))))?;
 
         // Now verify that the snapshot has the right since and that the data in
         // it has been advanced as expected.
