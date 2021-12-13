@@ -828,10 +828,15 @@ async fn compile_proto(
                 .file
                 .iter()
                 .find(|f| f.get_name() == primary_proto_name)
-                .map(|file| file.message_type.first())
-                .flatten()
-                .map(|message| format!(".{}", message.get_name()))
-                .ok_or_else(|| anyhow!("unable to compile temporary schema"))?;
+                .map(|file| file.message_type.iter().at_most_one())
+                .transpose()
+                .map_err(|_| anyhow!("proto files with multiple `message`'s are not yet supported"))
+                .map(|found| found.flatten())
+                .and_then(|message| {
+                    message
+                        .map(|message| format!(".{}", message.get_name()))
+                        .ok_or_else(|| anyhow!("unable to compile temporary schema"))
+                })?;
             let mut schema = String::new();
             strconv::format_bytes(&mut schema, &fds.write_to_bytes()?);
             Ok(CsrSeedCompiledEncoding {
