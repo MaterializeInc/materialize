@@ -43,6 +43,55 @@ use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFutureHandle;
 use crate::storage::{Blob, Log, SeqNo};
 
+/// An input to the persist state machine.
+#[derive(Debug)]
+pub enum Cmd {
+    /// Creates, if necessary, a new unsealed and trace with the given external
+    /// stream name, returning the corresponding internal stream id.
+    ///
+    /// This is idempotent: names may be registered multiple times.
+    Register(String, (String, String), PFutureHandle<Id>),
+    /// Removes a stream from the index.
+    ///
+    /// This is idempotent and may be called multiple times. It returns true if
+    /// the stream was destroyed from this call, and false if it was already
+    /// destroyed.
+    Destroy(String, PFutureHandle<bool>),
+    /// Asynchronously persists (Key, Value, Time, Diff) updates for the stream
+    /// with the given id.
+    Write(Vec<(Id, ColumnarRecords)>, PFutureHandle<SeqNo>),
+    /// Sealing a time advances the "sealed" frontier for an id, which restricts
+    /// what times can later be sealed and written for that id. See
+    /// `sealed_frontier` for details.
+    Seal(Vec<Id>, u64, PFutureHandle<SeqNo>),
+    /// Permit compaction of updates at times <= since to since.
+    ///
+    /// The compaction frontier can never decrease and it is an error to call
+    /// this function with a since argument that is less than the current compaction
+    /// frontier. It is also an error to advance the compaction frontier beyond the
+    /// current sealed frontier.
+    AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
+    /// Returns a [Description] of the stream identified by `id_str`.
+    //
+    // TODO: We might want to think about returning only the compaction frontier
+    // (since) and seal timestamp (upper) here. Description seems more oriented
+    // towards describing batches, and in our case the lower is always
+    // `Antichain::from_elem(Timestamp::minimum())`. We could return a tuple or
+    // create our own Description-like return type for this.
+    GetDescription(String, PFutureHandle<Description<u64>>),
+    /// Returns a [Snapshot] for the given id.
+    Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
+    /// Registers a callback to be invoked on successful writes and seals.
+    ///
+    /// Also returns a copy of the snapshot so that users can, if they want,
+    /// apply their logic to a consistent read of the entire stream.
+    Listen(
+        Id,
+        ListenFn<Vec<u8>, Vec<u8>>,
+        PFutureHandle<ArrangementSnapshot>,
+    ),
+}
+
 #[derive(Debug)]
 enum PendingResponse {
     SeqNo(PFutureHandle<SeqNo>, Result<SeqNo, Error>),
@@ -365,23 +414,82 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         Ok(())
     }
 
-    /// Creates, if necessary, a new unsealed and trace with the given external
-    /// stream name, returning the corresponding internal stream id.
-    ///
-    /// This method is idempotent: ids may be registered multiple times.
-    pub fn register(
+    /// Applies the given input to the state machine.
+    //
+    // WIP naming bikeshed: eval? run? cmd? do?
+    pub fn apply(&mut self, cmd: Cmd) {
+        match cmd {
+            Cmd::Write(updates, res) => self.apply_batched_cmd(|state, pending| {
+                let seqno = state.assign_seqno();
+                let resp = state
+                    .validate_write(&updates)
+                    .map(|_| seqno)
+                    .map_err(|err| Error::Noop(seqno, err));
+
+                if resp.is_ok() {
+                    pending.add_writes(updates);
+                }
+                pending.add_response(PendingResponse::SeqNo(res, resp));
+            }),
+            Cmd::Seal(ids, seal_ts, res) => self.apply_batched_cmd(|state, pending| {
+                let seqno = state.assign_seqno();
+                let resp = state
+                    .do_seal(&ids, seal_ts)
+                    .map(|_| seqno)
+                    .map_err(|err| Error::Noop(seqno, err));
+                if resp.is_ok() {
+                    pending.add_seals(ids, seal_ts);
+                }
+                pending.add_response(PendingResponse::SeqNo(res, resp));
+            }),
+            Cmd::AllowCompaction(id_sinces, res) => self.apply_batched_cmd(|state, pending| {
+                let seqno = state.assign_seqno();
+                let response = state
+                    .do_allow_compaction(id_sinces)
+                    .map(|_| seqno)
+                    .map_err(|err| Error::Noop(seqno, err));
+                pending.add_response(PendingResponse::SeqNo(res, response));
+            }),
+
+            Cmd::Register(id, (key_codec_name, val_codec_name), res) => res.fill((|| {
+                self.drain_pending()?;
+                self.apply_unbatched_cmd(|state, _, _| {
+                    state.do_register(&id, &key_codec_name, &val_codec_name)
+                })
+            })()),
+            Cmd::Destroy(name, res) => res.fill((|| {
+                self.drain_pending()?;
+                self.apply_unbatched_cmd(|state, _, _| state.do_destroy(&name))
+            })()),
+            Cmd::GetDescription(name, res) => res.fill((|| {
+                self.drain_pending()?;
+                self.apply_unbatched_cmd(|state, _, _| state.do_get_description(&name))
+            })()),
+            Cmd::Snapshot(id, res) => res.fill((|| {
+                self.drain_pending()?;
+                self.state.do_snapshot(id, &self.blob)
+            })()),
+            Cmd::Listen(id, listen_fn, res) => res.fill((|| {
+                self.drain_pending()?;
+                self.do_listen(id, listen_fn)
+            })()),
+        }
+    }
+
+    // A test helper for Cmd::Register.
+    #[cfg(test)]
+    fn register(
         &mut self,
-        id_str: &str,
+        name: &str,
         key_codec_name: &str,
         val_codec_name: &str,
         res: PFutureHandle<Id>,
     ) {
-        res.fill((|| {
-            self.drain_pending()?;
-            self.apply_unbatched_cmd(|state, _, _| {
-                state.do_register(id_str, key_codec_name, val_codec_name)
-            })
-        })());
+        self.apply(Cmd::Register(
+            name.into(),
+            (key_codec_name.to_owned(), val_codec_name.to_owned()),
+            res,
+        ))
     }
 }
 
@@ -437,23 +545,7 @@ impl AppliedState {
         };
         Ok(id)
     }
-}
 
-impl<L: Log, B: Blob> Indexed<L, B> {
-    /// Removes a stream from the index.
-    ///
-    /// This method is idempotent and may be called multiple times. It returns
-    /// true if the stream was destroyed from this call, and false if it was
-    /// already destroyed.
-    pub fn destroy(&mut self, id_str: &str, res: PFutureHandle<bool>) {
-        res.fill((|| {
-            self.drain_pending()?;
-            self.apply_unbatched_cmd(|state, _, _| state.do_destroy(id_str))
-        })());
-    }
-}
-
-impl AppliedState {
     fn do_destroy(&mut self, id_str: &str) -> Result<bool, Error> {
         if self.graveyard.iter().any(|r| r.name == id_str) {
             return Ok(false);
@@ -725,28 +817,7 @@ impl AppliedState {
         }
         Ok(())
     }
-}
 
-impl<L: Log, B: Blob> Indexed<L, B> {
-    /// Asynchronously persists (Key, Value, Time, Diff) updates for the stream
-    /// with the given id.
-    pub fn write(&mut self, updates: Vec<(Id, ColumnarRecords)>, res: PFutureHandle<SeqNo>) {
-        self.apply_batched_cmd(|state, pending| {
-            let seqno = state.assign_seqno();
-            let resp = state
-                .validate_write(&updates)
-                .map(|_| seqno)
-                .map_err(|err| Error::Noop(seqno, err));
-
-            if resp.is_ok() {
-                pending.add_writes(updates);
-            }
-            pending.add_response(PendingResponse::SeqNo(res, resp));
-        })
-    }
-}
-
-impl AppliedState {
     /// Drain pending writes to unsealed.
     ///
     /// The caller is responsible for commiting metadata after this succeeds, and
@@ -920,57 +991,24 @@ impl AppliedState {
         }
         Ok(())
     }
-}
 
-impl<L: Log, B: Blob> Indexed<L, B> {
-    /// Sealing a time advances the "sealed" frontier for an id, which restricts
-    /// what times can later be sealed and written for that id. See
-    /// `sealed_frontier` for details.
-    pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: PFutureHandle<SeqNo>) {
-        self.apply_batched_cmd(|state, pending| {
-            let seqno = state.assign_seqno();
-            let resp = state
-                .do_seal(&ids, seal_ts)
-                .map(|_| seqno)
-                .map_err(|err| Error::Noop(seqno, err));
-            if resp.is_ok() {
-                pending.add_seals(ids, seal_ts);
+    fn do_get_description(&self, name: &str) -> Result<Description<u64>, Error> {
+        let registration = self.id_mapping.iter().find(|s| s.name == name);
+        match registration {
+            Some(registration) => {
+                let arrangement = self
+                    .arrangements
+                    .get(&registration.id)
+                    .expect("missing trace");
+                let upper = arrangement.get_seal();
+                let since = arrangement.since();
+                let lower = Antichain::from_elem(u64::minimum());
+                Ok(Description::new(lower, upper, since))
             }
-            pending.add_response(PendingResponse::SeqNo(res, resp));
-        })
+            None => Err(Error::UnknownRegistration(name.to_string())),
+        }
     }
-}
 
-impl<L: Log, B: Blob> Indexed<L, B> {
-    /// Returns a [Description] of the stream identified by `id_str`.
-    // TODO: We might want to think about returning only the compaction frontier (since) and seal
-    // timestamp (upper) here. Description seems more oriented towards describing batches, and in
-    // our case the lower is always `Antichain::from_elem(Timestamp::minimum())`. We could return a
-    // tuple or create our own Description-like return type for this.
-    fn get_description(&mut self, id_str: &str, res: PFutureHandle<Description<u64>>) {
-        res.fill((|| {
-            self.drain_pending()?;
-            self.apply_unbatched_cmd(|state, _, _| {
-                let registration = state.id_mapping.iter().find(|s| s.name == id_str);
-                match registration {
-                    Some(registration) => {
-                        let arrangement = state
-                            .arrangements
-                            .get(&registration.id)
-                            .expect("missing trace");
-                        let upper = arrangement.get_seal();
-                        let since = arrangement.since();
-                        let lower = Antichain::from_elem(u64::minimum());
-                        Ok(Description::new(lower, upper, since))
-                    }
-                    None => Err(Error::UnknownRegistration(id_str.to_string())),
-                }
-            })
-        })());
-    }
-}
-
-impl AppliedState {
     fn do_allow_compaction(&mut self, id_sinces: Vec<(Id, Antichain<u64>)>) -> Result<(), String> {
         for (id, since) in id_sinces.iter() {
             let arrangement = self
@@ -990,32 +1028,7 @@ impl AppliedState {
         }
         Ok(())
     }
-}
 
-impl<L: Log, B: Blob> Indexed<L, B> {
-    /// Permit compaction of updates at times <= since to since.
-    ///
-    /// The compaction frontier can never decrease and it is an error to call
-    /// this function with a since argument that is less than the current compaction
-    /// frontier. It is also an error to advance the compaction frontier beyond the
-    /// current sealed frontier.
-    pub fn allow_compaction(
-        &mut self,
-        id_sinces: Vec<(Id, Antichain<u64>)>,
-        res: PFutureHandle<SeqNo>,
-    ) {
-        self.apply_batched_cmd(|state, pending| {
-            let seqno = state.assign_seqno();
-            let response = state
-                .do_allow_compaction(id_sinces)
-                .map(|_| seqno)
-                .map_err(|err| Error::Noop(seqno, err));
-            pending.add_response(PendingResponse::SeqNo(res, response));
-        })
-    }
-}
-
-impl AppliedState {
     /// Appends the given `batch` to the unsealed for `id`, writing the data into
     /// blob storage.
     ///
@@ -1042,19 +1055,7 @@ impl AppliedState {
             arrangements: self.arrangements.values().map(|x| x.meta()).collect(),
         }
     }
-}
 
-impl<L: Log, B: Blob> Indexed<L, B> {
-    /// Returns a [Snapshot] for the given id.
-    pub fn snapshot(&mut self, id: Id, res: PFutureHandle<ArrangementSnapshot>) {
-        res.fill((|| {
-            self.drain_pending()?;
-            self.state.do_snapshot(id, &self.blob)
-        })());
-    }
-}
-
-impl AppliedState {
     fn do_snapshot<B: Blob>(
         &self,
         id: Id,
@@ -1070,25 +1071,6 @@ impl AppliedState {
 }
 
 impl<L: Log, B: Blob> Indexed<L, B> {
-    /// Registers a callback to be invoked on successful writes and seals.
-    //
-    // Also returns a copy of the snapshot so that users can, if they want,
-    // apply their logic to a consistent read of the entire stream.
-    //
-    // TODO: Finish the naming bikeshed for this. Other options so far include
-    // tail, subscribe, tee, inspect, and capture.
-    pub fn listen(
-        &mut self,
-        id: Id,
-        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-        res: PFutureHandle<ArrangementSnapshot>,
-    ) {
-        res.fill((|| {
-            self.drain_pending()?;
-            self.do_listen(id, listen_fn)
-        })());
-    }
-
     fn do_listen(
         &mut self,
         id: Id,
@@ -1203,7 +1185,7 @@ mod tests {
 
         // Empty things are empty.
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
-            block_on(|res| i.snapshot(id, res))?;
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, vec![]);
         assert_eq!(seqno.0, 0);
@@ -1221,18 +1203,21 @@ mod tests {
             }
             ListenEvent::Sealed(_) => {}
         }));
-        block_on(|res| i.listen(id, listen_fn, res))?;
+        block_on(|res| i.apply(Cmd::Listen(id, listen_fn, res)))?;
 
         // After a write, all data is in the unsealed.
         block_on_drain(&mut i, |i, handle| {
-            i.write(
+            i.apply(Cmd::Write(
                 vec![(id, updates.iter().collect::<ColumnarRecords>())],
                 handle,
-            )
+            ))
         })?;
-        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
+        assert_eq!(
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?.read_to_end()?,
+            updates
+        );
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
-            block_on(|res| i.snapshot(id, res))?;
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
         assert_eq!(unsealed.read_to_end()?, updates);
         assert_eq!(trace.read_to_end()?, vec![]);
         assert_eq!(seqno.0, 1);
@@ -1241,9 +1226,12 @@ mod tests {
         // After a step, it's all still in the unsealed as nothing has been sealed
         // yet.
         i.step()?;
-        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
+        assert_eq!(
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?.read_to_end()?,
+            updates
+        );
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
-            block_on(|res| i.snapshot(id, res))?;
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
         assert_eq!(unsealed.read_to_end()?, updates);
         assert_eq!(trace.read_to_end()?, vec![]);
         assert_eq!(seqno.0, 1);
@@ -1252,22 +1240,28 @@ mod tests {
         // After a seal and a step, the relevant data has moved into the trace
         // part of the index. Since we haven't sealed all the data, some of it
         // is still in the unsealed.
-        block_on_drain(&mut i, |i, handle| i.seal(vec![id], 2, handle))?;
+        block_on_drain(&mut i, |i, handle| i.apply(Cmd::Seal(vec![id], 2, handle)))?;
         i.step()?;
-        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
+        assert_eq!(
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?.read_to_end()?,
+            updates
+        );
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
-            block_on(|res| i.snapshot(id, res))?;
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
         assert_eq!(unsealed.read_to_end()?, updates[1..]);
         assert_eq!(trace.read_to_end()?, updates[..1]);
         assert_eq!(seqno.0, 2);
         assert_eq!(seal_frontier.elements(), &[2]);
 
         // All the data has been sealed, so it's now all in the trace.
-        block_on_drain(&mut i, |i, handle| i.seal(vec![id], 3, handle))?;
+        block_on_drain(&mut i, |i, handle| i.apply(Cmd::Seal(vec![id], 3, handle)))?;
         i.step()?;
-        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
+        assert_eq!(
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?.read_to_end()?,
+            updates
+        );
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
-            block_on(|res| i.snapshot(id, res))?;
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, updates);
         assert_eq!(seqno.0, 3);
@@ -1285,7 +1279,10 @@ mod tests {
 
         // Can advance compaction frontier to a time that has already been sealed
         block_on_drain(&mut i, |i, handle| {
-            i.allow_compaction(vec![(id, Antichain::from_elem(2))], handle)
+            i.apply(Cmd::AllowCompaction(
+                vec![(id, Antichain::from_elem(2))],
+                handle,
+            ))
         })?;
 
         Ok(())
@@ -1305,21 +1302,22 @@ mod tests {
         // orders it within each batch by time. It's not, so this will fire a
         // validations error if the sort code doesn't work.
         block_on_drain(&mut i, |i, handle| {
-            i.write(
+            i.apply(Cmd::Write(
                 vec![(id, updates.iter().collect::<ColumnarRecords>())],
                 handle,
-            )
+            ))
         })?;
 
         // Now move it into the trace part of the index, which orders it within
         // each batch by key. It should currently be ordered by time, which
         // given the data is not ordered by key, so again this should fire a
         // validations error if the sort code doesn't work.
-        block_on_drain(&mut i, |i, handle| i.seal(vec![id], 3, handle))?;
+        block_on_drain(&mut i, |i, handle| i.apply(Cmd::Seal(vec![id], 3, handle)))?;
         i.step()?;
 
         // Sanity check that all the data made it into trace as expected.
-        let ArrangementSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
+        let ArrangementSnapshot(unsealed, trace, _, _) =
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, updates);
         Ok(())
@@ -1337,23 +1335,24 @@ mod tests {
 
         // Write the data and move it into the unsealed part of the index.
         block_on_drain(&mut i, |i, handle| {
-            i.write(
+            i.apply(Cmd::Write(
                 vec![(id, updates.iter().collect::<ColumnarRecords>())],
                 handle,
-            )
+            ))
         })?;
 
         // Add another set of identical updates and place into another unsealed
         // batch.
         block_on_drain(&mut i, |i, handle| {
-            i.write(
+            i.apply(Cmd::Write(
                 vec![(id, updates.iter().collect::<ColumnarRecords>())],
                 handle,
-            )
+            ))
         })?;
 
         // Sanity check that the data is all in unsealed and none of it is in trace.
-        let ArrangementSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
+        let ArrangementSnapshot(unsealed, trace, _, _) =
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
         assert_eq!(
             unsealed.read_to_end()?,
             vec![
@@ -1368,11 +1367,12 @@ mod tests {
         // Now move the data to the trace part of the index, which consolidates
         // updates at identical ((k, v), t). Since the writes are unconsolidated
         // this test will fail if trace batch consolidation does not work.
-        block_on_drain(&mut i, |i, handle| i.seal(vec![id], 2, handle))?;
+        block_on_drain(&mut i, |i, handle| i.apply(Cmd::Seal(vec![id], 2, handle)))?;
         i.step()?;
 
         // Sanity check that all the data made it into trace as expected.
-        let ArrangementSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
+        let ArrangementSnapshot(unsealed, trace, _, _) =
+            block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
         assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, vec![(("1".into(), "".into()), 1, 4)]);
 
@@ -1389,10 +1389,10 @@ mod tests {
         // Write the data and move it into the unsealed part of the index.
         assert_eq!(
             block_on_drain(&mut i, |i, handle| {
-                i.write(
+                i.apply(Cmd::Write(
                     vec![(id, updates.iter().collect::<ColumnarRecords>())],
                     handle,
-                )
+                ))
             }),
             Ok(SeqNo(1))
         );
@@ -1417,7 +1417,7 @@ mod tests {
         // to verify the fix.
         let s1 = block_on(|res| i.register("s1", "", "", res))?;
         block_on_drain(&mut i, |i, handle| {
-            i.write(
+            i.apply(Cmd::Write(
                 vec![(
                     s1,
                     vec![(("".into(), "".into()), 0, 1)]
@@ -1425,11 +1425,11 @@ mod tests {
                         .collect::<ColumnarRecords>(),
                 )],
                 handle,
-            )
+            ))
         })?;
         let s2 = block_on(|res| i.register("s2", "", "", res))?;
         block_on_drain(&mut i, |i, handle| {
-            i.write(
+            i.apply(Cmd::Write(
                 vec![(
                     s2,
                     vec![(("".into(), "".into()), 1, 1)]
@@ -1437,14 +1437,14 @@ mod tests {
                         .collect::<ColumnarRecords>(),
                 )],
                 handle,
-            )
+            ))
         })?;
 
         // The second flavor is similar. If we then write to the first stream
         // again and step, it is then missing X..Y. (A stream not written to
         // between two step calls doesn't get a batch.)
         block_on_drain(&mut i, |i, handle| {
-            i.write(
+            i.apply(Cmd::Write(
                 vec![(
                     s1,
                     vec![(("".into(), "".into()), 2, 1)]
@@ -1452,7 +1452,7 @@ mod tests {
                         .collect::<ColumnarRecords>(),
                 )],
                 handle,
-            )
+            ))
         })?;
 
         Ok(())
@@ -1465,14 +1465,20 @@ mod tests {
         let _ = block_on(|res| i.register("stream", "", "", res))?;
 
         // Normal case: destroy registered stream.
-        assert_eq!(block_on(|res| i.destroy("stream", res)), Ok(true));
+        assert_eq!(
+            block_on(|res| i.apply(Cmd::Destroy("stream".into(), res))),
+            Ok(true)
+        );
 
         // Normal case: destroy already destroyed stream.
-        assert_eq!(block_on(|res| i.destroy("stream", res)), Ok(false));
+        assert_eq!(
+            block_on(|res| i.apply(Cmd::Destroy("stream".into(), res))),
+            Ok(false)
+        );
 
         // Destroy stream that was never created.
         assert_eq!(
-            block_on(|res| i.destroy("stream2", res)),
+            block_on(|res| i.apply(Cmd::Destroy("stream2".into(), res))),
             Err(Error::from(
                 "invalid destroy of stream stream2 that was never registered or destroyed"
             ))
@@ -1533,10 +1539,10 @@ mod tests {
 
         // Write the data out but don't close it.
         block_on_drain(&mut i, |i, handle| {
-            i.write(
+            i.apply(Cmd::Write(
                 vec![(id, updates.iter().collect::<ColumnarRecords>())],
                 handle,
-            )
+            ))
         })?;
 
         // We haven't closed the data, so nothing for step to do. If the
@@ -1561,13 +1567,19 @@ mod tests {
             (("2".into(), "".into()), 2, 1),
         ];
         block_on_drain(&mut i, |i, res| {
-            i.write(vec![(id, updates.iter().collect::<ColumnarRecords>())], res)
+            i.apply(Cmd::Write(
+                vec![(id, updates.iter().collect::<ColumnarRecords>())],
+                res,
+            ))
         })?;
-        block_on_drain(&mut i, |i, res| i.seal(vec![id], 4, res))?;
+        block_on_drain(&mut i, |i, res| i.apply(Cmd::Seal(vec![id], 4, res)))?;
         block_on_drain(&mut i, |i, res| {
-            i.allow_compaction(vec![(id, Antichain::from_elem(3))], res)
+            i.apply(Cmd::AllowCompaction(
+                vec![(id, Antichain::from_elem(3))],
+                res,
+            ))
         })?;
-        let snap = block_on(|res| i.snapshot(id, res))?;
+        let snap = block_on(|res| i.apply(Cmd::Snapshot(id, res)))?;
 
         // Now verify that the snapshot has the right since and that the data in
         // it has been advanced as expected.

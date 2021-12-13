@@ -37,25 +37,13 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Indexed, ListenFn, Snapshot};
+use crate::indexed::{Cmd, Indexed, ListenFn, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 use futures_executor::block_on;
 
-#[derive(Debug)]
-enum Cmd {
-    Register(String, (String, String), PFutureHandle<Id>),
-    Destroy(String, PFutureHandle<bool>),
-    Write(Vec<(Id, ColumnarRecords)>, PFutureHandle<SeqNo>),
-    Seal(Vec<Id>, u64, PFutureHandle<SeqNo>),
-    GetDescription(String, PFutureHandle<Description<u64>>),
-    AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
-    Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
-    Listen(
-        Id,
-        ListenFn<Vec<u8>, Vec<u8>>,
-        PFutureHandle<ArrangementSnapshot>,
-    ),
+enum RuntimeCmd {
+    Cmd(Cmd),
     Stop(PFutureHandle<()>),
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
@@ -129,7 +117,7 @@ where
         let mut interval = time::interval(config.min_step_interval / 10);
         loop {
             interval.tick().await;
-            match ticker_tx.send(Cmd::Tick) {
+            match ticker_tx.send(RuntimeCmd::Tick) {
                 Ok(_) => {}
                 Err(_) => {
                     // Runtime has shut down, we can stop ticking.
@@ -180,40 +168,44 @@ struct RuntimeHandles {
 #[derive(Debug)]
 struct RuntimeCore {
     handles: Mutex<Option<RuntimeHandles>>,
-    tx: crossbeam_channel::Sender<Cmd>,
+    tx: crossbeam_channel::Sender<RuntimeCmd>,
     metrics: Metrics,
 }
 
+fn fill_cmd_res_runtime_shutdown(cmd: RuntimeCmd) {
+    match cmd {
+        RuntimeCmd::Stop(res) => {
+            // Already stopped: no-op.
+            res.fill(Ok(()))
+        }
+        RuntimeCmd::Cmd(Cmd::Register(_, _, res)) => res.fill(Err(Error::RuntimeShutdown)),
+        RuntimeCmd::Cmd(Cmd::Destroy(_, res)) => res.fill(Err(Error::RuntimeShutdown)),
+        RuntimeCmd::Cmd(Cmd::Write(_, res)) => res.fill(Err(Error::RuntimeShutdown)),
+        RuntimeCmd::Cmd(Cmd::Seal(_, _, res)) => res.fill(Err(Error::RuntimeShutdown)),
+        RuntimeCmd::Cmd(Cmd::GetDescription(_, res)) => res.fill(Err(Error::RuntimeShutdown)),
+        RuntimeCmd::Cmd(Cmd::AllowCompaction(_, res)) => res.fill(Err(Error::RuntimeShutdown)),
+        RuntimeCmd::Cmd(Cmd::Snapshot(_, res)) => res.fill(Err(Error::RuntimeShutdown)),
+        RuntimeCmd::Cmd(Cmd::Listen(_, _, res)) => res.fill(Err(Error::RuntimeShutdown)),
+        RuntimeCmd::Tick => {}
+    }
+}
+
 impl RuntimeCore {
-    fn send(&self, cmd: Cmd) {
+    fn send(&self, cmd: RuntimeCmd) {
         self.metrics.cmd_queue_in.inc();
         if let Err(crossbeam_channel::SendError(cmd)) = self.tx.send(cmd) {
             // According to the docs, a SendError can only happen if the
             // receiver has hung up, which in this case only happens if the
             // thread has exited. The thread only exits if we send it a
             // Cmd::Stop (or it panics).
-            match cmd {
-                Cmd::Stop(res) => {
-                    // Already stopped: no-op.
-                    res.fill(Ok(()))
-                }
-                Cmd::Register(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Destroy(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Write(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Seal(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::GetDescription(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::AllowCompaction(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::Tick => {}
-            }
+            fill_cmd_res_runtime_shutdown(cmd)
         }
     }
 
     fn stop(&self) -> Result<(), Error> {
         if let Some(handles) = self.handles.lock()?.take() {
             let (tx, rx) = PFuture::new();
-            self.send(Cmd::Stop(tx));
+            self.send(RuntimeCmd::Stop(tx));
             // NB: Make sure there are no early returns before this `join`,
             // otherwise the runtime thread might still be cleaning up when this
             // returns (flushing out final writes, cleaning up LOCK files, etc).
@@ -293,11 +285,11 @@ impl RuntimeClient {
         name: &str,
     ) -> (StreamWriteHandle<K, V>, StreamReadHandle<K, V>) {
         let (tx, rx) = PFuture::new();
-        self.core.send(Cmd::Register(
+        self.core.send(RuntimeCmd::Cmd(Cmd::Register(
             name.to_owned(),
-            (K::codec_name(), V::codec_name()),
+            (K::codec_name().to_string(), V::codec_name().to_string()),
             tx,
-        ));
+        )));
         let id = rx.recv();
         let write = StreamWriteHandle::new(name.to_owned(), id.clone(), self.clone());
         let meta = StreamReadHandle::new(name.to_owned(), id, self.clone());
@@ -311,7 +303,8 @@ impl RuntimeClient {
     // tuple or create our own Description-like return type for this.
     pub fn get_description(&self, id_str: &str) -> Result<Description<u64>, Error> {
         let (tx, rx) = PFuture::new();
-        self.core.send(Cmd::GetDescription(id_str.to_owned(), tx));
+        self.core
+            .send(RuntimeCmd::Cmd(Cmd::GetDescription(id_str.to_owned(), tx)));
         let seal_frontier = rx.recv()?;
         Ok(seal_frontier)
     }
@@ -321,7 +314,7 @@ impl RuntimeClient {
     ///
     /// The ids must have previously been registered.
     pub(crate) fn write(&self, updates: Vec<(Id, ColumnarRecords)>, res: PFutureHandle<SeqNo>) {
-        self.core.send(Cmd::Write(updates, res))
+        self.core.send(RuntimeCmd::Cmd(Cmd::Write(updates, res)))
     }
 
     /// Asynchronously advances the "sealed" frontier for the streams with the
@@ -330,7 +323,8 @@ impl RuntimeClient {
     ///
     /// The ids must have previously been registered.
     fn seal(&self, ids: &[Id], ts: u64, res: PFutureHandle<SeqNo>) {
-        self.core.send(Cmd::Seal(ids.to_vec(), ts, res))
+        self.core
+            .send(RuntimeCmd::Cmd(Cmd::Seal(ids.to_vec(), ts, res)))
     }
 
     /// Asynchronously advances the compaction frontier for the streams with the
@@ -340,8 +334,10 @@ impl RuntimeClient {
     ///
     /// The ids must have previously been registered.
     fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)], res: PFutureHandle<SeqNo>) {
-        self.core
-            .send(Cmd::AllowCompaction(id_sinces.to_vec(), res))
+        self.core.send(RuntimeCmd::Cmd(Cmd::AllowCompaction(
+            id_sinces.to_vec(),
+            res,
+        )))
     }
 
     /// Asynchronously returns a [crate::indexed::Snapshot] for the stream
@@ -351,7 +347,7 @@ impl RuntimeClient {
     ///
     /// The id must have previously been registered.
     fn snapshot(&self, id: Id, res: PFutureHandle<ArrangementSnapshot>) {
-        self.core.send(Cmd::Snapshot(id, res))
+        self.core.send(RuntimeCmd::Cmd(Cmd::Snapshot(id, res)))
     }
 
     /// Asynchronously registers a callback to be invoked on successful writes
@@ -362,7 +358,8 @@ impl RuntimeClient {
         listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
         res: PFutureHandle<ArrangementSnapshot>,
     ) {
-        self.core.send(Cmd::Listen(id, listen_fn, res))
+        self.core
+            .send(RuntimeCmd::Cmd(Cmd::Listen(id, listen_fn, res)))
     }
 
     /// Synchronously closes the runtime, releasing exclusive-writer locks and
@@ -379,7 +376,8 @@ impl RuntimeClient {
     /// destroyed, false if the stream had already been destroyed previously.
     pub fn destroy(&mut self, id: &str) -> Result<bool, Error> {
         let (tx, rx) = PFuture::new();
-        self.core.send(Cmd::Destroy(id.to_owned(), tx));
+        self.core
+            .send(RuntimeCmd::Cmd(Cmd::Destroy(id.to_owned(), tx)));
         rx.recv()
     }
 }
@@ -812,7 +810,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
 
 struct RuntimeImpl<L: Log, B: Blob> {
     indexed: Indexed<L, B>,
-    rx: crossbeam_channel::Receiver<Cmd>,
+    rx: crossbeam_channel::Receiver<RuntimeCmd>,
     metrics: Metrics,
     prev_step: Instant,
     min_step_interval: Duration,
@@ -854,7 +852,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
     fn new(
         config: RuntimeConfig,
         indexed: Indexed<L, B>,
-        rx: crossbeam_channel::Receiver<Cmd>,
+        rx: crossbeam_channel::Receiver<RuntimeCmd>,
         metrics: Metrics,
     ) -> Self {
         RuntimeImpl {
@@ -903,7 +901,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         let run_start = Instant::now();
         for cmd in cmds {
             match cmd {
-                Cmd::Stop(res) => {
+                RuntimeCmd::Stop(res) => {
                     // Finish up any pending work that we can before closing.
                     if let Err(e) = self.indexed.step() {
                         self.metrics.cmd_step_error_count.inc();
@@ -912,37 +910,12 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                     res.fill(self.indexed.close());
                     return false;
                 }
-                Cmd::Register(id, (key_codec_name, val_codec_name), res) => {
-                    self.indexed
-                        .register(&id, &key_codec_name, &val_codec_name, res);
-                }
-                Cmd::Destroy(id, res) => {
-                    self.indexed.destroy(&id, res);
-                }
-                Cmd::Write(updates, res) => {
-                    self.metrics.cmd_write_count.inc();
-                    self.indexed.write(updates, res);
-                }
-                Cmd::Seal(ids, ts, res) => {
-                    self.indexed.seal(ids, ts, res);
-                }
-                Cmd::GetDescription(id_str, res) => {
-                    self.indexed.get_description(&id_str, res);
-                }
-                Cmd::AllowCompaction(id_sinces, res) => {
-                    self.indexed.allow_compaction(id_sinces, res);
-                }
-                Cmd::Snapshot(id, res) => {
-                    self.indexed.snapshot(id, res);
-                }
-                Cmd::Listen(id, listen_fn, res) => {
-                    self.indexed.listen(id, listen_fn, res);
-                }
-                Cmd::Tick => {
+                RuntimeCmd::Tick => {
                     // This is a no-op. It's only here to give us the
                     // opportunity to hit the step logic below on some minimum
                     // interval, even when no other commands are coming in.
                 }
+                RuntimeCmd::Cmd(cmd) => self.indexed.apply(cmd),
             }
             self.metrics.cmd_run_count.inc()
         }

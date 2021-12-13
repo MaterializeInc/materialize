@@ -33,7 +33,7 @@ use persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use persist::indexed::encoding::{BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
 use persist::indexed::runtime::WriteReqBuilder;
-use persist::indexed::Indexed;
+use persist::indexed::{Cmd, Indexed};
 use persist::mem::MemRegistry;
 use persist::pfuture::{PFuture, PFutureHandle};
 use persist::storage::{Atomicity, Blob, LockInfo, Log, SeqNo};
@@ -196,7 +196,7 @@ fn bench_write<L: Log, B: Blob>(
             // once to Unsealed, and not to Trace.
             let mut updates = WriteReqBuilder::from_iter(updates.iter());
             block_on_drain(index, |i, handle| {
-                i.write(vec![(id, updates.finish())], handle)
+                i.apply(Cmd::Write(vec![(id, updates.finish())], handle));
             })
             .unwrap();
         }
@@ -249,7 +249,8 @@ fn bench_writes_indexed_inner<B: Blob, L: Log>(
 
     g.throughput(Throughput::Bytes(size));
 
-    let id = block_on(|res| index.register("0", "()", "()", res))?;
+    let id =
+        block_on(|res| index.apply(Cmd::Register("0".into(), ("()".into(), "()".into()), res)))?;
     g.bench_with_input(
         BenchmarkId::new(&format!("{}_sorted", name), size),
         &sorted_updates,
