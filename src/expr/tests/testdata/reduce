@@ -357,20 +357,20 @@ reduce
 (if (call_binary gt #0 #1) (null bool) false)
 [int32 int32]
 ----
-(null && (#0 > #1))
+(null && ((!(isnull(#0)) && !(isnull(#1))) && (#0 > #1)))
 
 # non-literal expression in the THEN clause
 reduce
 (if (call_binary gt #0 #1) true false)
 [int32 int32]
 ----
-(#0 > #1)
+((!(isnull(#0)) && !(isnull(#1))) && (#0 > #1))
 
 reduce
 (if (call_binary gt #0 #1) true (null bool))
 [int32 int32]
 ----
-(null || (#0 > #1))
+(null || ((!(isnull(#0)) && !(isnull(#1))) && (#0 > #1)))
 
 reduce
 (if (call_binary gt #0 #1) (call_binary eq #0 (1 int32)) true)
@@ -382,7 +382,7 @@ reduce
 (if (call_binary gt #0 #1) (null bool) true)
 [int32 int32]
 ----
-(null || (#0 <= #1))
+(null || ((isnull(#0) || isnull(#1)) || (#0 <= #1)))
 
 reduce
 (if (call_binary gt #0 #1) true true)
@@ -407,6 +407,114 @@ reduce
 [int32 int32]
 ----
 if (#0 > #1) then {1} else {2}
+
+reduce
+(if (null bool) true false)
+[]
+----
+false
+
+reduce
+(if (null bool) false true)
+[]
+----
+true
+
+reduce
+(if (null bool) #0 false)
+[bool]
+----
+false
+
+reduce
+(if (null bool) #0 true)
+[bool]
+----
+true
+
+reduce
+(if (null bool) false #0)
+[bool]
+----
+#0
+
+reduce
+(if (null bool) true #0)
+[bool]
+----
+#0
+
+reduce
+(if true true false)
+[]
+----
+true
+
+reduce
+(if true false true)
+[]
+----
+false
+
+reduce
+(if true #0 false)
+[bool]
+----
+#0
+
+reduce
+(if true #0 true)
+[bool]
+----
+#0
+
+reduce
+(if true false #0)
+[bool]
+----
+false
+
+reduce
+(if true true #0)
+[bool]
+----
+true
+
+reduce
+(if false true false)
+[]
+----
+false
+
+reduce
+(if false false true)
+[]
+----
+true
+
+reduce
+(if false #0 false)
+[bool]
+----
+false
+
+reduce
+(if false #0 true)
+[bool]
+----
+true
+
+reduce
+(if false false #0)
+[bool]
+----
+#0
+
+reduce
+(if false true #0)
+[bool]
+----
+#0
 
 ## undistribute_and/or works despite multiple copies of the same expression in
 ## the intersection
