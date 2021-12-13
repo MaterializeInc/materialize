@@ -9,6 +9,8 @@
 
 use repr::adt::system::{Oid, RegClass, RegProc, RegType};
 
+use crate::EvalError;
+
 sqlfunc!(
     #[sqlname = "oidtoi32"]
     #[preserves_uniqueness = true]
@@ -38,5 +40,14 @@ sqlfunc!(
     #[preserves_uniqueness = true]
     fn cast_oid_to_reg_type(a: Oid) -> RegType {
         RegType(a.0)
+    }
+);
+
+sqlfunc!(
+    fn pg_get_constraintdef(_oid: Option<Oid>) -> Result<String, EvalError> {
+        Err(EvalError::Unsupported {
+            feature: "pg_get_constraintdef".to_string(),
+            issue_no: Some(9483),
+        })
     }
 );

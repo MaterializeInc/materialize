@@ -1610,15 +1610,8 @@ lazy_static! {
             // view. It currently returns no information as the `pg_constraint` view is empty in
             // materialize
             "pg_get_constraintdef" => Scalar {
-                params!(Oid) => {
-                    UnaryFunc::NotImplemented{function_name:"pg_get_constraintdef".to_string()}}, 1387;
-                params!(Oid, Bool) => Operation::binary(|_ecx, e, _| {
-                    Ok(
-                        e.call_unary(
-                            UnaryFunc::NotImplemented{function_name: "pg_get_constraintdef".to_string()}
-                        )
-                    )
-                }), 2508;
+                params!(Oid) => UnaryFunc::PgGetConstraintdef(func::PgGetConstraintdef), 1387;
+                params!(Oid, Bool) => BinaryFunc::PgGetConstraintdef, 2508;
             },
             // pg_get_expr is meant to convert the textual version of
             // pg_node_tree data into parseable expressions. However, we don't

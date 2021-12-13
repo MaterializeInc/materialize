@@ -1282,9 +1282,6 @@ impl fmt::Display for EvalError {
             } => {
                 write!(f, "value too long for type {}({})", target_type, length)
             }
-            EvalError::NotImplemented { function_name } => {
-                write!(f, "{} is not yet implemented", function_name)
-            }
         }
     }
 }
