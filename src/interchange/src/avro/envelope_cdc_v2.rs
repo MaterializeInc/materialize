@@ -200,7 +200,7 @@ mod tests {
 
     /// Collected state to encode update batches and progress statements.
     #[derive(Debug)]
-    pub struct Encoder {
+    struct Encoder {
         columns: Vec<(ColumnName, ColumnType)>,
     }
 
