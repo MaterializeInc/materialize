@@ -958,22 +958,18 @@ SELECT *
     JOIN t1 AS t4 USING (f2);
 
 # https://github.com/MaterializeInc/materialize/pull/9489#issuecomment-992195117
-# https://github.com/MaterializeInc/materialize/pull/9489#issuecomment-992207932
-# These are permitted by PG with a different order of precedence for comma joins
-# and explicit `CROSS JOIN`s. However:
-# - We treat comma joins as if they were explicit cross joins, which prevents
-#   this from working.
-# - Users can recover this behavior by explicitly introducing precedence with
-#   parens.
-
-query error column name "f2" is ambiguous
+# Comma-joins of adjacent tables are equivalent to nested cross joins
+query TTTTT
 SELECT *
     FROM t2,
     t2 AS x
     JOIN t1
-    USING (f2);
+    USING (f2)
+ORDER BY 1;
+----
+3  4  4  3  3
+5  6  4  3  3
 
-# However, we support this equivalent query
 query TTTTT
 SELECT *
     FROM t2
@@ -981,7 +977,40 @@ SELECT *
     t2 AS x
         JOIN t1
         USING (f2)
-    );
+    )
+ORDER BY 1;
 ----
 3  4  4  3  3
 5  6  4  3  3
+
+# https://github.com/MaterializeInc/materialize/pull/9489#issuecomment-992207932
+statement ok
+DELETE FROM t1;
+
+statement ok
+DELETE FROM t2;
+
+statement ok
+INSERT INTO t1 VALUES
+    (NULL, 0),
+    (1, 1),
+    (1, 1),
+    (2, 2);
+
+statement ok
+INSERT INTO t2 VALUES
+    (NULL, 0),
+    (NULL, 0),
+    (1, 1);
+
+query II
+SELECT a3.f1,
+       a4.f1
+  FROM t2 AS a1
+  JOIN t1 AS a2 USING (f1), t2 AS a3
+  JOIN t1 AS a4 USING (f1);
+----
+1 1
+1 1
+1 1
+1 1

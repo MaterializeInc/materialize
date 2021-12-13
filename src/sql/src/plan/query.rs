@@ -2025,28 +2025,63 @@ fn plan_table_with_joins<'a>(
     table_with_joins: &'a TableWithJoins<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     let pushed_left_was_join_identity = left.is_join_identity();
-    let (mut left, mut left_scope) = plan_table_factor(
-        qcx,
-        left,
-        left_scope,
-        &JoinOperator::CrossJoin,
-        &table_with_joins.relation,
-    )?;
-    for join in &table_with_joins.joins {
-        if !pushed_left_was_join_identity
-            && matches!(
-                &join.join_operator,
-                JoinOperator::FullOuter(..) | JoinOperator::RightOuter(..)
-            )
-        {
-            bail_unsupported!(6875, "full/right outer joins in comma join");
+    let mut lateral_visitor = LateralJoinVisitor::new();
+    lateral_visitor.visit_table_with_joins(&table_with_joins);
+    if !lateral_visitor.found() {
+        // NOTE: this branch builds the correct join tree, but it bricks LATERAL
+        // behavior. See #6875.
+        let (expr, scope) = plan_join_identity(qcx);
+        let (mut expr, mut scope) = plan_table_factor(
+            qcx,
+            expr,
+            scope,
+            &JoinOperator::CrossJoin,
+            &table_with_joins.relation,
+        )?;
+        for join in &table_with_joins.joins {
+            let (new_expr, new_scope) =
+                plan_table_factor(qcx, expr, scope, &join.join_operator, &join.relation)?;
+            expr = new_expr;
+            scope = new_scope;
         }
-        let (new_left, new_left_scope) =
-            plan_table_factor(qcx, left, left_scope, &join.join_operator, &join.relation)?;
-        left = new_left;
-        left_scope = new_left_scope;
+        plan_join_operator(
+            &JoinOperator::CrossJoin,
+            qcx,
+            left,
+            left_scope,
+            &qcx,
+            expr,
+            scope,
+            false,
+        )
+    } else {
+        // This branch is WRONG, but it mostly handles LATERAL correctly.
+        let (mut left, mut left_scope) = plan_table_factor(
+            qcx,
+            left,
+            left_scope,
+            &JoinOperator::CrossJoin,
+            &table_with_joins.relation,
+        )?;
+        for join in &table_with_joins.joins {
+            if !pushed_left_was_join_identity
+                && matches!(
+                    &join.join_operator,
+                    JoinOperator::FullOuter(..) | JoinOperator::RightOuter(..)
+                )
+            {
+                bail_unsupported!(
+                    6875,
+                    "join trees using both lateral and full/right outer joins"
+                );
+            }
+            let (new_left, new_left_scope) =
+                plan_table_factor(qcx, left, left_scope, &join.join_operator, &join.relation)?;
+            left = new_left;
+            left_scope = new_left_scope;
+        }
+        Ok((left, left_scope))
     }
-    Ok((left, left_scope))
 }
 
 fn plan_table_factor(
@@ -2603,19 +2638,19 @@ fn plan_join_operator(
             // column references in `right`, but it doesn't seem worth it just
             // to make the raw query plans nicer. The optimizer doesn't have
             // trouble with the extra join.)
-            let join = if left.is_join_identity() && !lateral {
-                right
+            if left.is_join_identity() && !lateral {
+                Ok((right, right_scope))
             } else if right.is_join_identity() {
-                left
+                Ok((left, left_scope))
             } else {
-                HirRelationExpr::Join {
+                let join = HirRelationExpr::Join {
                     left: Box::new(left),
                     right: Box::new(right),
                     on: HirScalarExpr::literal_true(),
                     kind: JoinKind::Inner { lateral },
-                }
-            };
-            Ok((join, left_scope.product(right_scope)?))
+                };
+                Ok((join, left_scope.product(right_scope)?))
+            }
         }
     }
 }
@@ -4144,6 +4179,31 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, PlanError> {
             value_type: Box::new(scalar_type_from_pg(value_type)?),
             custom_oid: None,
         }),
+    }
+}
+
+struct LateralJoinVisitor {
+    found: bool,
+}
+
+impl LateralJoinVisitor {
+    fn new() -> LateralJoinVisitor {
+        LateralJoinVisitor { found: false }
+    }
+
+    fn found(self) -> bool {
+        self.found
+    }
+}
+
+impl<'a, 'ast> Visit<'ast, Aug> for LateralJoinVisitor {
+    fn visit_table_factor(&mut self, node: &'ast TableFactor<Aug>) {
+        if matches!(
+            node,
+            TableFactor::Derived { lateral: true, .. } | TableFactor::Function { .. }
+        ) {
+            self.found = true;
+        }
     }
 }
 
