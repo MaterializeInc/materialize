@@ -23,7 +23,9 @@ def main() -> None:
     args = parser.parse_args()
 
     target = f"{args.arch}-apple-darwin"
-    print(f"Target: {target}")
+
+    print(f"--- Ensuring rustup target {target} exists")
+    spawn.runv(["rustup", "target", "add", target])
 
     print("--- Building materialized release binary")
     spawn.runv(
