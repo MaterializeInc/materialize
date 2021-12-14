@@ -101,6 +101,8 @@ List new features before bug fixes.
 
 {{< /comment >}}
 
+{{% version-header v0.13.0 %}}
+
 {{% version-header v0.12.0 %}}
 
 - Support [`PREPARE`](/sql/prepare/), [`EXECUTE`](/sql/execute/), and [`DEALLOCATE`](/sql/deallocate/)
