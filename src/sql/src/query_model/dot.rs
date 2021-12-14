@@ -265,6 +265,8 @@ impl<'a> fmt::Display for DotLabelEscapedString<'a> {
                 '|' => f.write_str("\\|")?,
                 '{' => f.write_str("\\{")?,
                 '}' => f.write_str("\\}")?,
+                '>' => f.write_str("\\>")?,
+                '<' => f.write_str("\\<")?,
                 _ => f.write_char(c)?,
             }
         }
