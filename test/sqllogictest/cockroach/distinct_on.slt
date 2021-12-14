@@ -238,10 +238,10 @@ SELECT (SELECT DISTINCT ON (a) a FROM abc ORDER BY a, b||'foo') || 'bar';
 # With aggregations #
 #####################
 
-statement error column "y" does not exist
+statement error column "xyz.y" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT DISTINCT ON(max(x)) y FROM xyz
 
-statement error column "z" does not exist
+statement error column "xyz.z" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT DISTINCT ON(max(x), z) min(y) FROM xyz
 
 query I
@@ -263,7 +263,7 @@ SELECT DISTINCT ON(min(a), max(b), min(c)) max(c) FROM abc
 # With GROUP BY #
 #################
 
-statement error column "x" does not exist
+statement error column "xyz.x" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT DISTINCT ON (x) min(x) FROM xyz GROUP BY y
 
 query I rowsort

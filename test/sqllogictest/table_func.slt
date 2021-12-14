@@ -968,7 +968,7 @@ SELECT generate_series FROM ROWS FROM (generate_series(1, 1))
 generate_series
 1
 
-query error column name "generate_series" is ambiguous
+query error column reference "generate_series" is ambiguous
 SELECT generate_series FROM ROWS FROM (generate_series(1, 1), generate_series(2, 2))
 
 query I colnames

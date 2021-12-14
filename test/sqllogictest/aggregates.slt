@@ -15,8 +15,29 @@ CREATE TABLE t (a int, b int)
 statement ok
 INSERT INTO t (a, b) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
 
-statement error aggregate functions are not allowed in WHERE clause
+query error aggregate functions are not allowed in WHERE clause
 SELECT a FROM t WHERE sum(b) = 3 GROUP BY a
+
+query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT b FROM t GROUP BY a
+
+query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT 1 FROM t GROUP BY a ORDER BY b
+
+query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT 1 FROM t GROUP BY a HAVING b > 0
+
+query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT DISTINCT ON (b) a FROM t GROUP BY a ORDER BY b
+
+query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT t.b FROM t GROUP BY a
+
+query error column "c" does not exist
+SELECT c FROM t GROUP BY a
+
+query error column "t.c" does not exist
+SELECT t.c FROM t GROUP BY a
 
 query IIIR colnames
 SELECT 1 AS literal, sum(a) as sum_a, sum(b), avg(a) FROM t
@@ -45,7 +66,7 @@ dummy 2 3
 dummy 3 1
 
 # ...unless they are ambiguous...
-query error column name "c" is ambiguous
+query error column reference "c" is ambiguous
 SELECT a AS c, sum(b) AS c FROM t GROUP BY c
 
 # ...although ambiguity between the input list and the output list is not an
