@@ -16,6 +16,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
+use std::time::Duration;
 
 use persist_types::Codec;
 
@@ -238,6 +239,11 @@ where
         // workers, or to use a non-timely solution for keeping track of outstanding write
         // capabilities.
         let active_seal_operator = self.scope().index() == 0;
+        // An activator that allows us to re-schedule this operator for retries.
+        let activator = Arc::new(
+            self.scope()
+                .activator_for(&seal_op.operator_info().address[..]),
+        );
 
         seal_op.build_async(
             self.scope(),
@@ -291,6 +297,10 @@ where
                             frontier_element,
                             e
                         );
+
+                        // Reschedule this operator after a small delay to retry the
+                        // seal.
+                        activator.activate_after(Duration::from_millis(100));
 
                         return;
                     }
