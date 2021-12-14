@@ -17,6 +17,8 @@ skip = [
 
     # Waiting for clap to upgrade to v0.10.
     { name = "strsim", version = "0.8.0" },
+    # Waiting for csv, http, and aws_smithy_types to upgrade to v1.0.
+    { name = "itoa", version = "0.4.1" },
 ]
 
 # The `md5` and `sha1` crates are not part of the RustCrypto project. Use
