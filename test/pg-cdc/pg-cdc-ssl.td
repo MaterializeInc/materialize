@@ -141,7 +141,7 @@ DELETE FROM numbers WHERE number = 2;
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostssl dbname=postgres sslmode=verify-ca'
   PUBLICATION 'mz_source';
-self-signed certificate in certificate chain
+self signed certificate in certificate chain
 
 # server: hostssl, client: verify-ca => OK
 > CREATE MATERIALIZED SOURCE "mz_source"
@@ -164,7 +164,7 @@ DELETE FROM numbers WHERE number = 2;
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostssl dbname=postgres sslmode=verify-full'
   PUBLICATION 'mz_source';
-self-signed certificate in certificate chain
+self signed certificate in certificate chain
 
 # server: hostssl, client: verify-full => OK
 > CREATE MATERIALIZED SOURCE "mz_source"
@@ -217,13 +217,13 @@ db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnossl", datab
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostnossl sslmode=verify-ca dbname=postgres'
   PUBLICATION 'mz_source';
-self-signed certificate in certificate chain
+self signed certificate in certificate chain
 
 # server: hostnossl, client: verify-full => ERROR
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostnossl sslmode=verify-full dbname=postgres'
   PUBLICATION 'mz_source';
-self-signed certificate in certificate chain
+self signed certificate in certificate chain
 
 # server: certuser, client: require => OK
 > CREATE MATERIALIZED SOURCE "mz_source"

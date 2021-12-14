@@ -457,7 +457,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
                         err.to_string(),
-                        "self-signed certificate in certificate chain"
+                        "self signed certificate in certificate chain"
                     )
                 })),
             },
@@ -467,7 +467,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert!(code.is_none());
-                    assert_contains!(message, "self-signed certificate in certificate chain")
+                    assert_contains!(message, "self signed certificate in certificate chain")
                 })),
             },
             // Connecting with TLS with a bad client certificate should fail.
@@ -588,7 +588,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
                         err.to_string(),
-                        "self-signed certificate in certificate chain"
+                        "self signed certificate in certificate chain"
                     )
                 })),
             },
@@ -598,7 +598,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert!(code.is_none());
-                    assert_contains!(message, "self-signed certificate in certificate chain")
+                    assert_contains!(message, "self signed certificate in certificate chain")
                 })),
             },
             // Connecting with TLS with a bad client certificate should fail.
