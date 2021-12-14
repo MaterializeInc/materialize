@@ -21,6 +21,7 @@ stdenv.mkDerivation rec {
       cmake
       rustup
       openssl
+      postgresql
       pkg-config
       lld_13
       python38Packages.pip
