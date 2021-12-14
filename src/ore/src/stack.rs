@@ -97,7 +97,7 @@ pub fn maybe_grow<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, || f())
+    stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, f)
 }
 
 /// A trait for types which support bounded recursion to prevent stack overflow.

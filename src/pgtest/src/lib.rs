@@ -351,7 +351,7 @@ pub struct ErrorField {
 
 impl Drop for PgTest {
     fn drop(&mut self) {
-        let _ = self.send(|buf| frontend::terminate(buf));
+        let _ = self.send(frontend::terminate);
     }
 }
 

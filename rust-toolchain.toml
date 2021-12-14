@@ -38,5 +38,5 @@
 #   See: ci/builder/README.md
 
 [toolchain]
-channel = "1.56.0"
+channel = "1.57.0"
 profile = "default"

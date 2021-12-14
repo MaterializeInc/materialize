@@ -1086,7 +1086,7 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)>
         .from_reader(bytes);
     csv_reader.into_records().filter_map(move |res| match res {
         Ok(sr) if sr.len() == n_cols => {
-            row.extend(sr.iter().map(|s| Datum::String(s)));
+            row.extend(sr.iter().map(Datum::String));
             Some((row.finish_and_reuse(), 1))
         }
         _ => None,

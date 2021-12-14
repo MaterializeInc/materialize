@@ -69,14 +69,14 @@ impl RcActivator {
 struct ActivatorInner {
     activated: usize,
     activators: Vec<Activator>,
-    name: String,
+    _name: String,
     threshold: usize,
 }
 
 impl ActivatorInner {
     fn new(name: String, threshold: usize) -> Self {
         Self {
-            name,
+            _name: name,
             threshold,
             activated: 0,
             activators: Vec::new(),

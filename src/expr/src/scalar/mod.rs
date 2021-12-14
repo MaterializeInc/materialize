@@ -1315,7 +1315,7 @@ mod tests {
             ScalarType::Int64.nullable(true),
             ScalarType::Int64.nullable(false),
         ]);
-        let col = |i| MirScalarExpr::Column(i);
+        let col = MirScalarExpr::Column;
         let err = |e| MirScalarExpr::literal(Err(e), ScalarType::Int64);
         let lit = |i| MirScalarExpr::literal_ok(Datum::Int64(i), ScalarType::Int64);
         let null = || MirScalarExpr::literal_null(ScalarType::Int64);

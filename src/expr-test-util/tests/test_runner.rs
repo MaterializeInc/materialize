@@ -63,7 +63,7 @@ mod test {
                         match roundtrip(
                             &s.input,
                             "MirScalarExpr",
-                            |s| build_scalar(s),
+                            build_scalar,
                             MirScalarExprDeserializeContext::default,
                         ) {
                             Ok(scalar) => format!("{}\n", scalar),
