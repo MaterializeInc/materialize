@@ -89,7 +89,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut metrics_registry = MetricsRegistry::new();
     let (coord_handle, coord_client) = coord::serve(coord::Config {
         dataflow_client,
-        symbiosis_url: None,
         logging: None,
         data_directory: &args.data_directory,
         timestamp_frequency: Duration::from_secs(1),

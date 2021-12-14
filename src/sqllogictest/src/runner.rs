@@ -548,7 +548,6 @@ impl Runner {
             workers: config.workers,
             timely_worker: timely::WorkerConfig::default(),
             data_directory: temp_dir.path().to_path_buf(),
-            symbiosis_url: Some("postgres://".into()),
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             experimental_mode: true,
