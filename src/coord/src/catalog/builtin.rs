@@ -1231,6 +1231,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     mz_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
     NULL::pg_catalog.oid AS relowner,
+    0::pg_catalog.oid AS relam,
     CASE
         WHEN mz_objects.type = 'table' THEN 'r'
         WHEN mz_objects.type = 'source' THEN 'r'
@@ -1616,7 +1617,20 @@ WHERE c.relkind = ANY (ARRAY['r','p'])",
     needs_logs: false,
 };
 
-// Next id BuiltinView: 5036
+pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
+    name: "pg_am",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_am AS
+SELECT NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS amname,
+    NULL::pg_catalog.regproc AS amhandler,
+    NULL::pg_catalog.char(1) AS amtype
+WHERE false",
+    id: GlobalId::System(5036),
+    needs_logs: false,
+};
+
+// Next id BuiltinView: 5037
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
@@ -1758,6 +1772,7 @@ lazy_static! {
             Builtin::View(&PG_SETTINGS),
             Builtin::View(&PG_CONSTRAINT),
             Builtin::View(&PG_TABLES),
+            Builtin::View(&PG_ACCESS_METHODS),
         ];
 
         // TODO(sploiselle): assign static global IDs to functions
