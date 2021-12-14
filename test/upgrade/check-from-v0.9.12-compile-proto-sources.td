@@ -13,7 +13,7 @@ id mz_offset
 c  1
 h  2
 
-$ kafka-ingest topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION} format=protobuf descriptor-file=message.pb message=.Message confluent-wire-format=true
+$ kafka-ingest topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION} format=protobuf descriptor-file=message.pb message=.Message confluent-wire-format=true schema-id=1
 {"id": "a"}
 {"id": "e"}
 
