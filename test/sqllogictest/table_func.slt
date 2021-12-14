@@ -1140,13 +1140,13 @@ query error invalid input syntax for type array
 SELECT generate_subscripts('[2:4]={1,2,3,4}'::int[], 1) AS s;
 
 query I
-select generate_subscripts(ARRAY[ARRAY[1,2,3], ARRAY[5,6,7]], 1);
+select generate_subscripts(ARRAY[ARRAY[1,2,3], ARRAY[4,5,6]], 1);
 ----
 1
 2
 
 query I
-select generate_subscripts(ARRAY[ARRAY[1,2,3], ARRAY[5,6,7]], 2);
+select generate_subscripts(ARRAY[ARRAY[1,2,3], ARRAY[4,5,6]], 2);
 ----
 1
 2
