@@ -17,7 +17,7 @@ expr = { path = "../expr" }
 futures = "0.3.18"
 ore = { path = "../ore" }
 repr = { path = "../repr" }
-serde_json = "1.0.72"
+serde_json = "1.0.73"
 structopt = "0.3.25"
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"
