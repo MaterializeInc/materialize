@@ -991,7 +991,7 @@ fn generate_subscripts_array(
             .try_into()
             .expect("array dimensions must be a usize"),
     ) {
-        Some(requested_dim) => generate_series::<i32>(
+        Some(requested_dim) => Ok(Box::new(generate_series::<i32>(
             requested_dim
                 .lower_bound
                 .try_into()
@@ -1001,8 +1001,7 @@ fn generate_subscripts_array(
                 .try_into()
                 .expect("array dimensions must be a usize"),
             1,
-        )
-        .map(|e| Box::new(e) as Box<dyn Iterator<Item = _>>),
+        )?)),
         None => Ok(Box::new(iter::empty())),
     }
 }
@@ -1231,8 +1230,7 @@ impl TableFunc {
                 Ok(Box::new(res))
             }
             TableFunc::GenerateSubscriptsArray => {
-                let res = generate_subscripts_array(datums[0], datums[1].unwrap_int32())?;
-                Ok(Box::new(res))
+                generate_subscripts_array(datums[0], datums[1].unwrap_int32())
             }
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
