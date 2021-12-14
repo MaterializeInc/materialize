@@ -2807,6 +2807,7 @@ version = "0.0.0"
 dependencies = [
  "reqwest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

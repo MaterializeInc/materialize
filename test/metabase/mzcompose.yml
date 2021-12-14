@@ -15,7 +15,7 @@ services:
     environment:
       - MZ_DEV=1
   metabase:
-    image: materialize/metabase:v0.0.5
+    image: metabase/metabase:v0.41.4
     ports:
     - 3000:3000
   smoketest:
