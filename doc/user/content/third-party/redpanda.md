@@ -12,18 +12,17 @@ The Redpanda integration has [beta-level](../supported-tools#beta-level-support)
 
 ## What's missing?
 
-You can use most of the Kafka source options for Redpanda as a Kafka broker, with a few exceptions:
+You can use most of the Kafka source options for Redpanda as a Kafka broker, with an exception:
 
-- The Protobuf schema registry isn't supported for Redpanda sources.
-- The `start_offset` option may not work properly [Redpanda issue #2397](https://github.com/vectorizedio/redpanda/issues/2397).
+- The `start_offset` option may not work properly ([Redpanda #2397](https://github.com/vectorizedio/redpanda/issues/2397)).
 
-## Redpanda setup
+## Configuration
 
-Two settings that are enabled by default in Kafka will need be enabled explicitly in Redpanda for `redpanda start`:
+Two configuration parameters that are enabled by default in Kafka need to be enabled explicitly in Redpanda:
 
 ```nofmt
---set "redpanda.enable_transactions=true"
---set "redpanda.enable_idempotence=true"
+--set redpanda.enable_transactions=true
+--set redpanda.enable_idempotence=true
 ```
 
 For more information on general Redpanda configuration, see the [Redpanda documentation](https://vectorized.io/docs/configuration/).
@@ -32,3 +31,4 @@ For more information on general Redpanda configuration, see the [Redpanda docume
 
 ## Related pages
 - [`CREATE SOURCE`](/sql/create-source/)
+- [`CREATE SINK`](/sql/create-sink/)
