@@ -1111,6 +1111,18 @@ SELECT generate_subscripts('{1,2,3,4}'::TEXT[], 1) AS s;
 3
 4
 
+query I
+SELECT generate_subscripts(ARRAY[ARRAY[1, 2], ARRAY[3, 4], ARRAY[5, 6]], 1) AS s;
+----
+1
+2
+3
+
+query I
+SELECT generate_subscripts(ARRAY[ARRAY[1, 2], ARRAY[3, 4], ARRAY[5, 6]], 2) AS s;
+----
+1
+2
 
 query I
 SELECT generate_subscripts('{1,2,3,4}'::int[], 0) AS s;
