@@ -42,7 +42,7 @@ production readiness.
   should be (see `--help` for all the release types):
 
   ```shell
-  bin/mkrelease new-rc feature
+  bin/mkrelease new-rc weekly
   ```
 
 - [ ] Update the [release notes][] to include a new "unreleased" version so that new
