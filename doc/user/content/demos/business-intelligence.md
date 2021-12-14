@@ -271,6 +271,7 @@ Materialize to maintain for us.
 
     Field             | Enter...
     ----------------- | ----------------
+    Database type     | **PostgreSQL**
     Database          | **Materialize**
     Name              | **tpcch**
     Host              | **materialized**

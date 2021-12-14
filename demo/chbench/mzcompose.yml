@@ -219,11 +219,8 @@ services:
     volumes:
       - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
 
-  # Metabase
-  # We need to ~manually add our `metabase-materialize-driver` to /plugins
-  # for Metabase to automatically load Materialize as a connection option.
   metabase:
-    image: materialize/metabase:v0.0.5
+    image: metabase/metabase:v0.41.4
     depends_on: [materialized]
     ports:
       - *metabase

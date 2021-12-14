@@ -21,7 +21,7 @@ use metabase::{
 use ore::retry::Retry;
 
 const DUMMY_EMAIL: &str = "ci@materialize.io";
-const DUMMY_PASSWORD: &str = "dummy1";
+const DUMMY_PASSWORD: &str = "dummydummy1";
 
 async fn connect_materialized() -> Result<tokio_postgres::Client, anyhow::Error> {
     Retry::default()
@@ -72,7 +72,7 @@ async fn connect_metabase() -> Result<metabase::Client, anyhow::Error> {
             let req = &SetupRequest {
                 allow_tracking: false,
                 database: SetupDatabase {
-                    engine: "materialize".into(),
+                    engine: "postgres".into(),
                     name: "Materialize".into(),
                     details: SetupDatabaseDetails {
                         host: "materialized".into(),
@@ -124,6 +124,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let expected_metadata = DatabaseMetadata {
         tables: vec![Table {
             name: "orders".into(),
+            schema: "public".into(),
             fields: vec![
                 TableField {
                     name: "date".into(),
@@ -133,15 +134,15 @@ async fn main() -> Result<(), anyhow::Error> {
                 },
                 TableField {
                     name: "id".into(),
-                    database_type: "integer".into(),
-                    base_type: "type/*".into(),
-                    special_type: Some("type/PK".into()),
+                    database_type: "int4".into(),
+                    base_type: "type/Integer".into(),
+                    special_type: None,
                 },
                 TableField {
                     name: "quantity".into(),
-                    database_type: "integer".into(),
-                    base_type: "type/*".into(),
-                    special_type: Some("type/Category".into()),
+                    database_type: "int4".into(),
+                    base_type: "type/Integer".into(),
+                    special_type: None,
                 },
                 TableField {
                     name: "total".into(),
@@ -158,6 +159,7 @@ async fn main() -> Result<(), anyhow::Error> {
     Retry::default()
         .retry(|_| async {
             let mut metadata = metabase_client.database_metadata(mzdb.id).await?;
+            metadata.tables.retain(|t| t.schema == "public");
             metadata.tables.sort_by(|a, b| a.name.cmp(&b.name));
             for t in &mut metadata.tables {
                 t.fields.sort_by(|a, b| a.name.cmp(&b.name));
