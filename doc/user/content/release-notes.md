@@ -117,6 +117,8 @@ for SQL statements.
 - Ensure `pg_get_constraintdef` [compatibility function] parses, though it
   remains unimplemented.
 
+- Support `generate_subscripts` for 1-dimensional `arrays`
+
 {{% version-header v0.11.0 %}}
 
 - **Breaking change.** Remove the `mz_workers` function {{% gh 9363 %}}.

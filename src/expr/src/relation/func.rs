@@ -978,6 +978,34 @@ fn generate_series_ts(
     Ok(tsri.map(move |i| (Row::pack_slice(&[conv(i)]), 1)))
 }
 
+fn generate_subscripts_array(
+    a: Datum,
+    dim: i32,
+) -> Result<Box<dyn Iterator<Item = (Row, Diff)>>, EvalError> {
+    if dim <= 0 {
+        return Ok(Box::new(iter::empty()));
+    }
+
+    match a.unwrap_array().dims().into_iter().nth(
+        (dim - 1)
+            .try_into()
+            .map_err(|_| EvalError::Int32OutOfRange)?,
+    ) {
+        Some(requested_dim) => Ok(Box::new(generate_series::<i32>(
+            requested_dim
+                .lower_bound
+                .try_into()
+                .map_err(|_| EvalError::Int32OutOfRange)?,
+            requested_dim
+                .length
+                .try_into()
+                .map_err(|_| EvalError::Int32OutOfRange)?,
+            1,
+        )?)),
+        None => Ok(Box::new(iter::empty())),
+    }
+}
+
 fn unnest_array<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_array()
         .elements()
@@ -1137,6 +1165,7 @@ pub enum TableFunc {
         types: Vec<ColumnType>,
         width: usize,
     },
+    GenerateSubscriptsArray,
 }
 
 impl TableFunc {
@@ -1200,6 +1229,9 @@ impl TableFunc {
                 )?;
                 Ok(Box::new(res))
             }
+            TableFunc::GenerateSubscriptsArray => {
+                generate_subscripts_array(datums[0], datums[1].unwrap_int32())
+            }
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
@@ -1239,6 +1271,9 @@ impl TableFunc {
             }
             TableFunc::GenerateSeriesTimestamp => vec![ScalarType::Timestamp.nullable(false)],
             TableFunc::GenerateSeriesTimestampTz => vec![ScalarType::TimestampTz.nullable(false)],
+            TableFunc::GenerateSubscriptsArray => {
+                vec![ScalarType::Int32.nullable(false)]
+            }
             TableFunc::Repeat => vec![],
             TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
@@ -1257,6 +1292,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt64 => 1,
             TableFunc::GenerateSeriesTimestamp => 1,
             TableFunc::GenerateSeriesTimestampTz => 1,
+            TableFunc::GenerateSubscriptsArray => 1,
             TableFunc::Repeat => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
@@ -1273,6 +1309,7 @@ impl TableFunc {
             | TableFunc::GenerateSeriesInt64
             | TableFunc::GenerateSeriesTimestamp
             | TableFunc::GenerateSeriesTimestampTz
+            | TableFunc::GenerateSubscriptsArray
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
@@ -1296,6 +1333,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt64 => true,
             TableFunc::GenerateSeriesTimestamp => true,
             TableFunc::GenerateSeriesTimestampTz => true,
+            TableFunc::GenerateSubscriptsArray => true,
             TableFunc::Repeat => false,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
@@ -1316,6 +1354,7 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesTimestamp => f.write_str("generate_series"),
             TableFunc::GenerateSeriesTimestampTz => f.write_str("generate_series"),
+            TableFunc::GenerateSubscriptsArray => f.write_str("generate_subscripts"),
             TableFunc::Repeat => f.write_str("repeat_row"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
