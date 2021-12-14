@@ -1620,11 +1620,11 @@ WHERE c.relkind = ANY (ARRAY['r','p'])",
 pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
     name: "pg_am",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_am AS \
-SELECT NULL::pg_catalog.oid AS oid, \
-    NULL::pg_catalog.text AS amname, \
-    NULL::pg_catalog.regproc AS amhandler, \
-    NULL::pg_catalog.char(1) AS amtype \
+    sql: "CREATE VIEW pg_am AS
+SELECT NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS amname,
+    NULL::pg_catalog.regproc AS amhandler,
+    NULL::pg_catalog.char(1) AS amtype
 WHERE false",
     id: GlobalId::System(5036),
     needs_logs: false,
