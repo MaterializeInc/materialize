@@ -563,6 +563,7 @@ impl Timestamper {
                         consistency,
                         ts_frequency: _,
                         timeline: _,
+                        persist: _,
                     } = sc
                     {
                         (connector, encoding, envelope, consistency)

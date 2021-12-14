@@ -15,7 +15,6 @@
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
 use super::*;
-use dataflow_types::ConnectorDesc;
 use ore::stack::maybe_grow;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -100,10 +99,10 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_by_id(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        let connector = ConnectorDesc::nonpersisted(SourceConnector::Local {
+                        let connector = SourceConnector::Local {
                             timeline: table.timeline(),
                             persisted_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
-                        });
+                        };
                         dataflow.import_source(
                             *id,
                             dataflow_types::SourceDesc {
@@ -116,20 +115,32 @@ impl<'a> DataflowBuilder<'a> {
                         );
                     }
                     CatalogItem::Source(source) => {
-                        let connector_desc = match &source.details {
-                            SourceDetails::NonpersistedSource(connector) => {
-                                ConnectorDesc::nonpersisted(connector.clone())
+                        // This is the place I don't much like. We're injecting a `persist` into an
+                        // existing struct. And for the most part, that struct never holds a
+                        // persist. It's only when we send it to `dataflow` for rendering that we
+                        // inject it. We could get around this by not sending a SourceConnector to
+                        // dataflow but an entirely new thing. My previous version got around that
+                        // by wrapping a SourceConnector into either a
+                        // `PersistedSource(SourceConnector, Persist)` or a
+                        // `NonpersistedSource(SourceConnector)`.
+                        let mut connector = source.connector.clone();
+                        if let Some(persist) = &source.persist {
+                            match &mut connector {
+                                SourceConnector::External {
+                                    persist: connector_persist,
+                                    ..
+                                } => {
+                                    assert!(connector_persist.is_none());
+                                    *connector_persist = Some(persist.clone().into());
+                                }
+                                SourceConnector::Local { .. } => {
+                                    // Nothing to do, this will already be correctly set up.
+                                }
                             }
-                            SourceDetails::PersistedSource(connector, persist_details) => {
-                                ConnectorDesc::persisted(
-                                    connector.clone(),
-                                    persist_details.clone().into(),
-                                )
-                            }
-                        };
+                        }
                         let source_connector = dataflow_types::SourceDesc {
                             name: entry.name().to_string(),
-                            connector: connector_desc,
+                            connector,
                             operators: None,
                             bare_desc: source.bare_desc.clone(),
                         };

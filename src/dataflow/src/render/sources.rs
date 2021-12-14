@@ -93,63 +93,11 @@ where
         //
         // This has a lot of potential for improvement in the near future.
         match src.connector {
-            ConnectorDesc::NonpersistedSource(connector) => self.render_source(
-                render_state,
-                tokens,
-                scope,
-                materialized_logging,
-                now,
-                base_metrics,
-                src.name,
-                src.bare_desc,
-                linear_operators,
-                src_id,
-                orig_id,
-                connector,
-                None,
-            ),
-            ConnectorDesc::PersistedSource(connector, persist_desc) => self.render_source(
-                render_state,
-                tokens,
-                scope,
-                materialized_logging,
-                now,
-                base_metrics,
-                src.name,
-                src.bare_desc,
-                linear_operators,
-                src_id,
-                orig_id,
-                connector,
-                Some(persist_desc), // <- this is the only different to above!
-            ),
-            ConnectorDesc::Ingest(_) => unreachable!("the coordinator does not send these out"),
-        }
-    }
-
-    fn render_source(
-        &mut self,
-        render_state: &mut RenderState,
-        tokens: &mut RelevantTokens,
-        scope: &mut G,
-        materialized_logging: Option<Logger>,
-        now: NowFn,
-        base_metrics: &SourceBaseMetrics,
-        src_name: String,
-        bare_desc: RelationDesc,
-        linear_operators: Option<LinearOperator>,
-        src_id: GlobalId,
-        orig_id: GlobalId,
-        connector: SourceConnector,
-        persist_desc: Option<SourcePersistDesc>,
-    ) {
-        match connector {
             // Create a new local input (exposed as TABLEs to users). Data is inserted
             // via Command::Insert commands.
             SourceConnector::Local { persisted_name, .. } => {
                 self.render_local_source(render_state, scope, src_id, persisted_name);
             }
-
             SourceConnector::External {
                 connector,
                 encoding,
@@ -157,6 +105,7 @@ where
                 consistency,
                 ts_frequency,
                 timeline: _,
+                persist,
             } => {
                 self.render_external_source(
                     render_state,
@@ -165,14 +114,14 @@ where
                     materialized_logging,
                     now,
                     base_metrics,
-                    src_name,
+                    src.name,
                     src_id,
                     orig_id,
                     connector,
-                    persist_desc,
+                    persist,
                     encoding,
                     envelope,
-                    bare_desc,
+                    src.bare_desc,
                     linear_operators,
                     consistency,
                     ts_frequency,

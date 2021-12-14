@@ -317,7 +317,7 @@ impl CatalogState {
 
         let item = self.get_by_id(&id).item();
         match item {
-            CatalogItem::Source(source) => match &source.connector() {
+            CatalogItem::Source(source) => match &source.connector {
                 SourceConnector::External { connector, .. } => match &connector {
                     ExternalSourceConnector::PubNub(_) => Volatile,
                     ExternalSourceConnector::Kinesis(_) => Volatile,
@@ -536,22 +536,8 @@ pub struct Source {
 
     // This describes the "physical" details of the source, i.e. how it should be rendered in a
     // dataflow.
-    pub details: SourceDetails,
-}
-
-impl Source {
-    pub fn connector(&self) -> &SourceConnector {
-        match &self.details {
-            SourceDetails::NonpersistedSource(connector) => connector,
-            SourceDetails::PersistedSource(connector, _persist_details) => connector,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub enum SourceDetails {
-    NonpersistedSource(SourceConnector),
-    PersistedSource(SourceConnector, SourcePersistDetails),
+    pub connector: SourceConnector,
+    pub persist: Option<SourcePersistDetails>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -682,7 +668,7 @@ impl CatalogItem {
 
     pub fn source_connector(&self, name: &FullName) -> Result<&SourceConnector, SqlCatalogError> {
         match &self {
-            CatalogItem::Source(source) => Ok(source.connector()),
+            CatalogItem::Source(source) => Ok(&source.connector),
             _ => Err(SqlCatalogError::UnknownSource(name.to_string())),
         }
     }
@@ -969,14 +955,13 @@ impl Catalog {
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
                             optimized_expr,
-                            details: SourceDetails::NonpersistedSource(
-                                dataflow_types::SourceConnector::Local {
-                                    timeline: Timeline::EpochMilliseconds,
-                                    persisted_name: None,
-                                },
-                            ),
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
+                            connector: dataflow_types::SourceConnector::Local {
+                                timeline: Timeline::EpochMilliseconds,
+                                persisted_name: None,
+                            },
+                            persist: None,
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -2196,12 +2181,10 @@ impl Catalog {
                 persist_details: None,
             },
             CatalogItem::Source(source) => {
-                let persist_details = match &source.details {
-                    SourceDetails::NonpersistedSource(_) => None,
-                    SourceDetails::PersistedSource(_connector, persist_details) => {
-                        Some(persist_details.clone().into())
-                    }
-                };
+                let persist_details = source
+                    .persist
+                    .as_ref()
+                    .map(|details| details.clone().into());
                 SerializedCatalogItem::V1 {
                     create_sql: source.create_sql.clone(),
                     eval_env: None,
@@ -2289,18 +2272,13 @@ impl Catalog {
                 let persist_details = self
                     .persist
                     .source_details_from_stream_names(&source.connector, source_persist_details)?;
-                let details = match persist_details {
-                    Some(persist_details) => {
-                        SourceDetails::PersistedSource(source.connector, persist_details)
-                    }
-                    None => SourceDetails::NonpersistedSource(source.connector),
-                };
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
                     optimized_expr,
-                    details,
                     bare_desc: source.bare_desc,
                     desc: transformed_desc,
+                    connector: source.connector,
+                    persist: persist_details,
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {

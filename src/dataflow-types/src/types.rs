@@ -507,60 +507,7 @@ pub struct SourceDesc {
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
     pub bare_desc: RelationDesc,
-    pub connector: ConnectorDesc,
-}
-
-// TODO: In a post-ingestd world, the first two would not be sent to `dataflow`, and only the
-// second would be sent to an `ingestd`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ConnectorDesc {
-    NonpersistedSource(SourceConnector),
-    PersistedSource(SourceConnector, SourcePersistDesc),
-    // TODO: Having this here only makes the rendering code slightly weird for now. I can leave it
-    // in or remove it. It currently doesn't do anything.
-    Ingest(IngestDesc),
-}
-
-impl ConnectorDesc {
-    pub fn nonpersisted(connector: SourceConnector) -> Self {
-        ConnectorDesc::NonpersistedSource(connector)
-    }
-
-    pub fn persisted(connector: SourceConnector, persist_desc: SourcePersistDesc) -> Self {
-        ConnectorDesc::PersistedSource(connector, persist_desc)
-    }
-
-    pub fn connector(&self) -> Option<SourceConnector> {
-        match self {
-            ConnectorDesc::NonpersistedSource(connector) => Some(connector.clone()),
-            ConnectorDesc::PersistedSource(connector, _persist_desc) => Some(connector.clone()),
-            ConnectorDesc::Ingest(_) => None,
-        }
-    }
-}
-
-/// A source that reads that from an ingester. This is "fully described" by the persistent stream
-/// that we have to read from.
-// TODO: This is for future work. No-one will use this for now, and no-one will create one. But
-// there can be prototypes that use this... ;-).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IngestDesc {
-    stream_name: String,
-}
-
-/// The persistence details that are needed to render a persistent Source.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SourcePersistDesc {
-    /// Name of the primary persisted stream of this source. This is what a consumer of the
-    /// persisted data would be interested in while the secondary stream(s) of the source are an
-    /// internal implementation detail.
-    pub primary_stream: String,
-
-    /// Persisted stream of timestamp bindings.
-    pub timestamp_bindings_stream: String,
-
-    /// Any additional details that we need to make the envelope logic stateful.
-    pub envelope_desc: EnvelopePersistDesc,
+    pub connector: SourceConnector,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -796,6 +743,7 @@ pub enum SourceConnector {
         consistency: Consistency,
         ts_frequency: Duration,
         timeline: Timeline,
+        persist: Option<SourcePersistDesc>,
     },
 
     /// A local "source" is either fed by a local input handle, or by reading from a
@@ -819,6 +767,21 @@ pub enum SourceConnector {
         timeline: Timeline,
         persisted_name: Option<String>,
     },
+}
+
+/// The persistence details of an external [`SourceConnector`].
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SourcePersistDesc {
+    /// Name of the primary persisted stream of this source. This is what a consumer of the
+    /// persisted data would be interested in while the secondary stream(s) of the source are an
+    /// internal implementation detail.
+    pub primary_stream: String,
+
+    /// Persisted stream of timestamp bindings.
+    pub timestamp_bindings_stream: String,
+
+    /// Any additional details that we need to make the envelope logic stateful.
+    pub envelope_desc: EnvelopePersistDesc,
 }
 
 impl SourceConnector {
