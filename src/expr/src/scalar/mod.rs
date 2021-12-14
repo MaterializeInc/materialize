@@ -577,10 +577,21 @@ impl MirScalarExpr {
                             *e = then.take();
                         } else if then.is_literal_ok() && els.is_literal_ok() {
                             match (then.as_literal(), els.as_literal()) {
+                                // Note: NULLs from the condition should not be propagated to the result
+                                // of the expression.
                                 (Some(Ok(Datum::True)), _) => {
-                                    *e = cond.take().call_binary(els.take(), BinaryFunc::Or);
+                                    // Rewritten as ((<cond> IS NOT NULL) AND (<cond>)) OR (<els>)
+                                    // NULL <cond> results in: (FALSE AND NULL) OR (<els>) => (<els>)
+                                    *e = cond
+                                        .clone()
+                                        .call_unary(UnaryFunc::IsNull(func::IsNull))
+                                        .call_unary(UnaryFunc::Not(func::Not))
+                                        .call_binary(cond.take(), BinaryFunc::And)
+                                        .call_binary(els.take(), BinaryFunc::Or);
                                 }
                                 (Some(Ok(Datum::False)), _) => {
+                                    // Rewritten as ((NOT <cond>) OR (<cond> IS NULL)) AND (<els>)
+                                    // NULL <cond> results in: (NULL OR TRUE) AND (<els>) => TRUE AND (<els>) => (<els>)
                                     *e = cond
                                         .clone()
                                         .call_unary(UnaryFunc::Not(func::Not))
@@ -591,13 +602,26 @@ impl MirScalarExpr {
                                         .call_binary(els.take(), BinaryFunc::And);
                                 }
                                 (_, Some(Ok(Datum::True))) => {
+                                    // Rewritten as (NOT <cond>) OR (<cond> IS NULL) OR (<then>)
+                                    // NULL <cond> results in: NULL OR TRUE OR (<then>) => TRUE
                                     *e = cond
-                                        .take()
+                                        .clone()
                                         .call_unary(UnaryFunc::Not(func::Not))
+                                        .call_binary(
+                                            cond.take().call_unary(UnaryFunc::IsNull(func::IsNull)),
+                                            BinaryFunc::Or,
+                                        )
                                         .call_binary(then.take(), BinaryFunc::Or);
                                 }
                                 (_, Some(Ok(Datum::False))) => {
-                                    *e = cond.take().call_binary(then.take(), BinaryFunc::And);
+                                    // Rewritten as (<cond> IS NOT NULL) AND (<cond>) AND (<then>)
+                                    // NULL <cond> results in: FALSE AND NULL AND (<then>) => FALSE
+                                    *e = cond
+                                        .clone()
+                                        .call_unary(UnaryFunc::IsNull(func::IsNull))
+                                        .call_unary(UnaryFunc::Not(func::Not))
+                                        .call_binary(cond.take(), BinaryFunc::And)
+                                        .call_binary(then.take(), BinaryFunc::And);
                                 }
                                 _ => {}
                             }
