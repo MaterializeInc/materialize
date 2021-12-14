@@ -17,7 +17,7 @@ hex = "0.4.3"
 hmac = "0.11.0"
 itertools = "0.10.3"
 lowertest = { path = "../lowertest"}
-md-5 = "0.9.0"
+md-5 = "0.10.0"
 num_enum = "0.5.4"
 num = "0.4.0"
 num-iter = "0.1.42"

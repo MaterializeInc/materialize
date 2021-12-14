@@ -710,6 +710,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-buffer"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1d36a02058e76b040de25a4464ba1c80935655595b661505c8b39b664828b95"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "bstr"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -819,7 +828,7 @@ dependencies = [
  "env_logger",
  "futures",
  "log",
- "md-5",
+ "md-5 0.10.0",
  "ore",
  "rand",
  "structopt",
@@ -1144,6 +1153,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-common"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683d6b536309245c849479fba3da410962a43ed8e51c26b729208ec0ac2798d0"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "crypto-mac"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1455,6 +1473,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "digest"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b697d66081d42af4fba142d56918a3cb21dc8eb63372c6b85d14f44fb9c5979b"
+dependencies = [
+ "block-buffer 0.10.0",
+ "crypto-common",
+ "generic-array",
+]
+
+[[package]]
 name = "dirs-next"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1709,7 +1738,7 @@ dependencies = [
  "hmac",
  "itertools",
  "lowertest",
- "md-5",
+ "md-5 0.10.0",
  "num",
  "num-iter",
  "num_enum",
@@ -2165,7 +2194,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a2a2320eb7ec0ebe8da8f744d7812d9fc4cb4d09344ac01898dbcb6a20ae69b"
 dependencies = [
  "crypto-mac",
- "digest",
+ "digest 0.9.0",
 ]
 
 [[package]]
@@ -2654,7 +2683,7 @@ checksum = "a3e378b66a060d48947b590737b30a1be76706c8dd7b8ba0f2fe3989c68a853f"
 
 [[package]]
 name = "materialized"
-version = "0.11.1-dev"
+version = "0.12.1-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -2765,9 +2794,18 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b5a279bb9607f9f53c22d496eade00d138d1bdcccd07d74650387cf94942a15"
 dependencies = [
- "block-buffer",
- "digest",
+ "block-buffer 0.9.0",
+ "digest 0.9.0",
  "opaque-debug",
+]
+
+[[package]]
+name = "md-5"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6a38fc55c8bbc10058782919516f88826e70320db6d206aebc49611d24216ae"
+dependencies = [
+ "digest 0.10.1",
 ]
 
 [[package]]
@@ -2877,13 +2915,13 @@ dependencies = [
  "byteorder",
  "chrono",
  "crc32fast",
- "digest",
+ "digest 0.9.0",
  "enum-kinds",
  "flate2",
  "itertools",
  "lazy_static",
  "log",
- "md-5",
+ "md-5 0.10.0",
  "rand",
  "regex",
  "serde",
@@ -3414,7 +3452,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "log",
- "md-5",
+ "md-5 0.10.0",
  "mz-aws-util",
  "mz-protoc",
  "ore",
@@ -3643,7 +3681,7 @@ dependencies = [
  "bytes",
  "fallible-iterator",
  "hmac",
- "md-5",
+ "md-5 0.9.1",
  "memchr",
  "rand",
  "sha2",
@@ -4316,14 +4354,14 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
- "digest",
+ "digest 0.9.0",
  "futures",
  "hex",
  "hmac",
  "http",
  "hyper",
  "log",
- "md-5",
+ "md-5 0.9.1",
  "percent-encoding",
  "pin-project-lite",
  "rusoto_credential",
@@ -4557,10 +4595,10 @@ version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99cd6713db3cf16b6c84e06321e049a9b9f699826e16096d23bbcc44d15d51a6"
 dependencies = [
- "block-buffer",
+ "block-buffer 0.9.0",
  "cfg-if",
  "cpufeatures",
- "digest",
+ "digest 0.9.0",
  "opaque-debug",
 ]
 
@@ -4570,10 +4608,10 @@ version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b69f9a4c9740d74c5baa3fd2e547f9525fa8088a8a958e0ca2409a514e33f5fa"
 dependencies = [
- "block-buffer",
+ "block-buffer 0.9.0",
  "cfg-if",
  "cpufeatures",
- "digest",
+ "digest 0.9.0",
  "opaque-debug",
 ]
 
@@ -4743,7 +4781,7 @@ dependencies = [
  "futures",
  "lazy_static",
  "materialized",
- "md-5",
+ "md-5 0.10.0",
  "ore",
  "pgrepr",
  "postgres-protocol",
@@ -5055,7 +5093,7 @@ dependencies = [
  "krb5-src",
  "lazy_static",
  "maplit",
- "md-5",
+ "md-5 0.10.0",
  "mz-avro",
  "mz-aws-util",
  "mz-protoc",

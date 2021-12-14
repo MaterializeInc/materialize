@@ -31,7 +31,7 @@ uuid = "0.8.2"
 
 [dev-dependencies]
 lazy_static = "1.1.0"
-md-5 = "0.9.0"
+md-5 = "0.10.0"
 
 [features]
 snappy = ["byteorder", "crc32fast", "snap"]

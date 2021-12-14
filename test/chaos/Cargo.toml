@@ -10,7 +10,7 @@ anyhow = "1.0.51"
 env_logger = "0.9.0"
 futures = "0.3.18"
 log = "0.4.13"
-md-5 = "0.9.0"
+md-5 = "0.10.0"
 ore = { path = "../../src/ore" }
 rand = "0.8.4"
 structopt = "0.3.25"
