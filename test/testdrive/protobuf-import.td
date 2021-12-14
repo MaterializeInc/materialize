@@ -148,7 +148,7 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
 Decode error: Text: protobuf deserialization error: unsupported Confluent-style protobuf message descriptor id: expected 0, but found: 123. See https://github.com/MaterializeInc/materialize/issues/9250
 
 
-# TODO(guswynn): uncomment these when we can test them with a single worker. 
+# TODO(guswynn): uncomment these when we can test them with a single worker.
 # They are testing that each protobuf decoder tracks validated schema id's correctly
 #
 ## Schema id checks
