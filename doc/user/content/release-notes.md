@@ -117,7 +117,8 @@ for SQL statements.
 - Ensure `pg_get_constraintdef` [compatibility function] parses, though it
   remains unimplemented.
 
-- Support `generate_subscripts` for 1-dimensional `arrays`
+- Support `generate_subscripts` for `arrays` which will generate a series comprising
+  the valid subscripts of the selected dimension of the given array.
 
 {{% version-header v0.11.0 %}}
 
