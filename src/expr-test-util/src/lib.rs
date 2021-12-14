@@ -86,6 +86,24 @@ pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, Stri
     )
 }
 
+/// Pretty-print the MirRelationExpr.
+///
+/// If format contains "types", then add types to the pretty-printed
+/// `MirRelationExpr`.
+pub fn generate_explanation(
+    humanizer: &dyn ExprHumanizer,
+    rel: &MirRelationExpr,
+    format: Option<&Vec<String>>,
+) -> String {
+    let mut explanation = ViewExplanation::new(rel, humanizer);
+    if let Some(format) = format {
+        if format.contains(&"types".to_string()) {
+            explanation.explain_types();
+        }
+    }
+    explanation.to_string()
+}
+
 /// Turns the json version of a MirRelationExpr into the [lowertest::to_json]
 /// syntax.
 ///
@@ -165,24 +183,6 @@ impl<'a> TestCatalog {
     /// Looks up the name of the object referred to as `id`.
     pub fn get_source_name(&'a self, id: &GlobalId) -> Option<&'a String> {
         self.names.get(id)
-    }
-
-    /// Pretty-print the MirRelationExpr.
-    ///
-    /// If format contains "types", then add types to the pretty-printed
-    /// `MirRelationExpr`.
-    pub fn generate_explanation(
-        &self,
-        rel: &MirRelationExpr,
-        format: Option<&Vec<String>>,
-    ) -> String {
-        let mut explanation = ViewExplanation::new(rel, self);
-        if let Some(format) = format {
-            if format.contains(&"types".to_string()) {
-                explanation.explain_types();
-            }
-        }
-        explanation.to_string()
     }
 
     /// Handles instructions to modify the catalog.

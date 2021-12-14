@@ -22,7 +22,8 @@ mod tests {
     use anyhow::{anyhow, Error};
     use expr::{GlobalId, Id, MirRelationExpr};
     use expr_test_util::{
-        build_rel, json_to_spec, MirRelationExprDeserializeContext, TestCatalog, RTI,
+        build_rel, generate_explanation, json_to_spec, MirRelationExprDeserializeContext,
+        TestCatalog, RTI,
     };
     use lowertest::{deserialize, tokenize};
     use ore::str::separated;
@@ -110,7 +111,7 @@ mod tests {
                 json_to_spec(&serde_json::to_string(rel).unwrap(), cat).0
             ),
             FormatType::Json => format!("{}\n", serde_json::to_string(rel).unwrap()),
-            FormatType::Explain(format) => cat.generate_explanation(rel, *format),
+            FormatType::Explain(format) => generate_explanation(cat, rel, *format),
         }
     }
 

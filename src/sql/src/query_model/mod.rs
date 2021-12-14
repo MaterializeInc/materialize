@@ -91,6 +91,10 @@ pub struct QueryBox {
     pub quantifiers: QuantifierSet,
     /// quantifiers ranging over this box
     pub ranging_quantifiers: QuantifierSet,
+    /// list of unique keys exposed by this box. Each unique key is made by
+    /// a list of column positions. Must be re-computed every time the box
+    /// is modified.
+    pub unique_keys: Vec<Vec<usize>>,
     /// whether this box must enforce the uniqueness of its output, it is
     /// guaranteed by structure of the box or it must preserve duplicated
     /// rows from its input boxes. See [DistinctOperation].
@@ -152,7 +156,7 @@ pub enum QuantifierType {
 #[derive(Debug)]
 pub enum BoxType {
     /// A table from the catalog.
-    BaseTable(BaseTable),
+    Get(Get),
     /// SQL's except operator
     Except,
     /// GROUP BY operator.
@@ -176,7 +180,9 @@ pub enum BoxType {
 }
 
 #[derive(Debug)]
-pub struct BaseTable {/* @todo table metadata from the catalog */}
+pub struct Get {
+    id: expr::GlobalId,
+}
 
 /// The content of a Grouping box.
 #[derive(Debug, Default)]
@@ -234,6 +240,7 @@ impl Model {
             columns: Vec::new(),
             quantifiers: QuantifierSet::new(),
             ranging_quantifiers: QuantifierSet::new(),
+            unique_keys: Vec::new(),
             distinct: DistinctOperation::Preserve,
         }));
         self.boxes.insert(id, b);
@@ -401,7 +408,7 @@ impl QueryBox {
                     f(p)?;
                 }
             }
-            BoxType::Except | BoxType::Union | BoxType::Intersect | BoxType::BaseTable(_) => {}
+            BoxType::Except | BoxType::Union | BoxType::Intersect | BoxType::Get(_) => {}
         }
         Ok(())
     }
@@ -445,8 +452,8 @@ impl QueryBox {
 impl BoxType {
     pub fn get_box_type_str(&self) -> &'static str {
         match self {
-            BoxType::BaseTable(..) => "BaseTable",
             BoxType::Except => "Except",
+            BoxType::Get(..) => "Get",
             BoxType::Grouping(..) => "Grouping",
             BoxType::Intersect => "Intersect",
             BoxType::OuterJoin(..) => "OuterJoin",

@@ -10,11 +10,12 @@
 //! Generates a Query Graph Model from a [HirRelationExpr].
 
 use itertools::Itertools;
+use std::collections::HashMap;
 
 use crate::plan::expr::{HirScalarExpr, JoinKind};
 use crate::query_model::{
-    BoxId, BoxScalarExpr, BoxType, Column, ColumnReference, Model, OuterJoin, QuantifierType,
-    Select, Values,
+    BaseColumn, BoxId, BoxScalarExpr, BoxType, Column, ColumnReference, Get, Model, OuterJoin,
+    QuantifierType, Select, Values,
 };
 
 use crate::plan::expr::HirRelationExpr;
@@ -29,6 +30,9 @@ struct FromHir {
     model: Model,
     /// The stack of context boxes for resolving offset-based column references.
     context_stack: Vec<BoxId>,
+    /// Track the `BoxId` that represents each HirRelationExpr::Get expression
+    /// we have seen so far.
+    gets_seen: HashMap<expr::Id, BoxId>,
 }
 
 impl FromHir {
@@ -37,6 +41,7 @@ impl FromHir {
         let mut generator = FromHir {
             model: Model::new(),
             context_stack: Vec::new(),
+            gets_seen: HashMap::new(),
         };
         generator.model.top_box = generator.generate_select(expr);
         generator.model
@@ -55,9 +60,33 @@ impl FromHir {
     /// Generates a sub-graph representing the given expression.
     fn generate_internal(&mut self, expr: HirRelationExpr) -> BoxId {
         match expr {
-            // HirRelationExpr::Get { id, typ } => {
-            //     self.model.make_box(BoxType::BaseTable(BaseTable {}))
-            // }
+            HirRelationExpr::Get { id, mut typ } => {
+                if let Some(box_id) = self.gets_seen.get(&id) {
+                    return *box_id;
+                }
+                if let expr::Id::Global(id) = id {
+                    let result = self.model.make_box(BoxType::Get(Get { id }));
+                    let b = self.model.get_box(result);
+                    self.gets_seen.insert(expr::Id::Global(id), result);
+                    b.borrow_mut().unique_keys.append(&mut typ.keys);
+                    b.borrow_mut()
+                        .columns
+                        .extend(typ.column_types.into_iter().enumerate().map(
+                            |(position, column_type)| Column {
+                                expr: BoxScalarExpr::BaseColumn(BaseColumn {
+                                    position,
+                                    column_type,
+                                }),
+                                alias: None,
+                            },
+                        ));
+                    result
+                } else {
+                    // Other id variants should not be present in the
+                    // HirRelationExpr.
+                    panic!("unsupported get id {:?}", id);
+                }
+            }
             HirRelationExpr::Constant { rows, typ } => {
                 assert!(typ.arity() == 0, "expressions are not yet supported",);
                 self.model.make_box(BoxType::Values(Values {

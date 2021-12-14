@@ -10,10 +10,18 @@ This crate supports converting a specification written in a readable syntax (see
 the stack. It also supports converting the Rust object back into the readable
 syntax.
 
+Note that this crate can help create not only a Rust object to run tests on but
+also the test itself. Suppose you want to run `funcX`, a function with `n`
+arguments. Instead of initializing each of the `n` arguments one by one in Rust
+code, you can define a struct or enum with those `n` arguments as fields and use
+this crate to convert a test specification into an instance of the struct or
+enum. Then, you can feed the fields of the struct into `funcX`.
+
 ## Syntax
 
 Write:
-* an enum as `(variant_in_snake_case field1 field2 .. fieldn)`
+* an enum as `(variant_in_snake_case field1 field2 .. fieldn)` or
+  `(VariantInCamelCase field1 field2 .. fieldn)`.
 * a struct with arguments as `(field1 field2 .. fieldn)`
 * a struct with no arguments as the empty string.
 * a `Vec` as `[elem1 elem2 .. elemn]`
@@ -26,6 +34,11 @@ Write:
 You can put commas between fields and elements; they will essentially be treated
 as whitespace.
 
+The syntax can be overridden and extended by creating an object that implements
+the trait `TestDeserializationContext`; see [#extending-the-syntax] for more
+details.
+
+### Shortcut for unit enum (resp. a struct with only one argument)
 As a convenience, a unit enum (resp. a struct with only one argument) can
 alternatively be written as `variant_in_snake_case` (resp. `field1`).
 
@@ -33,14 +46,15 @@ The convenience cannot be used if you have a struct whose only argument is a
 non-unit enum (resp. a struct with multiple arguments). In this case, you
 should use two sets of parentheses, e.g.
 `((variant_in_snake_case field1 .. fieldn))` (resp. `((field1 .. fieldn))`) to
-make it clear that the multiple arguments belong to the inner enum/struct and
-not the outer struct.
+make it clear that the multiple arguments belong to the inner enum (resp.
+struct) and not the outer struct.
 
-The syntax can be overridden and extended by creating an object that implements
-the trait `TestDeserializationContext`; see [#extending-the-syntax] for more
-details.
+Just as with regular enums, `variant_in_snake_case` can be replaced with `VariantInCamelCase`.
 
-Enum variants can be written as CamelCase in addition to snake_case.
+### Shortcut for `String`
+
+A object of type `String` can be optionally specified without quotations if the
+string is something other than `"null"`.
 
 ## Creating an object
 
