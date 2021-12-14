@@ -989,17 +989,17 @@ fn generate_subscripts_array(
     match a.unwrap_array().dims().into_iter().nth(
         (dim - 1)
             .try_into()
-            .expect("array dimensions must be a usize"),
+            .map_err(|_| EvalError::Int32OutOfRange)?,
     ) {
         Some(requested_dim) => Ok(Box::new(generate_series::<i32>(
             requested_dim
                 .lower_bound
                 .try_into()
-                .expect("array lower bound must be a usize"),
+                .map_err(|_| EvalError::Int32OutOfRange)?,
             requested_dim
                 .length
                 .try_into()
-                .expect("array dimensions must be a usize"),
+                .map_err(|_| EvalError::Int32OutOfRange)?,
             1,
         )?)),
         None => Ok(Box::new(iter::empty())),
