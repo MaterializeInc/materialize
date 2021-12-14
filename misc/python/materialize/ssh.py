@@ -26,6 +26,6 @@ def runv(
     if not check_host_key:
         initial_args += ["-o", "StrictHostKeyChecking off"]
     if identity_file:
-        initial_args += ["-i", identity_file]
+        initial_args += ["-i", identity_file, "-o", "IdentitiesOnly yes"]
     initial_args += [f"{username}@{host}"]
     return spawn.runv(initial_args + args)
