@@ -949,19 +949,6 @@ lazy_static! {
         // for this to be persisted.
         persistent: true,
     };
-    pub static ref MZ_ACCESS_METHODS: BuiltinTable = BuiltinTable {
-        name: "mz_ams",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
-                .with_named_column("oid", ScalarType::Oid.nullable(false))
-                .with_named_column("amname", ScalarType::String.nullable(false))
-                .with_named_column("amhandler", ScalarType::RegProc.nullable(false))
-                .with_named_column("amtype", ScalarType::Char{length: Some(1)}.nullable(false))
-                .with_key(vec![0]),
-        id: GlobalId::System(4049),
-        index_id: GlobalId::System(4050),
-        persistent: false,
-    };
 }
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
@@ -1633,8 +1620,12 @@ WHERE c.relkind = ANY (ARRAY['r','p'])",
 pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
     name: "pg_am",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_am AS
-SELECT * from mz_catalog.mz_ams",
+    sql: "CREATE VIEW pg_am AS \
+SELECT NULL::pg_catalog.oid AS oid, \
+    NULL::pg_catalog.text AS amname, \
+    NULL::pg_catalog.regproc AS amhandler, \
+    NULL::pg_catalog.char(1) AS amtype \
+WHERE false",
     id: GlobalId::System(5036),
     needs_logs: false,
 };
@@ -1746,7 +1737,6 @@ lazy_static! {
             Builtin::Table(&MZ_PROMETHEUS_READINGS),
             Builtin::Table(&MZ_PROMETHEUS_HISTOGRAMS),
             Builtin::Table(&MZ_PROMETHEUS_METRICS),
-            Builtin::Table(&MZ_ACCESS_METHODS),
             Builtin::View(&MZ_CATALOG_NAMES),
             Builtin::View(&MZ_ARRANGEMENT_SHARING),
             Builtin::View(&MZ_ARRANGEMENT_SIZES),
