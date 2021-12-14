@@ -133,12 +133,26 @@ struct Args {
     /// The `<path>` is a prefix prepended to all S3 object keys used for
     /// persistence and allowed to be empty.
     ///
-    /// Ignored if persistence is disabled. If unset, files stored under
-    /// `--data-directory/-D` are used instead. If set, S3 credentials and
-    /// region must be available in the process or environment: for details see
+    /// Additional configuration can be specified by appending url-like query
+    /// parameters: `?<key1>=<val1>&<key2>=<val2>...`
+    ///
+    /// Supported additional configurations are:
+    ///
+    /// - `aws_role_arn=arn:aws:...`
+    ///
+    /// Ignored if persistence is disabled. Ignored if --persist_storage_enabled
+    /// is false.
+    ///
+    /// If unset, files stored under `--data-directory/-D` are used instead. If
+    /// set, S3 credentials and region must be available in the process or
+    /// environment: for details see
     /// https://github.com/rusoto/rusoto/blob/rusoto-v0.47.0/AWS-CREDENTIALS.md.
     #[structopt(long, hidden = true, default_value)]
     persist_storage: String,
+
+    /// Enable the --persist_storage flag. Has to be used with --experimental.
+    #[structopt(long, hidden = true)]
+    persist_storage_enabled: bool,
 
     /// Enable persistent Kafka UPSERT source. Has to be used with --experimental.
     #[structopt(long, hidden = true)]
@@ -651,14 +665,18 @@ dataflow workers: {workers}",
             system_table_enabled = false;
         }
 
-        let storage = if args.persist_storage.is_empty() {
+        let storage = if args.persist_storage_enabled {
+            if args.persist_storage.is_empty() {
+                bail!("--persist-storage must be specified with --persist-storage-enabled");
+            } else if !args.experimental {
+                bail!("cannot specify --persist-storage-enabled without --experimental");
+            } else {
+                PersistStorage::try_from(args.persist_storage)?
+            }
+        } else {
             PersistStorage::File(PersistFileStorage {
                 blob_path: data_directory.join("persist").join("blob"),
             })
-        } else if !args.experimental {
-            bail!("cannot specify --persist-storage without --experimental");
-        } else {
-            PersistStorage::try_from(args.persist_storage)?
         };
 
         let kafka_upsert_source_enabled =
