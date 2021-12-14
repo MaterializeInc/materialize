@@ -686,6 +686,7 @@ class Materialized(PythonService):
         workers: Optional[int] = None,
         memory: Optional[str] = None,
         data_directory: str = "/share/mzdata",
+        timestamp_frequency: str = "100ms",
         options: str = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
@@ -716,7 +717,8 @@ class Materialized(PythonService):
             f"--listen-addr 0.0.0.0:{port}",
             "--disable-telemetry",
             "--experimental",
-            "--timestamp-frequency 100ms",
+            f"--timestamp-frequency {timestamp_frequency}",
+            f"--introspection-frequency {timestamp_frequency}",
             "--retain-prometheus-metrics 1s",
         ]
 
@@ -1106,6 +1108,7 @@ class Testdrive(PythonService):
         self,
         name: str = "testdrive-svc",
         mzbuild: str = "testdrive",
+        materialized_url: str = "postgres://materialize@materialized:6875",
         no_reset: bool = False,
         default_timeout: str = "30s",
         seed: Optional[int] = None,
@@ -1137,7 +1140,7 @@ class Testdrive(PythonService):
                 "testdrive",
                 "--kafka-addr=kafka:9092",
                 "--schema-registry-url=http://schema-registry:8081",
-                "--materialized-url=postgres://materialize@materialized:6875",
+                f"--materialized-url={materialized_url}",
             ]
 
         if validate_catalog:
@@ -1269,9 +1272,9 @@ class Steps:
             to_register.name = name
 
             # Allow the step to also be called as a Workflow.step_name() classmethod
-            def run_step(workflow: Workflow, **kwargs: Any) -> None:
+            def run_step(workflow: Workflow, **kwargs: Any) -> Optional[str]:
                 step: WorkflowStep = to_register(**kwargs)
-                step.run(workflow)
+                return step.run(workflow)
 
             func_name = name.replace("-", "_")
             if func_name == "run":
@@ -1306,7 +1309,7 @@ class WorkflowStep:
     def __init__(self, **kwargs: Any) -> None:
         pass
 
-    def run(self, workflow: Workflow) -> None:
+    def run(self, workflow: Workflow) -> Optional[str]:
         """Perform the action specified by this step"""
 
 
@@ -1438,7 +1441,10 @@ class RemoveServicesStep(WorkflowStep):
     """
 
     def __init__(
-        self, *, services: Optional[List[str]] = None, destroy_volumes: bool = False
+        self,
+        *,
+        services: Optional[List[str]] = None,
+        destroy_volumes: bool = False,
     ) -> None:
         self._services = services if services is not None else []
         self._destroy_volumes = destroy_volumes
@@ -1454,7 +1460,7 @@ class RemoveServicesStep(WorkflowStep):
                     "-s",
                     *(["-v"] if self._destroy_volumes else []),
                     *self._services,
-                ]
+                ],
             )
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
@@ -2065,6 +2071,7 @@ class RunStep(WorkflowStep):
       - service: (required) the name of the service, from the mzcompose file
       - entrypoint: Overwrite the entrypoint with this
       - command: the command to run. These are the arguments to the entrypoint
+      - capture: Capture and return output (default: False)
       - daemon: run as a daemon (default: False)
       - service_ports: expose and use service ports. (Default: True)
       - force_service_name: ensure that this container has exactly the name of
@@ -2079,6 +2086,7 @@ class RunStep(WorkflowStep):
         *,
         service: str,
         command: Optional[Union[str, list]] = None,
+        capture: bool = False,
         daemon: bool = False,
         entrypoint: Optional[str] = None,
         service_ports: bool = True,
@@ -2098,17 +2106,19 @@ class RunStep(WorkflowStep):
         self._force_service_name = force_service_name
         self._service_ports = service_ports
         self._command = cmd
+        self._capture = capture
 
-    def run(self, workflow: Workflow) -> None:
+    def run(self, workflow: Workflow) -> Any:
         try:
-            workflow.run_compose(
-                [
+            return workflow.run_compose(
+                capture=self._capture,
+                args=[
                     "run",
                     *(["--service-ports"] if self._service_ports else []),
                     *(["--name", self._service] if self._force_service_name else []),
                     *self._command,
-                ]
-            )
+                ],
+            ).stdout
         except subprocess.CalledProcessError:
             raise errors.Failed("giving up: {}".format(ui.shell_quote(self._command)))
 

@@ -1,0 +1,54 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+import statistics
+from typing import Any, Callable, List
+
+import numpy as np
+
+
+class Aggregation:
+    def __init__(self) -> None:
+        self._data: List[Any] = []
+
+    def append(self, measurement: float) -> None:
+        self._data.append(measurement)
+
+    def aggregate(self) -> Any:
+        return self.func()(*self._data)
+
+    def func(self) -> Callable:
+        assert False
+
+
+class MinAggregation(Aggregation):
+    def func(self) -> Callable:
+        return min
+
+
+class MeanAggregation(Aggregation):
+    def func(self) -> Callable:
+        return np.mean
+
+
+class StdDevAggregation(Aggregation):
+    def __init__(self, num_stdevs: float) -> None:
+        self._data = []
+        self._num_stdevs = num_stdevs
+
+    def aggregate(self) -> float:
+        stdev = np.std(self._data)
+        mean = np.mean(self._data)
+        val = mean - (stdev * self._num_stdevs)
+        return val  # type: ignore
+
+
+class NormalDistributionAggregation(Aggregation):
+    def aggregate(self) -> statistics.NormalDist:
+        return statistics.NormalDist(mu=np.mean(self._data), sigma=np.std(self._data))
