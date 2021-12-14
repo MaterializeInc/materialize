@@ -1,7 +1,7 @@
 [package]
 name = "materialized"
 description = "Streaming SQL materialized views."
-version = "0.11.1-dev"
+version = "0.12.1-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2021"
@@ -59,7 +59,7 @@ mz-process-collector = { path = "../mz-process-collector" }
 nix = "0.23.0"
 num_cpus = "1.0.0"
 openssl = { version = "0.10.38", features = ["vendored"] }
-openssl-sys = { version = "0.9.71", features = ["vendored"] }
+openssl-sys = { version = "0.9.72", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.8"
 pid-file = { path = "../pid-file" }
