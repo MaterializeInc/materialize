@@ -179,24 +179,19 @@ WHERE l1.la IN (
 | Get materialize.public.l (u1)
 | Filter !(isnull(#0))
 | Project (#0)
+| Distinct group=((#0 + 1))
+| ArrangeBy (#0)
 
 %7 =
-| Join %5 %6 (= #0 (#1 + 1))
-| | implementation = Differential %6 %5.(#0)
+| Join %4 %5 %6 (= #1 #2 #3)
+| | implementation = Differential %4 %5.(#0) %6.(#0)
 | Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %8 =
-| Join %4 %7 (= #1 #2)
-| | implementation = Differential %4 %7.(#0)
-| Project (#0)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%9 =
-| Join %3 %8 (= #0 #2)
-| | implementation = Differential %3 %8.(#0)
+| Join %3 %7 (= #0 #2)
+| | implementation = Differential %3 %7.(#0)
 | Project (#0, #1)
 
 EOF

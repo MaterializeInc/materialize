@@ -63,7 +63,7 @@ Applied Fixpoint { transforms: [Join, RedundantJoin { recursion_guard: Recursion
 | Union %0 %1
 
 ====
-No change: Fixpoint { transforms: [JoinImplementation { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }, ReductionPushdown, CanonicalizeMfp
+No change: Fixpoint { transforms: [JoinImplementation { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }, CanonicalizeMfp
 ====
 Applied RelationCSE:
 %0 = Let l0 =
@@ -135,7 +135,7 @@ Applied Fixpoint { transforms: [JoinImplementation { recursion_guard: RecursionG
 (Join [(ArrangeBy (get u1) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 null] [[0 [#0]]]))
 
 ====
-No change: ReductionPushdown, CanonicalizeMfp
+No change: CanonicalizeMfp
 ====
 Applied RelationCSE:
 (let l0 (get u1) (let l1 (ArrangeBy (get l0) [[#0]]) (let l2 (get x) (let l3 (Join [(get l1) (get l2)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 null] [[0 [#0]]])) (get l3)))))
