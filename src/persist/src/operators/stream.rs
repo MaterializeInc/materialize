@@ -16,7 +16,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
-use std::time::Duration;
 
 use persist_types::Codec;
 
@@ -27,11 +26,10 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::{Branch, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use timely::{Data as TimelyData, PartialOrder};
+use timely::Data as TimelyData;
 
 use crate::error::Error;
 use crate::indexed::runtime::StreamWriteHandle;
-use crate::operators::async_ext::OperatorBuilderExt;
 use crate::storage::SeqNo;
 
 /// Extension trait for [`Stream`].
@@ -220,9 +218,7 @@ where
         let mut seal_op = OperatorBuilder::new(operator_name.clone(), self.scope());
 
         let mut data_input = seal_op.new_input(&self, Pipeline);
-
         let (mut data_output, data_output_stream) = seal_op.new_output();
-
         let mut data_buffer = Vec::new();
         let mut input_frontier =
             Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
@@ -238,19 +234,22 @@ where
         // workers, or to use a non-timely solution for keeping track of outstanding write
         // capabilities.
         let active_seal_operator = self.scope().index() == 0;
-        // An activator that allows us to re-schedule this operator for retries.
+        // An activator that allows futures to re-schedule this operator when ready.
         let activator = Arc::new(
             self.scope()
-                .activator_for(&seal_op.operator_info().address[..]),
+                .sync_activator_for(&seal_op.operator_info().address[..]),
         );
 
-        seal_op.build_async(
-            self.scope(),
-            async_op!(|initial_capabilities, frontiers| {
-                if !active_seal_operator {
-                    // Drop initial capabilities
-                    initial_capabilities.clear();
-                }
+        let mut pending_futures = VecDeque::new();
+
+        seal_op.build(move |mut capabilities| {
+            let mut cap_set = if active_seal_operator {
+                CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
+            } else {
+                CapabilitySet::new()
+            };
+
+            move |frontiers| {
                 let mut data_output = data_output.activate();
 
                 // Pass through all data.
@@ -265,58 +264,107 @@ where
                     return;
                 }
 
-                // Seal if/when the frontier advances.
-                let frontiers = frontiers.borrow();
-                let new_input_frontier = frontiers[0].borrow();
-                let progress =
-                    !PartialOrder::less_equal(&new_input_frontier, &input_frontier.borrow());
+                let mut new_input_frontier = Antichain::new();
+                new_input_frontier.extend(frontiers[0].frontier().into_iter().cloned());
 
-                if !progress {
-                    return;
-                }
-
+                // We seal for every element in the new frontier that represents progress compared
+                // to the old frontier. Alternatively, we could always seal to the current
+                // frontier, because sealing is idempotent or seal to the current frontier if there
+                // is any progress compared to the previous frontier.
+                //
+                // The current solution is the one that does the least amount of expected work.
+                // However, with frontiers of Antichain<u64> we will always only have a single
+                // element in the frontier/antichain, so the optimization is somewhat unnecessary.
+                // This way, we are prepared for a future of multi-dimensional frontiers, though.
                 for frontier_element in new_input_frontier.iter() {
-                    // Only seal if this element of the new input frontier truly
-                    // represents progress. With Antichain<u64>, this will always be
-                    // the case, but antichains of types with a different partial order
-                    // can have frontier progress and have some elements that don't
-                    // represent progress.
-                    if !input_frontier.less_than(frontier_element) {
-                        continue;
-                    }
-
-                    log::trace!("Sealing {} up to {}", &operator_name, frontier_element);
-
-                    if let Err(e) = write.seal(*frontier_element).await {
-                        // If we fail to seal, simply exit and try again the next
-                        // time the operator is scheduled.
-                        log::error!(
-                            "Error sealing {} up to {}: {:?}",
+                    if input_frontier.less_than(&frontier_element) {
+                        log::trace!(
+                            "In {}, sealing collection up to {}...",
                             &operator_name,
                             frontier_element,
-                            e
                         );
 
-                        // Reschedule this operator after a small delay to retry the
-                        // seal.
-                        activator.activate_after(Duration::from_millis(100));
+                        let future = write.seal(*frontier_element);
 
-                        return;
+                        pending_futures.push_back(SealFuture {
+                            time: *frontier_element,
+                            future,
+                        });
                     }
                 }
 
-                input_frontier = new_input_frontier.to_owned();
+                // Swing through all pending futures and see if they're ready. Ready futures will
+                // invoke the Activator, which will make sure that we arrive here, even when there
+                // are no changes in the input frontier or new input.
+                let waker = futures_util::task::waker_ref(&activator);
+                let mut context = Context::from_waker(&waker);
+
+                while let Some(mut pending_future) = pending_futures.pop_front() {
+                    match Pin::new(&mut pending_future.future).poll(&mut context) {
+                        std::task::Poll::Ready(Ok(_)) => {
+                            log::trace!(
+                                "In {}, finished sealing collection up to {}",
+                                &operator_name,
+                                pending_future.time,
+                            );
+                            // Explicitly downgrade the capability to the new time.
+                            cap_set.downgrade(Some(pending_future.time));
+                        }
+                        std::task::Poll::Ready(Err(e)) => {
+                            log::trace!(
+                                "Error sealing {} up to {}: {}",
+                                &operator_name,
+                                pending_future.time,
+                                e
+                            );
+
+                            // Only retry this seal if there is no other pending conditional
+                            // seal at a time >= this seal's time.
+                            let retry = {
+                                let mut retry = true;
+                                let seal_ts = pending_future.time;
+                                for seal_future in pending_futures.iter() {
+                                    if seal_future.time >= seal_ts {
+                                        retry = false;
+                                        break;
+                                    }
+                                }
+                                retry
+                            };
+
+                            if retry {
+                                log::trace!("Adding seal to queue again: {}", pending_future.time);
+
+                                let future = write.seal(pending_future.time);
+                                pending_futures.push_front(SealFuture {
+                                    time: pending_future.time,
+                                    future,
+                                });
+                            }
+                        }
+                        std::task::Poll::Pending => {
+                            // We assume that seal requests are worked off in order and stop
+                            // trying for the first seal that is not done.
+                            // Push the future back to the front of the queue. We have to
+                            // do this dance of popping and pushing because we're modifying
+                            // the queue while we work on a future. This prevents us from
+                            // just getting a reference to the front of the queue and then
+                            // popping once we know that a future is done.
+                            pending_futures.push_front(pending_future);
+                            break;
+                        }
+                    }
+                }
+
+                input_frontier.clone_from(&new_input_frontier);
+                // We need to downgrade when the input frontier is empty. This basically releases
+                // all the capabilities so that downstream operators and eventually the worker can
+                // shut down.
                 if input_frontier.is_empty() {
-                    initial_capabilities.clear();
+                    cap_set.downgrade(input_frontier.iter());
                 }
-
-                for cap in initial_capabilities.iter_mut() {
-                    for input_frontier_element in input_frontier.iter() {
-                        cap.downgrade(input_frontier_element);
-                    }
-                }
-            }),
-        );
+            }
+        });
 
         data_output_stream
     }
