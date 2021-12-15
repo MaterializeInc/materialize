@@ -113,13 +113,13 @@ impl Decoder {
     pub fn new(
         descriptors: DecodedDescriptors,
         schema_registry: Option<ccsr::ClientConfig>,
-    ) -> Self {
-        Decoder {
+    ) -> Result<Self, anyhow::Error> {
+        Ok(Decoder {
             descriptors,
             packer: Default::default(),
-            ccsr_client: schema_registry.map(|sr| sr.build()).transpose().unwrap(),
+            ccsr_client: schema_registry.map(|sr| sr.build()).transpose()?,
             validated_schema_id: Default::default(),
-        }
+        })
     }
 
     /// Decodes the encoded Protobuf message into a [`Row`].

@@ -93,9 +93,21 @@ impl Client {
         &self,
         subject: &str,
     ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
+        self.get_subject_and_references_by_version(subject, "latest".to_owned())
+            .await
+    }
+
+    /// Gets a subject and all other subjects referenced by that subject (recursively)
+    ///
+    /// The dependencies are returned in alphabetical order by subject name.
+    async fn get_subject_and_references_by_version(
+        &self,
+        subject: &str,
+        version: String,
+    ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
         let mut subjects = vec![];
         let mut seen = HashSet::new();
-        let mut subjects_queue = vec![(subject.to_owned(), "latest".to_owned())];
+        let mut subjects_queue = vec![(subject.to_owned(), version)];
         while let Some((subject, version)) = subjects_queue.pop() {
             let req = self.make_request(Method::GET, &["subjects", &subject, "versions", &version]);
             let res: GetBySubjectResponse = send_request(req).await?;
@@ -189,7 +201,13 @@ impl Client {
         // See https://docs.confluent.io/platform/current/schema-registry/develop/api.html#post--subjects-(string-%20subject)-versions
         // for more info.
         match res.as_slice() {
-            [first, ..] => self.get_subject_and_references(&first.subject).await,
+            [first, ..] => {
+                self.get_subject_and_references_by_version(
+                    &first.subject,
+                    first.version.to_string(),
+                )
+                .await
+            }
             _ => Err(GetBySubjectError::SubjectNotFound),
         }
     }
@@ -202,8 +220,7 @@ where
     let res = req.send().await?;
     let status = res.status();
     if status.is_success() {
-        let bytes = res.bytes().await?;
-        Ok(serde_json::from_slice(&bytes).unwrap())
+        Ok(res.json().await?)
     } else {
         match res.json::<ErrorResponse>().await {
             Ok(err_res) => Err(UnhandledError::Api {
@@ -285,7 +302,7 @@ pub enum GetByIdError {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SubjectVersion {
+struct SubjectVersion {
     /// The name of the subject
     pub subject: String,
     /// The version of the schema
@@ -376,15 +393,6 @@ impl fmt::Display for GetBySubjectError {
             GetBySubjectError::Server { code, message } => {
                 write!(f, "server error {}: {}", code, message)
             }
-        }
-    }
-}
-
-impl From<ListError> for GetBySubjectError {
-    fn from(other: ListError) -> Self {
-        match other {
-            ListError::Transport(t) => GetBySubjectError::Transport(t),
-            ListError::Server { code, message } => GetBySubjectError::Server { code, message },
         }
     }
 }

@@ -25,14 +25,14 @@ impl ProtobufDecoderState {
             message_name,
             schema_registry_config,
         }: ProtobufEncoding,
-    ) -> Self {
+    ) -> Result<Self, anyhow::Error> {
         let descriptors = DecodedDescriptors::from_bytes(&descriptors, message_name)
             .expect("descriptors provided to protobuf source are pre-validated");
-        ProtobufDecoderState {
-            decoder: Decoder::new(descriptors, schema_registry_config),
+        Ok(ProtobufDecoderState {
+            decoder: Decoder::new(descriptors, schema_registry_config)?,
             events_success: 0,
             events_error: 0,
-        }
+        })
     }
     pub fn get_value(&mut self, bytes: &[u8]) -> Option<Result<Row, DecodeError>> {
         // TODO(guswynn): make this async-sync-async sandwich open-faced.

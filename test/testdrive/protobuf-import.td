@@ -157,8 +157,13 @@ $ schema-registry-publish subject=testdrive-import-csr-wrong-proto-${testdrive.s
 $ schema-registry-publish subject=testdrive-import-csr-other-${testdrive.seed}-value schema-type=protobuf references=empty.proto,importee.proto
 \${importer-other-schema}
 
+# setup the kafka's
+$ kafka-create-topic topic=import-csr-wrong-id partitions=1
+$ kafka-create-topic topic=import-csr-wrong-proto partitions=1
 
 # wrong id case
+$ set-regex match="expected schema id: \d*, found \d*" replacement="expected schema id: X, found X"
+
 # Setup the correct first message, priming all the workers with the correct schema id
 $ kafka-ingest repeat=9 topic=import-csr-wrong-id format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true
 {"importee1": {"b": false}, "importee2": {"ts": {"seconds": 1234, "nanos": 5678}}}
@@ -186,10 +191,11 @@ $ kafka-ingest topic=import-csr-wrong-id format=protobuf descriptor-file=import.
 {"importee1": {"b": false}, "importee2": {"ts": {"seconds": 1234, "nanos": 5678}}}
 
 ! SELECT importee1::text, importee2::text, mz_offset FROM import_csr_wrong_id
-Decode error: Text: protobuf deserialization error: cannot decode protobuf, expected schema id: 4, found 12; schema evolution in protobuf is not supported. See https://github.com/MaterializeInc/materialize/issues/9598 for more details.
-
+Decode error: Text: protobuf deserialization error: cannot decode protobuf, expected schema id: X, found X; schema evolution in protobuf is not supported. See https://github.com/MaterializeInc/materialize/issues/9598 for more details.
 
 # wrong protobuf definition case
+$ set-regex match="schema id: \d* refers" replacement="schema id: X refers"
+
 # Setup the source
 > CREATE MATERIALIZED SOURCE import_csr_wrong_proto FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-wrong-proto-${testdrive.seed}'
@@ -200,4 +206,4 @@ $ kafka-ingest topic=import-csr-wrong-proto format=protobuf descriptor-file=impo
 {"importee1": {"b": false}, "importee2": {"ts": {"seconds": 1234, "nanos": 5678}}}
 
 ! SELECT importee1::text, importee2::text, mz_offset FROM import_csr_wrong_proto
-Decode error: Text: protobuf deserialization error: cannot decode protobuf, schema id: 12 refers to a schema different than the expected schema; schema evolution in protobuf is not supported. See https://github.com/MaterializeInc/materialize/issues/9598 for more details.
+Decode error: Text: protobuf deserialization error: cannot decode protobuf, schema id: X refers to a schema different than the expected schema; schema evolution in protobuf is not supported. See https://github.com/MaterializeInc/materialize/issues/9598 for more details.
