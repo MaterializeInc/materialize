@@ -16,12 +16,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
+use std::time::Duration;
 
 use persist_types::Codec;
 
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::Operator;
@@ -180,11 +180,7 @@ pub trait Seal<G: Scope<Timestamp = u64>, D: TimelyData> {
     /// wait for the seal to be successful before allowing the frontier to advance. In other words,
     /// this operator is holding on to capabilities as long as seals corresponding to their
     /// timestamp are not done.
-    fn seal<K, V>(
-        &self,
-        name: &str,
-        write: StreamWriteHandle<K, V>,
-    ) -> (Stream<G, (D, u64, isize)>, Stream<G, (String, u64, isize)>)
+    fn seal<K, V>(&self, name: &str, write: StreamWriteHandle<K, V>) -> Stream<G, (D, u64, isize)>
     where
         K: Codec,
         V: Codec;
@@ -216,11 +212,7 @@ where
     G: Scope<Timestamp = u64>,
     D: TimelyData,
 {
-    fn seal<K, V>(
-        &self,
-        name: &str,
-        write: StreamWriteHandle<K, V>,
-    ) -> (Stream<G, (D, u64, isize)>, Stream<G, (String, u64, isize)>)
+    fn seal<K, V>(&self, name: &str, write: StreamWriteHandle<K, V>) -> Stream<G, (D, u64, isize)>
     where
         K: Codec,
         V: Codec,
@@ -231,14 +223,10 @@ where
         let mut data_input = seal_op.new_input(&self, Pipeline);
 
         let (mut data_output, data_output_stream) = seal_op.new_output();
-        let (mut error_output, error_output_stream) = seal_op.new_output();
 
         let mut data_buffer = Vec::new();
         let mut input_frontier =
             Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
-        let mut capabilities = Antichain::<Capability<u64>>::new();
-        let error_output_port = error_output_stream.name().port;
-
         // We only seal from one worker because sealing from multiple workers could lead to a race
         // conditions where one worker seals up to time `t` while another worker is still trying to
         // write data with timestamps that are not beyond `t`.
@@ -251,14 +239,20 @@ where
         // workers, or to use a non-timely solution for keeping track of outstanding write
         // capabilities.
         let active_seal_operator = self.scope().index() == 0;
+        // An activator that allows us to re-schedule this operator for retries.
+        let activator = Arc::new(
+            self.scope()
+                .activator_for(&seal_op.operator_info().address[..]),
+        );
 
         seal_op.build_async(
             self.scope(),
             async_op!(|initial_capabilities, frontiers| {
-                // Drop initial capabilities
-                initial_capabilities.clear();
+                if !active_seal_operator {
+                    // Drop initial capabilities
+                    initial_capabilities.clear();
+                }
                 let mut data_output = data_output.activate();
-                let mut error_output = error_output.activate();
 
                 // Pass through all data.
                 data_input.for_each(|cap, data| {
@@ -266,12 +260,6 @@ where
 
                     let mut session = data_output.session(&cap);
                     session.give_vec(&mut data_buffer);
-
-                    // We only need capabilities for reporting errors, which we only need to do
-                    // when we're the active operator.
-                    if active_seal_operator {
-                        capabilities.insert(cap.retain_for_output(error_output_port));
-                    }
                 });
 
                 if !active_seal_operator {
@@ -288,68 +276,50 @@ where
                     return;
                 }
 
-                // Only try and seal if we have seen some data. Otherwise, we wouldn't have
-                // a capability that allows us to emit errors.
-                if let Some(err_cap) = capabilities.get(0) {
-                    for frontier_element in new_input_frontier.iter() {
-                        // Only seal if this element of the new input frontier truly
-                        // represents progress. With Antichain<u64>, this will always be
-                        // the case, but antichains of types with a different partial order
-                        // can have frontier progress and have some elements that don't
-                        // represent progress.
-                        if !input_frontier.less_than(frontier_element) {
-                            continue;
-                        }
+                for frontier_element in new_input_frontier.iter() {
+                    // Only seal if this element of the new input frontier truly
+                    // represents progress. With Antichain<u64>, this will always be
+                    // the case, but antichains of types with a different partial order
+                    // can have frontier progress and have some elements that don't
+                    // represent progress.
+                    if !input_frontier.less_than(frontier_element) {
+                        continue;
+                    }
 
-                        log::trace!("Sealing {} up to {}", &operator_name, frontier_element);
+                    log::trace!("Sealing {} up to {}", &operator_name, frontier_element);
 
-                        let result = write.seal(*frontier_element).await;
-                        if let Err(e) = result {
-                            log::error!(
-                                "Error sealing {} up to {}: {:?}",
-                                &operator_name,
-                                frontier_element,
-                                e
-                            );
+                    if let Err(e) = write.seal(*frontier_element).await {
+                        // If we fail to seal, simply exit and try again the next
+                        // time the operator is scheduled.
+                        log::error!(
+                            "Error sealing {} up to {}: {:?}",
+                            &operator_name,
+                            frontier_element,
+                            e
+                        );
 
-                            let mut session = error_output.session(err_cap);
-                            // TODO: Make error retractable? Probably not...
-                            session.give((e.to_string(), *err_cap.time(), 1));
-                        }
+                        // Reschedule this operator after a small delay to retry the
+                        // seal.
+                        activator.activate_after(Duration::from_millis(100));
+
+                        return;
                     }
                 }
 
-                input_frontier.clear();
-                input_frontier.extend(new_input_frontier.into_iter().cloned());
+                input_frontier = new_input_frontier.to_owned();
+                if input_frontier.is_empty() {
+                    initial_capabilities.clear();
+                }
 
-                // If we didn't yet receive any data we won't have capabilities yet.
-                if !capabilities.is_empty() {
-                    // Try and maintain the least amount of capabilities. In our case, where
-                    // the timestamp is u64, this means we only ever keep one capability
-                    // because u64 has a total order and the input frontier therefore only ever
-                    // contains one element.
-                    //
-                    // This solution is very generic, though, and will work for the case where
-                    // we don't use u64 as the timestamp.
-                    let mut new_capabilities = Antichain::new();
-                    for time in input_frontier.iter() {
-                        if let Some(capability) = capabilities
-                            .elements()
-                            .iter()
-                            .find(|c| c.time().less_equal(time))
-                        {
-                            new_capabilities.insert(capability.delayed(time));
-                        } else {
-                            panic!("failed to find capability");
-                        }
+                for cap in initial_capabilities.iter_mut() {
+                    for input_frontier_element in input_frontier.iter() {
+                        cap.downgrade(input_frontier_element);
                     }
-
-                    capabilities = new_capabilities;
                 }
             }),
         );
 
-        (data_output_stream, error_output_stream)
+        data_output_stream
     }
 
     fn conditional_seal<D2: TimelyData, K, V, K2, V2>(
@@ -874,7 +844,7 @@ mod tests {
             let (mut input, probe) = worker.dataflow(|scope| {
                 let (write, _read) = p.create_or_load::<(), ()>("1");
                 let mut input = Handle::new();
-                let (ok_stream, _) = input.to_stream(scope).seal("test", write);
+                let ok_stream = input.to_stream(scope).seal("test", write);
                 let probe = ok_stream.probe();
                 (input, probe)
             });
@@ -893,37 +863,51 @@ mod tests {
     }
 
     #[test]
-    fn seal_error_stream() -> Result<(), Error> {
-        let mut p = MemRegistry::new().runtime_no_reentrance()?;
-        let (write, _read) = p.create_or_load::<(), ()>("error_stream");
-        p.stop()?;
+    fn seal_frontier_advance_only_on_success() -> Result<(), Error> {
+        ore::test::init_logging_default("trace");
+        let mut registry = MemRegistry::new();
+        let mut unreliable = UnreliableHandle::default();
+        let p = registry.runtime_unreliable(unreliable.clone())?;
 
-        let recv = timely::execute_directly(move |worker| {
-            let (mut input, probe, err_stream) = worker.dataflow(|scope| {
+        timely::execute_directly(move |worker| {
+            let (mut input, seal_probe) = worker.dataflow(|scope| {
+                let (write, _read) = p.create_or_load::<(), ()>("primary");
                 let mut input = Handle::new();
-                let (_, err_stream) = input.to_stream(scope).seal("test", write);
-                let probe = err_stream.probe();
-                (input, probe, err_stream.capture())
+                let stream = input.to_stream(scope);
+
+                let sealed_stream = stream.seal("test", write);
+
+                let seal_probe = sealed_stream.probe();
+
+                (input, seal_probe)
             });
 
-            input.send((((), ()), 1, 1));
-            input.advance_to(1);
+            input.send((((), ()), 0, 1));
 
-            while probe.less_than(&1) {
+            input.advance_to(1);
+            while seal_probe.less_than(&1) {
                 worker.step();
             }
 
-            err_stream
+            unreliable.make_unavailable();
+
+            input.advance_to(2);
+
+            // This is the best we can do. Wait for a bit, and verify that the frontier didn't
+            // advance. Of course, we cannot rule out that the frontier might advance on the 11th
+            // step, but tests without the fix showed the test to be very unstable on this
+            for _i in 0..10 {
+                worker.step();
+            }
+            assert!(seal_probe.less_than(&2));
+
+            // After we make the runtime available again, sealing will work and the frontier will
+            // advance.
+            unreliable.make_available();
+            while seal_probe.less_than(&2) {
+                worker.step();
+            }
         });
-
-        let actual = recv
-            .extract()
-            .into_iter()
-            .flat_map(|(_, xs)| xs.into_iter())
-            .collect::<Vec<_>>();
-
-        let expected = vec![("runtime shutdown".to_string(), 0, 1)];
-        assert_eq!(actual, expected);
 
         Ok(())
     }
