@@ -22,7 +22,7 @@ use timely::Data as TimelyData;
 
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
 use crate::operators::replay::Replay;
-use crate::operators::split_ok_err;
+use crate::operators::{split_ok_err, DEFAULT_OUTPUTS_PER_YIELD};
 use crate::pfuture::PFuture;
 use crate::storage::SeqNo;
 
@@ -63,7 +63,9 @@ where
 
         // Replay the previously persisted data, if any.
         let snapshot = read.snapshot();
-        let (ok_previous, err_previous) = self.replay(snapshot).ok_err(split_ok_err);
+        let (ok_previous, err_previous) = self
+            .replay(snapshot, DEFAULT_OUTPUTS_PER_YIELD)
+            .ok_err(split_ok_err);
 
         let ok_previous = ok_previous.map(|((k, _), ts, diff)| (k, ts, diff));
 

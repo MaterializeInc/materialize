@@ -22,6 +22,7 @@ use timely::Data as TimelyData;
 use crate::indexed::runtime::StreamReadHandle;
 use crate::indexed::{ListenEvent, ListenFn};
 use crate::operators::replay::Replay;
+use crate::operators::DEFAULT_OUTPUTS_PER_YIELD;
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
 pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
@@ -30,6 +31,20 @@ pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyDat
     fn persisted_source(
         &mut self,
         read: StreamReadHandle<K, V>,
+    ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
+        self.persisted_source_yield(read, DEFAULT_OUTPUTS_PER_YIELD)
+    }
+
+    /// Emits a snapshot of the persisted stream taken as of this call and
+    /// listens for any new data added to the persisted stream after that,
+    /// yielding periodically.
+    ///
+    /// This yields after `outputs_per_yield` outputs to allow downstream
+    /// operators to reduce down the data and limit max memory usage.
+    fn persisted_source_yield(
+        &mut self,
+        read: StreamReadHandle<K, V>,
+        outputs_per_yield: usize,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)>;
 }
 
@@ -39,9 +54,10 @@ where
     K: TimelyData + Codec + Send,
     V: TimelyData + Codec + Send,
 {
-    fn persisted_source(
+    fn persisted_source_yield(
         &mut self,
         read: StreamReadHandle<K, V>,
+        outputs_per_yield: usize,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
         let (listen_tx, listen_rx) = mpsc::channel();
         let listen_fn = ListenFn(Box::new(move |e| {
@@ -60,10 +76,10 @@ where
         // it for the operator.
 
         // listen to new data
-        let new = listen_source(self, snapshot_seal, listen_rx);
+        let new = listen_source(self, snapshot_seal, listen_rx, outputs_per_yield);
 
         // Replay the previously persisted data, if any.
-        let previous = self.replay(snapshot);
+        let previous = self.replay(snapshot, outputs_per_yield);
 
         previous.concat(&new)
     }
@@ -77,6 +93,7 @@ fn listen_source<G, K, V>(
     // meaning that there will be no more events in the future.
     initial_frontier: Option<Antichain<u64>>,
     listen_rx: Receiver<ListenEvent<Vec<u8>, Vec<u8>>>,
+    _outputs_per_yield: usize,
 ) -> Stream<G, (Result<(K, V), String>, u64, isize)>
 where
     G: Scope<Timestamp = u64>,
@@ -119,6 +136,10 @@ where
                                 }
                             }
                             activator.activate();
+                            // TODO: Instead of yielding after every message
+                            // from the channel, only yield after we've given at
+                            // least `outputs_per_yield` records (or if we get
+                            // an Empty or Disconnected from try_recv).
                         }
                         ListenEvent::Sealed(ts) => {
                             cap.downgrade(&ts);

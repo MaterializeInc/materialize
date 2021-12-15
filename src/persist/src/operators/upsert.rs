@@ -24,9 +24,9 @@ use timely::progress::Antichain;
 
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
 use crate::operators::replay::Replay;
-use crate::operators::split_ok_err;
 use crate::operators::stream::Persist;
 use crate::operators::stream::RetractUnsealed;
+use crate::operators::{split_ok_err, DEFAULT_OUTPUTS_PER_YIELD};
 
 use persist_types::Codec;
 
@@ -126,7 +126,10 @@ where
 
         let (restored_upsert_oks, _state_errs) = {
             let snapshot = persist_config.read_handle.snapshot();
-            let (restored_oks, restored_errs) = self.scope().replay(snapshot).ok_err(split_ok_err);
+            let (restored_oks, restored_errs) = self
+                .scope()
+                .replay(snapshot, DEFAULT_OUTPUTS_PER_YIELD)
+                .ok_err(split_ok_err);
             let (restored_upsert_oks, retract_errs) = restored_oks.retract_unsealed(
                 name,
                 persist_config.write_handle.clone(),

@@ -149,6 +149,9 @@ struct DirectCore {
 }
 
 impl DirectCore {
+    // Selected to be a small prime number.
+    const OUTPUTS_PER_YIELD: usize = 3;
+
     fn stream(&mut self, name: &str) -> Result<Ingest, Error> {
         match self.streams.entry(name.to_owned()) {
             Entry::Occupied(x) => {
@@ -174,7 +177,8 @@ impl DirectCore {
                                 .lock()
                                 .expect("clone doesn't panic and poison lock")
                                 .clone();
-                            let data = scope.persisted_source(dataflow_read);
+                            let data = scope
+                                .persisted_source_yield(dataflow_read, Self::OUTPUTS_PER_YIELD);
                             data.probe_with(&mut probe).capture_into(output_tx);
                         });
                         while worker.step_or_park(None) {
