@@ -346,7 +346,8 @@ fn get_decoder(
                 DataEncoding::Protobuf(encoding) => {
                     // TODO(guswynn): get rid of this expect https://github.com/MaterializeInc/materialize/issues/9613
                     PreDelimitedFormat::Protobuf(
-                        ProtobufDecoderState::new(encoding).expect("Failed to create protobuf decoder"),
+                        ProtobufDecoderState::new(encoding)
+                            .expect("Failed to create protobuf decoder"),
                     )
                 }
                 DataEncoding::Bytes => PreDelimitedFormat::Bytes,

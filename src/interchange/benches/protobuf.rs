@@ -71,7 +71,8 @@ pub fn bench_protobuf(c: &mut Criterion) {
         )
         .unwrap(),
         None,
-    );
+    )
+    .unwrap();
 
     let mut bg = c.benchmark_group("protobuf");
     bg.throughput(Throughput::Bytes(len));
