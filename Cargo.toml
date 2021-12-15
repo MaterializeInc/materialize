@@ -53,6 +53,11 @@ members = [
     "test/performance/s3-datagen",
     "test/test-util",
 ]
+# Use Cargo's new feature resolver, which can handle target-specific features.
+# Explicit opt-in is required even with the 2021 edition because we use a
+# virtual workspace.
+# See: https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#cargos-new-feature-resolver
+resolver = "2"
 
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even
