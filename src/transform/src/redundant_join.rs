@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 
 use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use itertools::Itertools;
 use ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformArgs;
@@ -96,11 +97,7 @@ impl RedundantJoin {
                     // Extract the value provenance, or an empty list if unavailable.
                     let mut val_info = lets.get(id).cloned().unwrap_or_default();
                     // Add information about being exactly this let binding too.
-                    val_info.push(ProvInfo {
-                        id: *id,
-                        binding: (0..typ.arity()).map(|c| (c, c)).collect::<Vec<_>>(),
-                        exact: true,
-                    });
+                    val_info.push(ProvInfo::make_leaf(*id, typ.arity()));
                     Ok(val_info)
                 }
 
@@ -129,7 +126,7 @@ impl RedundantJoin {
                     // We only do this once per invocation to keep our sanity, but we could
                     // rewrite it to iterate. We can avoid looking for any relation that
                     // does not have keys, as it cannot be redundant in that case.
-                    if let Some((input, bindings)) = (0..input_types.len())
+                    if let Some((remove_input_idx, mut bindings)) = (0..input_types.len())
                         .rev()
                         .filter(|i| !input_types[*i].keys.is_empty())
                         .flat_map(|i| {
@@ -144,51 +141,67 @@ impl RedundantJoin {
                         })
                         .next()
                     {
-                        inputs.remove(input);
-                        input_types.remove(input);
+                        inputs.remove(remove_input_idx);
+                        input_types.remove(remove_input_idx);
 
-                        let new_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
-                        // From `binding`, we produce the projection we will apply to the join
-                        // once `input` is removed. This is valuable also to rewrite expressions
-                        // in the join constraints.
-                        let mut projection = Vec::new();
-                        for i in 0..old_input_mapper.total_inputs() {
-                            if i != input {
-                                projection.extend(new_input_mapper.global_columns(if i < input {
-                                    i
-                                } else {
-                                    i - 1
-                                }));
-                            } else {
-                                // When we reach the removed relation, we should introduce
-                                // references to the columns that are meant to replace these.
-                                // This should happen only once, and `.drain(..)` would be correct.
-                                projection.extend(bindings.clone());
-                            }
-                        }
-                        // The references introduced from `bindings` need to be refreshed, now that we
-                        // know where each target column will be. This is important because they could
-                        // have been to columns *after* `input`, and our original take on where they
-                        // would be is no longer correct. References before `input` should stay as they
-                        // are, and references afterwards will likely be decreased.
-                        for c in old_input_mapper.global_columns(input) {
-                            projection[c] = projection[projection[c]];
+                        // Update the column offsets in the binding expressions to catch
+                        // up with the removal of `remove_input_idx`.
+                        for expr in bindings.iter_mut() {
+                            expr.visit_mut_post(&mut |e| {
+                                if let MirScalarExpr::Column(c) = e {
+                                    let (_local_col, input_relation) =
+                                        old_input_mapper.map_column_to_local(*c);
+                                    if input_relation > remove_input_idx {
+                                        *c -= old_input_mapper.input_arity(remove_input_idx);
+                                    }
+                                }
+                            });
                         }
 
-                        // Tidy up equivalences rewriting column references with `projection` and
-                        // removing any equivalence classes that are now redundant (e.g. those that
-                        // related the columns of `input` with the relation that showed its redundancy)
+                        // Replace column references from `remove_input_idx` with the corresponding
+                        // binding expression. Update the offsets of the column references
+                        // from inputs after `remove_input_idx`.
                         for equivalence in equivalences.iter_mut() {
                             for expr in equivalence.iter_mut() {
-                                expr.permute(&projection[..]);
+                                expr.visit_mut_post(&mut |e| {
+                                    if let MirScalarExpr::Column(c) = e {
+                                        let (local_col, input_relation) =
+                                            old_input_mapper.map_column_to_local(*c);
+                                        if input_relation == remove_input_idx {
+                                            *e = bindings[local_col].clone();
+                                        } else if input_relation > remove_input_idx {
+                                            *c -= old_input_mapper.input_arity(remove_input_idx);
+                                        }
+                                    }
+                                });
                             }
                         }
+
                         expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
+
+                        // Build a projection that leaves the binding expressions in the same
+                        // position as the columns of the removed join input they are replacing.
+                        let new_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+                        let mut projection = Vec::new();
+                        let new_join_arity = new_input_mapper.total_columns();
+                        for i in 0..old_input_mapper.total_inputs() {
+                            if i != remove_input_idx {
+                                projection.extend(
+                                    new_input_mapper.global_columns(if i < remove_input_idx {
+                                        i
+                                    } else {
+                                        i - 1
+                                    }),
+                                );
+                            } else {
+                                projection.extend(new_join_arity..new_join_arity + bindings.len());
+                            }
+                        }
 
                         // Unset implementation, as irrevocably hosed by this transformation.
                         *implementation = expr::JoinImplementation::Unimplemented;
 
-                        *relation = relation.take_dangerous().project(projection);
+                        *relation = relation.take_dangerous().map(bindings).project(projection);
                         // The projection will gum up provenance reasoning anyhow, so don't work hard.
                         // We will return to this expression again with the same analysis.
                         Ok(Vec::new())
@@ -200,9 +213,14 @@ impl RedundantJoin {
                         for (input, input_prov) in input_prov.into_iter().enumerate() {
                             for mut prov in input_prov {
                                 prov.exact = false;
-                                for (_src, inp) in prov.binding.iter_mut() {
-                                    *inp = old_input_mapper.map_column_to_global(*inp, input);
+                                let mut projection = vec![None; old_input_mapper.total_columns()];
+                                for (local_col, global_col) in
+                                    old_input_mapper.global_columns(input).enumerate()
+                                {
+                                    projection[global_col] =
+                                        prov.dereferenced_projection[local_col].clone();
                                 }
+                                prov.dereferenced_projection = projection;
                                 results.push(prov);
                             }
                         }
@@ -219,7 +237,16 @@ impl RedundantJoin {
                     Ok(result)
                 }
 
-                MirRelationExpr::Map { input, .. } => self.action(input, lets),
+                MirRelationExpr::Map { input, scalars } => {
+                    let mut result = self.action(input, lets)?;
+                    for prov in result.iter_mut() {
+                        for scalar in scalars.iter() {
+                            let dereferenced_scalar = prov.strict_dereference(scalar);
+                            prov.dereferenced_projection.push(dereferenced_scalar);
+                        }
+                    }
+                    Ok(result)
+                }
                 MirRelationExpr::DeclareKeys { input, .. } => self.action(input, lets),
 
                 MirRelationExpr::Union { base, inputs } => {
@@ -236,40 +263,29 @@ impl RedundantJoin {
                         }
                         prov = new_prov;
                     }
+
                     Ok(prov)
                 }
 
                 MirRelationExpr::Constant { .. } => Ok(Vec::new()),
 
                 MirRelationExpr::Reduce {
-                    input, group_key, ..
+                    input,
+                    group_key,
+                    aggregates,
+                    ..
                 } => {
                     // Reduce yields its first few columns as a key, and produces
                     // all key tuples that were present in its input.
                     let mut result = self.action(input, lets)?;
                     for prov in result.iter_mut() {
-                        // update the bindings. no need to update `exact`.
-                        let new_bindings = group_key
+                        let mut projection = group_key
                             .iter()
-                            .enumerate()
-                            .filter_map(|(i, e)| {
-                                if let MirScalarExpr::Column(c) = e {
-                                    Some((i, c))
-                                } else {
-                                    None
-                                }
-                            })
-                            .filter_map(|(i, c)| {
-                                // output column `i` corresponds to input column `c`.
-                                prov.binding
-                                    .iter()
-                                    .find(|(_src, inp)| inp == c)
-                                    .map(|(src, _inp)| (*src, i))
-                            })
-                            .collect::<Vec<_>>();
-                        prov.binding = new_bindings;
+                            .map(|key| prov.strict_dereference(key))
+                            .collect_vec();
+                        projection.extend((0..aggregates.len()).map(|_| None));
+                        prov.dereferenced_projection = projection;
                     }
-                    result.retain(|p| !p.binding.is_empty());
                     // TODO: For min, max aggregates, we could preserve provenance
                     // if the expression references a column. We would need to un-set
                     // the `exact` bit in that case, and so we would want to keep both
@@ -299,29 +315,23 @@ impl RedundantJoin {
                     // Projections re-order, drop, and duplicate columns,
                     // but they neither drop rows nor invent values.
                     let mut result = self.action(input, lets)?;
-                    for provenance in result.iter_mut() {
-                        let new_binding = outputs
+                    for prov in result.iter_mut() {
+                        let projection = outputs
                             .iter()
-                            .enumerate()
-                            .flat_map(|(i, c)| {
-                                provenance
-                                    .binding
-                                    .iter()
-                                    .find(|(_, l)| l == c)
-                                    .map(|(s, _)| (*s, i))
-                            })
-                            .collect::<Vec<_>>();
-
-                        provenance.binding = new_binding;
+                            .map(|c| prov.dereference(&MirScalarExpr::Column(*c)))
+                            .collect_vec();
+                        prov.dereferenced_projection = projection;
                     }
                     Ok(result)
                 }
 
-                MirRelationExpr::FlatMap { input, .. } => {
+                MirRelationExpr::FlatMap { input, func, .. } => {
                     // FlatMap may drop records, and so we unset `exact`.
                     let mut result = self.action(input, lets)?;
                     for prov in result.iter_mut() {
                         prov.exact = false;
+                        prov.dereferenced_projection
+                            .extend((0..func.output_type().column_types.len()).map(|_| None));
                     }
                     Ok(result)
                 }
@@ -348,27 +358,103 @@ impl RedundantJoin {
 /// A relationship between a collections columns and some source columns.
 ///
 /// An instance of this type indicates that some of the bearer's columns
-/// derive from `id`. In particular, each column in the second element of
-/// `binding` is derived from the column of `id` found in the corresponding
-/// first element.
+/// derive from `id`. In particular, the non-`None` elements in
+/// `dereferenced_projection` correspond to columns that can be derived
+/// from `id`'s projection.
 ///
 /// The guarantee is that projected on to these columns, the distinct values
 /// of the bearer are contained in the set of distinct values of projected
 /// columns of `id`. In the case that `exact` is set, the two sets are equal.
 #[derive(Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
 pub struct ProvInfo {
-    // The Id (local or global) of the source.
+    /// The Id (local or global) of the source.
     id: Id,
-    // A list of (source column, current column) associations.
-    // There should be at most one occurrence of each number in the second position.
-    binding: Vec<(usize, usize)>,
-    // If true, all distinct projected source rows are present in the rows of
-    // the projection of the current collection. This constraint is lost as soon
-    // as a transformation may drop records.
+    /// The projection of the bearer written in terms of the columns projected
+    /// by the underlying Get operator. Set to `None` for columns that cannot
+    /// be expressed as scalar expression referencing only columns of the
+    /// underlying Get operator.
+    dereferenced_projection: Vec<Option<MirScalarExpr>>,
+    /// If true, all distinct projected source rows are present in the rows of
+    /// the projection of the current collection. This constraint is lost as soon
+    /// as a transformation may drop records.
     exact: bool,
 }
 
 impl ProvInfo {
+    fn make_leaf(id: Id, arity: usize) -> Self {
+        Self {
+            id,
+            dereferenced_projection: (0..arity)
+                .map(|c| Some(MirScalarExpr::column(c)))
+                .collect::<Vec<_>>(),
+            exact: true,
+        }
+    }
+
+    /// Rewrite `expr` so it refers to the columns of the original source instead
+    /// of the columns of the projected source.
+    fn dereference(&self, expr: &MirScalarExpr) -> Option<MirScalarExpr> {
+        match expr {
+            MirScalarExpr::Column(c) => {
+                if let Some(expr) = &self.dereferenced_projection[*c] {
+                    Some(expr.clone())
+                } else {
+                    None
+                }
+            }
+            MirScalarExpr::CallUnary { func, expr } => self.dereference(expr).and_then(|expr| {
+                Some(MirScalarExpr::CallUnary {
+                    func: func.clone(),
+                    expr: Box::new(expr),
+                })
+            }),
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                self.dereference(expr1).and_then(|expr1| {
+                    self.dereference(expr2).and_then(|expr2| {
+                        Some(MirScalarExpr::CallBinary {
+                            func: func.clone(),
+                            expr1: Box::new(expr1),
+                            expr2: Box::new(expr2),
+                        })
+                    })
+                })
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                let new_exprs = exprs.iter().flat_map(|e| self.dereference(e)).collect_vec();
+                if new_exprs.len() == exprs.len() {
+                    Some(MirScalarExpr::CallVariadic {
+                        func: func.clone(),
+                        exprs: new_exprs,
+                    })
+                } else {
+                    None
+                }
+            }
+            MirScalarExpr::Literal(..) | MirScalarExpr::CallNullary(..) => Some(expr.clone()),
+            MirScalarExpr::If { cond, then, els } => self.dereference(cond).and_then(|cond| {
+                self.dereference(then).and_then(|then| {
+                    self.dereference(els).and_then(|els| {
+                        Some(MirScalarExpr::If {
+                            cond: Box::new(cond),
+                            then: Box::new(then),
+                            els: Box::new(els),
+                        })
+                    })
+                })
+            }),
+        }
+    }
+
+    /// Like `dereference` but only returns expressions that actually depend on
+    /// the original source.
+    fn strict_dereference(&self, expr: &MirScalarExpr) -> Option<MirScalarExpr> {
+        let derefed = self.dereference(expr);
+        match derefed {
+            Some(ref expr) if !expr.support().is_empty() => derefed,
+            _ => None,
+        }
+    }
+
     /// Merge two constraints to find a constraint that satisfies both inputs.
     ///
     /// This method returns nothing if no columns are in common (either because
@@ -376,11 +462,18 @@ impl ProvInfo {
     /// intersects bindings and the `exact` bit.
     fn meet(&self, other: &Self) -> Option<Self> {
         if self.id == other.id {
-            let mut result = self.clone();
-            result.binding.retain(|b| other.binding.contains(b));
-            result.exact &= other.exact;
-            if !result.binding.is_empty() {
-                Some(result)
+            let resulting_projection = self
+                .dereferenced_projection
+                .iter()
+                .zip(other.dereferenced_projection.iter())
+                .map(|(e1, e2)| if e1 == e2 { e1.clone() } else { None })
+                .collect_vec();
+            if resulting_projection.iter().any(|e| e.is_some()) {
+                Some(ProvInfo {
+                    id: self.id,
+                    dereferenced_projection: resulting_projection,
+                    exact: self.exact && other.exact,
+                })
             } else {
                 None
             }
@@ -408,50 +501,87 @@ fn find_redundancy(
     input_mapper: &JoinInputMapper,
     equivalences: &[Vec<MirScalarExpr>],
     input_prov: &[Vec<ProvInfo>],
-) -> Option<Vec<usize>> {
+) -> Option<Vec<MirScalarExpr>> {
+    // Whether the `equivalence` contains an expression that only references
+    // `input` that leads to the same as `root_expr` once dereferenced.
+    let contains_equivalent_expr_from_input = |equivalence: &[MirScalarExpr],
+                                               root_expr: &MirScalarExpr,
+                                               input: usize,
+                                               provenance: &ProvInfo|
+     -> bool {
+        equivalence.iter().any(|expr| {
+            Some(input) == input_mapper.single_input(expr)
+                && provenance
+                    .dereference(&input_mapper.map_expr_to_local(expr.clone()))
+                    .as_ref()
+                    == Some(root_expr)
+        })
+    };
     for provenance in input_prov[input].iter() {
         // We can only elide if the input contains all records, and binds all columns.
-        if provenance.exact && provenance.binding.len() == input_mapper.input_arity(input) {
+        if provenance.exact
+            && provenance
+                .dereferenced_projection
+                .iter()
+                .all(|e| e.is_some())
+        {
             // examine all *other* inputs that have not been removed...
             for other in (0..input_mapper.total_inputs()).filter(|other| other != &input) {
                 for other_prov in input_prov[other].iter().filter(|p| p.id == provenance.id) {
-                    // We need to find each column of `input` bound in `other` with this provenance.
-                    let mut bindings = HashMap::new();
-                    for (src, input_col) in provenance.binding.iter() {
-                        for (src2, other_col) in other_prov.binding.iter() {
-                            if src == src2 {
-                                bindings.insert(input_col, *other_col);
-                            }
-                        }
-                    }
-
-                    // True iff `col = binding[col]` is in `equivalences` for all `col` in `cols`.
-                    let all_columns_equated =
-                        |cols: &Vec<usize>| {
-                            cols.iter().all(|input_col| {
-                                let other_col = bindings[&input_col];
-                                equivalences.iter().any(|e| {
-                                    e.contains(&input_mapper.map_expr_to_global(
-                                        MirScalarExpr::Column(*input_col),
+                    let all_columns_equated = |cols: &Vec<usize>| {
+                        cols.iter().all(|input_col| {
+                            // The root expression behind the key column, ie. the expression
+                            // re-written in terms of elements in the projection of the Get
+                            // operator.
+                            let root_expr =
+                                provenance.dereference(&MirScalarExpr::column(*input_col));
+                            root_expr.as_ref().map_or(false, |root_expr| {
+                                // Check if there is a join equivalence that joins 'input' and
+                                // 'other' on expressions that lead to the same root expression
+                                // as the key column.
+                                equivalences.iter().any(|equivalence| {
+                                    contains_equivalent_expr_from_input(
+                                        equivalence,
+                                        root_expr,
                                         input,
-                                    )) && e.contains(&input_mapper.map_expr_to_global(
-                                        MirScalarExpr::Column(other_col),
+                                        provenance,
+                                    ) && contains_equivalent_expr_from_input(
+                                        equivalence,
+                                        root_expr,
                                         other,
-                                    ))
+                                        other_prov,
+                                    )
                                 })
                             })
-                        };
+                        })
+                    };
 
-                    // If all columns of `input` are bound, and any key columns of `input` are equated,
-                    // the binding can be returned as mapping replacements for each input column.
-                    if bindings.len() == input_mapper.input_arity(input)
-                        && keys.iter().any(|key| all_columns_equated(key))
-                    {
-                        let binding = input_mapper
-                            .local_columns(input)
-                            .map(|c| input_mapper.map_column_to_global(bindings[&c], other))
-                            .collect::<Vec<_>>();
-                        return Some(binding);
+                    if keys.iter().any(|key| all_columns_equated(key)) {
+                        // Find out whether we can produce input's projection strictly with
+                        // elements in other's projection.
+                        let expressions = provenance
+                            .dereferenced_projection
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(c, _)| {
+                                // Check if the expression under input's 'c' column can be built
+                                // with elements in other's projection.
+                                provenance.dereferenced_projection[c].as_ref().map_or(
+                                    None,
+                                    |root_expr| {
+                                        try_build_expression_using_other(
+                                            root_expr,
+                                            other,
+                                            other_prov,
+                                            input_mapper,
+                                        )
+                                    },
+                                )
+                            })
+                            .collect_vec();
+                        if expressions.len() == provenance.dereferenced_projection.len() {
+                            return Some(expressions);
+                        }
                     }
                 }
             }
@@ -459,4 +589,89 @@ fn find_redundancy(
     }
 
     None
+}
+
+/// Tries to build `root_expr` using elements from other's projection.
+fn try_build_expression_using_other(
+    root_expr: &MirScalarExpr,
+    other: usize,
+    other_prov: &ProvInfo,
+    input_mapper: &JoinInputMapper,
+) -> Option<MirScalarExpr> {
+    if root_expr.is_literal() {
+        return Some(root_expr.clone());
+    }
+
+    // Check if 'other' projects a column that lead to `root_expr`.
+    for (other_col, derefed) in other_prov.dereferenced_projection.iter().enumerate() {
+        if let Some(derefed) = derefed {
+            if derefed == root_expr {
+                return Some(MirScalarExpr::Column(
+                    input_mapper.map_column_to_global(other_col, other),
+                ));
+            }
+        }
+    }
+
+    // Otherwise, try to build root_expr's sub-expressions recursively
+    // other's projection.
+    match root_expr {
+        MirScalarExpr::Column(_) => None,
+        MirScalarExpr::CallUnary { func, expr } => {
+            try_build_expression_using_other(expr, other, other_prov, input_mapper).and_then(
+                |expr| {
+                    Some(MirScalarExpr::CallUnary {
+                        func: func.clone(),
+                        expr: Box::new(expr),
+                    })
+                },
+            )
+        }
+        MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+            try_build_expression_using_other(expr1, other, other_prov, input_mapper).and_then(
+                |expr1| {
+                    try_build_expression_using_other(expr2, other, other_prov, input_mapper)
+                        .and_then(|expr2| {
+                            Some(MirScalarExpr::CallBinary {
+                                func: func.clone(),
+                                expr1: Box::new(expr1),
+                                expr2: Box::new(expr2),
+                            })
+                        })
+                },
+            )
+        }
+        MirScalarExpr::CallVariadic { func, exprs } => {
+            let new_exprs = exprs
+                .iter()
+                .flat_map(|e| try_build_expression_using_other(e, other, other_prov, input_mapper))
+                .collect_vec();
+            if new_exprs.len() == exprs.len() {
+                Some(MirScalarExpr::CallVariadic {
+                    func: func.clone(),
+                    exprs: new_exprs,
+                })
+            } else {
+                None
+            }
+        }
+        MirScalarExpr::Literal(..) | MirScalarExpr::CallNullary(..) => Some(root_expr.clone()),
+        MirScalarExpr::If { cond, then, els } => {
+            try_build_expression_using_other(cond, other, other_prov, input_mapper).and_then(
+                |cond| {
+                    try_build_expression_using_other(then, other, other_prov, input_mapper)
+                        .and_then(|then| {
+                            try_build_expression_using_other(els, other, other_prov, input_mapper)
+                                .and_then(|els| {
+                                    Some(MirScalarExpr::If {
+                                        cond: Box::new(cond),
+                                        then: Box::new(then),
+                                        els: Box::new(els),
+                                    })
+                                })
+                        })
+                },
+            )
+        }
+    }
 }

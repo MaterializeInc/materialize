@@ -232,38 +232,30 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND EXISTS (SELECT f1 FROM t1);
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Project ()
-
-%1 =
+%0 =
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%2 =
+%1 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
 | Project (#0)
 
-%3 =
-| Get %0 (l0)
+%2 =
+| Get materialize.public.t1 (u1)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)
 | Project ()
 | Map (err: more than one record produced in subquery)
 
+%3 =
+| Union %1 %2
+
 %4 =
-| Union %2 %3
-
-%5 =
-| Get %0 (l0)
-| Distinct group=()
-| ArrangeBy ()
-
-%6 =
-| Join %1 %4 %5 (= #0 #2)
-| | implementation = Differential %4 %5.() %1.(#0)
+| Join %0 %3 (= #0 #2)
+| | implementation = Differential %3 %0.(#0)
 | Project (#0, #1)
 
 EOF
