@@ -24,13 +24,10 @@ $ kafka-create-topic topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION}
 $ schema-registry-publish subject=testdrive-upgrade-proto-source-${env.UPGRADE_FROM_VERSION}-${testdrive.seed}-value schema-type=protobuf
 \${schema}
 
-$ kafka-ingest topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION} format=protobuf descriptor-file=message.pb message=.Message
+$ kafka-ingest topic=upgrade-proto-source-${env.UPGRADE_FROM_VERSION} format=protobuf descriptor-file=message.pb message=.Message confluent-wire-format=true
 {"id": "c"}
 {"id": "h"}
 
 > CREATE MATERIALIZED SOURCE kafka_proto_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-upgrade-proto-source-${env.UPGRADE_FROM_VERSION}-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-> SELECT COUNT(*) = 2 FROM kafka_proto_source
-true

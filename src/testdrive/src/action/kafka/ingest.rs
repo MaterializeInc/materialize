@@ -54,6 +54,9 @@ enum Format {
     Protobuf {
         descriptor_file: String,
         message: String,
+        confluent_wire_format: bool,
+        schema_id_subject: Option<String>,
+        schema_message_id: u8,
     },
     Bytes {
         terminator: Option<u8>,
@@ -68,6 +71,9 @@ enum Transcoder {
     },
     Protobuf {
         message: MessageDescriptor,
+        confluent_wire_format: bool,
+        schema_id: i32,
+        schema_message_id: u8,
     },
     Bytes {
         terminator: Option<u8>,
@@ -115,11 +121,27 @@ impl Transcoder {
                     Ok(None)
                 }
             }
-            Transcoder::Protobuf { message } => {
+            Transcoder::Protobuf {
+                message,
+                confluent_wire_format,
+                schema_id,
+                schema_message_id,
+            } => {
                 if let Some(val) = Self::decode_json::<_, Box<serde_json::value::RawValue>>(row)? {
                     let message = protobuf::json::parse_dynamic_from_str(message, val.get())
                         .map_err(|e| format!("parsing protobuf JSON: {}", e))?;
                     let mut out = vec![];
+                    if *confluent_wire_format {
+                        // See: https://github.com/MaterializeInc/materialize/issues/9250
+                        // The first byte is a magic byte (0) that indicates the Confluent
+                        // serialization format version, and the next four bytes are a
+                        // 32-bit schema ID, which we default to something fun.
+                        // And, as we only support single-message proto files for now,
+                        // we also set the following message id to 0.
+                        out.write_u8(0).unwrap();
+                        out.write_i32::<NetworkEndian>(*schema_id).unwrap();
+                        out.write_u8(*schema_message_id).unwrap();
+                    }
                     message
                         .write_to_vec_dyn(&mut out)
                         .map_err(|e| e.to_string())?;
@@ -162,11 +184,17 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         },
         "protobuf" => {
             let descriptor_file = cmd.args.string("descriptor-file")?;
+            // This was introduced after the avro format's confluent-wire-format, so it defaults to
+            // false
             let message = cmd.args.string("message")?;
             validate_protobuf_message_name(&message)?;
+
             Format::Protobuf {
                 descriptor_file,
                 message,
+                confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
+                schema_id_subject: cmd.args.opt_string("schema-id-subject"),
+                schema_message_id: cmd.args.opt_parse::<u8>("schema-message-id")?.unwrap_or(0),
             }
         }
         "bytes" => Format::Bytes { terminator: None },
@@ -184,6 +212,12 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
             Some(Format::Protobuf {
                 descriptor_file,
                 message,
+                confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
+                schema_id_subject: cmd.args.opt_string("key-schema-id-subject"),
+                schema_message_id: cmd
+                    .args
+                    .opt_parse::<u8>("key-schema-message-id")?
+                    .unwrap_or(0),
             })
         }
         Some("bytes") => Some(Format::Bytes {
@@ -263,13 +297,13 @@ impl Action for IngestAction {
         let ccsr_client = &state.ccsr_client;
         let temp_path = &state.temp_path;
         let make_transcoder = |format, typ| async move {
+            let ccsr_subject = format!("{}-{}", topic_name, typ);
             match format {
                 Format::Avro {
                     schema,
                     confluent_wire_format,
                 } => {
                     let schema_id = if self.publish {
-                        let ccsr_subject = format!("{}-{}", topic_name, typ);
                         let schema_id = ccsr_client
                             .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Avro, &[])
                             .await
@@ -289,7 +323,22 @@ impl Action for IngestAction {
                 Format::Protobuf {
                     descriptor_file,
                     message,
+                    confluent_wire_format,
+                    schema_id_subject,
+                    schema_message_id,
                 } => {
+                    let schema_id = if confluent_wire_format {
+                        ccsr_client
+                            .get_schema_by_subject(
+                                schema_id_subject.as_deref().unwrap_or(&ccsr_subject),
+                            )
+                            .await
+                            .map_err(|e| format!("schema registry error: {}", e))?
+                            .id
+                    } else {
+                        0
+                    };
+
                     let bytes = fs::read(temp_path.join(descriptor_file))
                         .await
                         .map_err(|e| format!("reading protobuf descriptor file: {}", e))?;
@@ -300,7 +349,12 @@ impl Action for IngestAction {
                         .iter()
                         .find_map(|fd| fd.message_by_full_name(&message))
                         .ok_or_else(|| format!("unknown message name {}", message))?;
-                    Ok(Transcoder::Protobuf { message })
+                    Ok(Transcoder::Protobuf {
+                        message,
+                        confluent_wire_format,
+                        schema_id,
+                        schema_message_id,
+                    })
                 }
                 Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),
             }

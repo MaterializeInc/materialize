@@ -320,6 +320,7 @@ fn get_decoder(
                 }
                 _ => false,
             };
+            // TODO(guswynn): get rid of this expect https://github.com/MaterializeInc/materialize/issues/9613
             let state = avro::AvroDecoderState::new(
                 &schema,
                 schema_registry_config,
@@ -343,7 +344,11 @@ fn get_decoder(
                     PreDelimitedFormat::Regex(regex, Default::default())
                 }
                 DataEncoding::Protobuf(encoding) => {
-                    PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(encoding))
+                    // TODO(guswynn): get rid of this expect https://github.com/MaterializeInc/materialize/issues/9613
+                    PreDelimitedFormat::Protobuf(
+                        ProtobufDecoderState::new(encoding)
+                            .expect("Failed to create protobuf decoder"),
+                    )
                 }
                 DataEncoding::Bytes => PreDelimitedFormat::Bytes,
                 DataEncoding::Text => PreDelimitedFormat::Text,

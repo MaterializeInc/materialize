@@ -23,18 +23,22 @@ impl ProtobufDecoderState {
         ProtobufEncoding {
             descriptors,
             message_name,
+            schema_registry_config,
         }: ProtobufEncoding,
-    ) -> Self {
+    ) -> Result<Self, anyhow::Error> {
         let descriptors = DecodedDescriptors::from_bytes(&descriptors, message_name)
             .expect("descriptors provided to protobuf source are pre-validated");
-        ProtobufDecoderState {
-            decoder: Decoder::new(descriptors),
+        Ok(ProtobufDecoderState {
+            decoder: Decoder::new(descriptors, schema_registry_config)?,
             events_success: 0,
             events_error: 0,
-        }
+        })
     }
     pub fn get_value(&mut self, bytes: &[u8]) -> Option<Result<Row, DecodeError>> {
-        match self.decoder.decode(bytes) {
+        // TODO(guswynn): make this async-sync-async sandwich open-faced.
+        //   Figuring out how to do async-to-sync work in timely land needs a general solution.
+        use futures::executor::block_on;
+        match block_on(self.decoder.decode(bytes)) {
             Ok(row) => {
                 if let Some(row) = row {
                     self.events_success += 1;

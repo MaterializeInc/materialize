@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use criterion::{black_box, Criterion, Throughput};
+use futures::executor::block_on;
 use protobuf::{Message, MessageField};
 
 use interchange::protobuf::{DecodedDescriptors, Decoder, NormalizedProtobufMessageName};
@@ -69,12 +70,14 @@ pub fn bench_protobuf(c: &mut Criterion) {
             NormalizedProtobufMessageName::new(".bench.Record".to_string()),
         )
         .unwrap(),
-    );
+        None,
+    )
+    .unwrap();
 
     let mut bg = c.benchmark_group("protobuf");
     bg.throughput(Throughput::Bytes(len));
     bg.bench_function("decode", move |b| {
-        b.iter(|| black_box(decoder.decode(&buf).unwrap()))
+        b.iter(|| black_box(block_on(decoder.decode(&buf)).unwrap()))
     });
     bg.finish();
 }

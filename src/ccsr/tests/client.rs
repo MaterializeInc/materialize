@@ -226,6 +226,14 @@ async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
     assert_eq!(schema0_subject, dependency_subjects[0].name);
     assert_eq!(schema1_subject, dependency_subjects[1].name);
 
+    // Also do the by-id lookup
+    let (primary_subject, dependency_subjects) =
+        client.get_subject_and_references_by_id(schema2_id).await?;
+    assert_eq!(schema2_subject, primary_subject.name);
+    assert_eq!(2, dependency_subjects.len());
+    assert_eq!(schema0_subject, dependency_subjects[0].name);
+    assert_eq!(schema1_subject, dependency_subjects[1].name);
+
     Ok(())
 }
 

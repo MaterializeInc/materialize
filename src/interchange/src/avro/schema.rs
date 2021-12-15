@@ -16,7 +16,6 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Error};
 use log::warn;
 
-use byteorder::{BigEndian, ByteOrder};
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use ore::retry::Retry;
@@ -249,31 +248,6 @@ impl ConfluentAvroResolver {
         &'a mut self,
         mut bytes: &'b [u8],
     ) -> anyhow::Result<(&'b [u8], &'a Schema)> {
-        let mut extract_schema_id = || {
-            // The first byte is a magic byte (0) that indicates the Confluent
-            // serialization format version, and the next four bytes are a big
-            // endian 32-bit schema ID.
-            //
-            // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-            if bytes.len() < 5 {
-                bail!(
-                        "Confluent-style avro datum is too few bytes: expected at least 5 bytes, got {}",
-                        bytes.len()
-                    );
-            }
-            let magic = bytes[0];
-            let schema_id = BigEndian::read_i32(&bytes[1..5]);
-            bytes = &bytes[5..];
-
-            if magic != 0 {
-                bail!(
-                    "wrong Confluent-style avro serialization magic: expected 0, got {}",
-                    magic
-                );
-            }
-            Ok(schema_id)
-        };
-
         let resolved_schema = match &mut self.writer_schemas {
             Some(cache) => {
                 debug_assert!(
@@ -281,7 +255,9 @@ impl ConfluentAvroResolver {
                     "We should have set 'confluent_wire_format' everywhere \
                      that can lead to this branch"
                 );
-                let schema_id = extract_schema_id()?;
+                // XXX(guswynn): use destructuring assignments when they are stable
+                let (schema_id, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
+                bytes = adjusted_bytes;
                 cache
                     .get(schema_id, &self.reader_schema)
                     .await
@@ -294,7 +270,8 @@ impl ConfluentAvroResolver {
             None => {
                 if self.confluent_wire_format {
                     // validate and just move the bytes buffer ahead
-                    extract_schema_id()?;
+                    let (_, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
+                    bytes = adjusted_bytes;
                 }
                 &self.reader_schema
             }

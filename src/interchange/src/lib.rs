@@ -12,6 +12,7 @@
 #![warn(missing_debug_implementations)]
 
 pub mod avro;
+mod confluent;
 pub mod encode;
 pub mod envelopes;
 pub mod json;

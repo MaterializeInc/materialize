@@ -93,9 +93,21 @@ impl Client {
         &self,
         subject: &str,
     ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
+        self.get_subject_and_references_by_version(subject, "latest".to_owned())
+            .await
+    }
+
+    /// Gets a subject and all other subjects referenced by that subject (recursively)
+    ///
+    /// The dependencies are returned in alphabetical order by subject name.
+    async fn get_subject_and_references_by_version(
+        &self,
+        subject: &str,
+        version: String,
+    ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
         let mut subjects = vec![];
         let mut seen = HashSet::new();
-        let mut subjects_queue = vec![(subject.to_owned(), "latest".to_owned())];
+        let mut subjects_queue = vec![(subject.to_owned(), version)];
         while let Some((subject, version)) = subjects_queue.pop() {
             let req = self.make_request(Method::GET, &["subjects", &subject, "versions", &version]);
             let res: GetBySubjectResponse = send_request(req).await?;
@@ -161,6 +173,43 @@ impl Client {
         let req = self.make_request(Method::DELETE, &["subjects", subject]);
         let _res: Vec<i32> = send_request(req).await?;
         Ok(())
+    }
+
+    /// Gets the latest version of the first subject found associated with the scheme with
+    /// the given id, as well as all other subjects referenced by that subject (recursively).
+    ///
+    /// The dependencies are returned in alphabetical order by subject name.
+    pub async fn get_subject_and_references_by_id(
+        &self,
+        id: i32,
+    ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
+        let req = self.make_request(
+            Method::GET,
+            &["schemas", "ids", &id.to_string(), "versions"],
+        );
+        let res: Vec<SubjectVersion> = send_request(req).await?;
+
+        // NOTE NOTE NOTE
+        // We take the FIRST subject that matches this schema id. This could be DIFFERENT
+        // than the actual subject we are interested in (it could even be from a different test
+        // run), but we are trusting the schema registry to only output the same schema id for
+        // identical subjects.
+        // This was validated by publishing 2 empty schemas (i.e., identical), with different
+        // references (one empty, one with a random reference), and they were not linked to the
+        // same schema id.
+        //
+        // See https://docs.confluent.io/platform/current/schema-registry/develop/api.html#post--subjects-(string-%20subject)-versions
+        // for more info.
+        match res.as_slice() {
+            [first, ..] => {
+                self.get_subject_and_references_by_version(
+                    &first.subject,
+                    first.version.to_string(),
+                )
+                .await
+            }
+            _ => Err(GetBySubjectError::SubjectNotFound),
+        }
     }
 }
 
@@ -250,6 +299,14 @@ pub enum GetByIdError {
     Transport(reqwest::Error),
     /// An internal server error occured.
     Server { code: i32, message: String },
+}
+
+#[derive(Debug, Deserialize)]
+struct SubjectVersion {
+    /// The name of the subject
+    pub subject: String,
+    /// The version of the schema
+    pub version: i32,
 }
 
 impl From<UnhandledError> for GetByIdError {

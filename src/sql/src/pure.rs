@@ -13,17 +13,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
-use std::iter;
-use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use ccsr::Client;
 use csv::ReaderBuilder;
 use itertools::Itertools;
-use lazy_static::lazy_static;
-use protobuf::Message;
-use regex::Regex;
 use reqwest::Url;
 use sql_parser::ast::{CsrSeedCompiledOrLegacy, Op};
 use tokio::fs::File;
@@ -33,7 +28,7 @@ use uuid::Uuid;
 
 use dataflow_types::AwsConfig;
 use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
-use mz_protoc::Protoc;
+use interchange::protobuf::compile_proto_from_subjects;
 use repr::strconv;
 use sql_parser::parser::parse_columns;
 
@@ -787,70 +782,14 @@ async fn get_remote_csr_schema(
     })
 }
 
+/// Collect protobuf message descriptor from CSR and compile the descriptor.
 async fn compile_proto(
     subject_name: &String,
     ccsr_client: Client,
 ) -> Result<CsrSeedCompiledEncoding, anyhow::Error> {
-    lazy_static! {
-        static ref WELL_KNOWN_REGEX: Regex = Regex::new(r#"(\.)?google\.protobuf\.\w+"#).unwrap();
-        static ref MISSING_IMPORT_ERROR: Regex =
-            Regex::new(r#"protobuf path \\"(?P<reference>.*)\\" is not found in import path"#)
-                .unwrap();
-    }
-
     let (primary_subject, dependency_subjects) =
         ccsr_client.get_subject_and_references(subject_name).await?;
-
-    let primary_proto_name = primary_subject.name.clone();
-    let include_dir = tempfile::tempdir()?;
-    let primary_proto_path = include_dir.path().join(&primary_proto_name);
-
-    for subject in iter::once(primary_subject).chain(dependency_subjects.into_iter()) {
-        if WELL_KNOWN_REGEX.is_match(&subject.name) {
-            continue;
-        }
-        let subject_pb = PathBuf::from(subject.name);
-        if let Some(parent) = subject_pb.parent() {
-            tokio::fs::create_dir_all(include_dir.path().join(parent)).await?;
-        }
-        let path = include_dir.path().join(subject_pb);
-        let bytes = strconv::parse_bytes(&subject.schema.raw)?;
-        tokio::fs::write(&path, &bytes).await?;
-    }
-
-    match Protoc::new()
-        .include(include_dir.path())
-        .input(primary_proto_path)
-        .parse()
-    {
-        Ok(fds) => {
-            let message_name = fds
-                .file
-                .iter()
-                .find(|f| f.get_name() == primary_proto_name)
-                .map(|file| file.message_type.first())
-                .flatten()
-                .map(|message| format!(".{}", message.get_name()))
-                .ok_or_else(|| anyhow!("unable to compile temporary schema"))?;
-            let mut schema = String::new();
-            strconv::format_bytes(&mut schema, &fds.write_to_bytes()?);
-            Ok(CsrSeedCompiledEncoding {
-                schema,
-                message_name,
-            })
-        }
-        Err(e) => {
-            // Make protobuf import errors more user-friendly.
-            if let Some(captures) = MISSING_IMPORT_ERROR.captures(&e.to_string()) {
-                bail!(
-                    "unsupported protobuf schema reference {}",
-                    &captures["reference"]
-                )
-            } else {
-                Err(e)
-            }
-        }
-    }
+    compile_proto_from_subjects(primary_subject, dependency_subjects).await
 }
 
 /// Makes an always-valid AWS API call to perform a basic sanity check of
