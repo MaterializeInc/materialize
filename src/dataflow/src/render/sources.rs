@@ -522,13 +522,12 @@ where
                                         source_persist_config,
                                     ) = source_persist_config
                                     {
-                                        let (sealed_upsert_ok, upsert_seal_err) = upsert_ok
-                                            .conditional_seal(
-                                                &source_name,
-                                                &ts_bindings,
-                                                source_persist_config.upsert_config.write_handle,
-                                                source_persist_config.bindings_config.write_handle,
-                                            );
+                                        let sealed_upsert = upsert_ok.conditional_seal(
+                                            &source_name,
+                                            &ts_bindings,
+                                            source_persist_config.upsert_config.write_handle,
+                                            source_persist_config.bindings_config.write_handle,
+                                        );
 
                                         // Don't send data forward to "dataflow" until the frontier
                                         // tells us that we both persisted and sealed it.
@@ -537,22 +536,10 @@ where
                                         // control, an alternatie would be to not hold data but
                                         // only hold the frontier (which is what the persist/seal
                                         // operators do).
-                                        let sealed_upsert_ok =
-                                            sealed_upsert_ok.await_frontier(&source_name);
+                                        let sealed_upsert =
+                                            sealed_upsert.await_frontier(&source_name);
 
-                                        let upsert_seal_err =
-                                            upsert_seal_err.map(move |(err, ts, diff)| {
-                                                let wrapped_error =
-                                                    DataflowError::from(SourceError::new(
-                                                        source_name.clone(),
-                                                        SourceErrorDetails::Persistence(err),
-                                                    ));
-                                                (wrapped_error, ts, diff)
-                                            });
-
-                                        let combined_err = upsert_err.concat(&upsert_seal_err);
-
-                                        (sealed_upsert_ok, combined_err)
+                                        (sealed_upsert, upsert_err)
                                     } else {
                                         (upsert_ok, upsert_err)
                                     };

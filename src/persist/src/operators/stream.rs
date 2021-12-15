@@ -23,7 +23,6 @@ use persist_types::Codec;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::CapabilitySet;
-use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::{Branch, Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -199,7 +198,7 @@ pub trait Seal<G: Scope<Timestamp = u64>, D: TimelyData> {
         condition_input: &Stream<G, (D2, u64, isize)>,
         primary_write: StreamWriteHandle<K, V>,
         condition_write: StreamWriteHandle<K2, V2>,
-    ) -> (Stream<G, (D, u64, isize)>, Stream<G, (String, u64, isize)>)
+    ) -> Stream<G, (D, u64, isize)>
     where
         K: Codec,
         V: Codec,
@@ -328,7 +327,7 @@ where
         condition_input: &Stream<G, (D2, u64, isize)>,
         primary_write: StreamWriteHandle<K, V>,
         condition_write: StreamWriteHandle<K2, V2>,
-    ) -> (Stream<G, (D, u64, isize)>, Stream<G, (String, u64, isize)>)
+    ) -> Stream<G, (D, u64, isize)>
     where
         K: Codec,
         V: Codec,
@@ -382,10 +381,8 @@ where
                 primary_data_input.for_each(|cap, data| {
                     data.swap(&mut primary_data_buffer);
 
-                    let as_result = primary_data_buffer.drain(..).map(Ok);
-
                     let mut session = data_output.session(&cap);
-                    session.give_iterator(as_result);
+                    session.give_vec(&mut primary_data_buffer);
                 });
 
                 // Consume condition input data but throw it away. We only use this
@@ -601,11 +598,7 @@ where
             }
         });
 
-        // We use a single, multiplexed output instead of dealing with the hassles of managing
-        // capabilities for a regular output and an error output for the seal operator.
-        let (data_output_stream, error_output_stream) = data_output_stream.ok_err(|x| x);
-
-        (data_output_stream, error_output_stream)
+        data_output_stream
     }
 }
 
@@ -965,7 +958,7 @@ mod tests {
                 let primary_stream = primary_input.to_stream(scope);
                 let condition_stream = condition_input.to_stream(scope);
 
-                let (sealed_stream, _) = primary_stream.conditional_seal(
+                let sealed_stream = primary_stream.conditional_seal(
                     "test",
                     &condition_stream,
                     primary_write,
@@ -1047,7 +1040,7 @@ mod tests {
                 let primary_stream = primary_input.to_stream(scope);
                 let condition_stream = condition_input.to_stream(scope);
 
-                let (sealed_stream, _) = primary_stream.conditional_seal(
+                let sealed_stream = primary_stream.conditional_seal(
                     "test",
                     &condition_stream,
                     primary_write,
@@ -1110,7 +1103,7 @@ mod tests {
                 let primary_stream = primary_input.to_stream(scope);
                 let condition_stream = condition_input.to_stream(scope);
 
-                let (sealed_stream, _) = primary_stream.conditional_seal(
+                let sealed_stream = primary_stream.conditional_seal(
                     "test",
                     &condition_stream,
                     primary_write,
