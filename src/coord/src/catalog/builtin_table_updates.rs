@@ -183,7 +183,13 @@ impl CatalogState {
         source: &Source,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let persisted_name_datum = Datum::from(source.persist_name.as_ref().map(|s| s.as_str()));
+        let persist_name = match &source.connector {
+            dataflow_types::SourceConnector::External { persist, .. } => persist
+                .as_ref()
+                .map(|persist| persist.primary_stream.as_str()),
+            dataflow_types::SourceConnector::Local { .. } => None,
+        };
+        let persisted_name_datum = Datum::from(persist_name);
         vec![BuiltinTableUpdate {
             id: MZ_SOURCES.id,
             row: Row::pack_slice(&[

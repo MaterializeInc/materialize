@@ -998,6 +998,7 @@ pub fn plan_create_source(
             consistency,
             ts_frequency,
             timeline,
+            persist: None,
         },
         expr,
         bare_desc,
