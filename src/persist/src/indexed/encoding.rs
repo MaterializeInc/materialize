@@ -21,6 +21,7 @@ use std::{fmt, io};
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use protobuf::MessageField;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -734,9 +735,11 @@ impl From<ProtoU64Antichain> for Antichain<u64> {
     }
 }
 
-impl From<&BlobMeta> for ProtoMeta {
-    fn from(x: &BlobMeta) -> Self {
+impl From<(&BlobMeta, &Version)> for ProtoMeta {
+    fn from(x: (&BlobMeta, &Version)) -> Self {
+        let (x, b) = x;
         ProtoMeta {
+            version: b.to_string(),
             seqno: x.seqno.0,
             id_mapping: x.id_mapping.iter().map(|x| (x.id.0, x.into())).collect(),
             graveyard: x.graveyard.iter().map(|x| (x.id.0, x.into())).collect(),

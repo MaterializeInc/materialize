@@ -23,6 +23,7 @@ harness = false
 async-trait = "0.1"
 bincode = "1.3.3"
 aws-sdk-s3 = { version = "0.2.0", default-features = false }
+build-info = { path = "../build-info" }
 crossbeam-channel = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
@@ -34,6 +35,7 @@ mz-aws-util = { path = "../aws-util", features = ["s3"] }
 ore = { path = "../ore", default-features = false, features = ["metrics"] }
 persist-types = { path = "../persist-types" }
 protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
+semver = { version = "1.0.4" }
 serde = { version = "1.0.131", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.13.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }

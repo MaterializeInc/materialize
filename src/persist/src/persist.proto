@@ -14,25 +14,22 @@ syntax = "proto3";
 package gen;
 
 message ProtoMeta {
+    // For data written by some vX.Y.Z of Materialize, we'll support reading it
+    // back in by later versions (backward compatibility, so users can upgrade)
+    // and earlier versions (forward compatiblity, so users can roll back an
+    // upgrade). The specific policy is yet to be determined, but each of these
+    // is likely to be bounded, especially forward compatatibility.
+    //
+    // For us to reason about this (e.g. to prevent startup if a binary is
+    // pointed at data it can't handle), we store the version that wrote data
+    // alongside the data itself.
+    string version = 1;
+
     uint64 seqno = 2;
     // TODO: Should these all be protobuf maps?
     map<uint64, ProtoStreamRegistration> id_mapping = 3;
     map<uint64, ProtoStreamRegistration> graveyard = 4;
     map<uint64, ProtoArrangement> arrangements = 5;
-
-    // TODO: For data written by some vX.Y.Z of Materialize, we'll support
-    // reading it back in by later versions (backward compatibility, so users
-    // can upgrade) and earlier versions (forward compatiblity, so users can
-    // roll back an upgrade). The specific policy is yet to be determined, but
-    // each of these is likely to be bounded, especially forward
-    // compatatibility.
-    //
-    // For us to reason about this (e.g. to prevent startup if a binary is
-    // pointed at data it can't handle), we'll want to store the version that
-    // wrote data alongside the data itself. Figure out whether this should be
-    // the version triple (and how to plumb that down to persist) or something
-    // else.
-    reserved 1;
 }
 
 message ProtoStreamRegistration {

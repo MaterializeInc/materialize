@@ -999,6 +999,7 @@ mod tests {
     #[test]
     fn append_trace_ts_upper_invariant() -> Result<(), Error> {
         let mut blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
             Metrics::default(),
             MemBlob::new_no_reentrance("append_trace_ts_upper_invariant"),
         );
@@ -1040,6 +1041,7 @@ mod tests {
     #[test]
     fn append_detect_min_max_times() {
         let mut blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
             Metrics::default(),
             MemBlob::new_no_reentrance("append_ts_lower_invariant"),
         );
@@ -1069,6 +1071,7 @@ mod tests {
     #[test]
     fn unsealed_evict() -> Result<(), Error> {
         let mut blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
             Metrics::default(),
             MemBlob::new_no_reentrance("unsealed_evict"),
         );
@@ -1142,6 +1145,7 @@ mod tests {
     #[test]
     fn unsealed_snapshot() -> Result<(), Error> {
         let mut blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
             Metrics::default(),
             MemBlob::new_no_reentrance("unsealed_snapshot"),
         );
@@ -1194,6 +1198,7 @@ mod tests {
     #[test]
     fn unsealed_batch_trim() -> Result<(), Error> {
         let mut blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
             Metrics::default(),
             MemBlob::new_no_reentrance("unsealed_batch_trim"),
         );
@@ -1312,7 +1317,11 @@ mod tests {
 
     #[test]
     fn trace_compact() -> Result<(), Error> {
-        let mut blob = BlobCache::new(Metrics::default(), MemRegistry::new().blob_no_reentrance()?);
+        let mut blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
+            Metrics::default(),
+            MemRegistry::new().blob_no_reentrance()?,
+        );
         let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
         t.update_seal(10);

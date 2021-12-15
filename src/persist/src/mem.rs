@@ -371,7 +371,11 @@ impl MemRegistry {
     pub fn indexed_no_reentrance(&mut self) -> Result<Indexed<MemLog, MemBlob>, Error> {
         let log = self.log_no_reentrance()?;
         let metrics = Metrics::register_with(&MetricsRegistry::new());
-        let blob = BlobCache::new(metrics.clone(), self.blob_no_reentrance()?);
+        let blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
+            metrics.clone(),
+            self.blob_no_reentrance()?,
+        );
         let compacter = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
         Indexed::new(log, blob, compacter, metrics)
     }
@@ -387,7 +391,7 @@ impl MemRegistry {
         let metrics = Metrics::register_with(&MetricsRegistry::new());
         let blob = self.blob_no_reentrance()?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
-        let blob = BlobCache::new(metrics.clone(), blob);
+        let blob = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics.clone(), blob);
         let compacter = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
         Indexed::new(log, blob, compacter, metrics)
     }
@@ -401,6 +405,7 @@ impl MemRegistry {
             RuntimeConfig::for_tests(),
             log,
             blob,
+            build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
             None,
         )
@@ -420,6 +425,7 @@ impl MemRegistry {
             RuntimeConfig::for_tests(),
             log,
             blob,
+            build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
             None,
         )
@@ -478,6 +484,7 @@ impl MemMultiRegistry {
             RuntimeConfig::for_tests(),
             log,
             blob,
+            build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
             None,
         )

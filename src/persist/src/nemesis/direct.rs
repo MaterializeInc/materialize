@@ -593,6 +593,7 @@ mod tests {
                 RuntimeConfig::for_tests(),
                 log,
                 blob,
+                build_info::DUMMY_BUILD_INFO,
                 &MetricsRegistry::new(),
                 None,
             )

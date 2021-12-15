@@ -14,9 +14,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
+use build_info::BuildInfo;
 use futures_executor::block_on;
 use ore::cast::CastFrom;
 use persist_types::Codec;
+use semver::Version;
 
 use crate::error::Error;
 use crate::gen::persist::ProtoMeta;
@@ -42,6 +44,7 @@ use crate::storage::{Atomicity, Blob};
 /// erroring) until disk space frees up.
 #[derive(Debug)]
 pub struct BlobCache<B: Blob> {
+    build_version: Version,
     metrics: Metrics,
     blob: Arc<Mutex<B>>,
     // TODO: Use a disk-backed LRU cache.
@@ -53,6 +56,7 @@ pub struct BlobCache<B: Blob> {
 impl<B: Blob> Clone for BlobCache<B> {
     fn clone(&self) -> Self {
         BlobCache {
+            build_version: self.build_version.clone(),
             metrics: self.metrics.clone(),
             blob: self.blob.clone(),
             unsealed: self.unsealed.clone(),
@@ -66,8 +70,9 @@ impl<B: Blob> BlobCache<B> {
     const META_KEY: &'static str = "META";
 
     /// Returns a new, empty cache for the given [Blob] storage.
-    pub fn new(metrics: Metrics, blob: B) -> Self {
+    pub fn new(build: BuildInfo, metrics: Metrics, blob: B) -> Self {
         BlobCache {
+            build_version: build.semver_version(),
             metrics,
             blob: Arc::new(Mutex::new(blob)),
             unsealed: Arc::new(Mutex::new(HashMap::new())),
@@ -300,6 +305,7 @@ impl<B: Blob> BlobCache<B> {
         let meta = ProtoMeta::decode(&bytes).map_err(|err| {
             Error::from(format!("invalid meta at key {}: {}", Self::META_KEY, err))
         })?;
+        self.check_meta_build_version(&meta)?;
         let meta = BlobMeta::from(meta);
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
         Ok(Some(meta))
@@ -308,7 +314,7 @@ impl<B: Blob> BlobCache<B> {
     /// Overwrites metadata about what batches are in [Blob] storage.
     pub fn set_meta(&mut self, meta: &BlobMeta) -> Result<(), Error> {
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
-        let meta = ProtoMeta::from(meta);
+        let meta = ProtoMeta::from((meta, &self.build_version));
 
         let mut val = Vec::new();
         meta.encode(&mut val);
@@ -344,6 +350,37 @@ impl<B: Blob> BlobCache<B> {
         Ok(())
     }
 
+    fn check_meta_build_version(&self, meta: &ProtoMeta) -> Result<(), Error> {
+        // TODO: After ENCODING_VERSION is bumped to 8 or higher, this can be
+        // removed.
+        let meta_version = if meta.version.is_empty() {
+            // Any build that includes this check comes after a ProtoMeta that
+            // was written with no version set.
+            Version::new(0, 0, 0)
+        } else {
+            meta.version
+                .parse::<Version>()
+                .map_err(|err| err.to_string())?
+        };
+        // Allow data written by any previous version of persist (backward
+        // compatible for all time) but disallow data written by a future
+        // version of persist (aka we're currently *not* forward compatible).
+        // Note that at some point, mz will need to be forward compatible to
+        // allow for rollbacks but this policy is not yet settled.
+        //
+        // NB: Since ProtoMeta is the entrypoint for all written persist
+        // metadata and data, it's an upper bound on versions involved in any
+        // persist data.
+        if meta_version > self.build_version {
+            return Err(format!(
+                "persist v{} cannot read data written by future persist v{}",
+                self.build_version, meta_version
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     fn metric_set_error(&self, err: Error) -> Error {
         match &err {
             &Error::OutOfQuota(_) => self.metrics.blob_write_error_quota_count.inc(),
@@ -355,5 +392,56 @@ impl<B: Blob> BlobCache<B> {
     /// Returns the list of keys known to the underlying [Blob].
     pub fn list_keys(&self) -> Result<Vec<String>, Error> {
         block_on(self.blob.lock()?.list_keys())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mem::MemRegistry;
+    use crate::storage::SeqNo;
+
+    use super::*;
+
+    #[test]
+    fn build_version() -> Result<(), Error> {
+        let mut cache = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
+            Metrics::default(),
+            MemRegistry::new().blob_no_reentrance()?,
+        );
+
+        // Whatever we write down roundtrips.
+        cache.build_version = Version::new(1, 0, 0);
+        let m = BlobMeta {
+            seqno: SeqNo(1),
+            ..Default::default()
+        };
+        cache.set_meta(&m)?;
+        assert_eq!(cache.get_meta(), Ok(Some(m.clone())));
+
+        // A later version of persist handles what we wrote down (backward
+        // compatible). NB: Remember that the blob currently has v1.0.0 data.
+        cache.build_version = Version::new(1, 0, 1);
+        assert_eq!(cache.get_meta(), Ok(Some(m)));
+
+        // An earlier version of persist fails, because who knows what important
+        // fields might be written down that it doesn't know to parse (*not*
+        // forward compatible). Also note that at some point, mz will need to be
+        // forward compatible to allow for rollbacks but this policy is not yet
+        // settled. NB: Remember that the blob still has v1.0.0 data.
+        cache.build_version = Version::new(0, 9, 9);
+        assert_eq!(
+            cache.get_meta(),
+            Err("persist v0.9.9 cannot read data written by future persist v1.0.0".into())
+        );
+
+        // Holdover until ENCODING_VERSION gets bumped to 8. We have to handle a
+        // ProtoMeta that was written with no version.
+        assert_eq!(
+            cache.check_meta_build_version(&ProtoMeta::default()),
+            Ok(())
+        );
+
+        Ok(())
     }
 }
