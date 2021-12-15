@@ -18,18 +18,24 @@
 //!    reduce and not have to construct its own arrangement.
 //! 3) Reducing the frequency with which we have to recalculate the result of a join.
 //!
-//! Suppose there are two inputs R and T being joined. According to
+//! Suppose there are two inputs R and S being joined. According to
 //! [Galindo-Legaria and Joshi (2001)](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.563.8492&rep=rep1&type=pdf),
 //! a full reduction pushdown to R can be done if and only if:
 //! 1) Columns from R involved in join constraints are a subset of the group by keys.
-//! 2) The key of T is a subset of the group by keys.
+//! 2) The key of S is a subset of the group by keys.
 //! 3) The columns involved in the aggregation all belong to R.
 //!
 //! In our current implementation:
 //! * We abide by condition 1 to the letter.
-//! * We work around condition 2 by pushing the reduction down to both inputs.
-//! * TODO: We work around condition 3 in some cases by noting that `sum(foo.a * bar.a)`
-//!   is equivalent to `sum(foo.a) * sum(bar.a)`.
+//! * We work around condition 2 by rewriting the reduce around a join of R to
+//!   S with an equivalent relational expression involving a join of R to
+//!   ```ignore
+//!   select <columns involved in join constraints>, count(true)
+//!   from S
+//!   group by <columns involved in join constraints>
+//!   ```
+//! * TODO: We work around condition 3 in some cases by noting that `sum(R.a * S.a)`
+//!   is equivalent to `sum(R.a) * sum(S.a)`.
 //!
 //! Full documentation with examples can be found
 //! [here](https://docs.google.com/document/d/1xrBJGGDkkiGBKRSNYR2W-nKba96ZOdC2mVbLqMLjJY0/edit)
@@ -126,7 +132,7 @@ impl ReductionPushdown {
                 implementation: _,
             } = &mut **input
             {
-                if let Some(new_relation_expr) = try_push_reduction(
+                if let Some(new_relation_expr) = try_push_reduce_through_join(
                     inputs,
                     equivalences,
                     group_key,
@@ -142,7 +148,7 @@ impl ReductionPushdown {
     }
 }
 
-fn try_push_reduction(
+fn try_push_reduce_through_join(
     inputs: &Vec<MirRelationExpr>,
     equivalences: &Vec<Vec<MirScalarExpr>>,
     group_key: &Vec<MirScalarExpr>,
@@ -174,11 +180,9 @@ fn try_push_reduction(
         .partition(|cls| cls.iter().any(|expr| group_key.contains(expr)));
 
     // 2) Find the connected components that remain after removing constraints
-    //    containing the GroupBykey. Also, track the set of constraints that
+    //    containing the group_key. Also, track the set of constraints that
     //    connect the inputs in each component.
-    let mut components = (0..inputs.len())
-        .map(|i| (vec![i], Vec::new()))
-        .collect::<Vec<_>>();
+    let mut components = (0..inputs.len()).map(Component::new).collect::<Vec<_>>();
     for equivalence in component_equivalences {
         // a) Find the inputs referenced by the constraint.
         let inputs_to_connect = HashSet::<usize>::from_iter(
@@ -187,23 +191,17 @@ fn try_push_reduction(
                 .flat_map(|expr| old_join_mapper.lookup_inputs(expr)),
         );
         // b) Extract the set of components that covers the inputs.
-        let (components_to_connect, other): (Vec<_>, Vec<_>) = components
+        let (mut components_to_connect, other): (Vec<_>, Vec<_>) = components
             .into_iter()
-            .partition(|(inputs, _)| inputs.iter().any(|i| inputs_to_connect.contains(i)));
-        // c) Union the components. Add the current constraint to the list of
-        // constraints connecting the union of the components.
-        let mut connected_component = Vec::new();
-        let mut all_constraints = vec![equivalence];
-        for (mut component, mut constraint_set) in components_to_connect {
-            connected_component.append(&mut component);
-            all_constraints.append(&mut constraint_set);
-        }
-        connected_component.sort();
-        connected_component.dedup();
+            .partition(|c| c.inputs.iter().any(|i| inputs_to_connect.contains(i)));
         components = other;
-        // d) Push the unioned component back into the list of components.
-        components.push((connected_component, all_constraints));
-        // e) Abort reduction pushdown if there are less than two connected components.
+        // c) Connect the components and push the result back into the list of
+        // components.
+        if let Some(mut connected_component) = components_to_connect.pop() {
+            connected_component.connect(components_to_connect, equivalence);
+            components.push(connected_component);
+        }
+        // d) Abort reduction pushdown if there are less than two connected components.
         if components.len() < 2 {
             return None;
         }
@@ -223,24 +221,13 @@ fn try_push_reduction(
         components
             .iter()
             .enumerate()
-            .flat_map(|(new, (input_idxs, _))| input_idxs.iter().map(move |old| (*old, new))),
+            .flat_map(|(c_idx, c)| c.inputs.iter().map(move |i| (*i, c_idx))),
     );
 
     // 3) Construct a reduce to push to each input
     let mut new_reduces = components
         .into_iter()
-        .map(|(input_idxs, constraints)| {
-            ReduceBuilder::new(
-                input_idxs.iter().map(|i| inputs[*i].clone()).collect(),
-                constraints,
-                input_idxs
-                    .iter()
-                    .flat_map(|i| old_join_mapper.global_columns(*i))
-                    .enumerate()
-                    .map(|(local, global)| (global, local))
-                    .collect::<HashMap<_, _>>(),
-            )
-        })
+        .map(|component| ReduceBuilder::new(component, inputs, &old_join_mapper))
         .collect::<Vec<_>>();
 
     // The new projection and new join equivalences will reference columns
@@ -279,33 +266,39 @@ fn try_push_reduction(
                 }
             }
             new_join_equivalences_by_component.push(new_join_cls);
-        } else if let Some(component) =
-            lookup_corresponding_component(key, &old_join_mapper, &input_component_map)
-        {
+        } else {
             // If GroupBy key does not belong in an equivalence class,
             // add the key to new projection + add it as a GroupBy key to
-            // the new input
-            new_projection.push((component, new_reduces[component].arity()));
-            new_reduces[component].add_group_key(key.clone())
-        } else {
-            return None;
+            // the new component
+            if let Some(component) =
+                lookup_corresponding_component(key, &old_join_mapper, &input_component_map)
+            {
+                new_projection.push((component, new_reduces[component].arity()));
+                new_reduces[component].add_group_key(key.clone())
+            } else {
+                // Abort reduction pushdown if the expression does not
+                // refer to exactly one component.
+                return None;
+            }
         }
     }
 
-    // 3b) Deduce the aggregates that each reduce needs calculate in order to
+    // 3b) Deduce the aggregates that each reduce needs to calculate in order to
     // reconstruct each aggregate in the old reduce.
     for agg in aggregates {
         if let Some(component) =
             lookup_corresponding_component(&agg.expr, &old_join_mapper, &input_component_map)
         {
-            if agg.distinct == false {
-                // TODO: support non-distinct aggs
+            if !agg.distinct {
+                // TODO: support non-distinct aggs.
+                // For more details, see https://github.com/MaterializeInc/materialize/issues/9604
                 return None;
             }
             new_projection.push((component, new_reduces[component].arity()));
             new_reduces[component].add_aggregate(agg.clone());
         } else {
             // TODO: support multi- and zero- component aggs
+            // For more details, see https://github.com/MaterializeInc/materialize/issues/9604
             return None;
         }
     }
@@ -358,6 +351,37 @@ fn lookup_corresponding_component(
     }
 }
 
+/// A subjoin represented as a multigraph.
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+struct Component {
+    /// Index numbers of the inputs in the subjoin.
+    /// Are the vertices in the multigraph.
+    inputs: Vec<usize>,
+    /// The edges in the multigraph.
+    constraints: Vec<Vec<MirScalarExpr>>,
+}
+
+impl Component {
+    /// Create a new component that contains only one input.
+    fn new(i: usize) -> Self {
+        Component {
+            inputs: vec![i],
+            constraints: Vec::new(),
+        }
+    }
+
+    /// Connect `self` with `others` using the edge `connecting_constraint`.
+    fn connect(&mut self, others: Vec<Component>, connecting_constraint: Vec<MirScalarExpr>) {
+        self.constraints.push(connecting_constraint);
+        for mut other in others {
+            self.inputs.append(&mut other.inputs);
+            self.constraints.append(&mut other.constraints);
+        }
+        self.inputs.sort();
+        self.inputs.dedup();
+    }
+}
+
 /// Constructs a Reduce around a component, localizing column references.
 struct ReduceBuilder {
     input: MirRelationExpr,
@@ -369,19 +393,34 @@ struct ReduceBuilder {
 
 impl ReduceBuilder {
     fn new(
-        mut inputs: Vec<MirRelationExpr>,
-        mut equivalences: Vec<Vec<MirScalarExpr>>,
-        localize_map: HashMap<usize, usize>,
+        mut component: Component,
+        inputs: &Vec<MirRelationExpr>,
+        old_join_mapper: &JoinInputMapper,
     ) -> Self {
-        for equivalence in equivalences.iter_mut() {
-            for expr in equivalence.iter_mut() {
+        let localize_map = component
+            .inputs
+            .iter()
+            .flat_map(|i| old_join_mapper.global_columns(*i))
+            .enumerate()
+            .map(|(local, global)| (global, local))
+            .collect::<HashMap<_, _>>();
+        // Convert the subjoin from the `Component` representation to a
+        // `MirRelationExpr` representation.
+        let mut inputs = component
+            .inputs
+            .iter()
+            .map(|i| inputs[*i].clone())
+            .collect::<Vec<_>>();
+        // Constraints need to be localized to the subjoin.
+        for constraint in component.constraints.iter_mut() {
+            for expr in constraint.iter_mut() {
                 expr.permute_map(&localize_map)
             }
         }
         let input = if inputs.len() == 1 {
             inputs.pop().unwrap()
         } else {
-            MirRelationExpr::join_scalars(inputs, equivalences)
+            MirRelationExpr::join_scalars(inputs, component.constraints)
         };
         Self {
             input,

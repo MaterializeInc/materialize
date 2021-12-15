@@ -38,7 +38,7 @@ build apply=ReductionPushdown
 ----
 ----
 
-## distinct(<multiple columns from same input>) \
+## distinct(<multiple columns from same input>)
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y)] [[#1 #3]]) [#0 #1] [])
@@ -305,6 +305,49 @@ build apply=ReductionPushdown
 | Join %2 %5 (= #0 #2) (= #1 #3)
 | | implementation = Unimplemented
 | Project (#0, #3)
+----
+----
+
+opt
+(reduce (join [(get x) (get y) (get z) (get w)] [[#0 #2] [#3 #5] [#4 #6]]) [#3 #5] [])
+----
+----
+%0 =
+| Get x (u1)
+| Project (#0)
+| ArrangeBy (#0)
+
+%1 =
+| Get y (u2)
+
+%2 =
+| Join %0 %1 (= #0 #1)
+| | implementation = Differential %1 %0.(#0)
+| Project (#2)
+| Distinct group=(#0)
+| ArrangeBy (#0)
+
+%3 =
+| Get z (u3)
+| ArrangeBy (#0)
+
+%4 =
+| Get w (u0)
+| Project (#0)
+
+%5 =
+| Join %3 %4 (= #0 #2)
+| | implementation = Differential %4 %3.(#0)
+| Project (#1)
+| Distinct group=(#0)
+| ArrangeBy (#0)
+
+%6 =
+| Join %2 %5 (= #0 #1)
+| | implementation = DeltaQuery
+| |   delta %2 %5.(#0)
+| |   delta %5 %2.(#0)
+| Project (#0, #0)
 ----
 ----
 
