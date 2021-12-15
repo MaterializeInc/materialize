@@ -112,14 +112,8 @@ $ schema-registry-publish subject=testdrive-import-csr-${testdrive.seed}-value s
 $ schema-registry-publish subject=testdrive-import-csr-other-${testdrive.seed}-value schema-type=protobuf references=empty.proto,importee.proto
 \${importer-schema}
 
-$ schema-registry-publish subject=testdrive-import-csr-other2-${testdrive.seed}-value schema-type=protobuf references=empty.proto,importee.proto
-\${importer-other-schema}
-
-$ schema-registry-publish subject=testdrive-import-csr-other3-${testdrive.seed}-value schema-type=protobuf references=empty.proto,importee.proto
-\${importer-schema}
-
 # schema id 4 is the correct schema
-$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-id=4
+$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true
 {"importee1": {"b": false}, "importee2": {"ts": {"seconds": 1234, "nanos": 5678}}}
 
 > CREATE MATERIALIZED SOURCE import_csr FROM
@@ -132,7 +126,7 @@ importee1  importee2            mz_offset
 (f)        "(\"(1234,5678)\")"  1
 
 # test input
-$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-id=4
+$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true
 {"importee1": {"b": false}, "importee2": {"ts": {"seconds": 1234, "nanos": 5678}}}
 
 > SELECT importee1::text, importee2::text, mz_offset FROM import_csr
@@ -141,7 +135,7 @@ importee1  importee2            mz_offset
 (f)        "(\"(1234,5678)\")"  1
 
 # Also test that our schema id checks make sense
-$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-id=4 schema-message-id=123
+$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-message-id=123
 {"importee1": {"b": false}, "importee2": {"ts": {"seconds": 1234, "nanos": 5678}}}
 
 ! SELECT importee1::text, importee2::text, mz_offset FROM import_csr
@@ -159,14 +153,14 @@ $ schema-registry-publish subject=testdrive-import-csr-wrong-id-${testdrive.seed
 $ schema-registry-publish subject=testdrive-import-csr-wrong-proto-${testdrive.seed}-value schema-type=protobuf references=empty.proto,importee.proto
 \${importer-schema}
 
-# the wrong schema that will have id 12
+# Some other wrong schema
 $ schema-registry-publish subject=testdrive-import-csr-other-${testdrive.seed}-value schema-type=protobuf references=empty.proto,importee.proto
 \${importer-other-schema}
 
 
 # wrong id case
 # Setup the correct first message, priming all the workers with the correct schema id
-$ kafka-ingest repeat=9 topic=import-csr-wrong-id format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-id=4
+$ kafka-ingest repeat=9 topic=import-csr-wrong-id format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true
 {"importee1": {"b": false}, "importee2": {"ts": {"seconds": 1234, "nanos": 5678}}}
 
 # Setup the source
@@ -188,11 +182,11 @@ importee1  importee2            mz_offset
 (f)        "(\"(1234,5678)\")"  9
 
 # Send a message with the wrong schema id
-$ kafka-ingest topic=import-csr-wrong-id format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-id=12
+$ kafka-ingest topic=import-csr-wrong-id format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-id-subject=testdrive-import-csr-other-${testdrive.seed}-value
 {"importee1": {"b": false}, "importee2": {"ts": {"seconds": 1234, "nanos": 5678}}}
 
 ! SELECT importee1::text, importee2::text, mz_offset FROM import_csr_wrong_id
-Decode error: Text: protobuf deserialization error: cannot decode protobuf, expected schema id: 4, found 12; schema evolution in protobuf is not supported
+Decode error: Text: protobuf deserialization error: cannot decode protobuf, expected schema id: 4, found 12; schema evolution in protobuf is not supported. See https://github.com/MaterializeInc/materialize/issues/9598 for more details.
 
 
 # wrong protobuf definition case
@@ -202,8 +196,8 @@ Decode error: Text: protobuf deserialization error: cannot decode protobuf, expe
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # Send a message with the wrong schema id
-$ kafka-ingest topic=import-csr-wrong-proto format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-id=12
+$ kafka-ingest topic=import-csr-wrong-proto format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-id-subject=testdrive-import-csr-other-${testdrive.seed}-value
 {"importee1": {"b": false}, "importee2": {"ts": {"seconds": 1234, "nanos": 5678}}}
 
 ! SELECT importee1::text, importee2::text, mz_offset FROM import_csr_wrong_proto
-Decode error: Text: protobuf deserialization error: cannot decode protobuf, schema id: 12 refers to a schema different than the expected schema; schema evolution in protobuf is not supported.
+Decode error: Text: protobuf deserialization error: cannot decode protobuf, schema id: 12 refers to a schema different than the expected schema; schema evolution in protobuf is not supported. See https://github.com/MaterializeInc/materialize/issues/9598 for more details.

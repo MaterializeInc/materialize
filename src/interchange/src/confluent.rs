@@ -53,26 +53,20 @@ pub fn extract_avro_header(buf: &[u8]) -> Result<(i32, &[u8])> {
 }
 
 pub fn extract_protobuf_header(buf: &[u8]) -> Result<(i32, &[u8])> {
-    let expected_len = 6;
-    if buf.len() < expected_len {
-        bail!(
-            "Confluent-style protobuf datum is too few bytes: expected at least {} bytes, got {}",
-            expected_len,
-            buf.len()
-        );
-    }
-
     let (schema_id, buf) = extract_schema_id(buf, "protobuf")?;
 
-    let message_id = buf[0];
-    if message_id != 0 {
-        bail!(
+    match buf.get(0) {
+        Some(0) => Ok((schema_id, &buf[1..])),
+        Some(message_id) => bail!(
             "unsupported Confluent-style protobuf message descriptor id: \
                 expected 0, but found: {}. \
                 See https://github.com/MaterializeInc/materialize/issues/9250",
             message_id
-        );
+        ),
+        None => bail!(
+            "Confluent-style protobuf datum is too few bytes: expected a message id after magic \
+            and schema id, got a buffer of length {}",
+            buf.len()
+        ),
     }
-
-    Ok((schema_id, &buf[1..]))
 }

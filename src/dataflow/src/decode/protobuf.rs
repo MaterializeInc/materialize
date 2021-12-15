@@ -35,7 +35,8 @@ impl ProtobufDecoderState {
         }
     }
     pub fn get_value(&mut self, bytes: &[u8]) -> Option<Result<Row, DecodeError>> {
-        // TODO(guswynn): make this async-sync-async sandwich open-faced
+        // TODO(guswynn): make this async-sync-async sandwich open-faced.
+        //   Figuring out how to do async-to-sync work in timely land needs a general solution.
         use futures::executor::block_on;
         match block_on(self.decoder.decode(bytes)) {
             Ok(row) => {

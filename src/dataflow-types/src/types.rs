@@ -381,7 +381,7 @@ impl DataEncoding {
             DataEncoding::Protobuf(ProtobufEncoding {
                 descriptors,
                 message_name,
-                ..
+                schema_registry_config: _,
             }) => protobuf::DecodedDescriptors::from_bytes(descriptors, message_name.to_owned())?
                 .columns()
                 .iter()

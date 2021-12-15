@@ -54,7 +54,7 @@ enum Format {
         descriptor_file: String,
         message: String,
         confluent_wire_format: bool,
-        schema_id: i32,
+        schema_id_subject: Option<String>,
         schema_message_id: u8,
     },
     Bytes {
@@ -186,11 +186,12 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
             // false
             let message = cmd.args.string("message")?;
             validate_protobuf_message_name(&message)?;
+
             Format::Protobuf {
                 descriptor_file,
                 message,
                 confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
-                schema_id: cmd.args.opt_parse::<i32>("schema-id")?.unwrap_or(885),
+                schema_id_subject: cmd.args.opt_string("schema-id-subject"),
                 schema_message_id: cmd.args.opt_parse::<u8>("schema-message-id")?.unwrap_or(0),
             }
         }
@@ -210,8 +211,11 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
                 descriptor_file,
                 message,
                 confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
-                schema_id: cmd.args.opt_parse::<i32>("schema-id")?.unwrap_or(885),
-                schema_message_id: cmd.args.opt_parse::<u8>("schema-message-id")?.unwrap_or(0),
+                schema_id_subject: cmd.args.opt_string("key-schema-id-subject"),
+                schema_message_id: cmd
+                    .args
+                    .opt_parse::<u8>("key-schema-message-id")?
+                    .unwrap_or(0),
             })
         }
         Some("bytes") => Some(Format::Bytes {
@@ -290,13 +294,13 @@ impl Action for IngestAction {
         let ccsr_client = &state.ccsr_client;
         let temp_path = &state.temp_path;
         let make_transcoder = |format, typ| async move {
+            let ccsr_subject = format!("{}-{}", topic_name, typ);
             match format {
                 Format::Avro {
                     schema,
                     confluent_wire_format,
                 } => {
                     let schema_id = if self.publish {
-                        let ccsr_subject = format!("{}-{}", topic_name, typ);
                         let schema_id = ccsr_client
                             .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Avro, &[])
                             .await
@@ -317,9 +321,21 @@ impl Action for IngestAction {
                     descriptor_file,
                     message,
                     confluent_wire_format,
-                    schema_id,
+                    schema_id_subject,
                     schema_message_id,
                 } => {
+                    let schema_id = if confluent_wire_format {
+                        ccsr_client
+                            .get_schema_by_subject(
+                                schema_id_subject.as_deref().unwrap_or(&ccsr_subject),
+                            )
+                            .await
+                            .map_err(|e| format!("schema registry error: {}", e))?
+                            .id
+                    } else {
+                        0
+                    };
+
                     let bytes = fs::read(temp_path.join(descriptor_file))
                         .await
                         .map_err(|e| format!("reading protobuf descriptor file: {}", e))?;

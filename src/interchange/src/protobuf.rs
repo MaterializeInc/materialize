@@ -129,11 +129,12 @@ impl Decoder {
 
             if let Some(validated_schema_id) = self.validated_schema_id {
                 if validated_schema_id != schema_id {
-                    return Err(anyhow!(
-                        "cannot decode protobuf, expected schema id: {}, found {}; schema evolution in protobuf is not supported",
+                    bail!(
+                        "cannot decode protobuf, expected schema id: {}, found {}; schema evolution in protobuf is not supported. \
+                        See https://github.com/MaterializeInc/materialize/issues/9598 for more details.",
                         validated_schema_id,
                         schema_id
-                    ));
+                    );
                 }
             } else {
                 let compiled = compile_proto(schema_id, client).await?;
@@ -147,11 +148,12 @@ impl Decoder {
                 {
                     self.validated_schema_id = Some(schema_id);
                 } else {
-                    return Err(anyhow!(
+                    bail!(
                         "cannot decode protobuf, schema id: {} refers to a schema different than the expected schema; \
-                        schema evolution in protobuf is not supported.",
+                        schema evolution in protobuf is not supported. \
+                        See https://github.com/MaterializeInc/materialize/issues/9598 for more details.",
                         schema_id
-                    ));
+                    );
                 }
             }
             bytes = adjusted_bytes;
@@ -304,6 +306,11 @@ fn pack_value(
     Ok(())
 }
 
+/// Collect protobuf message descriptor from CSR and compile the descriptor.
+///
+/// This reaches out to the Confluent Schema Registry to search for the correct schema
+/// for the provided subject (generally a Kafka topic with the `-value` or `-key` suffix)
+/// and recursively constructs the encoding.
 async fn compile_proto(
     id: i32,
     ccsr_client: &ccsr::Client,
@@ -313,6 +320,8 @@ async fn compile_proto(
     compile_proto_from_subjects(primary_subject, dependency_subjects).await
 }
 
+/// Given a primary subject and subjects for references (obtained using a ccsr client),
+/// compile the message descriptor
 pub async fn compile_proto_from_subjects(
     primary_subject: Subject,
     dependency_subjects: Vec<Subject>,

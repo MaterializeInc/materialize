@@ -171,19 +171,27 @@ impl Client {
         &self,
         id: i32,
     ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
-        for name in self.list_subjects().await.map_err(|le| match le {
-            ListError::Transport(t) => GetBySubjectError::Transport(t),
-            ListError::Server { code, message } => GetBySubjectError::Server { code, message },
-        })? {
-            let subject = self.get_subject(&name).await?;
+        let req = self.make_request(
+            Method::GET,
+            &["schemas", "ids", &id.to_string(), "versions"],
+        );
+        let res: Vec<SubjectVersion> = send_request(req).await?;
 
-            // We just assume the first one we find is correct
-            if subject.schema.id == id {
-                return self.get_subject_and_references(&subject.name).await;
-            }
+        // NOTE NOTE NOTE
+        // We take the FIRST subject that matches this schema id. This could be DIFFERENT
+        // than the actual subject we are interested in (it could even be from a different test
+        // run), but we are trusting the schema registry to only output the same schema id for
+        // identical subjects.
+        // This was validated by publishing 2 empty schemas (i.e., identical), with different
+        // references (one empty, one with a random reference), and they were not linked to the
+        // same schema id.
+        //
+        // See https://docs.confluent.io/platform/current/schema-registry/develop/api.html#post--subjects-(string-%20subject)-versions
+        // for more info.
+        match res.as_slice() {
+            [first, ..] => self.get_subject_and_references(&first.subject).await,
+            _ => Err(GetBySubjectError::SubjectNotFound),
         }
-
-        Err(GetBySubjectError::SubjectNotFound)
     }
 }
 
@@ -194,7 +202,8 @@ where
     let res = req.send().await?;
     let status = res.status();
     if status.is_success() {
-        Ok(res.json().await?)
+        let bytes = res.bytes().await?;
+        Ok(serde_json::from_slice(&bytes).unwrap())
     } else {
         match res.json::<ErrorResponse>().await {
             Ok(err_res) => Err(UnhandledError::Api {
@@ -273,6 +282,14 @@ pub enum GetByIdError {
     Transport(reqwest::Error),
     /// An internal server error occured.
     Server { code: i32, message: String },
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubjectVersion {
+    /// The name of the subject
+    pub subject: String,
+    /// The version of the schema
+    pub version: i32,
 }
 
 impl From<UnhandledError> for GetByIdError {
@@ -359,6 +376,15 @@ impl fmt::Display for GetBySubjectError {
             GetBySubjectError::Server { code, message } => {
                 write!(f, "server error {}: {}", code, message)
             }
+        }
+    }
+}
+
+impl From<ListError> for GetBySubjectError {
+    fn from(other: ListError) -> Self {
+        match other {
+            ListError::Transport(t) => GetBySubjectError::Transport(t),
+            ListError::Server { code, message } => GetBySubjectError::Server { code, message },
         }
     }
 }

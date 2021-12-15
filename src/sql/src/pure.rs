@@ -782,6 +782,7 @@ async fn get_remote_csr_schema(
     })
 }
 
+/// Collect protobuf message descriptor from CSR and compile the descriptor.
 async fn compile_proto(
     subject_name: &String,
     ccsr_client: Client,
