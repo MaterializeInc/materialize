@@ -16,7 +16,9 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-materialized = Materialized(options="--persistent-user-tables")
+materialized = Materialized(
+    options="--persistent-user-tables --persistent-kafka-upsert-source --disable-persistent-system-tables-test"
+)
 
 # This instance of Mz is used for failpoint testing. By using --disable-persistent-system-tables-test
 # we ensure that only testdrive-initiated actions cause I/O. The --workers 1 is used due to #8739
@@ -27,12 +29,54 @@ mz_without_system_tables = Materialized(
     options="--persistent-user-tables --disable-persistent-system-tables-test --workers 1",
 )
 
-services = [materialized, mz_without_system_tables, Testdrive(no_reset=True)]
+prerequisites = [Zookeeper(), Kafka(), SchemaRegistry()]
+services = [
+    *prerequisites,
+    materialized,
+    mz_without_system_tables,
+    Testdrive(no_reset=True, seed=1),
+]
 
 
 def workflow_persistence(w: Workflow):
+    workflow_kafka_sources(w)
     workflow_user_tables(w)
     workflow_failpoints(w)
+
+
+def workflow_kafka_sources(w: Workflow):
+    w.start_and_wait_for_tcp(services=prerequisites)
+
+    w.start_services(services=["materialized"])
+    w.wait_for_mz(service="materialized")
+
+    w.run_service(
+        service="testdrive-svc",
+        command="kafka-sources/*-before.td",
+    )
+
+    w.kill_services(services=["materialized"], signal="SIGKILL")
+    w.start_services(services=["materialized"])
+    w.wait_for_mz(service="materialized")
+
+    # And restart again, for extra stress
+    w.kill_services(services=["materialized"], signal="SIGKILL")
+    w.start_services(services=["materialized"])
+    w.wait_for_mz(service="materialized")
+
+    w.run_service(
+        service="testdrive-svc",
+        command="kafka-sources/*-after.td",
+    )
+
+    # Do one more restart, just in case and just confirm that Mz is able to come up
+    w.kill_services(services=["materialized"], signal="SIGKILL")
+    w.start_services(services=["materialized"])
+    w.wait_for_mz(service="materialized")
+
+    w.kill_services(services=["materialized"], signal="SIGKILL")
+    w.remove_services(services=["materialized", "testdrive-svc"], destroy_volumes=True)
+    w.remove_volumes(volumes=["mzdata"])
 
 
 def workflow_user_tables(w: Workflow):
@@ -53,6 +97,8 @@ def workflow_user_tables(w: Workflow):
     )
 
     w.kill_services(services=["materialized"], signal="SIGKILL")
+    w.remove_services(services=["materialized", "testdrive-svc"], destroy_volumes=True)
+    w.remove_volumes(volumes=["mzdata"])
 
 
 def workflow_failpoints(w: Workflow):
@@ -62,3 +108,7 @@ def workflow_failpoints(w: Workflow):
     w.run_service(service="testdrive-svc", command="failpoints/*.td")
 
     w.kill_services(services=["mz_without_system_tables"], signal="SIGKILL")
+    w.remove_services(
+        services=["mz_without_system_tables", "testdrive-svc"], destroy_volumes=True
+    )
+    w.remove_volumes(volumes=["mzdata"])

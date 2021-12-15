@@ -880,6 +880,8 @@ class Kafka(PythonService):
             "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
             "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
             "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+            "KAFKA_MESSAGE_MAX_BYTES=15728640",
+            "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
         ],
         depends_on: List[str] = ["zookeeper"],
     ) -> None:
@@ -1104,6 +1106,7 @@ class Testdrive(PythonService):
         mzbuild: str = "testdrive",
         no_reset: bool = False,
         default_timeout: str = "30s",
+        seed: Optional[int] = None,
         validate_catalog: bool = True,
         entrypoint: Optional[List[str]] = None,
         shell_eval: Optional[bool] = False,
@@ -1135,24 +1138,26 @@ class Testdrive(PythonService):
                 "--materialized-url=postgres://materialize@materialized:6875",
             ]
 
-        if shell_eval:
-            # Evaluate the arguments as a shell command
-            # This allows bashisms to be used to prepare the list of tests to run
-            entrypoint.append("`${TD_TEST:-$$*}`")
-        else:
-            entrypoint.append("${TD_TEST:-$$*}")
-
         if validate_catalog:
             entrypoint.append("--validate-catalog=/share/mzdata/catalog")
 
         if no_reset:
             entrypoint.append("--no-reset")
 
-        if default_timeout:
-            entrypoint.append(f"--default-timeout {default_timeout}")
+        entrypoint.append(f"--default-timeout {default_timeout}")
 
         if volumes_extra:
             volumes.extend(volumes_extra)
+
+        if seed:
+            entrypoint.append(f"--seed {seed}")
+
+        if shell_eval:
+            # Evaluate the arguments as a shell command
+            # This allows bashisms to be used to prepare the list of tests to run
+            entrypoint.append("`${TD_TEST:-$$*}`")
+        else:
+            entrypoint.append("${TD_TEST:-$$*}")
 
         super().__init__(
             name=name,

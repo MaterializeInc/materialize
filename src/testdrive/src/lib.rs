@@ -87,14 +87,18 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
         println!("Run {} ...", execution_count);
         cmds_exec = cmds.clone();
         let (mut state, state_cleanup) = action::create_state(config).await?;
+
+        let actions = action::build(cmds_exec, &state).await?;
+
         if config.reset {
             state.reset_materialized().await?;
+
+            for a in actions.iter().rev() {
+                let undo = a.action.undo(&mut state);
+                undo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+            }
         }
-        let actions = action::build(cmds_exec, &state).await?;
-        for a in actions.iter().rev() {
-            let undo = a.action.undo(&mut state);
-            undo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
-        }
+
         for a in &actions {
             let redo = a.action.redo(&mut state);
             redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
