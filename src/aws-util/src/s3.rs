@@ -22,6 +22,8 @@ pub fn client(config: &AwsConfig) -> Result<Client, anyhow::Error> {
     if let Some(endpoint) = config.endpoint() {
         builder = builder.endpoint_resolver(endpoint.clone());
     }
+    // TODO(#9644): maybe remove this
+    builder.set_sleep_impl(aws_smithy_async::rt::sleep::default_async_sleep());
     let conn = util::connector()?;
     Ok(Client::from_conf_conn(builder.build(), conn))
 }
