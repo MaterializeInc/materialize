@@ -27,13 +27,44 @@ INSERT INTO b VALUES (2);
 statement ok
 INSERT INTO c VALUES (3);
 
-query error full/right outer joins in comma join not yet supported, see https://github.com/MaterializeInc/materialize/issues/6875
+query III
 SELECT * FROM a, b full join c on b = c;
+----
+1  NULL  3
+1  2  NULL
 
-query error full/right outer joins in comma join not yet supported, see https://github.com/MaterializeInc/materialize/issues/6875
+query III
 SELECT * FROM a, b right join c on b = c;
+----
+1  NULL  3
 
 query III
 SELECT * FROM a, b left join c on b = c;
 ----
 1  2  NULL
+
+query III
+SELECT * FROM a CROSS JOIN b JOIN LATERAL(SELECT a.a FROM c) x ON TRUE;
+----
+1 2 1
+
+query error join trees using both lateral and full/right outer joins not yet supported
+SELECT * FROM a, b FULL JOIN LATERAL(SELECT a.a FROM c) x ON TRUE;
+
+query error column "a.a" does not exist
+SELECT * FROM a CROSS JOIN (b FULL JOIN LATERAL(SELECT a.a FROM c) x ON TRUE);
+
+statement ok
+CREATE TABLE t1 (a int, b int);
+
+statement ok
+CREATE TABLE t2 (a int, c int);
+
+statement ok
+INSERT INTO t1 VALUES (1, 2), (2, 3);
+
+statement ok
+INSERT INTO t2 VALUES (2, 4), (5, 7);
+
+query error join trees using both lateral and full/right outer joins not yet supported
+SELECT * FROM generate_series(1, 2), LATERAL (SELECT * FROM t1) _ NATURAL RIGHT JOIN t2;

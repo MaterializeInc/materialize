@@ -120,6 +120,13 @@ for SQL statements.
 - Support `generate_subscripts` for `arrays` which will generate a series comprising
   the valid subscripts of the selected dimension of the given array.
 
+- Fix a bug that returned incorrect results when filtering on _NULL_ values from
+  columns joined with `USING` constraints. {{% gh 7618 %}}
+
+- Execute comma-separated joins more like PostgreSQL by treating them as nested
+  cross joins where possible. (Nested joins are currently incompatible wih
+  `LATERAL` joins.)
+
 {{% version-header v0.11.0 %}}
 
 - **Breaking change.** Remove the `mz_workers` function {{% gh 9363 %}}.

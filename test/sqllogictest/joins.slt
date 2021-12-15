@@ -596,8 +596,7 @@ EXPLAIN RAW PLAN FOR SELECT la, l.lb, big_l.lb FROM l JOIN big_l USING (la)
 
 %2 =
 | InnerJoin %0 %1 on (true && (i32toi64(#0) = #2))
-| Map coalesce(i32toi64(#0), #2)
-| Project (#4, #1, #3)
+| Project (#0, #1, #3)
 
 EOF
 
@@ -692,3 +691,326 @@ SELECT lb, rb FROM l3 INNER JOIN r3 ON (la IS NULL AND ra IS NULL) OR la = ra
 l1  r1
 l3  r3
 l4  r5
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/7618
+
+statement ok
+CREATE TABLE t1 (f1 int, f2 int);
+
+statement ok
+CREATE TABLE t2 (f1 int, f2 int);
+
+statement ok
+CREATE TABLE t3 (f1 int, f3 int);
+
+statement ok
+CREATE TABLE t4 (f3 int, f4 int);
+
+query T
+SELECT f1 FROM t1 JOIN t2 USING (f1);
+----
+
+query error column reference "f2" is ambiguous
+SELECT f1, f2 FROM t1 JOIN t2 USING (f1);
+
+query T
+SELECT f1, t1.f2 AS f1 FROM t1 JOIN t2 USING (f1);
+----
+
+query error column reference "f1" is ambiguous
+SELECT f1, t1.f2 AS f1 FROM t1 JOIN t2 USING (f1) ORDER BY f1;
+
+query error column reference "f2" is ambiguous
+SELECT * FROM t1 LEFT JOIN t2 USING (f1) RIGHT JOIN t3 USING (f2);
+
+statement ok
+INSERT INTO t1 VALUES
+    (1, 2),
+    (3, 4);
+
+query TTT
+SELECT *
+FROM t1
+    LEFT JOIN t2 USING (f1)
+ORDER BY f1;
+----
+1  2  NULL
+3  4  NULL
+
+query TTT
+SELECT *
+FROM t1
+    LEFT JOIN t2 USING (f1)
+WHERE t2.f1 IS NOT NULL
+ORDER BY f1;
+----
+
+statement ok
+INSERT INTO t2 VALUES
+    (3, 4),
+    (5, 6);
+
+statement ok
+INSERT INTO t3 VALUES
+    (3, 4),
+    (7, 8);
+
+statement ok
+INSERT INTO t4 VALUES
+    (4, 3),
+    (9, 10);
+
+# Left
+
+query TTTTTT
+SELECT *,
+    f1 IS NULL AS f1_null,
+    t1.f1 IS NULL AS t1_f1_null,
+    t2.f1 IS NULL AS t2_f1_null
+FROM t1
+    LEFT JOIN t2 USING (f1)
+ORDER BY f1;
+----
+1  2  NULL  false  false  true
+3  4  4  false  false  false
+
+
+query TTTTTT
+SELECT *,
+    f1 IS NULL AS f1_null,
+    t1.f1 IS NULL AS t1_f1_null,
+    t2.f1 IS NULL AS t2_f1_null
+FROM t2
+    LEFT JOIN t1 USING (f1)
+ORDER BY f1;
+----
+3  4  4  false  false  false
+5  6  NULL  false  true  false
+
+query TTTT
+SELECT *
+FROM t1
+    LEFT JOIN t2 USING (f1)
+    LEFT JOIN t3 USING (f1)
+ORDER BY f1;
+----
+1  2  NULL  NULL
+3  4  4  4
+
+# Right
+
+query TTTTTT
+SELECT *,
+    f1 IS NULL AS f1_null,
+    t1.f1 IS NULL AS t1_f1_null,
+    t2.f1 IS NULL AS t2_f1_null
+FROM t1
+    RIGHT JOIN t2 USING (f1)
+ORDER BY f1;
+----
+3  4  4  false  false  false
+5  NULL  6  false  true  false
+
+query TTTTTT
+SELECT *,
+    f1 IS NULL AS f1_null,
+    t1.f1 IS NULL AS t1_f1_null,
+    t2.f1 IS NULL AS t2_f1_null
+FROM t2
+    RIGHT JOIN t1
+    USING (f1)
+ORDER BY f1;
+----
+1  NULL  2  false  false  true
+3  4  4  false  false  false
+
+query TTTT
+SELECT *
+FROM t1
+    RIGHT JOIN t2 USING (f1)
+    RIGHT JOIN t3 USING (f1)
+ORDER BY f1;
+----
+3  4  4  4
+7  NULL  NULL  8
+
+query TTTT
+SELECT *
+FROM t1
+    RIGHT JOIN t2 USING (f1)
+    LEFT JOIN t3 USING (f1)
+ORDER BY f1;
+----
+3  4  4  4
+5  NULL  6  NULL
+
+query TTTT
+SELECT *
+FROM t1
+    LEFT JOIN t2 USING (f1)
+    RIGHT JOIN t3 USING (f1)
+ORDER BY f1;
+----
+3  4  4  4
+7  NULL  NULL  8
+
+# Inner
+
+query TTTTTT
+SELECT *,
+    f1 IS NULL AS f1_null,
+    t1.f1 IS NULL AS t1_f1_null,
+    t2.f1 IS NULL AS t2_f1_null
+FROM t1
+    INNER JOIN t2
+    USING (f1)
+ORDER BY f1;
+----
+3  4  4  false  false  false
+
+
+query TTTTTT
+SELECT *,
+    f1 IS NULL AS f1_null,
+    t1.f1 IS NULL AS t1_f1_null,
+    t2.f1 IS NULL AS t2_f1_null
+FROM t2
+    INNER JOIN t1
+    USING (f1)
+ORDER BY f1;
+----
+3  4  4  false  false  false
+
+query TTTT
+SELECT *
+FROM t1
+    INNER JOIN t2 USING (f1)
+    INNER JOIN t3 USING (f1)
+ORDER BY f1;
+----
+3  4  4  4
+
+# Full
+
+query TTTTTT
+SELECT *,
+    f1 IS NULL AS f1_null,
+    t1.f1 IS NULL AS t1_f1_null,
+    t2.f1 IS NULL AS t2_f1_null
+FROM t1
+    FULL OUTER JOIN t2
+    USING (f1)
+ORDER BY f1;
+----
+1  2  NULL  false  false  true
+3  4  4  false  false  false
+5  NULL  6  false  true  false
+
+query TTTTTT
+SELECT *,
+    f1 IS NULL AS f1_null,
+    t1.f1 IS NULL AS t1_f1_null,
+    t2.f1 IS NULL AS t2_f1_null
+FROM t2
+    INNER JOIN t1
+    USING (f1)
+ORDER BY f1;
+----
+3  4  4  false  false  false
+
+query TTTT
+SELECT *
+FROM t1
+    FULL OUTER JOIN t2 USING (f1)
+    FULL OUTER JOIN t3 USING (f1)
+ORDER BY f1;
+----
+1  2  NULL  NULL
+3  4  4  4
+5  NULL  6  NULL
+7  NULL  NULL  8
+
+# Most recent joined cols are always leftmost in return select
+
+query TTTTT colnames
+SELECT *
+    FROM t1
+    JOIN t2 USING (f1)
+    JOIN t3 USING (f1)
+    JOIN t4 USING (f3);
+----
+f3 f1 f2 f2 f4
+4  3  4  4  3
+
+# https://github.com/MaterializeInc/materialize/pull/9489#issuecomment-992186563
+# Ensure priority does not persist through joins
+query error column reference "f2" is ambiguous
+SELECT *, f2 IS NULL
+     FROM t1 AS t1
+     JOIN t1 AS t2 USING (f1, f2)
+     JOIN t1 AS t3 USING (f1);
+
+query error column reference "f2" is ambiguous
+SELECT *
+    FROM t1 AS t1
+    JOIN t1 AS t2 USING (f1, f2)
+    JOIN t1 AS t3 USING (f1)
+    JOIN t1 AS t4 USING (f2);
+
+# https://github.com/MaterializeInc/materialize/pull/9489#issuecomment-992195117
+# Comma-joins of adjacent tables are equivalent to nested cross joins
+query TTTTT
+SELECT *
+    FROM t2,
+    t2 AS x
+    JOIN t1
+    USING (f2)
+ORDER BY 1;
+----
+3  4  4  3  3
+5  6  4  3  3
+
+query TTTTT
+SELECT *
+    FROM t2
+    CROSS JOIN (
+    t2 AS x
+        JOIN t1
+        USING (f2)
+    )
+ORDER BY 1;
+----
+3  4  4  3  3
+5  6  4  3  3
+
+# https://github.com/MaterializeInc/materialize/pull/9489#issuecomment-992207932
+statement ok
+DELETE FROM t1;
+
+statement ok
+DELETE FROM t2;
+
+statement ok
+INSERT INTO t1 VALUES
+    (NULL, 0),
+    (1, 1),
+    (1, 1),
+    (2, 2);
+
+statement ok
+INSERT INTO t2 VALUES
+    (NULL, 0),
+    (NULL, 0),
+    (1, 1);
+
+query II
+SELECT a3.f1,
+       a4.f1
+  FROM t2 AS a1
+  JOIN t1 AS a2 USING (f1), t2 AS a3
+  JOIN t1 AS a4 USING (f1);
+----
+1 1
+1 1
+1 1
+1 1

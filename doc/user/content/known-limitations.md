@@ -36,6 +36,11 @@ us know on the linked-to GitHub issue.
   gh 4867 %}}
 - `WITH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
 
+### Joins
+
+- The combining `JOIN` type must be `INNER` or `LEFT` for `LATERAL` references.
+- Nested joins do not support `LATERAL` references.
+
 ### `COPY FROM`
 
 - CSV-formatted data does not strictly adhere to Postgres' semantics.

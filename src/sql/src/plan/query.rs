@@ -1641,6 +1641,7 @@ fn plan_view_select(
                         names: vec![],
                         expr: group_expr.cloned(),
                         nameable: true,
+                        visible_to_wildcard: true,
                     }
                 };
 
@@ -1666,6 +1667,7 @@ fn plan_view_select(
                 names: vec![],
                 expr: Some(Expr::Function(sql_function.clone())),
                 nameable: true,
+                visible_to_wildcard: true,
             });
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || having.is_some() {
@@ -1751,6 +1753,7 @@ fn plan_view_select(
                         .collect(),
                     expr: None,
                     nameable: true,
+                    visible_to_wildcard: true,
                 });
             }
         }
@@ -2022,28 +2025,63 @@ fn plan_table_with_joins<'a>(
     table_with_joins: &'a TableWithJoins<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     let pushed_left_was_join_identity = left.is_join_identity();
-    let (mut left, mut left_scope) = plan_table_factor(
-        qcx,
-        left,
-        left_scope,
-        &JoinOperator::CrossJoin,
-        &table_with_joins.relation,
-    )?;
-    for join in &table_with_joins.joins {
-        if !pushed_left_was_join_identity
-            && matches!(
-                &join.join_operator,
-                JoinOperator::FullOuter(..) | JoinOperator::RightOuter(..)
-            )
-        {
-            bail_unsupported!(6875, "full/right outer joins in comma join");
+    let mut lateral_visitor = LateralJoinVisitor::new();
+    lateral_visitor.visit_table_with_joins(&table_with_joins);
+    if !lateral_visitor.found() {
+        // NOTE: this branch builds the correct join tree, but it bricks LATERAL
+        // behavior. See #6875.
+        let (expr, scope) = plan_join_identity(qcx);
+        let (mut expr, mut scope) = plan_table_factor(
+            qcx,
+            expr,
+            scope,
+            &JoinOperator::CrossJoin,
+            &table_with_joins.relation,
+        )?;
+        for join in &table_with_joins.joins {
+            let (new_expr, new_scope) =
+                plan_table_factor(qcx, expr, scope, &join.join_operator, &join.relation)?;
+            expr = new_expr;
+            scope = new_scope;
         }
-        let (new_left, new_left_scope) =
-            plan_table_factor(qcx, left, left_scope, &join.join_operator, &join.relation)?;
-        left = new_left;
-        left_scope = new_left_scope;
+        plan_join_operator(
+            &JoinOperator::CrossJoin,
+            qcx,
+            left,
+            left_scope,
+            &qcx,
+            expr,
+            scope,
+            false,
+        )
+    } else {
+        // This branch is WRONG, but it mostly handles LATERAL correctly.
+        let (mut left, mut left_scope) = plan_table_factor(
+            qcx,
+            left,
+            left_scope,
+            &JoinOperator::CrossJoin,
+            &table_with_joins.relation,
+        )?;
+        for join in &table_with_joins.joins {
+            if !pushed_left_was_join_identity
+                && matches!(
+                    &join.join_operator,
+                    JoinOperator::FullOuter(..) | JoinOperator::RightOuter(..)
+                )
+            {
+                bail_unsupported!(
+                    6875,
+                    "join trees using both lateral and full/right outer joins"
+                );
+            }
+            let (new_left, new_left_scope) =
+                plan_table_factor(qcx, left, left_scope, &join.join_operator, &join.relation)?;
+            left = new_left;
+            left_scope = new_left_scope;
+        }
+        Ok((left, left_scope))
     }
-    Ok((left, left_scope))
 }
 
 fn plan_table_factor(
@@ -2512,11 +2550,13 @@ fn expand_select_item<'a>(
                 .items
                 .iter()
                 .enumerate()
+                .filter(|(_i, item)| item.visible_to_wildcard)
                 .map(|(i, item)| {
                     let name = item.names.get(0).and_then(|n| n.column_name.clone());
                     (ExpandedSelectItem::InputOrdinal(i), name)
                 })
                 .collect();
+
             Ok(items)
         }
         SelectItem::Expr { expr, alias } => {
@@ -2598,19 +2638,19 @@ fn plan_join_operator(
             // column references in `right`, but it doesn't seem worth it just
             // to make the raw query plans nicer. The optimizer doesn't have
             // trouble with the extra join.)
-            let join = if left.is_join_identity() && !lateral {
-                right
+            if left.is_join_identity() && !lateral {
+                Ok((right, right_scope))
             } else if right.is_join_identity() {
-                left
+                Ok((left, left_scope))
             } else {
-                HirRelationExpr::Join {
+                let join = HirRelationExpr::Join {
                     left: Box::new(left),
                     right: Box::new(right),
                     on: HirScalarExpr::literal_true(),
                     kind: JoinKind::Inner { lateral },
-                }
-            };
-            Ok((join, left_scope.product(right_scope)?))
+                };
+                Ok((join, left_scope.product(right_scope)?))
+            }
         }
     }
 }
@@ -2727,12 +2767,22 @@ fn plan_using_constraint(
     right_scope: Scope,
     kind: JoinKind,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let mut join_exprs = vec![];
-    let mut map_exprs = vec![];
-    let mut new_items = vec![];
-    let mut dropped_columns = HashSet::new();
-
     let mut both_scope = left_scope.clone().product(right_scope.clone())?;
+
+    // Cargo culting PG here; no discernable reason this must fail, but PG does
+    // so we do, as well.
+    let mut unique_column_names = HashSet::new();
+    for c in column_names {
+        if !unique_column_names.insert(c) {
+            return Err(PlanError::Unsupported {
+                feature: format!(
+                    "column name {} appears more than once in USING clause",
+                    c.as_str().quoted()
+                ),
+                issue_no: None,
+            });
+        }
+    }
 
     let ecx = &ExprContext {
         qcx: &right_qcx,
@@ -2750,6 +2800,12 @@ fn plan_using_constraint(
         allow_subqueries: false,
     };
 
+    let mut join_exprs = vec![];
+    let mut map_exprs = vec![];
+    let mut new_items = vec![];
+    let mut priority_cols = vec![];
+    let mut non_priority_cols = vec![];
+
     for column_name in column_names {
         let (lhs, _) = left_scope.resolve_column(column_name)?;
         let (mut rhs, _) = right_scope.resolve_column(column_name)?;
@@ -2760,13 +2816,12 @@ fn plan_using_constraint(
             )
         }
 
-        // The new column can be named using aliases from either the right or
-        // left.
-        let mut names = left_scope.items[lhs.column].names.clone();
-        names.extend(right_scope.items[rhs.column].names.clone());
-
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();
+
+        // Track that these columns must have their priority reset.
+        non_priority_cols.push(lhs.column);
+        non_priority_cols.push(rhs.column);
 
         // Join keys must be resolved to same type.
         let mut exprs = coerce_homogeneous_exprs(
@@ -2783,35 +2838,70 @@ fn plan_using_constraint(
         )?;
         let (expr1, expr2) = (exprs.remove(0), exprs.remove(0));
 
+        match kind {
+            JoinKind::LeftOuter { .. } | JoinKind::Inner { .. } => priority_cols.push(lhs.column),
+            JoinKind::RightOuter => priority_cols.push(rhs.column),
+            JoinKind::FullOuter => {
+                // Create a new column that will be the coalesced value of left and right
+                let names = both_scope.items[lhs.column]
+                    .names
+                    .iter()
+                    .chain(both_scope.items[rhs.column].names.iter())
+                    .map(|scope_item_name| scope_item_name.column_name.clone())
+                    .unique()
+                    .map(|column_name| ScopeItemName {
+                        table_name: None,
+                        column_name,
+                        priority: true,
+                    })
+                    .collect::<Vec<_>>();
+
+                priority_cols.push(both_scope.items.len() + map_exprs.len());
+                map_exprs.push(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![expr1.clone(), expr2.clone()],
+                });
+                new_items.push(ScopeItem {
+                    names,
+                    expr: None,
+                    nameable: true,
+                    visible_to_wildcard: true,
+                });
+            }
+        }
+
         join_exprs.push(HirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
-            expr1: Box::new(expr1.clone()),
-            expr2: Box::new(expr2.clone()),
+            expr1: Box::new(expr1),
+            expr2: Box::new(expr2),
         });
-        map_exprs.push(HirScalarExpr::CallVariadic {
-            func: VariadicFunc::Coalesce,
-            exprs: vec![expr1, expr2],
-        });
-        new_items.push(ScopeItem {
-            names,
-            expr: None,
-            nameable: true,
-        });
-        dropped_columns.insert(lhs.column);
-        dropped_columns.insert(rhs.column);
     }
-    let project_key =
-        // coalesced join columns
-        (0..map_exprs.len())
-        .map(|i| left_scope.len() + right_scope.len() + i)
-        // other columns that weren't joined
-        .chain(
-            (0..(left_scope.len() + right_scope.len()))
-                .filter(|i| !dropped_columns.contains(i)),
-        )
-        .collect::<Vec<_>>();
     both_scope.items.extend(new_items);
-    let both_scope = both_scope.project(&project_key);
+
+    // Toggle which columns should (not)? return from `SELECT *`.
+    for c in &non_priority_cols {
+        for item_name in both_scope.items[*c].names.iter_mut() {
+            item_name.priority = false;
+        }
+        both_scope.items[*c].visible_to_wildcard = false;
+    }
+
+    for c in &priority_cols {
+        for item_name in both_scope.items[*c].names.iter_mut() {
+            item_name.priority = true;
+        }
+        both_scope.items[*c].visible_to_wildcard = true;
+    }
+
+    // Reproject all returned elements to the front of the list.
+    let project_key = priority_cols
+        .into_iter()
+        .chain(0..both_scope.items.len())
+        .unique()
+        .collect::<Vec<_>>();
+
+    both_scope = both_scope.project(&project_key);
+
     let both = HirRelationExpr::Join {
         left: Box::new(left),
         right: Box::new(right),
@@ -4089,6 +4179,31 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, PlanError> {
             value_type: Box::new(scalar_type_from_pg(value_type)?),
             custom_oid: None,
         }),
+    }
+}
+
+struct LateralJoinVisitor {
+    found: bool,
+}
+
+impl LateralJoinVisitor {
+    fn new() -> LateralJoinVisitor {
+        LateralJoinVisitor { found: false }
+    }
+
+    fn found(self) -> bool {
+        self.found
+    }
+}
+
+impl<'a, 'ast> Visit<'ast, Aug> for LateralJoinVisitor {
+    fn visit_table_factor(&mut self, node: &'ast TableFactor<Aug>) {
+        if matches!(
+            node,
+            TableFactor::Derived { lateral: true, .. } | TableFactor::Function { .. }
+        ) {
+            self.found = true;
+        }
     }
 }
 

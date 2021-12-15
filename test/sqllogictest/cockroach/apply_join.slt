@@ -82,7 +82,7 @@ INSERT INTO table9 VALUES (
   '2020-05-26 14:23:36.157383-04'
 )
 
-query error full/right outer joins in comma join not yet supported, see https://github.com/MaterializeInc/materialize/issues/6875 for more details
+query T
 SELECT
   true
 FROM
@@ -127,6 +127,8 @@ WHERE
     )
 LIMIT
     89;
+----
+true
 
 # Regression test for #37454: untyped null produced at top level.
 

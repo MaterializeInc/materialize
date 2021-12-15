@@ -453,47 +453,40 @@ EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 1
 EOF
 
 #
-# Impossible conditions after propagation are currently not detected as such
+# Detect impossible conditions
 #
 
 query T multiline
 EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
 ----
-%0 = Let l0 =
+%0 =
+| Constant
+
+EOF
+
+#
+# Not all impossible conditions after propagation are currently not detected as such
+#
+
+query T multiline
+EXPLAIN SELECT * FROM t1 FULL OUTER JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
+----
+%0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123), (#0 = 234)
-
-%1 =
-| Get %0 (l0)
+| Project (#1)
 | ArrangeBy ()
 
-%2 =
+%1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123), (#0 = 234)
 | Project (#1)
 
-%3 = Let l1 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
-
-%4 =
-| Get %3 (l1)
-| Project (#1)
-| Negate
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 | Map 123
-| Project (#1, #0)
-
-%5 =
-| Get %0 (l0)
-| Map 123
-| Project (#2, #1)
-
-%6 =
-| Union %4 %5
-| Map null
-
-%7 =
-| Union %3 %6
+| Project (#2, #0, #1)
 
 EOF
 
