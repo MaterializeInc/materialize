@@ -16,6 +16,11 @@ pub mod source;
 pub mod stream;
 pub mod upsert;
 
+// This was selected to match the heuristic in differential dataflow's join.
+//
+// https://docs.rs/differential-dataflow/0.12.0/src/differential_dataflow/operators/join.rs.html#487-488
+const DEFAULT_OUTPUTS_PER_YIELD: usize = 1_000_000;
+
 pub(crate) fn split_ok_err<K, V>(
     x: (Result<(K, V), String>, u64, isize),
 ) -> Result<((K, V), u64, isize), (String, u64, isize)> {
