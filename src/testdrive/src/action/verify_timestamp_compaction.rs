@@ -7,12 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 
 use coord::catalog::Catalog;
 use coord::session::Session;
 use ore::now::NOW_ZERO;
 use ore::result::ResultExt;
+use ore::retry::Retry;
 use sql::catalog::SessionCatalog;
 use sql::names::PartialName;
 
@@ -46,36 +49,42 @@ impl Action for VerifyTimestampsAction {
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
         if let Some(path) = &state.materialized_catalog_path {
-            let mut catalog = Catalog::open_debug(path, NOW_ZERO.clone())
-                .await
-                .map_err_to_string()?;
-            let item_id = catalog
-                .for_session(&Session::dummy())
-                .resolve_item(&PartialName {
-                    database: None,
-                    schema: None,
-                    item: self.source.clone(),
+            Retry::default()
+                .initial_backoff(Duration::from_secs(1))
+                .max_duration(Duration::from_secs(10))
+                .retry(|_| async move {
+                    let mut catalog = Catalog::open_debug(path, NOW_ZERO.clone())
+                        .await
+                        .map_err_to_string()?;
+                    let item_id = catalog
+                        .for_session(&Session::dummy())
+                        .resolve_item(&PartialName {
+                            database: None,
+                            schema: None,
+                            item: self.source.clone(),
+                        })
+                        .map_err_to_string()?
+                        .id();
+                    let bindings = catalog
+                        .load_timestamp_bindings(item_id)
+                        .map_err_to_string()?;
+                    println!(
+                        "Verifying timestamp binding compaction for {:?}.  Found {:?} vs expected {:?}",
+                        self.source,
+                        bindings.len(),
+                        self.max_size
+                    );
+                    if bindings.len() > self.max_size {
+                        Err(format!(
+                            "There are {:?} bindings compared to max size {:?}",
+                            bindings.len(),
+                            self.max_size
+                        ))
+                    } else {
+                        Ok(())
+                    }
                 })
-                .map_err_to_string()?
-                .id();
-            let bindings = catalog
-                .load_timestamp_bindings(item_id)
-                .map_err_to_string()?;
-            println!(
-                "Verifying timestamp binding compaction for {:?}.  Found {:?} vs expected {:?}",
-                self.source,
-                bindings.len(),
-                self.max_size
-            );
-            if bindings.len() > self.max_size {
-                Err(format!(
-                    "There are {:?} bindings compared to max size {:?}",
-                    bindings.len(),
-                    self.max_size
-                ))
-            } else {
-                Ok(())
-            }
+                .await
         } else {
             println!(
                 "Skipping timestamp binding compaction verification for {:?}.",

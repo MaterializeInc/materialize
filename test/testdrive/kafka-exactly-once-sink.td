@@ -361,8 +361,7 @@ $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key key=true
 $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key_2 key=true
 {"b": 2} {"column1": 1, "b": 2, "column3": 3, "transaction": {"id": "0"}}
 
-# Verify compaction of exactly once sinks.  Add sleep to make sure we have at least one extra binding being computed.
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=1
+# Verify compaction of exactly once sinks.
 $ verify-timestamp-compaction source=input_csv max-size=3
 $ verify-timestamp-compaction source=rt_binding_consistency_test_source max-size=3
 # TODO: Enable when #9514 is fixed!
