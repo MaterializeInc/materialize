@@ -1065,8 +1065,9 @@ impl HirRelationExpr {
                 right,
             } => {
                 left.visit_columns(depth, f);
-                let depth = if kind.is_lateral() { depth + 1 } else { depth };
-                right.visit_columns(depth, f);
+                let right_depth = if kind.is_lateral() { depth + 1 } else { depth };
+                right.visit_columns(right_depth, f);
+                // The ON clause doesn't belong in the lateral context
                 on.visit_columns(depth, f);
             }
             HirRelationExpr::Map { scalars, input } => {
