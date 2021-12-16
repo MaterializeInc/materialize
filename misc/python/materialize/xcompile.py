@@ -179,5 +179,5 @@ def _bootstrap_darwin(arch: Arch) -> None:
         return
     spawn.runv(["brew", "install", f"messense/macos-cross-toolchains/{target(arch)}"])
     spawn.runv(["rustup", "target", "add", target(arch)])
-    BOOTSTRAP_FILE.parent.mkdir(exist_ok=True)
+    BOOTSTRAP_FILE.parent.mkdir(parents=True, exist_ok=True)
     BOOTSTRAP_FILE.write_text(BOOTSTRAP_VERSION)
