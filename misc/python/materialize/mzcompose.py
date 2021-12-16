@@ -1085,8 +1085,7 @@ class Localstack(PythonService):
     def __init__(
         self,
         name: str = "localstack",
-        # https://github.com/localstack/localstack/pull/4979
-        image: str = f"benesch/localstack:0.13.0-p1",
+        image: str = f"localstack/localstack:0.13.1",
         port: int = 4566,
         environment: List[str] = ["HOSTNAME_EXTERNAL=localstack"],
         volumes: List[str] = ["/var/run/docker.sock:/var/run/docker.sock"],
