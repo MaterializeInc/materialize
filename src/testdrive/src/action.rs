@@ -444,6 +444,9 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
                     "kafka-verify" => {
                         Box::new(kafka::build_verify(builtin, context.clone()).map_err(wrap_err)?)
                     }
+                    "kafka-verify-topic" => {
+                        Box::new(kafka::build_verify_topic(builtin).map_err(wrap_err)?)
+                    }
                     "kinesis-create-stream" => {
                         Box::new(kinesis::build_create_stream(builtin).map_err(wrap_err)?)
                     }

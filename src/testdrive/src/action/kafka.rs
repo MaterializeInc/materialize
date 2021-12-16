@@ -11,8 +11,10 @@ mod add_partitions;
 mod create_topic;
 mod ingest;
 mod verify;
+mod verify_topic;
 
 pub use add_partitions::build_add_partitions;
 pub use create_topic::build_create_topic;
 pub use ingest::build_ingest;
 pub use verify::build_verify;
+pub use verify_topic::build_verify_topic;

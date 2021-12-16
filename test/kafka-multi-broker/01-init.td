@@ -44,3 +44,5 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=6
   TOPIC 'testdrive-kafka-multi-broker-sink-${testdrive.seed}'
   WITH (replication_factor = 2, partition_count = 2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify-topic sink=materialize.public.multi_broker_sink topic=testdrive-kafka-multi-broker-sink-${testdrive.seed} nonced=true
