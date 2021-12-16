@@ -977,3 +977,332 @@ pub mod process_local {
         }
     }
 }
+
+// // let dataflow_client = dataflowd::RemoteClient::connect(&args.dataflowd_addr).await?;
+
+// let mut remotes = Vec::with_capacity(args.dataflowd_addr.len());
+// for addr in args.dataflowd_addr.iter() {
+//     remotes.push(dataflowd::tcp::TcpClient::connect(addr).await?);
+// }
+// let dataflow_client = crate::client::replicated::ActiveReplication::new(remotes);
+
+/// A client backed by multiple replicas.
+pub mod replicated {
+
+    use std::collections::{HashMap, HashSet};
+
+    use timely::progress::{frontier::MutableAntichain, Antichain};
+
+    use mz_expr::GlobalId;
+    use mz_repr::Timestamp;
+
+    use super::Client;
+    use super::{Command, ComputeCommand, ComputeResponse, Response};
+
+    /// A client backed by multiple replicas.
+    pub struct ActiveReplication<C: Client> {
+        /// The replicas themselves.
+        replicas: Vec<C>,
+        /// Outstanding peek identifiers, to guide responses (and which to suppress).
+        peeks: HashSet<uuid::Uuid>,
+        /// Frontier information, both from each replica and unioned across all replicas.
+        uppers: HashMap<GlobalId, (Antichain<Timestamp>, Vec<MutableAntichain<Timestamp>>)>,
+        /// The command history, used when introducing new replicas.
+        ///
+        /// In principle, this history can be thinned down, either periodically,
+        /// or pro-actively when new replicas are introduced.
+        history: Vec<Command>,
+        /// Cursor to use among the replicas
+        cursor: usize,
+    }
+
+    impl<C: Client> ActiveReplication<C> {
+        /// Creates a new active replica client from a list of active replicas.
+        pub fn new(replicas: Vec<C>) -> Self {
+            Self {
+                replicas,
+                peeks: HashSet::new(),
+                uppers: HashMap::new(),
+                history: Vec::new(),
+                cursor: 0,
+            }
+        }
+
+        /// Introduce a new replica, and catch it up to the commands of other replicas.
+        ///
+        /// It is not yet clear under which circumstances a replica can be removed.
+        pub async fn add_replica(&mut self, mut client: C) {
+            for (_, frontiers) in self.uppers.values_mut() {
+                frontiers.push({
+                    let mut frontier = timely::progress::frontier::MutableAntichain::new();
+                    frontier.update_iter(Some((
+                        <Timestamp as timely::progress::Timestamp>::minimum(),
+                        1,
+                    )));
+                    frontier
+                })
+            }
+
+            self.thin_history();
+            for command in self.history.iter() {
+                client.send(command.clone()).await.unwrap();
+            }
+            self.replicas.push(client);
+        }
+
+        /// Thins out `self.history`.
+        ///
+        /// This thinning is primarily by peeks that are no longer outstanding, as well as
+        /// consequences thereof (e.g. irrelevance of dataflows serving only those peeks).
+        fn thin_history(&mut self) {
+            self.history.retain(|cmd| {
+                match cmd {
+                    Command::Compute(ComputeCommand::Peek { uuid, .. }, _instance) => {
+                        // If the peek has been responded to or canceled we can remove it.
+                        self.peeks.contains(&uuid)
+                    }
+                    Command::Compute(ComputeCommand::CancelPeeks { .. }, _instance) => {
+                        // Peek cancelation can always be removed.
+                        // TODO: Should we never add it? Confusing?
+                        false
+                    }
+                    _ => true,
+                }
+            });
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl<C: Client> Client for ActiveReplication<C> {
+        async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+            // Register an interest in the peek.
+            if let Command::Compute(ComputeCommand::Peek { uuid, .. }, _instance) = &cmd {
+                self.peeks.insert(*uuid);
+            }
+
+            // Initialize any necessary frontier tracking.
+            let mut start = Vec::new();
+            let mut cease = Vec::new();
+            cmd.frontier_tracking(&mut start, &mut cease);
+            for id in start.into_iter() {
+                let frontier = timely::progress::Antichain::from_elem(
+                    <Timestamp as timely::progress::Timestamp>::minimum(),
+                );
+                let frontiers = self
+                    .replicas
+                    .iter()
+                    .map(|_| {
+                        let mut frontier = timely::progress::frontier::MutableAntichain::new();
+                        frontier.update_iter(Some((
+                            <Timestamp as timely::progress::Timestamp>::minimum(),
+                            1,
+                        )));
+                        frontier
+                    })
+                    .collect::<Vec<_>>();
+                let previous = self.uppers.insert(id, (frontier, frontiers));
+                assert!(previous.is_none());
+            }
+            for id in cease.into_iter() {
+                let previous = self.uppers.remove(&id);
+                assert!(previous.is_some());
+            }
+
+            // Clone the command for each active replica.
+            for client in self.replicas.iter_mut() {
+                client.send(cmd.clone()).await?;
+            }
+            // Record the command so that new replicas can be brought up to speed.
+            self.history.push(cmd);
+
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Option<Response> {
+            if self.replicas.is_empty() {
+                // We want to communicate that the result is not ready
+                futures::future::pending().await
+            } else {
+                // Receive responses from any of the replicas, and take appropriate action.
+                self.cursor = (self.cursor + 1) % self.replicas.len();
+                let mut stream = super::SelectStream::new(&mut self.replicas[..], self.cursor);
+                use futures::StreamExt;
+                while let Some((worker_id, message)) = stream.next().await {
+                    match message {
+                        Response::Compute(
+                            ComputeResponse::PeekResponse(uuid, response),
+                            instance,
+                        ) => {
+                            // If this is the first response, forward it; otherwise do not.
+                            // TODO: we could collect the other responses to assert equivalance?
+                            // Trades resources (memory) for reassurances; idk which is best.
+                            if self.peeks.remove(&uuid) {
+                                return Some(Response::Compute(
+                                    ComputeResponse::PeekResponse(uuid, response),
+                                    instance,
+                                ));
+                            }
+                        }
+                        Response::Compute(ComputeResponse::FrontierUppers(mut list), instance) => {
+                            for (id, changes) in list.iter_mut() {
+                                if let Some((frontier, frontiers)) = self.uppers.get_mut(id) {
+                                    // Apply changes to replica `worker_id`
+                                    frontiers[worker_id].update_iter(changes.drain());
+                                    // We can swap `frontier` into `changes, negated, and then use that to repopulate `frontier`.
+                                    // Working
+                                    changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
+                                    frontier.clear();
+                                    for (time1, _neg_one) in changes.iter() {
+                                        for time2 in frontiers[worker_id].frontier().iter() {
+                                            use differential_dataflow::lattice::Lattice;
+                                            frontier.insert(time1.join(time2));
+                                        }
+                                    }
+                                    changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
+                                    changes.compact();
+                                }
+                            }
+                            if !list.is_empty() {
+                                return Some(Response::Compute(
+                                    ComputeResponse::FrontierUppers(list),
+                                    instance,
+                                ));
+                            }
+                        }
+                        message => {
+                            if worker_id == 0 {
+                                return Some(message);
+                            }
+                        }
+                    }
+                }
+                // Indicate completion of the communication.
+                None
+            }
+        }
+    }
+}
+
+/// A convenience type for compatibility.
+pub struct RemoteClient {
+    client: partitioned::Partitioned<tcp::TcpClient>,
+}
+
+impl RemoteClient {
+    /// Construct a client backed by multiple tcp connections
+    pub async fn connect(addrs: &[impl tokio::net::ToSocketAddrs]) -> Result<Self, anyhow::Error> {
+        let mut remotes = Vec::with_capacity(addrs.len());
+        for addr in addrs.iter() {
+            remotes.push(tcp::TcpClient::connect(addr).await?);
+        }
+        Ok(Self {
+            client: partitioned::Partitioned::new(remotes),
+        })
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl Client for RemoteClient {
+    async fn send(&mut self, cmd: Command) -> Result<(), anyhow::Error> {
+        tracing::trace!("Broadcasting dataflow command: {:?}", cmd);
+        self.client.send(cmd).await
+    }
+    async fn recv(&mut self) -> Option<Response> {
+        self.client.recv().await
+    }
+}
+
+pub mod tcp {
+
+    // use crate::client::{partitioned::Partitioned, Client, Command, Response};
+
+    use futures::sink::SinkExt;
+    use futures::stream::StreamExt;
+    use tokio::io::{AsyncRead, AsyncWrite};
+    use tokio::net::{TcpStream, ToSocketAddrs};
+    use tokio_serde::formats::Bincode;
+    use tokio_util::codec::LengthDelimitedCodec;
+
+    use crate::client::{Command, Response};
+
+    /// A client to a remote dataflow server.
+    pub struct TcpClient {
+        connection: FramedClient<TcpStream>,
+    }
+
+    impl TcpClient {
+        /// Connects a remote client to the specified remote dataflow server.
+        pub async fn connect(addr: impl ToSocketAddrs) -> Result<TcpClient, anyhow::Error> {
+            let connection = framed_client(TcpStream::connect(addr).await?);
+            Ok(Self { connection })
+        }
+        /// Create a new client from a tcp stream.
+        pub fn new(stream: TcpStream) -> Self {
+            Self {
+                connection: framed_client(stream),
+            }
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl crate::client::Client for TcpClient {
+        async fn send(&mut self, cmd: crate::client::Command) -> Result<(), anyhow::Error> {
+            // TODO: something better than panicking.
+            self.connection.send(cmd).await?;
+
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Option<crate::client::Response> {
+            // TODO: something better than panicking.
+            self.connection.next().await.and_then(|x| x.ok())
+        }
+    }
+
+    /// A framed connection to a dataflowd server.
+    pub type Framed<C, T, U> = tokio_serde::Framed<
+        tokio_util::codec::Framed<C, LengthDelimitedCodec>,
+        T,
+        U,
+        Bincode<T, U>,
+    >;
+
+    /// A framed connection from the server's perspective.
+    pub type FramedServer<C> = Framed<C, Command, Response>;
+
+    /// A framed connection from the client's perspective.
+    pub type FramedClient<C> = Framed<C, Response, Command>;
+
+    fn length_delimited_codec() -> LengthDelimitedCodec {
+        // NOTE(benesch): using an unlimited maximum frame length is problematic
+        // because Tokio never shrinks its buffer. Sending or receiving one large
+        // message of size N means the client will hold on to a buffer of size
+        // N forever. We should investigate alternative transport protocols that
+        // do not have this limitation.
+        let mut codec = LengthDelimitedCodec::new();
+        codec.set_max_frame_length(usize::MAX);
+        codec
+    }
+
+    /// Constructs a framed connection for the server.
+    pub fn framed_server<C>(conn: C) -> FramedServer<C>
+    where
+        C: AsyncRead + AsyncWrite,
+    {
+        tokio_serde::Framed::new(
+            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
+            Bincode::default(),
+        )
+    }
+
+    /// Constructs a framed connection for the client.
+    pub fn framed_client<C>(conn: C) -> FramedClient<C>
+    where
+        C: AsyncRead + AsyncWrite,
+    {
+        tokio_serde::Framed::new(
+            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
+            Bincode::default(),
+        )
+    }
+}

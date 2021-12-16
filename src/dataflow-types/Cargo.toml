@@ -14,6 +14,7 @@ aws-smithy-http = "0.38.0"
 aws-types = { version = "0.8.0", features = ["hardcoded-credentials"] }
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+clap = { version = "3.1.6", features = ["derive", "env"] }
 crossbeam-channel = "0.5.3"
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
@@ -40,8 +41,11 @@ regex = "1.5.4"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
 serde_regex = "1.1.0"
+structopt = "0.3.25"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.17.0"
+tokio = "1.13.0"
+tokio-serde = { version = "0.8.0", features = ["bincode"] }
+tokio-util = { version = "0.6.9", features = ["codec"] }
 tracing = "0.1.32"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
