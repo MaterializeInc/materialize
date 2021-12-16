@@ -1453,7 +1453,7 @@ fn plan_values(
     // Build column names.
     let mut scope = Scope::empty(Some(qcx.outer_scope.clone()));
     for i in 0..ncols {
-        let name = Some(format!("column{}", i + 1).into());
+        let name = format!("column{}", i + 1);
         scope.items.push(ScopeItem::from_column_name(name));
     }
 
@@ -1637,12 +1637,7 @@ fn plan_view_select(
                     scope_item.expr = group_expr.cloned();
                     scope_item
                 } else {
-                    ScopeItem {
-                        names: vec![],
-                        expr: group_expr.cloned(),
-                        nameable: true,
-                        visible_to_wildcard: true,
-                    }
+                    ScopeItem::from_expr(group_expr.cloned())
                 };
 
                 group_key.push(from_scope.len() + group_exprs.len());
@@ -1663,12 +1658,9 @@ fn plan_view_select(
         let mut agg_exprs = vec![];
         for sql_function in aggregates {
             agg_exprs.push(plan_aggregate(ecx, sql_function)?);
-            group_scope.items.push(ScopeItem {
-                names: vec![],
-                expr: Some(Expr::Function(sql_function.clone())),
-                nameable: true,
-                visible_to_wildcard: true,
-            });
+            group_scope
+                .items
+                .push(ScopeItem::from_expr(Expr::Function(sql_function.clone())));
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || having.is_some() {
             // apply GROUP BY / aggregates
@@ -1742,19 +1734,11 @@ fn plan_view_select(
             } else {
                 project_key.push(group_scope.len() + new_exprs.len());
                 new_exprs.push(expr);
-                map_scope.items.push(ScopeItem {
-                    names: column_name
-                        .iter()
-                        .map(|column_name| ScopeItemName {
-                            table_name: None,
-                            column_name: Some(column_name.clone()),
-                            priority: true,
-                        })
-                        .collect(),
-                    expr: None,
-                    nameable: true,
-                    visible_to_wildcard: true,
-                });
+                map_scope.items.push(ScopeItem::from_name(ScopeItemName {
+                    table_name: None,
+                    column_name: column_name.clone(),
+                    priority: true,
+                }));
             }
         }
         relation_expr = relation_expr.map(new_exprs);
@@ -2852,12 +2836,7 @@ fn plan_using_constraint(
                     func: VariadicFunc::Coalesce,
                     exprs: vec![expr1.clone(), expr2.clone()],
                 });
-                new_items.push(ScopeItem {
-                    names,
-                    expr: None,
-                    nameable: true,
-                    visible_to_wildcard: true,
-                });
+                new_items.push(ScopeItem::from_names(names));
             }
         }
 

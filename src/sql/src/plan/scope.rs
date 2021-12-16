@@ -48,6 +48,7 @@ use itertools::Itertools;
 
 use repr::ColumnName;
 
+use crate::ast::Expr;
 use crate::names::PartialName;
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
@@ -90,7 +91,7 @@ pub struct ScopeItem {
     // table must appear before names that specify non-canonical tables.
     // This impacts the behavior of the `is_from_table` test.
     pub names: Vec<ScopeItemName>,
-    pub expr: Option<sql_parser::ast::Expr<Aug>>,
+    pub expr: Option<Expr<Aug>>,
     // Whether this item is actually resolveable by its name. Non-nameable scope
     // items are used e.g. in the scope created by an inner join, so that the
     // duplicated key columns from the right relation do not cause ambiguous
@@ -103,6 +104,8 @@ pub struct ScopeItem {
     /// `ScopeItemName::priority`, but it isn't clear what the long-term
     /// ramifications are with SQL support in that case.
     pub visible_to_wildcard: bool,
+    // Force use of the constructor methods.
+    _private: (),
 }
 
 #[derive(Debug, Clone)]
@@ -114,17 +117,42 @@ pub struct Scope {
 }
 
 impl ScopeItem {
-    pub fn from_column_name(column_name: Option<ColumnName>) -> Self {
+    fn empty() -> ScopeItem {
         ScopeItem {
-            names: vec![ScopeItemName {
-                table_name: None,
-                column_name,
-                priority: false,
-            }],
+            names: vec![],
             expr: None,
             nameable: true,
             visible_to_wildcard: true,
+            _private: (),
         }
+    }
+
+    /// Constructs a new scope item from a bare column name.
+    pub fn from_column_name(column_name: impl Into<ColumnName>) -> ScopeItem {
+        ScopeItem::from_name(ScopeItemName {
+            table_name: None,
+            column_name: Some(column_name.into()),
+            priority: false,
+        })
+    }
+
+    /// Constructs a new scope item from a single name.
+    pub fn from_name(name: ScopeItemName) -> ScopeItem {
+        ScopeItem::from_names(vec![name])
+    }
+
+    /// Constructs a new scope item from several names.
+    pub fn from_names(names: impl IntoIterator<Item = ScopeItemName>) -> ScopeItem {
+        let mut item = ScopeItem::empty();
+        item.names.extend(names);
+        item
+    }
+
+    /// Constructs a new scope item with no name from an expression.
+    pub fn from_expr(expr: impl Into<Option<Expr<Aug>>>) -> ScopeItem {
+        let mut item = ScopeItem::empty();
+        item.expr = expr.into();
+        item
     }
 
     pub fn is_from_table(&self, table_name: &PartialName) -> bool {
@@ -160,15 +188,12 @@ impl Scope {
         let mut scope = Scope::empty(outer_scope);
         scope.items = column_names
             .into_iter()
-            .map(|column_name| ScopeItem {
-                names: vec![ScopeItemName {
+            .map(|column_name| {
+                ScopeItem::from_name(ScopeItemName {
                     table_name: table_name.clone(),
                     column_name: column_name.map(|n| n.into()),
                     priority: false,
-                }],
-                expr: None,
-                nameable: true,
-                visible_to_wildcard: true,
+                })
             })
             .collect();
         scope
