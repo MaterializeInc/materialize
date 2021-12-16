@@ -24,6 +24,8 @@ pub enum Error {
     OutOfQuota(String),
     /// An unstructured persistence related error.
     String(String),
+    /// There is no stream registered under the given name.
+    UnknownRegistration(String),
     /// The associated write request was sequenced (given a SeqNo) and applied
     /// to the persist state machine, but that application was deterministically
     /// made into a no-op because it was contextually invalid (a write or seal
@@ -43,6 +45,7 @@ impl fmt::Display for Error {
             Error::IO(e) => fmt::Display::fmt(e, f),
             Error::OutOfQuota(e) => f.write_str(e),
             Error::String(e) => f.write_str(e),
+            Error::UnknownRegistration(id) => write!(f, "unknown registration: {}", id),
             Error::Noop(_, e) => f.write_str(e),
             Error::RuntimeShutdown => f.write_str("runtime shutdown"),
         }

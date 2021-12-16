@@ -17,7 +17,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
 use persist_types::Codec;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::{Concat, Map, OkErr, ToStream, UnorderedInput};
+use timely::dataflow::operators::{Concat, Map, OkErr, UnorderedInput};
 use timely::dataflow::Scope;
 
 use persist::operators::source::PersistedSource;
@@ -187,34 +187,7 @@ where
 
                 let source_persist_config = match (persist, render_state.persist.as_mut()) {
                     (Some(persist_desc), Some(persist)) => {
-                        let mut persist_errs = Vec::new();
-
-                        let source_persist_config = get_persist_config(&uid, persist_desc, persist);
-
-                        if let Err(ref e) = source_persist_config {
-                            let err = SourceError::new(
-                                src.name.clone(),
-                                SourceErrorDetails::Persistence(e.to_string()),
-                            );
-                            persist_errs.push(err);
-                        }
-
-                        // Make sure to always create and push an error stream, even if there
-                        // are no errors. This ensures that the shape of the operator graph is
-                        // consistent across all timely workers.
-                        //
-                        // TODO: The error collections are not the right place for surfacing
-                        // persistence errors, since they are not deterministic/definite. We
-                        // don't have a better place right now, though.
-                        error_collections.push(
-                            persist_errs
-                                .to_stream(scope)
-                                .map(DataflowError::SourceError)
-                                .pass_through("source-persist-errors")
-                                .as_collection(),
-                        );
-
-                        source_persist_config.ok()
+                        Some(get_persist_config(&uid, persist_desc, persist))
                     }
                     _ => None,
                 };
@@ -705,35 +678,33 @@ fn get_persist_config(
     source_id: &SourceInstanceId,
     persist_desc: SourcePersistDesc,
     persist_client: &mut persist::indexed::runtime::RuntimeClient,
-) -> Result<
-    PersistentSourceConfig<
-        Result<Row, DecodeError>,
-        Result<Row, DecodeError>,
-        SourceTimestamp,
-        AssignedTimestamp,
-    >,
-    persist::error::Error,
+) -> PersistentSourceConfig<
+    Result<Row, DecodeError>,
+    Result<Row, DecodeError>,
+    SourceTimestamp,
+    AssignedTimestamp,
 > {
     // TODO: Ensure that we only render one materialized source when persistence is enabled. We can
     // use https://github.com/MaterializeInc/materialize/pull/8522, which has most of the plumbing.
-    let persist_bindings_name = persist_desc.timestamp_bindings_stream;
-    let persist_data_name = persist_desc.primary_stream;
 
-    let (bindings_write, bindings_read) =
-        persist_client.create_or_load::<SourceTimestamp, AssignedTimestamp>(&persist_bindings_name);
+    let (bindings_write, bindings_read) = persist_client
+        .create_or_load::<SourceTimestamp, AssignedTimestamp>(
+            &persist_desc.timestamp_bindings_stream.name,
+        );
 
     let (data_write, data_read) = persist_client
-        .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(&persist_data_name);
+        .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(
+            &persist_desc.primary_stream.name,
+        );
 
-    use persist::indexed::runtime::sealed_ts;
-    let bindings_seal_ts = sealed_ts(&bindings_read)?;
-    let data_seal_ts = sealed_ts(&data_read)?;
+    let bindings_seal_ts = persist_desc.timestamp_bindings_stream.upper_seal_ts;
+    let data_seal_ts = persist_desc.primary_stream.upper_seal_ts;
 
     log::debug!(
             "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
             source_id,
-            persist_bindings_name,
-            persist_data_name,
+            persist_desc.primary_stream.name,
+            persist_desc.timestamp_bindings_stream.name,
             bindings_seal_ts,
             data_seal_ts,
         );
@@ -746,7 +717,7 @@ fn get_persist_config(
     );
     let upsert_config = PersistentUpsertConfig::new(data_seal_ts, data_read, data_write);
 
-    Ok(PersistentSourceConfig::new(bindings_config, upsert_config))
+    PersistentSourceConfig::new(bindings_config, upsert_config)
 }
 
 /// After handling metadata insertion, we split streams into key/value parts for convenience

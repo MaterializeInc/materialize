@@ -1014,30 +1014,6 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
     }
 }
 
-/// Returns the seal timestamp of the given collection.
-// TODO: There are some things we should change about this:
-//
-// 1. Getting the seal timestamp shouldn't require knowing the types of the collection. This can be
-//    achieved by adding a `get_seal(id)` method on `RuntimeClient`. Even better, the method should
-//    probably be `get_description()` and return a complete differential `Description` of the
-//    contained updates.
-//
-// 2. We need to figure out what our nomenclature should be around seal vs. upper vs. "a whole
-//    Description".
-//
-pub fn sealed_ts<K: persist_types::Codec, V: persist_types::Codec>(
-    read: &StreamReadHandle<K, V>,
-) -> Result<u64, Error> {
-    let seal_ts = read.snapshot()?.get_seal();
-
-    if let Some(sealed) = seal_ts.first() {
-        Ok(*sealed)
-    } else {
-        use timely::progress::Timestamp;
-        Ok(Timestamp::minimum())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use timely::dataflow::operators::capture::Extract;

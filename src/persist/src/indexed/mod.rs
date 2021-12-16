@@ -963,7 +963,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                         let lower = Antichain::from_elem(u64::minimum());
                         Ok(Description::new(lower, upper, since))
                     }
-                    None => Err(Error::String(format!("Unknown registration '{}'", id_str))),
+                    None => Err(Error::UnknownRegistration(id_str.to_string())),
                 }
             })
         })());

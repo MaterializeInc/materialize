@@ -186,7 +186,7 @@ impl CatalogState {
         let persist_name = match &source.connector {
             dataflow_types::SourceConnector::External { persist, .. } => persist
                 .as_ref()
-                .map(|persist| persist.primary_stream.as_str()),
+                .map(|persist| persist.primary_stream.name.as_str()),
             dataflow_types::SourceConnector::Local { .. } => None,
         };
         let persisted_name_datum = Datum::from(persist_name);
