@@ -7,14 +7,14 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.51"
-aws-config = { version = "0.2.0", default-features = false, features = ["default-provider", "native-tls"] }
-aws-smithy-client = { version = "0.32.0", default-features = false }
-aws-smithy-http = "0.32.0"
-aws-sdk-kinesis = { version = "0.2.0", default-features = false, features = ["client", "native-tls"], optional = true }
-aws-sdk-s3 = { version = "0.2.0", default-features = false, features = ["client", "native-tls"], optional = true }
-aws-sdk-sqs = { version = "0.2.0", default-features = false, features = ["client", "native-tls"], optional = true }
-aws-sdk-sts = { version = "0.2.0", default-features = false, features = ["client", "native-tls"], optional = true }
-aws-types = { version = "0.2.0" }
+aws-config = { version = "0.3.0", default-features = false, features = ["default-provider", "native-tls"] }
+aws-smithy-client = { version = "0.33.1", default-features = false }
+aws-smithy-http = "0.33.1"
+aws-sdk-kinesis = { version = "0.3.0", default-features = false, features = ["native-tls"], optional = true }
+aws-sdk-s3 = { version = "0.3.0", default-features = false, features = ["native-tls"], optional = true }
+aws-sdk-sqs = { version = "0.3.0", default-features = false, features = ["native-tls"], optional = true }
+aws-sdk-sts = { version = "0.3.0", default-features = false, features = ["native-tls"], optional = true }
+aws-types = { version = "0.3.0" }
 hyper = "0.14.16"
 mz-http-proxy = { path = "../http-proxy", features = ["hyper"] }
 

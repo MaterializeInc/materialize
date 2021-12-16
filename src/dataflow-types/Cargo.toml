@@ -8,9 +8,9 @@ publish = false
 [dependencies]
 anyhow = "1.0.51"
 async-trait = "0.1.52"
-aws-config = { version = "0.2.0", default-features = false, features = ["default-provider", "native-tls"] }
-aws-types = { version = "0.2.0", features = ["hardcoded-credentials"] }
-aws-smithy-http = "0.32.0"
+aws-config = { version = "0.3.0", default-features = false, features = ["default-provider", "native-tls"] }
+aws-types = { version = "0.3.0", features = ["hardcoded-credentials"] }
+aws-smithy-http = "0.33.1"
 ccsr = { path = "../ccsr" }
 crossbeam-channel = "0.5.1"
 enum-iterator = "0.7.0"
