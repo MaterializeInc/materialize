@@ -20,6 +20,7 @@ use repr::ColumnName;
 
 use crate::catalog::CatalogError;
 use crate::names::PartialName;
+use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 
 #[derive(Clone, Debug)]
@@ -41,6 +42,14 @@ pub enum PlanError {
         column: ColumnName,
     },
     AmbiguousColumn(ColumnName),
+    UnknownColumnInUsingClause {
+        column: ColumnName,
+        join_side: JoinSide,
+    },
+    AmbiguousColumnInUsingClause {
+        column: ColumnName,
+        join_side: JoinSide,
+    },
     MisqualifiedName(String),
     OverqualifiedDatabaseName(String),
     OverqualifiedSchemaName(String),
@@ -99,6 +108,18 @@ impl fmt::Display for PlanError {
                 f,
                 "column reference {} is ambiguous",
                 column.as_str().quoted()
+            ),
+            Self::UnknownColumnInUsingClause { column, join_side } => write!(
+                f,
+                "column {} specified in USING clause does not exist in {} table",
+                column.as_str().quoted(),
+                join_side,
+            ),
+            Self::AmbiguousColumnInUsingClause { column, join_side } => write!(
+                f,
+                "common column name {} appears more than once in {} table",
+                column.as_str().quoted(),
+                join_side,
             ),
             Self::MisqualifiedName(name) => write!(
                 f,

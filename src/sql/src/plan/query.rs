@@ -59,10 +59,11 @@ use crate::plan::expr::{
     CoercibleScalarExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind,
     ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, VariadicFunc, WindowExpr, WindowExprType,
 };
+use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
-use crate::plan::{plan_utils, Params};
+use crate::plan::Params;
 use crate::plan::{transform_ast, PlanContext};
 
 // Aug is the type variable assigned to an AST that has already been
@@ -2645,14 +2646,8 @@ fn plan_using_constraint(
     let mut hidden_cols = vec![];
 
     for column_name in column_names {
-        let (lhs, _) = left_scope.resolve_column(column_name)?;
-        let (mut rhs, _) = right_scope.resolve_column(column_name)?;
-        if lhs.level != 0 || rhs.level != 0 {
-            sql_bail!(
-                "Internal error: name {} in USING resolved to outer column",
-                column_name
-            )
-        }
+        let lhs = left_scope.resolve_using_column(column_name, JoinSide::Left)?;
+        let mut rhs = right_scope.resolve_using_column(column_name, JoinSide::Right)?;
 
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();

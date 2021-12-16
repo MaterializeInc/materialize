@@ -722,7 +722,7 @@ SELECT f1, t1.f2 AS f1 FROM t1 JOIN t2 USING (f1);
 query error column reference "f1" is ambiguous
 SELECT f1, t1.f2 AS f1 FROM t1 JOIN t2 USING (f1) ORDER BY f1;
 
-query error column reference "f2" is ambiguous
+query error  common column name "f2" appears more than once in left table
 SELECT * FROM t1 LEFT JOIN t2 USING (f1) RIGHT JOIN t3 USING (f2);
 
 statement ok
@@ -952,7 +952,7 @@ SELECT *, f2 IS NULL
      JOIN t1 AS t2 USING (f1, f2)
      JOIN t1 AS t3 USING (f1);
 
-query error column reference "f2" is ambiguous
+query error common column name "f2" appears more than once in left table
 SELECT *
     FROM t1 AS t1
     JOIN t1 AS t2 USING (f1, f2)
@@ -1016,3 +1016,19 @@ SELECT a3.f1,
 1 1
 1 1
 1 1
+
+# Simple USING column missing from the right table.
+query error column "a" specified in USING clause does not exist in right table
+SELECT * FROM (SELECT 1 a) s1 JOIN (SELECT 2 b) s2 USING (a)
+
+# Simple USING column missing from the left table.
+query error column "b" specified in USING clause does not exist in left table
+SELECT * FROM (SELECT 1 a) s1 JOIN (SELECT 2 b) s2 USING (b)
+
+# USING column missing from both tables, but existing in the outer scope.
+query error column "c" specified in USING clause does not exist in left table
+SELECT (SELECT * FROM (SELECT 1 a) s1 JOIN (SELECT 2 b) s2 USING (c)) FROM (SELECT 3 c) s3
+
+# USING column missing from the right table only but existing in the outer scope.
+query error column "a" specified in USING clause does not exist in right table
+SELECT (SELECT * FROM (SELECT 1 a) s1 JOIN (SELECT 2 b) s2 USING (a)) FROM (SELECT 3 a) s3

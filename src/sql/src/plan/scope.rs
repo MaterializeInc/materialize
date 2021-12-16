@@ -52,6 +52,7 @@ use crate::ast::Expr;
 use crate::names::PartialName;
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
+use crate::plan::plan_utils::JoinSide;
 use crate::plan::query::Aug;
 
 #[derive(Debug, Clone)]
@@ -353,6 +354,33 @@ impl Scope {
             table_name,
             column_name,
         )
+    }
+
+    /// Resolves a column name in a `USING` clause.
+    pub fn resolve_using_column(
+        &self,
+        column_name: &ColumnName,
+        join_side: JoinSide,
+    ) -> Result<ColumnRef, PlanError> {
+        match self.resolve_column(column_name) {
+            // We found a column in level 0, which is acceptable.
+            Ok((column, _name)) if column.level == 0 => Ok(column),
+            // Columns in outer scopes are not valid in USING clauses.
+            Ok(_) => Err(PlanError::UnknownColumnInUsingClause {
+                column: column_name.clone(),
+                join_side,
+            }),
+            // Attach a bit more context to unknown and ambiguous column errors
+            // to match PostgreSQL.
+            Err(PlanError::AmbiguousColumn(column)) => {
+                Err(PlanError::AmbiguousColumnInUsingClause { column, join_side })
+            }
+            Err(PlanError::UnknownColumn { column, .. }) => {
+                Err(PlanError::UnknownColumnInUsingClause { column, join_side })
+            }
+            // Other errors are untouched.
+            Err(e) => Err(e),
+        }
     }
 
     pub fn resolve_table_column<'a>(
