@@ -2862,6 +2862,7 @@ dependencies = [
  "aws-sdk-s3",
  "aws-sdk-sqs",
  "aws-sdk-sts",
+ "aws-smithy-async",
  "aws-smithy-client",
  "aws-smithy-http",
  "aws-types",
