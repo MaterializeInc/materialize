@@ -167,7 +167,7 @@ def _enter_builder(arch: Arch) -> List[str]:
 
 
 def _bootstrap_darwin(arch: Arch) -> None:
-    BOOTSTRAP_VERSION = "2"
+    BOOTSTRAP_VERSION = "3"
     BOOTSTRAP_FILE = (
         Path(os.environ["MZ_ROOT"]) / "target" / target(arch) / ".xcompile-bootstrap"
     )
@@ -177,7 +177,18 @@ def _bootstrap_darwin(arch: Arch) -> None:
         contents = ""
     if contents == BOOTSTRAP_VERSION:
         return
-    spawn.runv(["brew", "install", f"messense/macos-cross-toolchains/{target(arch)}"])
+
+    if arch == Arch.AARCH64:
+        spawn.runv(["brew", "install", f"messense/macos-cross-toolchains/{target(arch)}"])
+    elif arch == Arch.X86_64:
+        # Get rid of one we used for all arches in boostrap v2 just in case a conflict makes things tricky
+        spawn.runv(["brew", "uninstall", "-f", f"messense/macos-cross-toolchains/{target(arch)}"])
+        spawn.runv(["brew", "untap", "-f", f"messense/macos-cross-toolchains"])
+        spawn.runv(["brew", "install", f"SergioBenitez/osxct/{target(arch)}"])
+        #spawn.runv(["cargo", "clean", "--target", f"{target(arch)}"], cwd=os.environ["MZ_ROOT"])
+    else:
+        raise RuntimeError("python enums are worse than rust enums")
+
     spawn.runv(["rustup", "target", "add", target(arch)])
     BOOTSTRAP_FILE.parent.mkdir(parents=True, exist_ok=True)
     BOOTSTRAP_FILE.write_text(BOOTSTRAP_VERSION)
