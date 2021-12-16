@@ -24,7 +24,6 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::mem::size_of;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -713,12 +712,8 @@ pub struct AssignedTimestamp(pub(crate) u64);
 const SOURCE_TIMESTAMP_PARTITION_KAFKA: u8 = 0;
 const SOURCE_TIMESTAMP_PARTITION_NONE: u8 = 1;
 impl Codec for SourceTimestamp {
-    fn codec_name() -> &'static str {
-        "SourceTimestamp"
-    }
-
-    fn size_hint(&self) -> usize {
-        size_of::<u8>() + size_of::<i32>() + size_of::<i64>() // PartitionId + MzOffset
+    fn codec_name() -> String {
+        "SourceTimestamp".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
@@ -753,12 +748,8 @@ impl Codec for SourceTimestamp {
 
 // TODO: see comment on Codec for SourceTimestamp
 impl Codec for AssignedTimestamp {
-    fn codec_name() -> &'static str {
-        "AssignedTimestamp"
-    }
-
-    fn size_hint(&self) -> usize {
-        size_of::<u64>()
+    fn codec_name() -> String {
+        "AssignedTimestamp".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {

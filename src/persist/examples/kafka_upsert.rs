@@ -441,12 +441,8 @@ mod kafka_offset_impls {
     use crate::SourceTimestamp;
 
     impl Codec for KafkaPartition {
-        fn codec_name() -> &'static str {
-            "KafkaPartition"
-        }
-
-        fn size_hint(&self) -> usize {
-            8
+        fn codec_name() -> String {
+            "KafkaPartition".into()
         }
 
         fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
@@ -461,12 +457,8 @@ mod kafka_offset_impls {
     }
 
     impl Codec for KafkaOffset {
-        fn codec_name() -> &'static str {
-            "KafkaOffset"
-        }
-
-        fn size_hint(&self) -> usize {
-            8
+        fn codec_name() -> String {
+            "KafkaOffset".into()
         }
 
         fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
@@ -481,12 +473,8 @@ mod kafka_offset_impls {
     }
 
     impl Codec for AssignedTimestamp {
-        fn codec_name() -> &'static str {
-            "AssignedTimestamp"
-        }
-
-        fn size_hint(&self) -> usize {
-            8
+        fn codec_name() -> String {
+            "AssignedTimestamp".into()
         }
 
         fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
@@ -501,12 +489,8 @@ mod kafka_offset_impls {
     }
 
     impl<P: Codec, O: Codec> Codec for SourceTimestamp<P, O> {
-        fn codec_name() -> &'static str {
-            "SourceTimestamp"
-        }
-
-        fn size_hint(&self) -> usize {
-            self.0.size_hint() + self.1.size_hint() + 8 + 8
+        fn codec_name() -> String {
+            "SourceTimestamp".into()
         }
 
         fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
