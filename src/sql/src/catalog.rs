@@ -307,7 +307,7 @@ impl fmt::Display for CatalogItemType {
 }
 
 /// An error returned by the catalog.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogError {
     /// Unknown database.
     UnknownDatabase(String),

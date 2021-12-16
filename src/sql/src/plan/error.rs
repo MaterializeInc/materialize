@@ -22,7 +22,7 @@ use crate::catalog::CatalogError;
 use crate::names::PartialName;
 use crate::plan::scope::ScopeItem;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum PlanError {
     Unsupported {
         feature: String,
@@ -33,6 +33,10 @@ pub enum PlanError {
         column: ColumnName,
     },
     UngroupedColumn {
+        table: Option<PartialName>,
+        column: ColumnName,
+    },
+    WrongJoinTypeForLateralColumn {
         table: Option<PartialName>,
         column: ColumnName,
     },
@@ -83,6 +87,12 @@ impl fmt::Display for PlanError {
             Self::UngroupedColumn { table, column } => write!(
                 f,
                 "column {} must appear in the GROUP BY clause or be used in an aggregate function",
+                ColumnDisplay { table, column },
+            ),
+            Self::WrongJoinTypeForLateralColumn { table, column } => write!(
+                f,
+                "column {} cannot be referenced from this part of the query: \
+                the combining JOIN type must be INNER or LEFT for a LATERAL reference",
                 ColumnDisplay { table, column },
             ),
             Self::AmbiguousColumn(column) => write!(

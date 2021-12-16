@@ -401,7 +401,7 @@ fn plan_source_envelope(
                 })],
             }),
             on: HirScalarExpr::literal_true(),
-            kind: JoinKind::Inner { lateral: true },
+            kind: JoinKind::Inner,
         }
         .project((0..diff_col).collect());
         let expr = if let Some(post_transform_key) = post_transform_key {

@@ -12,7 +12,6 @@
 //! similar to that file, with some differences which are noted below. It gets turned into that
 //! representation via a call to decorrelate().
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::mem;
@@ -467,8 +466,8 @@ pub struct ColumnRef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum JoinKind {
-    Inner { lateral: bool },
-    LeftOuter { lateral: bool },
+    Inner,
+    LeftOuter,
     RightOuter,
     FullOuter,
 }
@@ -479,10 +478,8 @@ impl fmt::Display for JoinKind {
             f,
             "{}",
             match self {
-                JoinKind::Inner { lateral: false } => "Inner",
-                JoinKind::Inner { lateral: true } => "InnerLateral",
-                JoinKind::LeftOuter { lateral: false } => "LeftOuter",
-                JoinKind::LeftOuter { lateral: true } => "LeftOuterLateral",
+                JoinKind::Inner => "Inner",
+                JoinKind::LeftOuter => "LeftOuter",
                 JoinKind::RightOuter => "RightOuter",
                 JoinKind::FullOuter => "FullOuter",
             }
@@ -491,9 +488,9 @@ impl fmt::Display for JoinKind {
 }
 
 impl JoinKind {
-    pub fn is_lateral(&self) -> bool {
+    pub fn can_be_correlated(&self) -> bool {
         match self {
-            JoinKind::Inner { lateral } | JoinKind::LeftOuter { lateral } => *lateral,
+            JoinKind::Inner | JoinKind::LeftOuter => true,
             JoinKind::RightOuter | JoinKind::FullOuter => false,
         }
     }
@@ -722,13 +719,8 @@ impl HirRelationExpr {
                     let nullable = t.nullable || left_nullable;
                     t.nullable(nullable)
                 });
-                let outers = if kind.is_lateral() {
-                    let mut outers = outers.to_vec();
-                    outers.push(RelationType::new(lt.clone().collect()));
-                    Cow::Owned(outers)
-                } else {
-                    Cow::Borrowed(outers)
-                };
+                let mut outers = outers.to_vec();
+                outers.push(RelationType::new(lt.clone().collect()));
                 let rt = right
                     .typ(&outers, params)
                     .column_types
@@ -804,6 +796,18 @@ impl HirRelationExpr {
     /// Pretty-print this HirRelationExpr to a string.
     pub fn pretty(&self) -> String {
         Explanation::new(self, &DummyHumanizer).to_string()
+    }
+
+    /// Reports whether this expression contains a column reference to its
+    /// direct parent scope.
+    pub fn is_correlated(&self) -> bool {
+        let mut correlated = false;
+        self.visit_columns(0, &mut |depth, col| {
+            if col.level > depth && col.level - depth == 1 {
+                correlated = true;
+            }
+        });
+        correlated
     }
 
     pub fn is_join_identity(&self) -> bool {
@@ -925,15 +929,30 @@ impl HirRelationExpr {
 
     pub fn join(
         self,
-        right: HirRelationExpr,
+        mut right: HirRelationExpr,
         on: HirScalarExpr,
         kind: JoinKind,
     ) -> HirRelationExpr {
-        HirRelationExpr::Join {
-            left: Box::new(self),
-            right: Box::new(right),
-            on,
-            kind,
+        if self.is_join_identity() && !right.is_correlated() && on == HirScalarExpr::literal_true()
+        {
+            // The join can be elided, but we need to adjust column references
+            // on the right-hand side to account for the removal of the scope
+            // introduced by the join.
+            right.visit_columns_mut(0, &mut |depth, col| {
+                if col.level > depth {
+                    col.level -= 1;
+                }
+            });
+            right
+        } else if right.is_join_identity() && on == HirScalarExpr::literal_true() {
+            self
+        } else {
+            HirRelationExpr::Join {
+                left: Box::new(self),
+                right: Box::new(right),
+                on,
+                kind,
+            }
         }
     }
 
@@ -1073,14 +1092,10 @@ impl HirRelationExpr {
     {
         match self {
             HirRelationExpr::Join {
-                kind,
-                on,
-                left,
-                right,
+                on, left, right, ..
             } => {
                 left.visit_columns(depth, f);
-                let right_depth = if kind.is_lateral() { depth + 1 } else { depth };
-                right.visit_columns(right_depth, f);
+                right.visit_columns(depth + 1, f);
                 // The ON clause doesn't belong in the lateral context
                 on.visit_columns(depth, f);
             }
@@ -1134,14 +1149,10 @@ impl HirRelationExpr {
     {
         match self {
             HirRelationExpr::Join {
-                kind,
-                on,
-                left,
-                right,
+                on, left, right, ..
             } => {
                 left.visit_columns_mut(depth, f);
-                let right_depth = if kind.is_lateral() { depth + 1 } else { depth };
-                right.visit_columns_mut(right_depth, f);
+                right.visit_columns_mut(depth + 1, f);
                 // The ON clause doesn't belong in the lateral context
                 on.visit_columns_mut(depth, f);
             }
@@ -1245,14 +1256,10 @@ impl HirRelationExpr {
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
         match self {
             HirRelationExpr::Join {
-                kind,
-                on,
-                left,
-                right,
+                on, left, right, ..
             } => {
                 left.splice_parameters(params, depth);
-                let right_depth = if kind.is_lateral() { depth + 1 } else { depth };
-                right.splice_parameters(params, right_depth);
+                right.splice_parameters(params, depth + 1);
                 // The ON clause doesn't belong in the lateral context
                 on.splice_parameters(params, depth);
             }

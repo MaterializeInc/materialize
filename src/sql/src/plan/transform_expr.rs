@@ -184,9 +184,7 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
                     walk_scalar(scalar, &outers, false);
                 }
             }
-            HirRelationExpr::Join {
-                kind, left, right, ..
-            } if kind.is_lateral() => {
+            HirRelationExpr::Join { left, right, .. } => {
                 walk_relation(left, outers);
                 let mut outers = outers.to_vec();
                 outers.push(left.typ(&outers, &NO_PARAMS));

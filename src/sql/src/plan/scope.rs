@@ -109,6 +109,14 @@ pub struct ScopeItem {
     /// having three columns in scope named `a` would result in "ambiguous
     /// column reference" errors.
     pub allow_unqualified_references: bool,
+    /// Whether reference the item should produce an error about the item being
+    /// on the wrong side of a lateral join.
+    ///
+    /// Per PostgreSQL (and apparently SQL:2008), we can't simply make these
+    /// items unnameable. These items need to *exist* because they might shadow
+    /// variables in outer scopes that would otherwise be valid to reference,
+    /// but accessing them needs to produce an error.
+    pub lateral_error_if_referenced: bool,
     // Force use of the constructor methods.
     _private: (),
 }
@@ -119,6 +127,26 @@ pub struct Scope {
     pub items: Vec<ScopeItem>,
     // items inherited from an enclosing query
     pub outer_scope: Option<Box<Scope>>,
+    // Whether this scope starts a new chain of lateral outer scopes.
+    //
+    // It's easiest to understand with an example. Consider this query:
+    //
+    //     SELECT (SELECT * FROM tab1, tab2, (SELECT tab1.a, tab3.a)) FROM tab3, tab4
+    //     Scope 1:                          ------------------------
+    //     Scope 2:                    ----
+    //     Scope 3:              ----
+    //     Scope 4:                                                              ----
+    //     Scope 5:                                                        ----
+    //
+    // Note that the because the derived table is not marked `LATERAL`, its
+    // reference to `tab3.a` is valid but its reference to `tab1.a` is not.
+    //
+    // Scope 5 is the parent of scope 4, scope 4 is the parent of scope 3, and
+    // so on. The non-lateral derived table is not allowed to access scopes 2
+    // and 3, because they are part of the same lateral chain, but it *is*
+    // allowed to access scope 4 and 5. So, to capture this information, we set
+    // `lateral_barrier: true` for scope 4.
+    pub lateral_barrier: bool,
 }
 
 impl ScopeItem {
@@ -128,6 +156,7 @@ impl ScopeItem {
             expr: None,
             nameable: true,
             allow_unqualified_references: true,
+            lateral_error_if_referenced: false,
             _private: (),
         }
     }
@@ -178,6 +207,7 @@ impl Scope {
         Scope {
             items: vec![],
             outer_scope: outer_scope.map(Box::new),
+            lateral_barrier: false,
         }
     }
 
@@ -239,6 +269,24 @@ impl Scope {
         items
     }
 
+    /// Marks all scope items unnameable until the first lateral barrier is
+    /// encountered.
+    ///
+    /// This is useful for mutating the scope before planning a non-lateral
+    /// subquery.
+    pub fn hide_lateral_items(&mut self) {
+        let mut scope = self;
+        loop {
+            for item in &mut scope.items {
+                item.nameable = false;
+            }
+            match &mut scope.outer_scope {
+                Some(s) if !s.lateral_barrier => scope = s,
+                _ => break,
+            }
+        }
+    }
+
     fn resolve_internal<'a, M>(
         &'a self,
         mut matches: M,
@@ -263,7 +311,7 @@ impl Scope {
                 table: table_name.cloned(),
                 column: column_name.clone(),
             }),
-            Some((level, column, _item, name)) => {
+            Some((level, column, item, name)) => {
                 if results
                     .find(|(level2, column2, item, name2)| {
                         column != *column2
@@ -271,12 +319,19 @@ impl Scope {
                             && item.nameable
                             && name.priority == name2.priority
                     })
-                    .is_none()
+                    .is_some()
                 {
-                    Ok((ColumnRef { level, column }, name))
-                } else {
-                    Err(PlanError::AmbiguousColumn(column_name.clone()))
+                    return Err(PlanError::AmbiguousColumn(column_name.clone()));
                 }
+
+                if item.lateral_error_if_referenced {
+                    return Err(PlanError::WrongJoinTypeForLateralColumn {
+                        table: table_name.cloned(),
+                        column: column_name.clone(),
+                    });
+                }
+
+                Ok((ColumnRef { level, column }, name))
             }
         }
     }
@@ -371,6 +426,7 @@ impl Scope {
                 .chain(right.items.into_iter())
                 .collect(),
             outer_scope: self.outer_scope,
+            lateral_barrier: false,
         })
     }
 
@@ -378,6 +434,7 @@ impl Scope {
         Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
             outer_scope: self.outer_scope.clone(),
+            lateral_barrier: false,
         }
     }
 
