@@ -72,13 +72,14 @@ $ docker run -d \
 
 ### Observing local Materialize
 
-Using the dashboard to observe a Materialize instance running on the same
-machine as the dashboard is complicated by Docker. The solution depends upon
-your host platform.
+Since the dashboard runs inside a Docker container, using it to observe a Materialize
+instance running on the same machine is complicated by Docker networking isolation. The
+exact steps required to expose `materialized` to the dashboard process depends on exactly
+how you are running `materialized`.
 
 {{< tabs >}}
 
-{{< tab "Materialize inside Docker" >}}
+{{< tab "Docker" >}}
 
 Local schedulers like Docker Compose (which we use for our demos) or Kubernetes will
 typically expose running containers to each other using the container's service name as a
@@ -90,7 +91,7 @@ it. Check out the [example configuration for Docker Compose][dc-example].
 [dc-example]: https://github.com/MaterializeInc/materialize/blob/d793b112758c840c1240eefdd56ca6f7e4f484cf/demo/billing/mzcompose.yml#L60-L70
 
 {{</ tab >}}
-{{< tab "Materialize on macOS" >}}
+{{< tab "macOS" >}}
 
 When our dashboard container is running inside of Docker via Docker for Mac and
 `materialized` is running on the host macOS system the `localhost` inside of the
@@ -103,7 +104,7 @@ docker run -p 3000:3000 -e MATERIALIZED_URL=host.docker.internal:6875 materializ
 ```
 
 {{</ tab >}}
-{{< tab "Materialize on Linux" >}}
+{{< tab "Linux" >}}
 
 When our dashboard container is running inside of a Docker container on a Linux machine
 we must override one of the isolation policies that Docker creates. Docker configures
