@@ -313,7 +313,7 @@ def update_versions_list(released_version: Version) -> None:
     toml_line = (
         f'  {{ name = "v{released_version}", date = "{today}", '
         + 'targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", '
-        + '"x86_64-apple-darwin", "aarch64-apple-darwin"] }},\n'
+        + '"x86_64-apple-darwin", "aarch64-apple-darwin"] },\n'
     )
     with open(USER_DOC_CONFIG) as fh:
         docs = fh.readlines()
