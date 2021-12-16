@@ -43,13 +43,12 @@ async fn run() -> Result<()> {
     let mz_config = config.mz_config();
 
     log::info!(
-        "starting up message_count={} mzd={}:{} kafka={} preserve_source={} enable_persistence={} num_peeks={}",
+        "starting up message_count={} mzd={}:{} kafka={} preserve_source={} num_peeks={}",
         config.message_count,
         config.materialized_host,
         config.materialized_port,
         config.kafka_url(),
         config.preserve_source,
-        config.enable_persistence,
         config.num_peeks,
     );
 
@@ -131,30 +130,20 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     Ok(())
 }
 
-async fn create_upsert_text_source(
+async fn create_upsert_bytes_source(
     mz_client: &Client,
     kafka_url: &impl std::fmt::Display,
     kafka_topic_name: &str,
     source_name: &str,
-    enable_persistence: bool,
 ) -> Result<()> {
-    let query_prefix = format!(
-        "CREATE MATERIALIZED SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}'",
+    let query = format!(
+        "CREATE MATERIALIZED SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' FORMAT BYTES ENVELOPE UPSERT",
         kafka_url = kafka_url,
         topic = kafka_topic_name,
         source = source_name,
     );
 
-    let query = if enable_persistence {
-        format!(
-            "{} WITH (cache = true) FORMAT TEXT ENVELOPE UPSERT",
-            query_prefix
-        )
-    } else {
-        format!("{} FORMAT BYTES ENVELOPE NONE", query_prefix)
-    };
     log::debug!("creating source=> {}", query);
-
     mz_client.execute(&*query, &[]).await?;
 
     Ok(())
@@ -169,12 +158,11 @@ async fn create_and_query_source(config: MzConfig) -> Result<()> {
 
     let sources = mz_client::show_sources(&client).await?;
     if !any_matches(&sources, config::KAFKA_SOURCE_NAME) {
-        create_upsert_text_source(
+        create_upsert_bytes_source(
             &client,
             &config.kafka_url,
             &config.kafka_topic,
             config::KAFKA_SOURCE_NAME,
-            config.enable_persistence,
         )
         .await?;
     } else {
