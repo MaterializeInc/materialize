@@ -2084,6 +2084,7 @@ pub enum BinaryFunc {
     RoundNumeric,
     Eq,
     NotEq,
+    ValueEq,
     Lt,
     Lte,
     Gt,
@@ -2253,6 +2254,7 @@ impl BinaryFunc {
             BinaryFunc::ModFloat32 => eager!(mod_float32),
             BinaryFunc::ModFloat64 => eager!(mod_float64),
             BinaryFunc::ModNumeric => eager!(mod_numeric),
+            BinaryFunc::ValueEq => Ok(eager!(eq)),
             BinaryFunc::Eq => Ok(eager!(eq)),
             BinaryFunc::NotEq => Ok(eager!(not_eq)),
             BinaryFunc::Lt => Ok(eager!(lt)),
@@ -2397,7 +2399,7 @@ impl BinaryFunc {
                 | ModNumeric
         );
         match self {
-            And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
+            And | Or | ValueEq | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
                 ScalarType::Bool.nullable(in_nullable)
             }
 
@@ -2547,6 +2549,7 @@ impl BinaryFunc {
                 | BinaryFunc::ListListConcat
                 | BinaryFunc::ListElementConcat
                 | BinaryFunc::ElementListConcat
+                | BinaryFunc::ValueEq
         )
     }
 
@@ -2560,6 +2563,7 @@ impl BinaryFunc {
         !matches!(
             self,
             And | Or
+                | ValueEq
                 | Eq
                 | NotEq
                 | Lt
@@ -2697,6 +2701,7 @@ impl BinaryFunc {
             | ModFloat32
             | ModFloat64
             | ModNumeric
+            | ValueEq
             | Eq
             | NotEq
             | Lt
@@ -2847,6 +2852,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ModFloat32 => f.write_str("%"),
             BinaryFunc::ModFloat64 => f.write_str("%"),
             BinaryFunc::ModNumeric => f.write_str("%"),
+            BinaryFunc::ValueEq => f.write_str("=="),
             BinaryFunc::Eq => f.write_str("="),
             BinaryFunc::NotEq => f.write_str("!="),
             BinaryFunc::Lt => f.write_str("<"),

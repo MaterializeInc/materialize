@@ -2965,7 +2965,7 @@ fn plan_expr_inner<'a>(
             expr,
             construct,
             negated,
-        } => Ok(plan_is_expr(ecx, expr, *construct, *negated)?.into()),
+        } => Ok(plan_is_expr(ecx, expr, construct.to_owned(), *negated)?.into()),
         Expr::Case {
             operand,
             conditions,
@@ -3887,7 +3887,7 @@ pub fn resolve_func(
 fn plan_is_expr<'a>(
     ecx: &ExprContext,
     inner: &'a Expr<Aug>,
-    construct: IsExprConstruct,
+    construct: IsExprConstruct<Aug>,
     not: bool,
 ) -> Result<HirScalarExpr, PlanError> {
     let planned_expr = plan_expr(ecx, inner)?;
@@ -3900,14 +3900,32 @@ fn plan_is_expr<'a>(
         // means we wind up supporting both.
         planned_expr.type_as_any(ecx)?
     };
-    let func = match construct {
-        IsExprConstruct::Null | IsExprConstruct::Unknown => UnaryFunc::IsNull(expr_func::IsNull),
-        IsExprConstruct::True => UnaryFunc::IsTrue(expr_func::IsTrue),
-        IsExprConstruct::False => UnaryFunc::IsFalse(expr_func::IsFalse),
-    };
-    let expr = HirScalarExpr::CallUnary {
-        func,
-        expr: Box::new(expr),
+    let expr = match construct {
+        IsExprConstruct::Null | IsExprConstruct::Unknown => HirScalarExpr::CallUnary {
+            func: UnaryFunc::IsNull(expr_func::IsNull),
+            expr: Box::new(expr),
+        },
+        IsExprConstruct::True => HirScalarExpr::CallUnary {
+            func: UnaryFunc::IsTrue(expr_func::IsTrue),
+            expr: Box::new(expr),
+        },
+        IsExprConstruct::False => HirScalarExpr::CallUnary {
+            func: UnaryFunc::IsFalse(expr_func::IsFalse),
+            expr: Box::new(expr),
+        },
+        IsExprConstruct::DistinctFrom(e) => {
+            // TODO(asenac) is this type-checking correct?
+            let expr2 = plan_expr(ecx, &*e)?.type_as(ecx, &ecx.scalar_type(&expr))?;
+            let equivalence = HirScalarExpr::CallBinary {
+                func: BinaryFunc::ValueEq,
+                expr1: Box::new(expr),
+                expr2: Box::new(expr2),
+            };
+            HirScalarExpr::CallUnary {
+                func: UnaryFunc::Not(expr_func::Not),
+                expr: Box::new(equivalence),
+            }
+        }
     };
 
     if not {

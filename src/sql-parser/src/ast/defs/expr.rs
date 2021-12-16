@@ -66,7 +66,7 @@ pub enum Expr<T: AstInfo> {
     /// `IS {NULL, TRUE, FALSE, UNKNOWN}` expression
     IsExpr {
         expr: Box<Expr<T>>,
-        construct: IsExprConstruct,
+        construct: IsExprConstruct<T>,
         negated: bool,
     },
     /// `[ NOT ] IN (val1, val2, ...)`
@@ -796,31 +796,36 @@ impl<T: AstInfo> AstDisplay for FunctionArgs<T> {
 }
 impl_display_t!(FunctionArgs);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IsExprConstruct {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IsExprConstruct<T: AstInfo> {
     Null,
     True,
     False,
     Unknown,
+    DistinctFrom(Box<Expr<T>>),
 }
 
-impl IsExprConstruct {
+impl<T: AstInfo> IsExprConstruct<T> {
     pub fn requires_boolean_expr(&self) -> bool {
         match self {
-            IsExprConstruct::Null => false,
+            IsExprConstruct::Null | IsExprConstruct::DistinctFrom(..) => false,
             IsExprConstruct::True | IsExprConstruct::False | IsExprConstruct::Unknown => true,
         }
     }
 }
 
-impl AstDisplay for IsExprConstruct {
+impl<T: AstInfo> AstDisplay for IsExprConstruct<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             IsExprConstruct::Null => f.write_str("NULL"),
             IsExprConstruct::True => f.write_str("TRUE"),
             IsExprConstruct::False => f.write_str("FALSE"),
             IsExprConstruct::Unknown => f.write_str("UNKNOWN"),
+            IsExprConstruct::DistinctFrom(e) => {
+                f.write_str("DISTINCT FROM ");
+                e.fmt(f)
+            }
         }
     }
 }
-impl_display!(IsExprConstruct);
+impl_display_t!(IsExprConstruct);
