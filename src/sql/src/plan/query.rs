@@ -2530,7 +2530,7 @@ fn expand_select_item<'a>(
                 .items
                 .iter()
                 .enumerate()
-                .filter(|(_i, item)| item.visible_to_wildcard)
+                .filter(|(_i, item)| item.allow_unqualified_references)
                 .map(|(i, item)| {
                     let name = item.names.get(0).and_then(|n| n.column_name.clone());
                     (ExpandedSelectItem::InputOrdinal(i), name)
@@ -2778,8 +2778,8 @@ fn plan_using_constraint(
     let mut join_exprs = vec![];
     let mut map_exprs = vec![];
     let mut new_items = vec![];
-    let mut priority_cols = vec![];
-    let mut non_priority_cols = vec![];
+    let mut join_cols = vec![];
+    let mut hidden_cols = vec![];
 
     for column_name in column_names {
         let (lhs, _) = left_scope.resolve_column(column_name)?;
@@ -2793,10 +2793,6 @@ fn plan_using_constraint(
 
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();
-
-        // Track that these columns must have their priority reset.
-        non_priority_cols.push(lhs.column);
-        non_priority_cols.push(rhs.column);
 
         // Join keys must be resolved to same type.
         let mut exprs = coerce_homogeneous_exprs(
@@ -2814,8 +2810,14 @@ fn plan_using_constraint(
         let (expr1, expr2) = (exprs.remove(0), exprs.remove(0));
 
         match kind {
-            JoinKind::LeftOuter { .. } | JoinKind::Inner { .. } => priority_cols.push(lhs.column),
-            JoinKind::RightOuter => priority_cols.push(rhs.column),
+            JoinKind::LeftOuter { .. } | JoinKind::Inner { .. } => {
+                join_cols.push(lhs.column);
+                hidden_cols.push(rhs.column);
+            }
+            JoinKind::RightOuter => {
+                join_cols.push(rhs.column);
+                hidden_cols.push(lhs.column);
+            }
             JoinKind::FullOuter => {
                 // Create a new column that will be the coalesced value of left and right
                 let names = both_scope.items[lhs.column]
@@ -2831,7 +2833,9 @@ fn plan_using_constraint(
                     })
                     .collect::<Vec<_>>();
 
-                priority_cols.push(both_scope.items.len() + map_exprs.len());
+                join_cols.push(both_scope.items.len() + map_exprs.len());
+                hidden_cols.push(lhs.column);
+                hidden_cols.push(rhs.column);
                 map_exprs.push(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs: vec![expr1.clone(), expr2.clone()],
@@ -2848,23 +2852,15 @@ fn plan_using_constraint(
     }
     both_scope.items.extend(new_items);
 
-    // Toggle which columns should (not)? return from `SELECT *`.
-    for c in &non_priority_cols {
-        for item_name in both_scope.items[*c].names.iter_mut() {
-            item_name.priority = false;
-        }
-        both_scope.items[*c].visible_to_wildcard = false;
-    }
-
-    for c in &priority_cols {
-        for item_name in both_scope.items[*c].names.iter_mut() {
-            item_name.priority = true;
-        }
-        both_scope.items[*c].visible_to_wildcard = true;
+    // The columns from the secondary side of the join remain accessible by
+    // their table-qualified name, but not by their column name alone. They are
+    // also excluded from `SELECT *`.
+    for c in hidden_cols {
+        both_scope.items[c].allow_unqualified_references = false;
     }
 
     // Reproject all returned elements to the front of the list.
-    let project_key = priority_cols
+    let project_key = join_cols
         .into_iter()
         .chain(0..both_scope.items.len())
         .unique()

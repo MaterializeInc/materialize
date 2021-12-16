@@ -98,12 +98,17 @@ pub struct ScopeItem {
     // column names. Omitting the name entirely is not an option, since the name
     // is used to label the column in the result set.
     pub nameable: bool,
-    /// Controls whether or not the item should return from `SELECT *`.
+    /// Controls whether the column is only accessible via a table-qualified
+    /// reference. When false, the scope item is also excluded from `SELECT *`.
     ///
-    /// It's possible that this feature could be folded into
-    /// `ScopeItemName::priority`, but it isn't clear what the long-term
-    /// ramifications are with SQL support in that case.
-    pub visible_to_wildcard: bool,
+    /// This should be true for almost all scope items. It is set to false for
+    /// join columns in USING constraints. For exmaple, in `t1 FULL JOIN t2
+    /// USING a`, `t1.a` and `t2.a` are still available by fully-qualified
+    /// reference, but a bare `a` refers to a new column whose value is
+    /// `coalesce(t1.a, t2.a)`. This is a big special case because normally
+    /// having three columns in scope named `a` would result in "ambiguous
+    /// column reference" errors.
+    pub allow_unqualified_references: bool,
     // Force use of the constructor methods.
     _private: (),
 }
@@ -122,7 +127,7 @@ impl ScopeItem {
             names: vec![],
             expr: None,
             nameable: true,
-            visible_to_wildcard: true,
+            allow_unqualified_references: true,
             _private: (),
         }
     }
@@ -241,7 +246,7 @@ impl Scope {
         column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError>
     where
-        M: FnMut(usize, &ScopeItemName) -> bool,
+        M: FnMut(usize, &ScopeItem, &ScopeItemName) -> bool,
     {
         let mut results = self
             .all_items()
@@ -251,7 +256,7 @@ impl Scope {
                     .iter()
                     .map(move |name| (level, column, item, name))
             })
-            .filter(|(level, _column, item, name)| (matches)(*level, name) && item.nameable)
+            .filter(|(level, _column, item, name)| (matches)(*level, item, name) && item.nameable)
             .sorted_by_key(|(level, _column, _item, name)| (*level, !name.priority));
         match results.next() {
             None => Err(PlanError::UnknownColumn {
@@ -287,7 +292,9 @@ impl Scope {
     ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
         let table_name = None;
         self.resolve_internal(
-            |_level, item| item.column_name.as_ref() == Some(column_name),
+            |_level, item, name| {
+                item.allow_unqualified_references && name.column_name.as_ref() == Some(column_name)
+            },
             table_name,
             column_name,
         )
@@ -300,7 +307,7 @@ impl Scope {
     ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
         let mut seen_at_level = None;
         self.resolve_internal(
-            |level, item| {
+            |level, _item, name| {
                 // Once we've matched a table name at a level, even if the
                 // column name did not match, we can never match an item from
                 // another level.
@@ -309,9 +316,9 @@ impl Scope {
                         return false;
                     }
                 }
-                if item.table_name.as_ref().map(|n| n.matches(table_name)) == Some(true) {
+                if name.table_name.as_ref().map(|n| n.matches(table_name)) == Some(true) {
                     seen_at_level = Some(level);
-                    item.column_name.as_ref() == Some(column_name)
+                    name.column_name.as_ref() == Some(column_name)
                 } else {
                     false
                 }
@@ -362,14 +369,6 @@ impl Scope {
                 .items
                 .into_iter()
                 .chain(right.items.into_iter())
-                .map(|mut item| {
-                    // New scopes should not carry over priorities from old
-                    // scopes.
-                    for name in item.names.iter_mut() {
-                        name.priority = false;
-                    }
-                    item
-                })
                 .collect(),
             outer_scope: self.outer_scope,
         })
