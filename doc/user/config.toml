@@ -7,6 +7,7 @@ pygmentsUseClasses = true
 # Keep the releases in reverse order of their release date. The first release
 # in the list is assumed to be the most recent.
 versions = [
+  { name = "v0.12.0", date = "16 December 2021", targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin"] }},
   { name = "v0.11.0", date = "8 December 2021", targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin"] },
   { name = "v0.10.0", date = "23 November 2021", targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin"] },
   { name = "v0.9.13", date = "17 November 2021", targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin"] },
