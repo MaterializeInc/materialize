@@ -4384,7 +4384,7 @@ impl<'a> QueryContext<'a> {
                 let name = object.raw_name;
                 let cte = self.ctes.get(&id).unwrap();
                 let mut val = cte.val.clone();
-                val.visit_columns(0, &mut |depth, col| {
+                val.visit_columns_mut(0, &mut |depth, col| {
                     if col.level > depth {
                         col.level += cte.level_offset;
                     }

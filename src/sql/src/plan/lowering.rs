@@ -1052,7 +1052,7 @@ fn branch<F>(
     id_gen: &mut ore::id_gen::IdGen,
     outer: expr::MirRelationExpr,
     col_map: &ColumnMap,
-    mut inner: HirRelationExpr,
+    inner: HirRelationExpr,
     apply_requires_distinct_outer: bool,
     apply: F,
 ) -> expr::MirRelationExpr
