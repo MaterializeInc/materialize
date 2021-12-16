@@ -953,6 +953,9 @@ class SchemaRegistry(PythonService):
         port: int = 8081,
         environment: List[str] = [
             "SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092",
+            # NOTE(guswynn): under docker, kafka *can* be really slow, which means
+            # the default of 500ms won't work, so we give it PLENTY of time
+            "SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000",
             "SCHEMA_REGISTRY_HOST_NAME=localhost",
         ],
         depends_on: List[str] = ["kafka", "zookeeper"],
