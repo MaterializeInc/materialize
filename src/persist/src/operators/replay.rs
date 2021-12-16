@@ -69,6 +69,8 @@ where
 
                     match snapshot {
                         Ok((snapshot_since, snapshot_iter)) => {
+                            // NB: This `idx` from enumerate resets back to 0
+                            // each time the operator is run.
                             for (idx, x) in snapshot_iter.enumerate() {
                                 if let Ok((_, ts, _)) = &x {
                                     // The raw update data held internally in the
