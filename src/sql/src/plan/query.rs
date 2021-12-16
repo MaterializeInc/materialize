@@ -2254,22 +2254,18 @@ fn plan_rows_from(
     for (idx, func) in funcs.enumerate() {
         let (func, func_scope) = func;
         let next_column = scope.items.len() + idx + 1;
-        expr = HirRelationExpr::Join {
-            left: Box::new(expr),
-            right: Box::new(func),
-            on: HirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
-                expr1: Box::new(HirScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: 0,
-                })),
-                expr2: Box::new(HirScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: next_column,
-                })),
-            },
-            kind: JoinKind::FullOuter,
+        let on = HirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1: Box::new(HirScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: 0,
+            })),
+            expr2: Box::new(HirScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: next_column,
+            })),
         };
+        expr = expr.join(func, on, JoinKind::FullOuter);
         scope.items.extend(func_scope.items);
     }
     let expr = expr.project(project_outputs);
@@ -2705,12 +2701,7 @@ fn plan_join_constraint<'a>(
                     product_scope.items[l].names.extend(right_names);
                 }
             }
-            let joined = HirRelationExpr::Join {
-                left: Box::new(left),
-                right: Box::new(right),
-                on,
-                kind,
-            };
+            let joined = left.join(right, on, kind);
             (joined, product_scope)
         }
         JoinConstraint::Using(column_names) => plan_using_constraint(
@@ -2902,22 +2893,19 @@ fn plan_using_constraint(
 
     both_scope = both_scope.project(&project_key);
 
-    let both = HirRelationExpr::Join {
-        left: Box::new(left),
-        right: Box::new(right),
-        on: join_exprs
-            .into_iter()
-            .fold(HirScalarExpr::literal_true(), |expr1, expr2| {
-                HirScalarExpr::CallBinary {
-                    func: BinaryFunc::And,
-                    expr1: Box::new(expr1),
-                    expr2: Box::new(expr2),
-                }
-            }),
-        kind,
-    }
-    .map(map_exprs)
-    .project(project_key);
+    let on = join_exprs
+        .into_iter()
+        .fold(HirScalarExpr::literal_true(), |expr1, expr2| {
+            HirScalarExpr::CallBinary {
+                func: BinaryFunc::And,
+                expr1: Box::new(expr1),
+                expr2: Box::new(expr2),
+            }
+        });
+    let both = left
+        .join(right, on, kind)
+        .map(map_exprs)
+        .project(project_key);
     Ok((both, both_scope))
 }
 

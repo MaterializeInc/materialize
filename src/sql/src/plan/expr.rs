@@ -923,6 +923,20 @@ impl HirRelationExpr {
         HirScalarExpr::Select(Box::new(self))
     }
 
+    pub fn join(
+        self,
+        right: HirRelationExpr,
+        on: HirScalarExpr,
+        kind: JoinKind,
+    ) -> HirRelationExpr {
+        HirRelationExpr::Join {
+            left: Box::new(self),
+            right: Box::new(right),
+            on,
+            kind,
+        }
+    }
+
     pub fn take(&mut self) -> HirRelationExpr {
         mem::replace(
             self,
