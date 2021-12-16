@@ -142,9 +142,22 @@ def incorporate_inner(
 @cli.command()
 @OPT_CREATE_BRANCH
 @OPT_AFFECT_REMOTE
-def finish(create_branch: Optional[str], affect_remote: bool) -> None:
+@OPT_CHECKOUT
+def finish(
+    create_branch: Optional[str], checkout: Optional[str], affect_remote: bool
+) -> None:
     """Create the final non-rc tag and a branch to incorporate into the repo"""
-    tag = get_latest_tag(fetch=True)
+    if checkout is not None:
+        tags = git.get_version_tags()
+        tag = Version.parse(checkout.lstrip("v"))
+        if tag not in tags:
+            click.confirm(
+                f"This version: {tag} doesn't look like an existing tag, "
+                "are you sure you want to create a release from it?",
+                abort=True,
+            )
+    else:
+        tag = get_latest_tag(fetch=True)
     if not tag.prerelease or not tag.prerelease.startswith("rc"):
         click.confirm(
             f"This version: {tag} doesn't look like a prerelease, "
