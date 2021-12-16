@@ -20,6 +20,13 @@ materialized = Materialized(
     options="--persistent-user-tables --persistent-kafka-upsert-source --disable-persistent-system-tables-test"
 )
 
+mz_disable_user_indexes = Materialized(
+    name="mz_disable_user_indexes",
+    hostname="materialized",
+    options="--persistent-user-tables --persistent-kafka-upsert-source --disable-persistent-system-tables-test --disable-user-indexes",
+)
+
+
 # This instance of Mz is used for failpoint testing. By using --disable-persistent-system-tables-test
 # we ensure that only testdrive-initiated actions cause I/O. The --workers 1 is used due to #8739
 
@@ -33,6 +40,7 @@ prerequisites = [Zookeeper(), Kafka(), SchemaRegistry()]
 services = [
     *prerequisites,
     materialized,
+    mz_disable_user_indexes,
     mz_without_system_tables,
     Testdrive(no_reset=True, seed=1),
 ]
@@ -42,6 +50,7 @@ def workflow_persistence(w: Workflow):
     workflow_kafka_sources(w)
     workflow_user_tables(w)
     workflow_failpoints(w)
+    workflow_disable_user_indexes(w)
 
 
 def workflow_kafka_sources(w: Workflow):
@@ -110,5 +119,33 @@ def workflow_failpoints(w: Workflow):
     w.kill_services(services=["mz_without_system_tables"], signal="SIGKILL")
     w.remove_services(
         services=["mz_without_system_tables", "testdrive-svc"], destroy_volumes=True
+    )
+    w.remove_volumes(volumes=["mzdata"])
+
+
+def workflow_disable_user_indexes(w: Workflow):
+    w.start_and_wait_for_tcp(services=prerequisites)
+
+    w.start_services(services=["materialized"])
+    w.wait_for_mz(service="materialized")
+
+    w.run_service(
+        service="testdrive-svc",
+        command="disable-user-indexes/before.td",
+    )
+
+    w.kill_services(services=["materialized"], signal="SIGKILL")
+    w.start_services(services=["mz_disable_user_indexes"])
+    w.wait_for_mz(service="mz_disable_user_indexes")
+
+    w.run_service(
+        service="testdrive-svc",
+        command="disable-user-indexes/after.td",
+    )
+
+    w.kill_services(services=["mz_disable_user_indexes"], signal="SIGKILL")
+    w.remove_services(
+        services=["materialized", "mz_disable_user_indexes", "testdrive-svc"],
+        destroy_volumes=True,
     )
     w.remove_volumes(volumes=["mzdata"])
