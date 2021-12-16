@@ -236,6 +236,12 @@ pub fn extract_config(
             Config::string("ssl_key_password").include_env_var(),
             Config::new("transaction_timeout_ms", ValType::Number(0, i32::MAX)),
             Config::new("enable_idempotence", ValType::Boolean),
+            Config::new(
+                "fetch_message_max_bytes",
+                // The range of values comes from `fetch.message.max.bytes` in
+                // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+                ValType::Number(0, 1_000_000_000),
+            ),
         ],
     )
 }
