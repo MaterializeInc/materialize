@@ -68,7 +68,7 @@ def workflow_persistence_testdrive(w: Workflow):
 
 
 def test_testdrive(w: Workflow, mz: Materialized, aws: str, tests: str):
-    w.start_and_wait_for_tcp(services=prerequisites + [mz])
+    w.start_and_wait_for_tcp(services=prerequisites + [mz], timeout_secs=240)
     w.wait_for_mz(service=mz.name)
     w.run_service(service="testdrive-svc", command=f"{ci_output} {aws} {tests}")
     w.kill_services(services=[mz.name])
