@@ -27,6 +27,7 @@ num_enum = "0.5.4"
 mz-aws-util = { path = "../aws-util" }
 ore = { path = "../ore" }
 persist = { path = "../persist" }
+protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 regex = "1.5.4"
 repr = { path = "../repr" }
 serde = { version = "1.0.130", features = ["derive"] }
@@ -36,3 +37,6 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = "1.13.0"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
+
+[build-dependencies]
+mz-protoc = { path = "../protoc" }

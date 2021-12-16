@@ -1,0 +1,61 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package gen;
+
+import "src/repr/src/row.proto";
+
+// The proto equivalent to Result<Row, DataflowError>.
+message ProtoRowResult {
+    // NB: This inlines the DataflowError variants to save a bit of encoding
+    // space.
+    oneof result {
+        ProtoRow row = 1;
+        // We can break this out into a message+oneof if it ever gets more than
+        // one variant. In the meantime, don't pay the encoding overhead.
+        string decode = 2;
+        ProtoEvalError eval = 3;
+        ProtoSourceError source = 4;
+    }
+}
+
+message ProtoEvalError {
+    oneof variant {
+        ProtoEvalErrorSimple simple = 1;
+        string feature_not_supported = 2;
+        uint32 invalid_base64_symbol = 3;
+        string invalid_timezone = 4;
+        // WIP invalid_dimension = 5;
+        // WIP invalid_array = 6;
+        string invalid_encoding_name = 7;
+        // WIP fill out the rest
+    }
+}
+
+enum ProtoEvalErrorSimple {
+    UNKNOWN = 0;
+    DIVISION_BY_ZERO = 1;
+    FLOAT_OVERFLOW = 2;
+    FLOAT_UNDERFLOW = 3;
+    NUMERIC_FIELD_OVERFLOW = 4;
+    FLOAT32_OUT_OF_RANGE = 5;
+    FLOAT64_OUT_OF_RANGE = 6;
+    // WIP fill out the rest
+}
+
+message ProtoSourceError {
+    string source_name = 1;
+    oneof details {
+        string initialization = 2;
+        string file_io = 3;
+        string persistence = 4;
+    }
+}

@@ -19,6 +19,7 @@ pub mod plan;
 
 mod errors;
 mod explain;
+mod gen;
 mod types;
 
 pub use errors::*;

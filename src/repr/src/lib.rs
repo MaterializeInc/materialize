@@ -23,12 +23,12 @@
 #![warn(missing_debug_implementations)]
 
 mod datum_vec;
-mod gen;
 mod relation;
 mod row;
 mod scalar;
 
 pub mod adt;
+pub mod gen;
 pub mod strconv;
 pub mod util;
 
