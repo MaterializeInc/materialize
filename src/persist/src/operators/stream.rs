@@ -307,6 +307,7 @@ where
                                 &operator_name,
                                 pending_future.time,
                             );
+
                             // Explicitly downgrade the capability to the new time.
                             cap_set.downgrade(Some(pending_future.time));
                         }
@@ -359,9 +360,11 @@ where
                 input_frontier.clone_from(&new_input_frontier);
                 // We need to downgrade when the input frontier is empty. This basically releases
                 // all the capabilities so that downstream operators and eventually the worker can
-                // shut down.
+                // shut down. We also need to clear all pending futures to make sure we never
+                // attempt to downgrade any more capabilities.
                 if input_frontier.is_empty() {
                     cap_set.downgrade(input_frontier.iter());
+                    pending_futures.clear();
                 }
             }
         });
@@ -684,6 +687,77 @@ mod tests {
             // advance.
             unreliable.make_available();
             while seal_probe.less_than(&2) {
+                worker.step();
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Test to make sure we handle closing the seal operator correctly and don't
+    /// incorrectly process any seal futures after the operator has been closed.
+    #[test]
+    fn regression_9419_seal_close() -> Result<(), Error> {
+        ore::test::init_logging();
+        let mut registry = MemRegistry::new();
+        let mut unreliable = UnreliableHandle::default();
+        let p = registry.runtime_unreliable(unreliable.clone())?;
+
+        timely::execute_directly(move |worker| {
+            let (mut input, mut placeholder, probe) = worker.dataflow(|scope| {
+                let (write, _read) = p.create_or_load::<(), ()>("primary");
+                let mut input = Handle::new();
+                let stream = input.to_stream(scope);
+                // We need to create a placeholder stream to force the dataflow to stay around
+                // even after the actual input has been closed.
+                let mut placeholder = Handle::new();
+                let placeholder_stream = placeholder.to_stream(scope);
+
+                let sealed_stream = stream.seal("test", write);
+
+                let stream = placeholder_stream.concat(&sealed_stream);
+                let probe = stream.probe();
+
+                (input, placeholder, probe)
+            });
+
+            // Send data here mostly to avoid having to dictate types to the
+            // compiler.
+            input.send((((), ()), 0, 1));
+            placeholder.send((((), ()), 0, 1));
+
+            placeholder.advance_to(1);
+            unreliable.make_unavailable();
+
+            // Advance the frontier while persist is unavailable in order to force
+            // the seal operator into a retry loop with this seal operation.
+            input.advance_to(1);
+
+            // We intentionally take a thousand steps here because taking fewer steps
+            // makes the failure much less likely. We can't simply wait for frontier
+            // advancement because persistence is unavailable, so sealing will fail.
+            for _ in 0..1_000 {
+                worker.step();
+            }
+
+            // We close the input before we make persistence available again to
+            // maximise the chances that we observe an empty frontier in the seal operator
+            // before the pending seal operation has a chance to succeed.
+            input.close();
+            // We want to have the pending seal succeed as soon as possible after input
+            // is closed. If we wait too long, timely's internal state will clean up
+            // enough state such that the operator is never invoked again when the
+            // seal succeeds.
+            unreliable.make_available();
+
+            for _ in 0..1_000 {
+                worker.step();
+            }
+
+            // Once input has been closed, the frontier can safely advance without
+            // it.
+            placeholder.advance_to(2);
+            while probe.less_than(&2) {
                 worker.step();
             }
         });
