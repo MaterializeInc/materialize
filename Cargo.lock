@@ -893,6 +893,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "console-api"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "033fddce299c93dd44ae21d5f5a6e749baa5d103784bcdde65701c07272a9fde"
+dependencies = [
+ "prost",
+ "prost-types",
+ "tonic",
+ "tonic-build",
+ "tracing-core",
+]
+
+[[package]]
+name = "console-subscriber"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2380cc150266375aeda8f9aeadc5527395c1a8807ecf9fa97a46d1bb760ec5b"
+dependencies = [
+ "console-api",
+ "futures",
+ "hdrhistogram",
+ "humantime",
+ "serde",
+ "serde_json",
+ "thread_local",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "coord"
 version = "0.0.0"
 dependencies = [
@@ -2131,6 +2165,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hdrhistogram"
+version = "7.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6490be71f07a5f62b564bc58e36953f675833df11c7e4a0647bee7a07ca1ec5e"
+dependencies = [
+ "base64",
+ "byteorder",
+ "flate2",
+ "nom",
+ "num-traits",
+]
+
+[[package]]
 name = "headers"
 version = "0.3.5"
 source = "git+https://github.com/MaterializeInc/headers.git#b968d50f79907ea74ad42c8cc83c950314f1ca31"
@@ -2245,9 +2292,9 @@ checksum = "02296996cb8796d7c6e3bc2d9211b7802812d36999a51bb754123ead7d37d026"
 
 [[package]]
 name = "humantime"
-version = "2.0.1"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c1ad908cc71012b7bea4d0c53ba96a8cba9962f048fa68d143376143d863b7a"
+checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "hyper"
@@ -2307,6 +2354,18 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tower-service",
+]
+
+[[package]]
+name = "hyper-timeout"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb958482e8c7be4bc3cf272a766a2b0bf1a6755e7a6ae777f017a31d11b13b1"
+dependencies = [
+ "hyper",
+ "pin-project-lite",
+ "tokio",
+ "tokio-io-timeout",
 ]
 
 [[package]]
@@ -2696,6 +2755,7 @@ dependencies = [
  "chrono",
  "clap",
  "compile-time-run",
+ "console-subscriber",
  "coord",
  "coordtest",
  "crossbeam-channel",
@@ -3925,7 +3985,7 @@ dependencies = [
 [[package]]
 name = "prost"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/prost.git#28bc721d6a74b9ed4628cc8f13527a9573cf082d"
+source = "git+https://github.com/MaterializeInc/prost.git#6dd498282d0c7ade8f82f2a0163587dae259ae38"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -3934,7 +3994,7 @@ dependencies = [
 [[package]]
 name = "prost-build"
 version = "0.9.1"
-source = "git+https://github.com/MaterializeInc/prost.git#28bc721d6a74b9ed4628cc8f13527a9573cf082d"
+source = "git+https://github.com/MaterializeInc/prost.git#6dd498282d0c7ade8f82f2a0163587dae259ae38"
 dependencies = [
  "bytes",
  "heck",
@@ -3954,7 +4014,7 @@ dependencies = [
 [[package]]
 name = "prost-derive"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/prost.git#28bc721d6a74b9ed4628cc8f13527a9573cf082d"
+source = "git+https://github.com/MaterializeInc/prost.git#6dd498282d0c7ade8f82f2a0163587dae259ae38"
 dependencies = [
  "anyhow",
  "itertools",
@@ -3966,7 +4026,7 @@ dependencies = [
 [[package]]
 name = "prost-types"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/prost.git#28bc721d6a74b9ed4628cc8f13527a9573cf082d"
+source = "git+https://github.com/MaterializeInc/prost.git#6dd498282d0c7ade8f82f2a0163587dae259ae38"
 dependencies = [
  "bytes",
  "prost",
@@ -5054,11 +5114,11 @@ dependencies = [
 
 [[package]]
 name = "thread_local"
-version = "1.0.1"
+version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d40c6d1b69745a6ec6fb1ca717914848da4b44ae29d9b3080cbee91d72a69b14"
+checksum = "8018d24e04c95ac8790716a5987d0fec4f8b27249ffa0f7d33f1369bdfb88cbd"
 dependencies = [
- "lazy_static",
+ "once_cell",
 ]
 
 [[package]]
@@ -5207,7 +5267,18 @@ dependencies = [
  "pin-project-lite",
  "signal-hook-registry",
  "tokio-macros",
+ "tracing",
  "winapi",
+]
+
+[[package]]
+name = "tokio-io-timeout"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90c49f106be240de154571dd31fbe48acb10ba6c6dd6f6517ad603abffa42de9"
+dependencies = [
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
@@ -5316,6 +5387,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "tonic"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff08f4649d10a70ffa3522ca559031285d8e421d727ac85c60825761818f5d0a"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "base64",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "h2",
+ "http",
+ "http-body",
+ "hyper",
+ "hyper-timeout",
+ "percent-encoding",
+ "pin-project",
+ "prost",
+ "prost-derive",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+ "tracing-futures",
+]
+
+[[package]]
+name = "tonic-build"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9403f1bafde247186684b230dc6f38b5cd514584e8bec1dd32514be4745fa757"
+dependencies = [
+ "proc-macro2",
+ "prost-build",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "tower"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5323,9 +5437,14 @@ checksum = "c00e500fff5fa1131c866b246041a6bf96da9c965f8fe4128cb1421f23e93c00"
 dependencies = [
  "futures-core",
  "futures-util",
+ "indexmap",
  "pin-project",
  "pin-project-lite",
+ "rand",
+ "slab",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -5374,6 +5493,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f4ed65637b8390770814083d20756f87bfa2c21bf2f110babdc5438351746e4"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "tracing-futures"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
+dependencies = [
+ "pin-project",
+ "tracing",
 ]
 
 [[package]]
