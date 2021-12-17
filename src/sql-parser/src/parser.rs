@@ -4306,8 +4306,13 @@ impl<'a> Parser<'a> {
                 ExplainStage::DecorrelatedPlan
             }
             Some(OPTIMIZED) => {
-                self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::OptimizedPlan
+                if self.parse_keyword(QUERY) {
+                    self.expect_keywords(&[GRAPH, FOR])?;
+                    ExplainStage::OptimizedQueryGraph
+                } else {
+                    self.expect_keywords(&[PLAN, FOR])?;
+                    ExplainStage::OptimizedPlan
+                }
             }
             Some(PLAN) => {
                 self.expect_keyword(FOR)?;

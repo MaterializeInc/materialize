@@ -3381,6 +3381,11 @@ where
                 let model = sql::query_model::Model::from(raw_plan);
                 sql::query_model::dot::DotGenerator::new().generate(&model, "")?
             }
+            ExplainStage::OptimizedQueryGraph => {
+                let mut model = sql::query_model::Model::from(raw_plan);
+                sql::query_model::rewrite_engine::rewrite_model(&mut model);
+                sql::query_model::dot::DotGenerator::new().generate(&model, "")?
+            }
             ExplainStage::DecorrelatedPlan => {
                 let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(
                     &mut timings,
