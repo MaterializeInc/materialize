@@ -2179,7 +2179,7 @@ fn plan_rows_from(
 
     // Join remaining functions.
     for (idx, func) in funcs.enumerate() {
-        let (func, func_scope) = func;
+        let (mut func, func_scope) = func;
         let next_column = scope.items.len() + idx + 1;
         let on = HirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
@@ -2192,6 +2192,14 @@ fn plan_rows_from(
                 column: next_column,
             })),
         };
+        // Update the outer column references in the RHS of the resulting join
+        // since a new scope is always defined for the RHS of any join, even for
+        // FULL OUTER ones.
+        func.visit_columns_mut(0, &mut |depth, col| {
+            if col.level > depth {
+                col.level += 1;
+            }
+        });
         expr = expr.join(func, on, JoinKind::FullOuter);
         scope.items.extend(func_scope.items);
     }
