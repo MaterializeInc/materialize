@@ -848,6 +848,23 @@ pub struct PersistStreamDesc {
     /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
     /// source running already.
     pub upper_seal_ts: u64,
+    // TODO: This duplicates the above description but seems fine?
+    /// The _current_ compaction frontier (aka _since_) of this stream.
+    ///
+    /// NOTE: This timestamp is determined when the coordinator starts up or when the source is
+    /// initially created. When a source is actively writing to this stream and allowing
+    /// compaction, this will progress beyond this timestamp.
+    ///
+    /// This is okay for now because we only want to allow one source instantiation for persistent
+    /// sources, meaning the flow is usually this:
+    ///
+    ///  1. coordinator determines since timestamp
+    ///  2. timestamps for a source are sent to dataflow when rendering a source
+    ///  3. coordinator (or anyone) never looks at this timestamp again.
+    ///
+    /// And when we restart, we start from step 1., at which time we are guaranteed not to have a
+    /// source running already.
+    pub since_ts: u64,
 }
 
 impl SourceConnector {
