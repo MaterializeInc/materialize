@@ -13,8 +13,6 @@
 $ set the-schema
 syntax = "proto3";
 
-import "google/protobuf/timestamp.proto";
-
 message Message1 {
     bool b = 1;
 }
