@@ -119,6 +119,12 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
     ):
         os.environ["ARCHFLAGS"] = "-arch x86_64"
 
+    # The version of pip and setuptools installed into the virtualenv by default
+    # may have bugs like pypa/pip#9138 that cause them to e.g. fail to install
+    # wheels. So the first thing we do is upgrade these dependencies to known
+    # versions. This won't help if they're so broken that they can't upgrade
+    # themselves, but in that case there's nothing we can do.
+    acquire_deps(venv_dir, "core")
     acquire_deps(venv_dir)
     if dev:
         acquire_deps(venv_dir, "dev")
