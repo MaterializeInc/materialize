@@ -165,7 +165,7 @@ $ kafka-create-topic topic=import-csr-wrong-proto partitions=1
 $ set-regex match="expected schema id: \d*, found \d*" replacement="expected schema id: X, found X"
 
 # Setup the correct first message, priming all the workers with the correct schema id
-$ kafka-ingest repeat=9 topic=import-csr-wrong-id format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true
+$ kafka-ingest repeat=100 topic=import-csr-wrong-id format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true
 {"importee1": {"b": false}, "importee2": {"ts": {"seconds": 1234, "nanos": 5678}}}
 
 # Setup the source
@@ -173,18 +173,10 @@ $ kafka-ingest repeat=9 topic=import-csr-wrong-id format=protobuf descriptor-fil
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-wrong-id-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> SELECT importee1::text, importee2::text, mz_offset FROM import_csr_wrong_id
-importee1  importee2            mz_offset
------------------------------------------
-(f)        "(\"(1234,5678)\")"  1
-(f)        "(\"(1234,5678)\")"  2
-(f)        "(\"(1234,5678)\")"  3
-(f)        "(\"(1234,5678)\")"  4
-(f)        "(\"(1234,5678)\")"  5
-(f)        "(\"(1234,5678)\")"  6
-(f)        "(\"(1234,5678)\")"  7
-(f)        "(\"(1234,5678)\")"  8
-(f)        "(\"(1234,5678)\")"  9
+> SELECT count(*) FROM import_csr_wrong_id
+count
+-----
+100
 
 # Send a message with the wrong schema id
 $ kafka-ingest topic=import-csr-wrong-id format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-id-subject=testdrive-import-csr-other-${testdrive.seed}-value
