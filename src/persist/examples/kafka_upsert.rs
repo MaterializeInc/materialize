@@ -27,7 +27,7 @@ use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamReadHa
 use persist::indexed::Snapshot;
 use persist::operators::stream::{AwaitFrontier, Seal};
 use persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
-use persist::storage::LockInfo;
+use persist::storage::{Blob, LockInfo};
 use persist::Data;
 use persist_types::Codec;
 
@@ -55,7 +55,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
     let persist = {
         let lock_info = LockInfo::new("kafka_upsert".into(), "nonce".into())?;
         let log = FileLog::new(base_dir.join("log"), lock_info.clone())?;
-        let blob = FileBlob::new(base_dir.join("blob"), lock_info)?;
+        let blob = FileBlob::open_exclusive(base_dir.join("blob").into(), lock_info)?;
         runtime::start(
             RuntimeConfig::default(),
             log,

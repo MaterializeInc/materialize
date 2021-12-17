@@ -9,8 +9,6 @@
 
 //! An S3 implementation of [Blob] storage.
 
-use std::fmt;
-
 use async_trait::async_trait;
 use aws_sdk_s3::ByteStream;
 use aws_sdk_s3::Client as S3Client;
@@ -20,31 +18,21 @@ use futures_executor::block_on;
 use mz_aws_util::config::AwsConfig;
 
 use crate::error::Error;
-use crate::storage::{Atomicity, Blob, LockInfo};
+use crate::storage::{Atomicity, Blob, BlobRead, LockInfo};
 
-/// Configuration for [S3Blob].
-#[derive(Clone)]
-pub struct Config {
+/// Configuration for opening an [S3Blob] or [S3BlobRead].
+#[derive(Clone, Debug)]
+pub struct S3BlobConfig {
     client: S3Client,
     bucket: String,
     prefix: String,
 }
 
-impl fmt::Debug for Config {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Config")
-            .field("client", &"...")
-            .field("bucket", &self.bucket)
-            .field("prefix", &self.prefix)
-            .finish()
-    }
-}
-
-impl Config {
+impl S3BlobConfig {
     #[cfg(test)]
     const EXTERNAL_TESTS_S3_BUCKET: &'static str = "MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET";
 
-    /// Returns a new [Config] for use in production.
+    /// Returns a new [S3BlobConfig] for use in production.
     ///
     /// Stores objects in the given bucket prepended with the (possibly empty)
     /// prefix. S3 credentials and region must be available in the process or
@@ -53,7 +41,7 @@ impl Config {
         let config = AwsConfig::load_from_env().await;
         let client = mz_aws_util::s3::client(&config)
             .map_err(|err| format!("connecting client: {}", err))?;
-        Ok(Config {
+        Ok(S3BlobConfig {
             client,
             bucket,
             prefix,
@@ -123,16 +111,13 @@ impl Config {
         // to worry about deleting any data that we create because the bucket is
         // set to auto-delete after 1 day.
         let prefix = Uuid::new_v4().to_string();
-        let config = Config::new(bucket, prefix).await?;
+        let config = S3BlobConfig::new(bucket, prefix).await?;
         Ok(Some(config))
     }
 }
 
-/// Implementation of [Blob] backed by S3.
-//
-// TODO: Productionize this:
-// - Resolve what to do with LOCK, this impl is race-y.
-pub struct S3Blob {
+#[derive(Debug)]
+struct S3BlobCore {
     client: Option<S3Client>,
     bucket: String,
     prefix: String,
@@ -142,59 +127,9 @@ pub struct S3Blob {
     max_keys: i32,
 }
 
-impl fmt::Debug for S3Blob {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("S3Blob")
-            .field("client", &"...")
-            .field("bucket", &self.bucket)
-            .field("prefix", &self.prefix)
-            .finish()
-    }
-}
-
-impl S3Blob {
-    const LOCKFILE_KEY: &'static str = "LOCK";
-
-    /// Returns a new [S3Blob] which stores objects under the given bucket and
-    /// prefix.
-    ///
-    /// All calls to methods on [S3Blob] must be from a thread with a tokio
-    /// runtime guard.
-    //
-    // TODO: Figure out how to make this tokio runtime guard stuff more
-    // explicit.
-    pub fn new(config: Config, lock_info: LockInfo) -> Result<Self, Error> {
-        block_on(async {
-            let mut blob = S3Blob {
-                client: Some(config.client),
-                bucket: config.bucket,
-                prefix: config.prefix,
-                max_keys: 1_000,
-            };
-            let _ = blob.lock(lock_info).await?;
-            Ok(blob)
-        })
-    }
-
+impl S3BlobCore {
     fn get_path(&self, key: &str) -> String {
         format!("{}/{}", self.prefix, key)
-    }
-
-    #[cfg(test)]
-    fn set_max_keys(&mut self, max_keys: i32) {
-        self.max_keys = max_keys;
-    }
-
-    async fn lock(&mut self, new_lock: LockInfo) -> Result<(), Error> {
-        let lockfile_path = self.get_path(Self::LOCKFILE_KEY);
-        // TODO: This is race-y. See the productionize comment on [S3Blob].
-        if let Some(existing) = self.get(Self::LOCKFILE_KEY).await? {
-            let _ = new_lock.check_reentrant_for(&lockfile_path, &mut existing.as_slice())?;
-        }
-        let contents = new_lock.to_string().into_bytes();
-        self.set(Self::LOCKFILE_KEY, contents, Atomicity::RequireAtomic)
-            .await?;
-        Ok(())
     }
 
     fn ensure_open(&self) -> Result<&S3Client, Error> {
@@ -202,10 +137,7 @@ impl S3Blob {
             .as_ref()
             .ok_or_else(|| Error::from("S3Blob unexpectedly closed"))
     }
-}
 
-#[async_trait]
-impl Blob for S3Blob {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         let client = self.ensure_open()?;
         let path = self.get_path(key);
@@ -232,23 +164,6 @@ impl Blob for S3Blob {
             .into_bytes()
             .to_vec();
         Ok(Some(val))
-    }
-
-    async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
-        // NB: S3 is always atomic, so we're free to ignore the atomic param.
-        let client = self.ensure_open()?;
-        let path = self.get_path(key);
-
-        let body = ByteStream::from(value);
-        client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(path)
-            .body(body)
-            .send()
-            .await
-            .map_err(|err| Error::from(err.to_string()))?;
-        Ok(())
     }
 
     async fn list_keys(&self) -> Result<Vec<String>, Error> {
@@ -297,21 +212,152 @@ impl Blob for S3Blob {
         Ok(ret)
     }
 
-    async fn delete(&mut self, key: &str) -> Result<(), Error> {
-        let client = self.ensure_open()?;
-        let path = self.get_path(key);
+    fn close(&mut self) -> Option<S3Client> {
+        self.client.take()
+    }
+}
+
+/// Implementation of [BlobRead] backed by S3.
+#[derive(Debug)]
+pub struct S3BlobRead {
+    core: S3BlobCore,
+}
+
+#[async_trait]
+impl BlobRead for S3BlobRead {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.core.get(key).await
+    }
+
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.core.list_keys().await
+    }
+
+    async fn close(&mut self) -> Result<bool, Error> {
+        Ok(self.core.close().is_some())
+    }
+}
+
+/// Implementation of [Blob] backed by S3.
+//
+// TODO: Productionize this:
+// - Resolve what to do with LOCK, this impl is race-y.
+#[derive(Debug)]
+pub struct S3Blob {
+    core: S3BlobCore,
+}
+
+impl S3Blob {
+    const LOCKFILE_KEY: &'static str = "LOCK";
+
+    async fn lock(&mut self, new_lock: LockInfo) -> Result<(), Error> {
+        let lockfile_path = self.core.get_path(Self::LOCKFILE_KEY);
+        // TODO: This is race-y. See the productionize comment on [S3Blob].
+        if let Some(existing) = self.get(Self::LOCKFILE_KEY).await? {
+            let _ = new_lock.check_reentrant_for(&lockfile_path, &mut existing.as_slice())?;
+        }
+        let contents = new_lock.to_string().into_bytes();
+        self.set(Self::LOCKFILE_KEY, contents, Atomicity::RequireAtomic)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl BlobRead for S3Blob {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.core.get(key).await
+    }
+
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.core.list_keys().await
+    }
+
+    async fn close(&mut self) -> Result<bool, Error> {
+        match self.core.close() {
+            Some(client) => {
+                let lockfile_path = self.core.get_path(Self::LOCKFILE_KEY);
+                client
+                    .delete_object()
+                    .bucket(&self.core.bucket)
+                    .key(lockfile_path)
+                    .send()
+                    .await
+                    .map_err(|err| Error::from(err.to_string()))?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+}
+
+#[async_trait]
+impl Blob for S3Blob {
+    type Config = S3BlobConfig;
+    type Read = S3BlobRead;
+
+    /// Returns a new [S3Blob] which stores objects under the given bucket and
+    /// prefix.
+    ///
+    /// All calls to methods on [S3Blob] must be from a thread with a tokio
+    /// runtime guard.
+    //
+    // TODO: Figure out how to make this tokio runtime guard stuff more
+    // explicit.
+    fn open_exclusive(config: S3BlobConfig, lock_info: LockInfo) -> Result<Self, Error> {
+        block_on(async {
+            let core = S3BlobCore {
+                client: Some(config.client),
+                bucket: config.bucket,
+                prefix: config.prefix,
+                max_keys: 1_000,
+            };
+            let mut blob = S3Blob { core };
+            let _ = blob.lock(lock_info).await?;
+            Ok(blob)
+        })
+    }
+
+    fn open_read(config: S3BlobConfig) -> Result<S3BlobRead, Error> {
+        block_on(async {
+            let core = S3BlobCore {
+                client: Some(config.client),
+                bucket: config.bucket,
+                prefix: config.prefix,
+                max_keys: 1_000,
+            };
+            Ok(S3BlobRead { core })
+        })
+    }
+
+    async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
+        // NB: S3 is always atomic, so we're free to ignore the atomic param.
+        let client = self.core.ensure_open()?;
+        let path = self.core.get_path(key);
+
+        let body = ByteStream::from(value);
         client
-            .delete_object()
-            .bucket(&self.bucket)
+            .put_object()
+            .bucket(&self.core.bucket)
             .key(path)
+            .body(body)
             .send()
             .await
             .map_err(|err| Error::from(err.to_string()))?;
         Ok(())
     }
 
-    async fn close(&mut self) -> Result<bool, Error> {
-        Ok(self.client.take().is_some())
+    async fn delete(&mut self, key: &str) -> Result<(), Error> {
+        let client = self.core.ensure_open()?;
+        let path = self.core.get_path(key);
+        client
+            .delete_object()
+            .bucket(&self.core.bucket)
+            .key(path)
+            .send()
+            .await
+            .map_err(|err| Error::from(err.to_string()))?;
+        Ok(())
     }
 }
 
@@ -325,28 +371,41 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn s3_blob() -> Result<(), Error> {
         ore::test::init_logging();
-        let config = match Config::new_for_test().await? {
+        let config = match S3BlobConfig::new_for_test().await? {
             Some(client) => client,
             None => {
                 log::info!(
                     "{} env not set: skipping test that uses external service",
-                    Config::EXTERNAL_TESTS_S3_BUCKET
+                    S3BlobConfig::EXTERNAL_TESTS_S3_BUCKET
                 );
                 return Ok(());
             }
         };
+        let config_read = config.clone();
 
-        blob_impl_test(move |t| {
-            let lock_info = (t.reentrance_id, "s3_blob_test").into();
-            let config = Config {
-                client: config.client.clone(),
-                bucket: config.bucket.clone(),
-                prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, t.path),
-            };
-            let mut blob = S3Blob::new(config, lock_info)?;
-            blob.set_max_keys(2);
-            Ok(blob)
-        })
+        blob_impl_test(
+            move |t| {
+                let lock_info = (t.reentrance_id, "s3_blob_test").into();
+                let config = S3BlobConfig {
+                    client: config.client.clone(),
+                    bucket: config.bucket.clone(),
+                    prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, t.path),
+                };
+                let mut blob = S3Blob::open_exclusive(config, lock_info)?;
+                blob.core.max_keys = 2;
+                Ok(blob)
+            },
+            move |path| {
+                let config = S3BlobConfig {
+                    client: config_read.client.clone(),
+                    bucket: config_read.bucket.clone(),
+                    prefix: format!("{}/s3_blob_impl_test/{}", config_read.prefix, path),
+                };
+                let mut blob = S3Blob::open_read(config)?;
+                blob.core.max_keys = 2;
+                Ok(blob)
+            },
+        )
         .await?;
         Ok(())
     }

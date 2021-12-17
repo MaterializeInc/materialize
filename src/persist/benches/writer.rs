@@ -46,8 +46,11 @@ fn new_file_log(name: &str, parent: &Path) -> FileLog {
 
 fn new_file_blob(name: &str, parent: &Path) -> FileBlob {
     let file_blob_dir = parent.join(name);
-    FileBlob::new(file_blob_dir, LockInfo::new_no_reentrance(name.to_owned()))
-        .expect("creating a FileBlob cannot fail")
+    FileBlob::open_exclusive(
+        file_blob_dir.into(),
+        LockInfo::new_no_reentrance(name.to_owned()),
+    )
+    .expect("creating a FileBlob cannot fail")
 }
 
 fn generate_updates() -> ColumnarRecords {

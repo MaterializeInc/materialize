@@ -24,7 +24,7 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use crate::indexed::Indexed;
-use crate::storage::{Atomicity, Blob, LockInfo, Log, SeqNo};
+use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
 #[derive(Debug)]
@@ -196,6 +196,14 @@ impl MemBlobCore {
         }
     }
 
+    #[cfg(test)]
+    fn new_read() -> Self {
+        MemBlobCore {
+            dataz: HashMap::new(),
+            lock: None,
+        }
+    }
+
     fn open(&mut self, new_lock: LockInfo) -> Result<(), Error> {
         if let Some(existing) = &self.lock {
             let _ = new_lock.check_reentrant_for(&"MemBlob", existing.to_string().as_bytes())?;
@@ -219,7 +227,6 @@ impl MemBlobCore {
     }
 
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
-        self.ensure_open()?;
         Ok(self.dataz.get(key).cloned())
     }
 
@@ -230,7 +237,6 @@ impl MemBlobCore {
     }
 
     fn list_keys(&self) -> Result<Vec<String>, Error> {
-        self.ensure_open()?;
         Ok(self.dataz.keys().cloned().collect())
     }
 
@@ -238,6 +244,51 @@ impl MemBlobCore {
         self.ensure_open()?;
         self.dataz.remove(key);
         Ok(())
+    }
+}
+
+/// Configuration for opening a [MemBlob] or [MemBlobRead].
+#[derive(Debug)]
+pub struct MemBlobConfig {
+    core: Arc<Mutex<MemBlobCore>>,
+}
+
+/// An in-memory implementation of [BlobRead].
+#[derive(Debug)]
+pub struct MemBlobRead {
+    core: Option<Arc<Mutex<MemBlobCore>>>,
+}
+
+impl MemBlobRead {
+    fn open(config: MemBlobConfig) -> MemBlobRead {
+        MemBlobRead {
+            core: Some(config.core),
+        }
+    }
+
+    fn core_lock<'c>(&'c self) -> Result<MutexGuard<'c, MemBlobCore>, Error> {
+        match self.core.as_ref() {
+            None => return Err("MemBlob has been closed".into()),
+            Some(core) => Ok(core.lock()?),
+        }
+    }
+}
+
+#[async_trait]
+impl BlobRead for MemBlobRead {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.core_lock()?.get(key)
+    }
+
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.core_lock()?.list_keys()
+    }
+
+    async fn close(&mut self) -> Result<bool, Error> {
+        match self.core.take() {
+            None => Ok(false), // Someone already called close.
+            Some(core) => core.lock()?.close(),
+        }
     }
 }
 
@@ -250,9 +301,8 @@ pub struct MemBlob {
 impl MemBlob {
     /// Constructs a new, empty MemBlob.
     pub fn new(lock_info: LockInfo) -> Self {
-        MemBlob {
-            core: Some(Arc::new(Mutex::new(MemBlobCore::new(lock_info)))),
-        }
+        let core = Some(Arc::new(Mutex::new(MemBlobCore::new(lock_info))));
+        MemBlob { core }
     }
 
     /// Constructs a new, empty MemBlob with a unique reentrance id.
@@ -262,12 +312,6 @@ impl MemBlob {
     #[cfg(test)]
     pub fn new_no_reentrance(lock_info_details: &str) -> Self {
         Self::new(LockInfo::new_no_reentrance(lock_info_details.to_owned()))
-    }
-
-    /// Open a pre-existing MemBlob.
-    fn open(core: Arc<Mutex<MemBlobCore>>, lock_info: LockInfo) -> Result<Self, Error> {
-        core.lock()?.open(lock_info)?;
-        Ok(Self { core: Some(core) })
     }
 
     fn core_lock<'c>(&'c self) -> Result<MutexGuard<'c, MemBlobCore>, Error> {
@@ -301,18 +345,9 @@ impl Drop for MemBlob {
 }
 
 #[async_trait]
-impl Blob for MemBlob {
+impl BlobRead for MemBlob {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         self.core_lock()?.get(key)
-    }
-
-    async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
-        // NB: This is always atomic, so we're free to ignore the atomic param.
-        self.core_lock()?.set(key, value)
-    }
-
-    async fn delete(&mut self, key: &str) -> Result<(), Error> {
-        self.core_lock()?.delete(key)
     }
 
     async fn list_keys(&self) -> Result<Vec<String>, Error> {
@@ -324,6 +359,31 @@ impl Blob for MemBlob {
             None => Ok(false), // Someone already called close.
             Some(core) => core.lock()?.close(),
         }
+    }
+}
+
+#[async_trait]
+impl Blob for MemBlob {
+    type Config = MemBlobConfig;
+    type Read = MemBlobRead;
+
+    fn open_exclusive(config: MemBlobConfig, lock_info: LockInfo) -> Result<Self, Error> {
+        let core = config.core;
+        core.lock()?.open(lock_info)?;
+        Ok(MemBlob { core: Some(core) })
+    }
+
+    fn open_read(config: MemBlobConfig) -> Result<MemBlobRead, Error> {
+        Ok(MemBlobRead::open(config))
+    }
+
+    async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
+        // NB: This is always atomic, so we're free to ignore the atomic param.
+        self.core_lock()?.set(key, value)
+    }
+
+    async fn delete(&mut self, key: &str) -> Result<(), Error> {
+        self.core_lock()?.delete(key)
     }
 }
 
@@ -360,8 +420,10 @@ impl MemRegistry {
 
     /// Opens the [MemBlob] contained by this registry.
     pub fn blob_no_reentrance(&self) -> Result<MemBlob, Error> {
-        MemBlob::open(
-            self.blob.clone(),
+        MemBlob::open_exclusive(
+            MemBlobConfig {
+                core: self.blob.clone(),
+            },
             LockInfo::new_no_reentrance("MemRegistry".to_owned()),
         )
     }
@@ -451,7 +513,7 @@ impl MemMultiRegistry {
         }
     }
 
-    /// Opens the [MemLog] associated with `path`.
+    /// Opens a [MemLog] associated with `path`.
     pub fn log(&mut self, path: &str, lock_info: LockInfo) -> Result<MemLog, Error> {
         if let Some(log) = self.log_by_path.get(path) {
             MemLog::open(log.clone(), lock_info)
@@ -463,15 +525,26 @@ impl MemMultiRegistry {
         }
     }
 
-    /// Opens the [MemBlob] associated with `path`.
+    /// Opens a [MemBlob] associated with `path`.
     pub fn blob(&mut self, path: &str, lock_info: LockInfo) -> Result<MemBlob, Error> {
         if let Some(blob) = self.blob_by_path.get(path) {
-            MemBlob::open(blob.clone(), lock_info)
+            MemBlob::open_exclusive(MemBlobConfig { core: blob.clone() }, lock_info)
         } else {
             let blob = Arc::new(Mutex::new(MemBlobCore::new(lock_info)));
             self.blob_by_path.insert(path.to_string(), blob.clone());
             let blob = MemBlob { core: Some(blob) };
             Ok(blob)
+        }
+    }
+
+    /// Opens a [MemBlobRead] associated with `path`.
+    pub fn blob_read(&mut self, path: &str) -> MemBlobRead {
+        if let Some(blob) = self.blob_by_path.get(path) {
+            MemBlobRead::open(MemBlobConfig { core: blob.clone() })
+        } else {
+            let blob = Arc::new(Mutex::new(MemBlobCore::new_read()));
+            self.blob_by_path.insert(path.to_string(), blob.clone());
+            MemBlobRead::open(MemBlobConfig { core: blob })
         }
     }
 
@@ -506,9 +579,17 @@ mod tests {
 
     #[tokio::test]
     async fn mem_blob() -> Result<(), Error> {
-        let mut registry = MemMultiRegistry::new();
-        blob_impl_test(move |t| registry.blob(t.path, (t.reentrance_id, "blob_impl_test").into()))
-            .await
+        let registry = Arc::new(Mutex::new(MemMultiRegistry::new()));
+        let registry_read = registry.clone();
+        blob_impl_test(
+            move |t| {
+                registry
+                    .lock()?
+                    .blob(t.path, (t.reentrance_id, "blob_impl_test").into())
+            },
+            move |path| Ok(registry_read.lock()?.blob_read(path)),
+        )
+        .await
     }
 
     // This test covers a regression that was affecting the nemesis tests where

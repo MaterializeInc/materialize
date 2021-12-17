@@ -141,14 +141,62 @@ pub enum Atomicity {
     AllowNonAtomic,
 }
 
-/// An abstraction over a `bytes key`->`bytes value` store.
+/// An abstraction over read-only access to a `bytes key`->`bytes value` store.
+#[async_trait]
+pub trait BlobRead: Send + 'static {
+    /// Returns a reference to the value corresponding to the key.
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error>;
+
+    /// List all of the keys in the map.
+    async fn list_keys(&self) -> Result<Vec<String>, Error>;
+
+    /// Synchronously closes the blob, causing all future commands to error.
+    ///
+    /// If `Self` also implements [Blob], this releases the exclusive-writer
+    /// lock.
+    ///
+    /// Implementations must be idempotent. Returns true if the blob had not
+    /// previously been closed.
+    ///
+    /// NB: It's confusing for this to be on BlobRead, since it's a no-op on the
+    /// various concrete {Mem,File,S3}Read impls, but in various places we need
+    /// to be able to close something that we only know is a BlobRead. Possible
+    /// there's something better we could be doing here.
+    async fn close(&mut self) -> Result<bool, Error>;
+}
+
+/// An abstraction over read-write access to a `bytes key`->`bytes value` store.
+///
+/// Blob and BlobRead impls are allowed to be concurrently opened for the same
+/// location in the same process (which is often used in tests), but this is not
+/// idiomatic for production usage. Instead, within a process, only single Blob
+/// or BlobRead impl should be used for each unique storage location.
 ///
 /// - Invariant: Implementations are responsible for ensuring that they are
 ///   exclusive writers to this location.
 #[async_trait]
-pub trait Blob: Send + 'static {
-    /// Returns a reference to the value corresponding to the key.
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error>;
+pub trait Blob: BlobRead + Sized {
+    /// The configuration necessary to open this type of storage.
+    type Config;
+    /// The corresponding [BlobRead] implementation.
+    type Read: BlobRead;
+
+    /// Opens the given location for exclusive read-write access.
+    ///
+    /// Implementations are responsible for storing the given LockInfo in such a
+    /// way that no other calls to open_exclusive succeed before this one has
+    /// been closed. However, it must be possible to continue to open this
+    /// location for reads via [Blob::open_read].
+    fn open_exclusive(config: Self::Config, lock_info: LockInfo) -> Result<Self, Error>;
+
+    /// Opens the given location for non-exclusive read-only access.
+    ///
+    /// Implementations are responsible for ensuring that this works regardless
+    /// of whether anyone has opened the same location is opened for exclusive
+    /// read-write access. Said another way, this should succeed even if there
+    /// is no LOCK file present. If it's pointed at a meaningless location, the
+    /// first read (META) will fail anyway.
+    fn open_read(config: Self::Config) -> Result<Self::Read, Error>;
 
     /// Inserts a key-value pair into the map.
     ///
@@ -160,16 +208,6 @@ pub trait Blob: Send + 'static {
     ///
     /// Succeeds if the key does not exist.
     async fn delete(&mut self, key: &str) -> Result<(), Error>;
-
-    /// List all of the keys in the map.
-    async fn list_keys(&self) -> Result<Vec<String>, Error>;
-
-    /// Synchronously closes the blob, releasing exclusive-writer locks and
-    /// causing all future commands to error.
-    ///
-    /// Implementations must be idempotent. Returns true if the blob had not
-    /// previously been closed.
-    async fn close(&mut self) -> Result<bool, Error>;
 }
 
 /// The partially structured information stored in an exclusive-writer lock.
@@ -421,18 +459,23 @@ pub mod tests {
         ret
     }
 
-    pub async fn blob_impl_test<B: Blob, F: FnMut(PathAndReentranceId<'_>) -> Result<B, Error>>(
-        mut new_fn: F,
+    pub async fn blob_impl_test<
+        BF: Blob,
+        F: FnMut(PathAndReentranceId<'_>) -> Result<BF, Error>,
+        R: FnMut(&str) -> Result<BF::Read, Error>,
+    >(
+        mut new_full_fn: F,
+        mut new_read_fn: R,
     ) -> Result<(), Error> {
         let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
 
-        let _ = new_fn(PathAndReentranceId {
+        let _ = new_full_fn(PathAndReentranceId {
             path: "path0",
             reentrance_id: "reentrance0",
         })?;
 
         // We can create a second blob writing to a different place.
-        let _ = new_fn(PathAndReentranceId {
+        let _ = new_full_fn(PathAndReentranceId {
             path: "path1",
             reentrance_id: "reentrance0",
         })?;
@@ -440,100 +483,140 @@ pub mod tests {
         // We're allowed to open the place if the node_id matches. In this
         // scenario, the previous process using the blob has crashed and
         // orphaned the lock.
-        let mut blob0 = new_fn(PathAndReentranceId {
+        let mut full0 = new_full_fn(PathAndReentranceId {
             path: "path0",
             reentrance_id: "reentrance0",
         })?;
 
         // But the blob impl prevents us from opening the same place for
         // writing twice.
-        assert!(new_fn(PathAndReentranceId {
+        assert!(new_full_fn(PathAndReentranceId {
             path: "path0",
             reentrance_id: "reentrance1",
         })
         .is_err());
 
+        // We are, however, allowed to open the same location read-only.
+        let mut read0 = new_read_fn("path0")?;
+
+        // We can open two readers, even.
+        let _ = new_read_fn("path0")?;
+
         // Empty key is empty.
-        assert_eq!(blob0.get("k0").await?, None);
+        assert_eq!(full0.get("k0").await?, None);
+        assert_eq!(read0.get("k0").await?, None);
 
         // Blob might create one or more keys on startup (e.g. lock files)
-        let mut empty_keys: Vec<String> = blob0.list_keys().await?;
+        let mut empty_keys: Vec<String> = full0.list_keys().await?;
         empty_keys.sort();
 
         // List keys is idempotent
-        let mut blob_keys = blob0.list_keys().await?;
+        let mut blob_keys = full0.list_keys().await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, empty_keys);
+        let mut blob_keys = read0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
 
         // Set a key with AllowNonAtomic and get it back.
-        blob0.set("k0", values[0].clone(), AllowNonAtomic).await?;
-        assert_eq!(blob0.get("k0").await?, Some(values[0].clone()));
+        full0.set("k0", values[0].clone(), AllowNonAtomic).await?;
+        assert_eq!(full0.get("k0").await?, Some(values[0].clone()));
+        assert_eq!(read0.get("k0").await?, Some(values[0].clone()));
 
         // Set a key with RequireAtomic and get it back.
-        blob0.set("k0a", values[0].clone(), RequireAtomic).await?;
-        assert_eq!(blob0.get("k0a").await?, Some(values[0].clone()));
+        full0.set("k0a", values[0].clone(), RequireAtomic).await?;
+        assert_eq!(full0.get("k0a").await?, Some(values[0].clone()));
+        assert_eq!(read0.get("k0a").await?, Some(values[0].clone()));
 
         // Blob contains the key we just inserted.
-        let mut blob_keys = blob0.list_keys().await?;
+        let mut blob_keys = full0.list_keys().await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, keys(&empty_keys, &["k0", "k0a"]));
+        let mut blob_keys = read0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&empty_keys, &["k0", "k0a"]));
 
         // Can overwrite a key with AllowNonAtomic.
-        blob0.set("k0", values[1].clone(), AllowNonAtomic).await?;
-        assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
+        full0.set("k0", values[1].clone(), AllowNonAtomic).await?;
+        assert_eq!(full0.get("k0").await?, Some(values[1].clone()));
+        assert_eq!(read0.get("k0").await?, Some(values[1].clone()));
         // Can overwrite a key with RequireAtomic.
-        blob0.set("k0a", values[1].clone(), RequireAtomic).await?;
-        assert_eq!(blob0.get("k0a").await?, Some(values[1].clone()));
+        full0.set("k0a", values[1].clone(), RequireAtomic).await?;
+        assert_eq!(full0.get("k0a").await?, Some(values[1].clone()));
+        assert_eq!(read0.get("k0a").await?, Some(values[1].clone()));
 
         // Can delete a key.
-        blob0.delete("k0").await?;
+        full0.delete("k0").await?;
         // Can no longer get a deleted key.
-        assert_eq!(blob0.get("k0").await?, None);
+        assert_eq!(full0.get("k0").await?, None);
+        assert_eq!(read0.get("k0").await?, None);
         // Double deleting a key succeeds.
-        assert_eq!(blob0.delete("k0").await, Ok(()));
+        assert_eq!(full0.delete("k0").await, Ok(()));
         // Deleting a key that does not exist succeeds.
-        assert_eq!(blob0.delete("nope").await, Ok(()));
+        assert_eq!(full0.delete("nope").await, Ok(()));
 
         // Empty blob contains no keys.
-        blob0.delete("k0a").await?;
-        let mut blob_keys = blob0.list_keys().await?;
+        full0.delete("k0a").await?;
+        let mut blob_keys = full0.list_keys().await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, empty_keys);
+        let mut blob_keys = read0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
-        blob0.set("k0", values[1].clone(), AllowNonAtomic).await?;
-        assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
+        full0.set("k0", values[1].clone(), AllowNonAtomic).await?;
+        assert_eq!(read0.get("k0").await?, Some(values[1].clone()));
+        assert_eq!(full0.get("k0").await?, Some(values[1].clone()));
 
         // Insert multiple keys back to back and validate that we can list
         // them all out.
         let mut expected_keys = empty_keys;
         for i in 1..=5 {
             let key = format!("k{}", i);
-            blob0.set(&key, values[0].clone(), AllowNonAtomic).await?;
+            full0.set(&key, values[0].clone(), AllowNonAtomic).await?;
             expected_keys.push(key);
         }
 
         // Blob contains the key we just inserted.
-        let mut blob_keys = blob0.list_keys().await?;
+        let mut blob_keys = full0.list_keys().await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, keys(&expected_keys, &["k0"]));
+        let mut blob_keys = read0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&expected_keys, &["k0"]));
 
         // Cannot reuse a blob once it is closed.
-        assert_eq!(blob0.close().await, Ok(true));
-        assert!(blob0.get("k0").await.is_err());
-        assert!(blob0
+        assert_eq!(full0.close().await, Ok(true));
+        assert!(full0.get("k0").await.is_err());
+        assert!(full0.list_keys().await.is_err());
+        assert!(full0
             .set("k1", values[0].clone(), RequireAtomic)
             .await
             .is_err());
+        assert!(full0.delete("k0").await.is_err());
 
         // Close must be idempotent and must return false if it did no work.
-        assert_eq!(blob0.close().await, Ok(false));
+        assert_eq!(full0.close().await, Ok(false));
 
-        // But we can reopen it and use it.
-        let blob0 = new_fn(PathAndReentranceId {
+        // Closing the exclusive-writer doesn't affect the availability of any
+        // readers.
+        assert_eq!(read0.get("k0").await?, Some(values[1].clone()));
+
+        // We can reopen the exclusive-writer with a different reentrance_id and
+        // use it.
+        let full0 = new_full_fn(PathAndReentranceId {
             path: "path0",
-            reentrance_id: "reentrance0",
+            reentrance_id: "reentrance1",
         })?;
-        assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
+        assert_eq!(full0.get("k0").await?, Some(values[1].clone()));
+
+        // Reader is still available
+        assert_eq!(read0.get("k0").await?, Some(values[1].clone()));
+
+        // Cannot reuse a reader once it is closed.
+        assert_eq!(read0.close().await, Ok(true));
+        assert!(read0.get("k0").await.is_err());
+        assert!(read0.list_keys().await.is_err());
 
         Ok(())
     }
