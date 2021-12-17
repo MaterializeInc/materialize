@@ -2596,8 +2596,8 @@ pub enum SerializedEnvelopePersistDetails {
 impl From<SourcePersistDesc> for SerializedSourcePersistDetails {
     fn from(source_persist_desc: SourcePersistDesc) -> Self {
         SerializedSourcePersistDetails {
-            primary_stream: source_persist_desc.primary_stream,
-            timestamp_bindings_stream: source_persist_desc.timestamp_bindings_stream,
+            primary_stream: source_persist_desc.primary_stream.name,
+            timestamp_bindings_stream: source_persist_desc.timestamp_bindings_stream.name,
             envelope_details: source_persist_desc.envelope_desc.into(),
         }
     }

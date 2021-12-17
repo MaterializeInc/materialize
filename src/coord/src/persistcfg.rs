@@ -13,11 +13,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use timely::progress::Timestamp;
+
 use build_info::BuildInfo;
 use dataflow_types::{
-    EnvelopePersistDesc, ExternalSourceConnector, SourceConnector, SourceEnvelope,
-    SourcePersistDesc,
+    EnvelopePersistDesc, ExternalSourceConnector, PersistStreamDesc, SourceConnector,
+    SourceEnvelope, SourcePersistDesc,
 };
+use itertools::Itertools;
 use ore::metrics::MetricsRegistry;
 use persist::error::{Error, ErrorLog};
 use persist::indexed::encoding::Id as PersistId;
@@ -274,6 +277,11 @@ impl PersisterWithConfig {
         connector: &SourceConnector,
         serialized_details: Option<SerializedSourcePersistDetails>,
     ) -> Result<Option<SourcePersistDesc>, Error> {
+        let persister = match self.persister.as_ref() {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+
         let details = serialized_details.map(|serialized_details| {
             let envelope_desc = match connector {
                 SourceConnector::External {
@@ -300,15 +308,60 @@ impl PersisterWithConfig {
                 }
             };
 
+            // TODO: We might want to add (or change) a get_description() that allows getting the
+            // descriptions for a batch of IDs in one go instead of getting them all separately. It
+            // shouldn't be an issue right now, though.
+            let primary_stream =
+                stream_desc_from_name(serialized_details.primary_stream, persister)?;
+            let timestamp_bindings_stream =
+                stream_desc_from_name(serialized_details.timestamp_bindings_stream, persister)?;
+
             Ok(SourcePersistDesc {
-                primary_stream: serialized_details.primary_stream,
-                timestamp_bindings_stream: serialized_details.timestamp_bindings_stream,
+                primary_stream,
+                timestamp_bindings_stream,
                 envelope_desc,
             })
         });
 
         details.transpose()
     }
+}
+
+fn stream_desc_from_name(
+    name: String,
+    persister: &RuntimeClient,
+) -> Result<PersistStreamDesc, Error> {
+    let description = persister.get_description(&name);
+    let description = match description {
+        Ok(description) => description,
+        Err(Error::UnknownRegistration(error_name)) if name == error_name => {
+            // The stream has not been created yet, so return the initial seal timestamp of
+            // streams.
+            // TODO: We might want to codify this somewhere?
+            return Ok(PersistStreamDesc {
+                name,
+                upper_seal_ts: u64::minimum(),
+            });
+        }
+        Err(e) => {
+            let error_string = format!("Reading upper seal timestamp for {}: {}", name, e);
+            return Err(Error::String(error_string));
+        }
+    };
+
+    // TODO: We have a mismatch here: we know that the upper always contains only one element,
+    // because `seal` is `seal(u64)` but the return value suggests there could be more. Also: if
+    // the upper is a true multi-dimensional frontier in the future, the logic that determines a
+    // common upper seal timestamp will become a bit more complicated.
+    let upper_seal_ts = description
+        .upper()
+        .iter()
+        .exactly_one()
+        .map_err(|_| format!("expected exactly one element in the persist upper frontier"))?;
+    Ok(PersistStreamDesc {
+        name,
+        upper_seal_ts: *upper_seal_ts,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
