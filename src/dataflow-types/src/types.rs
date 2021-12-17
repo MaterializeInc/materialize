@@ -1206,22 +1206,13 @@ impl AwsConfig {
     /// Loads the AWS SDK configuration object from the environment, then
     /// applies the overrides from this object.
     pub async fn load(&self) -> Result<mz_aws_util::config::AwsConfig, anyhow::Error> {
-        let mut config = mz_aws_util::config::AwsConfig::load_from_env().await;
-        self.apply(&mut config)?;
-        Ok(config)
-    }
-
-    /// Applies the AWS configuration overrides in this object to an existing
-    /// SDK configuration object.
-    pub fn apply(&self, config: &mut mz_aws_util::config::AwsConfig) -> Result<(), anyhow::Error> {
         use aws_smithy_http::endpoint::Endpoint;
         use aws_types::credentials::SharedCredentialsProvider;
         use aws_types::region::Region;
 
-        config.set_region(Region::new(self.region.clone()));
-
+        let mut loader = aws_config::from_env().region(Region::new(self.region.clone()));
         if let Some(credentials) = &self.credentials {
-            config.set_credentials_provider(SharedCredentialsProvider::new(
+            loader = loader.credentials_provider(SharedCredentialsProvider::new(
                 aws_types::Credentials::from_keys(
                     &credentials.access_key_id,
                     &credentials.secret_access_key,
@@ -1229,13 +1220,12 @@ impl AwsConfig {
                 ),
             ));
         }
-
+        let mut config = mz_aws_util::config::AwsConfig::from_loader(loader).await;
         if let Some(endpoint) = &self.endpoint {
             let endpoint: Uri = endpoint.parse().context("parsing AWS endpoint")?;
             config.set_endpoint(Endpoint::immutable(endpoint));
         }
-
-        Ok(())
+        Ok(config)
     }
 }
 
