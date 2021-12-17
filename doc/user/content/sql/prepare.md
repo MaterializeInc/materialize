@@ -6,6 +6,8 @@ menu:
     parent: "sql"
 ---
 
+{{< version-added v0.9.7 />}}
+
 `PREPARE` creates a prepared statement by parsing the initial `SELECT`, `INSERT`, `UPDATE`, or `DELETE` statement. A subsequent [`EXECUTE`] statement then plans and executes the statement.
 
 ## Syntax
