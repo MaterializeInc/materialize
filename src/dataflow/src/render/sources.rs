@@ -121,8 +121,9 @@ where
                 {
                     (Some(persist), Some(stream_name)) => {
                         let (_write, read) = persist.create_or_load(&stream_name);
-                        let (persist_ok_stream, persist_err_stream) =
-                            scope.persisted_source(read).ok_err(|x| match x {
+                        let (persist_ok_stream, persist_err_stream) = scope
+                            .persisted_source(read, &self.as_of_frontier)
+                            .ok_err(|x| match x {
                                 (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
                                 (Err(err), ts, diff) => Err((err, ts, diff)),
                             });

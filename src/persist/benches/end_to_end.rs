@@ -20,6 +20,7 @@ use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use timely::dataflow::operators::Map;
 use timely::dataflow::ProbeHandle;
+use timely::progress::Antichain;
 use timely::Config;
 
 use persist::error::{Error, ErrorLog};
@@ -81,7 +82,7 @@ fn bench_read_persisted_source<M: Measurement>(
 
             worker.dataflow(|scope| {
                 scope
-                    .persisted_source(read)
+                    .persisted_source(read, &Antichain::from_elem(0))
                     .flat_map(move |(data, time, diff)| match data {
                         Err(_err) => None,
                         Ok((key, _value)) => Some({

@@ -174,7 +174,8 @@ impl DirectCore {
                                 .lock()
                                 .expect("clone doesn't panic and poison lock")
                                 .clone();
-                            let data = scope.persisted_source(dataflow_read);
+                            let data =
+                                scope.persisted_source(dataflow_read, &Antichain::from_elem(0));
                             data.probe_with(&mut probe).capture_into(output_tx);
                         });
                         while worker.step_or_park(None) {
