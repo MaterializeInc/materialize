@@ -59,6 +59,7 @@ impl Scheduler {
     }
 
     /// Wait for a notification.
+    #[allow(dead_code)]
     pub fn notified(&self) -> Notified<'_> {
         Notified {
             notified: &*self.inner,
@@ -170,6 +171,7 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
     }
 }
 
+#[allow(unused_macros)]
 macro_rules! async_op {
     (|$capabilities:ident, $frontiers:ident| $body:block) => {
         move |mut capabilities, mut frontiers, scheduler| async move {

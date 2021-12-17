@@ -153,7 +153,7 @@ where
         PersistentUpsertConfig::new(start_ts, out_read, out_write.clone()),
     );
 
-    let (upsert_oks, seal_err) = upsert_oks.conditional_seal(
+    let upsert_oks = upsert_oks.conditional_seal(
         "timestamp_bindings|upsert_state",
         &bindings_persist_oks,
         out_write,
@@ -169,9 +169,7 @@ where
     // be held back until data is persisted and sealed by the upstream persist/seal operators.
     let records_persist_ok = upsert_oks.await_frontier("upsert_state");
 
-    let errs = bindings_persist_err
-        .concat(&seal_err)
-        .concat(&upsert_persist_errs);
+    let errs = bindings_persist_err.concat(&upsert_persist_errs);
 
     Ok((records_persist_ok, errs))
 }
