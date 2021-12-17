@@ -17,6 +17,7 @@ use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::{ActivateCapability, Concat, Map, OkErr, UnorderedInput};
 use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
 use timely::scheduling::ActivateOnDrop;
 use timely::Data as TimelyData;
 
@@ -32,6 +33,7 @@ pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: TimelyData> {
     fn new_persistent_unordered_input(
         &mut self,
         token: (StreamWriteHandle<K, ()>, StreamReadHandle<K, ()>),
+        as_of_frontier: &Antichain<u64>,
     ) -> (
         (
             PersistentUnorderedHandle<K>,
@@ -50,6 +52,7 @@ where
     fn new_persistent_unordered_input(
         &mut self,
         token: (StreamWriteHandle<K, ()>, StreamReadHandle<K, ()>),
+        as_of_frontier: &Antichain<u64>,
     ) -> (
         (
             PersistentUnorderedHandle<K>,
@@ -63,7 +66,8 @@ where
 
         // Replay the previously persisted data, if any.
         let snapshot = read.snapshot();
-        let (ok_previous, err_previous) = self.replay(snapshot).ok_err(split_ok_err);
+        let (ok_previous, err_previous) =
+            self.replay(snapshot, as_of_frontier).ok_err(split_ok_err);
 
         let ok_previous = ok_previous.map(|((k, _), ts, diff)| (k, ts, diff));
 
@@ -159,7 +163,8 @@ mod tests {
         timely::execute_directly(move |worker| {
             let (mut handle, cap) = worker.dataflow(|scope| {
                 let token = p.create_or_load("1");
-                let (input, _, _) = scope.new_persistent_unordered_input(token);
+                let (input, _, _) =
+                    scope.new_persistent_unordered_input(token, &Antichain::from_elem(0));
                 input
             });
             let mut session = handle.session(cap);
@@ -178,7 +183,8 @@ mod tests {
         let recv = timely::execute_directly(move |worker| {
             let ((mut handle, cap), recv) = worker.dataflow(|scope| {
                 let token = p.create_or_load("1");
-                let (input, ok_stream, _) = scope.new_persistent_unordered_input(token);
+                let (input, ok_stream, _) =
+                    scope.new_persistent_unordered_input(token, &Antichain::from_elem(0));
                 // Send the data to be captured by a channel so that we can replay
                 // its contents outside of the dataflow and verify they are correct
                 let recv = ok_stream.capture();
@@ -215,7 +221,8 @@ mod tests {
         timely::execute(Config::process(3), move |worker| {
             worker.dataflow(|scope| {
                 let token = p.create_or_load("multiple_workers");
-                let ((mut handle, cap), _, _) = scope.new_persistent_unordered_input(token);
+                let ((mut handle, cap), _, _) =
+                    scope.new_persistent_unordered_input(token, &Antichain::from_elem(0));
                 // Write one thing from each worker.
                 handle
                     .session(cap)
@@ -234,7 +241,8 @@ mod tests {
         timely::execute(Config::process(2), move |worker| {
             worker.dataflow(|scope| {
                 let token = p.create_or_load("multiple_workers");
-                let (_, ok_stream, _) = scope.new_persistent_unordered_input(token);
+                let (_, ok_stream, _) =
+                    scope.new_persistent_unordered_input(token, &Antichain::from_elem(0));
                 // Send the data to be captured by a channel so that we can replay
                 // its contents outside of the dataflow and verify they are correct
                 let tx = tx.lock().expect("lock is not poisoned").clone();
@@ -267,7 +275,8 @@ mod tests {
 
         let recv = timely::execute_directly(move |worker| {
             worker.dataflow(|scope| {
-                let (_, _, err_stream) = scope.new_persistent_unordered_input(token);
+                let (_, _, err_stream) =
+                    scope.new_persistent_unordered_input(token, &Antichain::from_elem(0));
                 err_stream.capture()
             })
         });

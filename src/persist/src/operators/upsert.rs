@@ -126,7 +126,10 @@ where
 
         let (restored_upsert_oks, _state_errs) = {
             let snapshot = persist_config.read_handle.snapshot();
-            let (restored_oks, restored_errs) = self.scope().replay(snapshot).ok_err(split_ok_err);
+            let (restored_oks, restored_errs) = self
+                .scope()
+                .replay(snapshot, &as_of_frontier)
+                .ok_err(split_ok_err);
             let (restored_upsert_oks, retract_errs) = restored_oks.retract_unsealed(
                 name,
                 persist_config.write_handle.clone(),
