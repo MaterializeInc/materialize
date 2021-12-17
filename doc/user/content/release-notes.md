@@ -108,27 +108,34 @@ List new features before bug fixes.
 
 {{% version-header v0.12.0 %}}
 
-- Support [`PREPARE`](/sql/prepare/), [`EXECUTE`](/sql/execute/), and [`DEALLOCATE`](/sql/deallocate/)
-for SQL statements.
+- Optionally emit the message partition, offset, and timestamp in [Kafka
+  sources](/sql/create-source/avro-kafka/) via the new `INCLUDE PARTITION`,
+  `INCLUDE OFFSET`, and `INCLUDE TIMESTAMP` options, respectively.
 
-- Add support for including Kafka message partition, offset, and timestamp in
-  sources by extending the [`INCLUDE` syntax](/sql/create-source/avro-kafka/)
-  to understand `PARTITION`, `OFFSET`, and `TIMESTAMP` keywords.
+- Add the [`pg_type_is_visible`](/sql/functions#postgresql-compatibility-func)
+  function.
 
-- Support the `pg_type_is_visible` [compatibility function].
+- Add a stub implementation of the
+  [`pg_get_constraintdef`](/sql/functions#postgresql-compatibility-func)
+  function.
 
-- Ensure `pg_get_constraintdef` [compatibility function] parses, though it
-  remains unimplemented.
+- Add the [`generate_subscripts`](/sql/functions/#table-func) function, which
+  generates the valid subscripts of the selected dimension of an
+  [array](/sql/types/array).
 
-- Support `generate_subscripts` for `arrays` which will generate a series comprising
-  the valid subscripts of the selected dimension of the given array.
+- Avoid crashing when executing certain queries involving the
+  [`mz_logical_timestamp`](/sql/functions/#date-and-time-func) function
+  {{% gh 9504 %}}.
 
-- Fix a bug that returned incorrect results when filtering on _NULL_ values from
-  columns joined with `USING` constraints. {{% gh 7618 %}}
+- Fix a bug that caused incorrect results when filtering on `NULL` values in
+  columns joined with `USING` constraints {{% gh 7618 %}}.
 
-- Execute comma-separated joins more like PostgreSQL by treating them as nested
-  cross joins where possible. (Nested joins are currently incompatible wih
-  `LATERAL` joins.)
+- Correct join associativity when using comma-separated `FROM` items
+  {{% gh 9489 %}}. Previously the comma operator had higher precedence than the
+  `JOIN` operator; now it correctly has lower precedence.
+
+  This bug could cause incorrect results in queries that combined `RIGHT` and
+  `FULL` [joins](/sql/join) with comma-separated `FROM` items.
 
 {{% version-header v0.11.0 %}}
 
@@ -338,6 +345,9 @@ a problem with PostgreSQL JDBC 42.3.0.
 - Throw errors on floating point arithmetic overflow and underflow.
 
 {{% version-header v0.9.7 %}}
+
+- Support the [`PREPARE`](/sql/prepare/), [`EXECUTE`](/sql/execute/), and
+  [`DEALLOCATE`](/sql/deallocate/) SQL statements {{% gh 3383 %}}.
 
 - Support the `IS TRUE`, `IS FALSE`, `IS UNKNOWN` operators (and their `NOT`
   variations). {{% gh 8455 %}}
