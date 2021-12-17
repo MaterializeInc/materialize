@@ -341,6 +341,7 @@ fn stream_desc_from_name(
             return Ok(PersistStreamDesc {
                 name,
                 upper_seal_ts: u64::minimum(),
+                since_ts: u64::minimum(),
             });
         }
         Err(e) => {
@@ -349,18 +350,23 @@ fn stream_desc_from_name(
         }
     };
 
-    // TODO: We have a mismatch here: we know that the upper always contains only one element,
-    // because `seal` is `seal(u64)` but the return value suggests there could be more. Also: if
-    // the upper is a true multi-dimensional frontier in the future, the logic that determines a
-    // common upper seal timestamp will become a bit more complicated.
+    // TODO: We have a mismatch here: we know that these frontiers always contains only one
+    // element, because we only allow `u64` timestamps, but the return value suggests there could
+    // be more. Also: if the frontiers are truly multi-dimensional in the future, the logic that
+    // determines a common upper seal timestamp will become a bit more complicated.
     let upper_seal_ts = description
         .upper()
         .iter()
         .exactly_one()
         .map_err(|_| format!("expected exactly one element in the persist upper frontier"))?;
+    let since_ts =
+        description.since().iter().exactly_one().map_err(|_| {
+            format!("expected exactly one element in the persist compaction frontier")
+        })?;
     Ok(PersistStreamDesc {
         name,
         upper_seal_ts: *upper_seal_ts,
+        since_ts: *since_ts,
     })
 }
 

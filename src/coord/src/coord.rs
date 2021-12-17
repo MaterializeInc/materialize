@@ -472,11 +472,25 @@ where
                 // about how it was built. If we start building multiple sinks and/or indexes
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
+                CatalogItem::Source(source) => {
                     // Inform the timestamper about this source.
                     self.update_timestamper(entry.id(), true).await;
-                    let frontiers =
-                        self.new_frontiers(entry.id(), Some(0), self.logical_compaction_window_ms);
+                    let since_ts = {
+                        match &source.connector {
+                            SourceConnector::External { persist, .. } => {
+                                persist.as_ref().map(|p| p.primary_stream.since_ts)
+                            }
+                            _ => None,
+                        }
+                    };
+
+                    let since_ts = since_ts.unwrap_or(0);
+
+                    let frontiers = self.new_frontiers(
+                        entry.id(),
+                        Some(since_ts),
+                        self.logical_compaction_window_ms,
+                    );
                     self.sources.insert(entry.id(), frontiers);
                 }
                 CatalogItem::Index(_) => {
@@ -2074,6 +2088,20 @@ where
             coord_bail!("Unmaterialized Postgres sources are not supported yet");
         }
 
+        let since_ts = {
+            match &plan {
+                CreateSourcePlan {
+                    source:
+                        Source {
+                            connector: SourceConnector::External { persist, .. },
+                            ..
+                        },
+                    ..
+                } => persist.as_ref().map(|p| p.primary_stream.since_ts),
+                _ => None,
+            }
+        };
+
         let if_not_exists = plan.if_not_exists;
         let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
         match self
@@ -2101,8 +2129,13 @@ where
                 // shipping any dataflows that depend on its existence.
                 for source_id in source_ids {
                     self.update_timestamper(source_id, true).await;
-                    let frontiers =
-                        self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
+                    let since_ts = since_ts.unwrap_or(0);
+
+                    let frontiers = self.new_frontiers(
+                        source_id,
+                        Some(since_ts),
+                        self.logical_compaction_window_ms,
+                    );
                     self.sources.insert(source_id, frontiers);
                 }
                 self.ship_dataflows(dfs).await?;
