@@ -37,7 +37,10 @@ pub trait Rule {
 
 /// Entry-point of the normalization stage.
 pub fn rewrite_model(model: &mut Model) {
-    let mut rules: Vec<Box<dyn Rule>> = vec![Box::new(SelectMerge::new())];
+    let mut rules: Vec<Box<dyn Rule>> = vec![
+        Box::new(SelectMerge::new()),
+        Box::new(ConstantLifting::new()),
+    ];
 
     apply_rules_to_model(model, &mut rules);
 
@@ -188,5 +191,62 @@ impl Rule for SelectMerge {
                 }
             }
         }
+    }
+}
+
+/// Replaces any column reference pointing to a constant that can be lifted
+/// with the constant value pointed.
+///
+/// Constants can only be lifted from Foreach quantifiers.
+///
+/// TODO(asenac) For unions, we can only lift a constant if all the branches
+/// project the same constant in the same position.
+struct ConstantLifting {}
+
+impl ConstantLifting {
+    fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Rule for ConstantLifting {
+    fn name(&self) -> &'static str {
+        "ConstantLifting"
+    }
+
+    fn rule_type(&self) -> RuleType {
+        RuleType::PostOrder
+    }
+
+    fn condition(&mut self, model: &Model, box_id: BoxId) -> bool {
+        // No need to handle outer joins here since, once they are
+        // normalized, their preserving quantifier is in a Select box.
+        // TODO(asenac) grouping and unions
+        model.get_box(box_id).is_select()
+    }
+
+    fn action(&mut self, model: &mut Model, box_id: BoxId) {
+        let mut the_box = model.get_mut_box(box_id);
+
+        // Dereference all column references and check whether the referenced
+        // expression is constant within the context of the box it belongs to.
+        let _ = the_box.visit_expressions_mut(&mut |e| -> Result<(), ()> {
+            e.visit_mut(&mut |e| {
+                if let BoxScalarExpr::ColumnReference(c) = e {
+                    let q = model.get_quantifier(c.quantifier_id);
+                    if let QuantifierType::Foreach = q.quantifier_type {
+                        let input_box = model.get_box(q.input_box);
+                        if !input_box.is_data_source()
+                            && input_box.columns[c.position]
+                                .expr
+                                .is_constant_within_context(&input_box.quantifiers)
+                        {
+                            *e = input_box.columns[c.position].expr.clone();
+                        }
+                    }
+                }
+            });
+            Ok(())
+        });
     }
 }

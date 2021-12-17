@@ -295,4 +295,13 @@ impl BoxScalarExpr {
             }
         })
     }
+
+    /// True if the expression doesn't reference any column from the given set of
+    /// quantifiers, even though it may contain other column references from other
+    /// contexts.
+    pub fn is_constant_within_context(&self, context: &QuantifierSet) -> bool {
+        let mut column_refs = HashSet::new();
+        self.collect_column_references_from_context(context, &mut column_refs);
+        column_refs.is_empty()
+    }
 }

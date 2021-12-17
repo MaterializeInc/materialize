@@ -559,6 +559,14 @@ impl QueryBox {
         matches!(self.box_type, BoxType::Select(_))
     }
 
+    /// Note: data sources can only contain BaseColumns in their projections.
+    fn is_data_source(&self) -> bool {
+        matches!(
+            self.box_type,
+            BoxType::Get(_) | BoxType::TableFunction(_) | BoxType::Values(_)
+        )
+    }
+
     fn add_predicate(&mut self, predicate: BoxScalarExpr) {
         match &mut self.box_type {
             BoxType::Select(select) => select.predicates.push(predicate),
