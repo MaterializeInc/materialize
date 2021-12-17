@@ -25,14 +25,7 @@ pub trait Codec: Sized + 'static {
     ///
     /// This name is stored for the key and value when a stream is first created
     /// and the same key and value codec must be used for that stream afterward.
-    fn codec_name() -> &'static str;
-    /// A hint of the encoded size of self.
-    ///
-    /// No correctness guarantees are made about the return value of this
-    /// function, it's used purely to pre-size buffers.
-    //
-    // TODO: Give this the same signature and semantics as Iterator::size_hint.
-    fn size_hint(&self) -> usize;
+    fn codec_name() -> String;
     /// Encode a key or value for permanent storage.
     ///
     /// This must perfectly round-trip Self through [Codec::decode]. If the

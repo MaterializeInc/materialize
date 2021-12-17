@@ -44,7 +44,7 @@ use futures_executor::block_on;
 
 #[derive(Debug)]
 enum Cmd {
-    Register(String, (&'static str, &'static str), PFutureHandle<Id>),
+    Register(String, (String, String), PFutureHandle<Id>),
     Destroy(String, PFutureHandle<bool>),
     Write(Vec<(Id, ColumnarRecords)>, PFutureHandle<SeqNo>),
     Seal(Vec<Id>, u64, PFutureHandle<SeqNo>),
@@ -914,7 +914,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 }
                 Cmd::Register(id, (key_codec_name, val_codec_name), res) => {
                     self.indexed
-                        .register(&id, key_codec_name, val_codec_name, res);
+                        .register(&id, &key_codec_name, &val_codec_name, res);
                 }
                 Cmd::Destroy(id, res) => {
                     self.indexed.destroy(&id, res);

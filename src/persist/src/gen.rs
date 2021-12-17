@@ -16,7 +16,6 @@ include!(concat!(env!("OUT_DIR"), "/protobuf/mod.rs"));
 use std::io::Read;
 
 use md5::{Digest, Md5};
-use ore::cast::CastFrom;
 use protobuf::Message;
 
 use crate::error::Error;
@@ -72,15 +71,8 @@ impl ProtoMeta {
 }
 
 impl persist_types::Codec for ProtoMeta {
-    fn codec_name() -> &'static str {
-        "protobuf+md5[ProtoMeta]"
-    }
-
-    fn size_hint(&self) -> usize {
-        // TODO: The encode step ends up internally calling compute_size a
-        // second time, which is unfortunate. Is it worth using
-        // write_to_with_cached_sizes in encode?
-        1 + Self::CHECKSUM_LEN + usize::cast_from(self.compute_size())
+    fn codec_name() -> String {
+        "protobuf+md5[ProtoMeta]".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {

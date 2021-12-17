@@ -58,12 +58,8 @@ use crate::Row;
 const CURRENT_VERSION: u8 = 0u8;
 
 impl Codec for Row {
-    fn codec_name() -> &'static str {
-        "RowExperimental"
-    }
-
-    fn size_hint(&self) -> usize {
-        1 + 8 + self.data.len()
+    fn codec_name() -> String {
+        "RowExperimental".into()
     }
 
     /// Encodes a row into the permanent storage format.

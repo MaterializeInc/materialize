@@ -12,12 +12,8 @@
 use crate::Codec;
 
 impl Codec for () {
-    fn codec_name() -> &'static str {
-        "()"
-    }
-
-    fn size_hint(&self) -> usize {
-        0
+    fn codec_name() -> String {
+        "()".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, _buf: &mut E) {
@@ -33,12 +29,8 @@ impl Codec for () {
 }
 
 impl Codec for String {
-    fn codec_name() -> &'static str {
-        "String"
-    }
-
-    fn size_hint(&self) -> usize {
-        self.as_bytes().len()
+    fn codec_name() -> String {
+        "String".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
@@ -51,12 +43,8 @@ impl Codec for String {
 }
 
 impl Codec for Vec<u8> {
-    fn codec_name() -> &'static str {
-        "Vec<u8>"
-    }
-
-    fn size_hint(&self) -> usize {
-        self.len()
+    fn codec_name() -> String {
+        "Vec<u8>".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
@@ -71,15 +59,8 @@ impl Codec for Vec<u8> {
 const RESULT_OK: u8 = 0;
 const RESULT_ERR: u8 = 1;
 impl<T: Codec, E: Codec> Codec for Result<T, E> {
-    fn codec_name() -> &'static str {
-        "Result"
-    }
-
-    fn size_hint(&self) -> usize {
-        match self {
-            Ok(r) => r.size_hint() + 1 + 8,
-            Err(err) => err.size_hint() + 1 + 8,
-        }
+    fn codec_name() -> String {
+        "Result".into()
     }
 
     fn encode<B: for<'a> Extend<&'a u8>>(&self, buf: &mut B) {

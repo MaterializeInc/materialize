@@ -22,14 +22,8 @@ pub enum DecodeError {
 // We only want to support persisting DecodeError for now, and not the full DataflowError, which is
 // a bit more complex.
 impl Codec for DecodeError {
-    fn codec_name() -> &'static str {
-        "DecodeError"
-    }
-
-    fn size_hint(&self) -> usize {
-        match self {
-            DecodeError::Text(text) => text.size_hint(),
-        }
+    fn codec_name() -> String {
+        "DecodeError".into()
     }
 
     fn encode<B: for<'a> Extend<&'a u8>>(&self, buf: &mut B) {
