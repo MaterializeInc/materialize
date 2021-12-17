@@ -1558,6 +1558,8 @@ impl_display_t!(Assignment);
 pub enum ExplainStage {
     /// The sql::HirRelationExpr after parsing
     RawPlan,
+    /// Query Graph
+    QueryGraph,
     /// The expr::MirRelationExpr after decorrelation
     DecorrelatedPlan,
     /// The expr::MirRelationExpr after optimization
@@ -1570,6 +1572,7 @@ impl AstDisplay for ExplainStage {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             ExplainStage::RawPlan => f.write_str("RAW PLAN"),
+            ExplainStage::QueryGraph => f.write_str("QUERY GRAPH"),
             ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
             ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
             ExplainStage::PhysicalPlan => f.write_str("PHYSICAL PLAN"),

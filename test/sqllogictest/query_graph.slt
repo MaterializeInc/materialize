@@ -1,0 +1,45 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This tests exists for testing EXPLAIN QUERY GRAPH command. Specific outputs
+# are tested in `src/sql/tests/query_model`.
+
+statement ok
+create table t(f1 int, f2 int);
+
+query T multiline
+EXPLAIN QUERY GRAPH FOR
+SELECT * FROM t;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1 }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF

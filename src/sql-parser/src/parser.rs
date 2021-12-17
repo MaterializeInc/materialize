@@ -4285,31 +4285,41 @@ impl<'a> Parser<'a> {
         }
 
         // (RAW | DECORRELATED | OPTIMIZED | PHYSICAL)? PLAN
-        let stage =
-            match self.parse_one_of_keywords(&[RAW, DECORRELATED, OPTIMIZED, PHYSICAL, PLAN]) {
-                Some(RAW) => {
-                    self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStage::RawPlan
-                }
-                Some(DECORRELATED) => {
-                    self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStage::DecorrelatedPlan
-                }
-                Some(OPTIMIZED) => {
-                    self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStage::OptimizedPlan
-                }
-                Some(PLAN) => {
-                    self.expect_keyword(FOR)?;
-                    ExplainStage::OptimizedPlan
-                }
-                Some(PHYSICAL) => {
-                    self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStage::PhysicalPlan
-                }
-                None => ExplainStage::OptimizedPlan,
-                _ => unreachable!(),
-            };
+        let stage = match self.parse_one_of_keywords(&[
+            RAW,
+            DECORRELATED,
+            OPTIMIZED,
+            PHYSICAL,
+            PLAN,
+            QUERY,
+        ]) {
+            Some(RAW) => {
+                self.expect_keywords(&[PLAN, FOR])?;
+                ExplainStage::RawPlan
+            }
+            Some(QUERY) => {
+                self.expect_keywords(&[GRAPH, FOR])?;
+                ExplainStage::QueryGraph
+            }
+            Some(DECORRELATED) => {
+                self.expect_keywords(&[PLAN, FOR])?;
+                ExplainStage::DecorrelatedPlan
+            }
+            Some(OPTIMIZED) => {
+                self.expect_keywords(&[PLAN, FOR])?;
+                ExplainStage::OptimizedPlan
+            }
+            Some(PLAN) => {
+                self.expect_keyword(FOR)?;
+                ExplainStage::OptimizedPlan
+            }
+            Some(PHYSICAL) => {
+                self.expect_keywords(&[PLAN, FOR])?;
+                ExplainStage::PhysicalPlan
+            }
+            None => ExplainStage::OptimizedPlan,
+            _ => unreachable!(),
+        };
 
         // VIEW view_name | query
         let explainee = if self.parse_keyword(VIEW) {
