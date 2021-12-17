@@ -153,48 +153,8 @@ impl fmt::Debug for S3Blob {
 }
 
 impl S3Blob {
-    const LOCKFILE_KEY: &'static str = "LOCK";
-
-    /// Returns a new [S3Blob] which stores objects under the given bucket and
-    /// prefix.
-    ///
-    /// All calls to methods on [S3Blob] must be from a thread with a tokio
-    /// runtime guard.
-    //
-    // TODO: Figure out how to make this tokio runtime guard stuff more
-    // explicit.
-    pub fn new(config: Config, lock_info: LockInfo) -> Result<Self, Error> {
-        block_on(async {
-            let mut blob = S3Blob {
-                client: Some(config.client),
-                bucket: config.bucket,
-                prefix: config.prefix,
-                max_keys: 1_000,
-            };
-            let _ = blob.lock(lock_info).await?;
-            Ok(blob)
-        })
-    }
-
     fn get_path(&self, key: &str) -> String {
         format!("{}/{}", self.prefix, key)
-    }
-
-    #[cfg(test)]
-    fn set_max_keys(&mut self, max_keys: i32) {
-        self.max_keys = max_keys;
-    }
-
-    async fn lock(&mut self, new_lock: LockInfo) -> Result<(), Error> {
-        let lockfile_path = self.get_path(Self::LOCKFILE_KEY);
-        // TODO: This is race-y. See the productionize comment on [S3Blob].
-        if let Some(existing) = self.get(Self::LOCKFILE_KEY).await? {
-            let _ = new_lock.check_reentrant_for(&lockfile_path, &mut existing.as_slice())?;
-        }
-        let contents = new_lock.to_string().into_bytes();
-        self.set(Self::LOCKFILE_KEY, contents, Atomicity::RequireAtomic)
-            .await?;
-        Ok(())
     }
 
     fn ensure_open(&self) -> Result<&S3Client, Error> {
@@ -232,23 +192,6 @@ impl Blob for S3Blob {
             .into_bytes()
             .to_vec();
         Ok(Some(val))
-    }
-
-    async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
-        // NB: S3 is always atomic, so we're free to ignore the atomic param.
-        let client = self.ensure_open()?;
-        let path = self.get_path(key);
-
-        let body = ByteStream::from(value);
-        client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(path)
-            .body(body)
-            .send()
-            .await
-            .map_err(|err| Error::from(err.to_string()))?;
-        Ok(())
     }
 
     async fn list_keys(&self) -> Result<Vec<String>, Error> {
@@ -297,6 +240,81 @@ impl Blob for S3Blob {
         Ok(ret)
     }
 
+    async fn close(&mut self) -> Result<bool, Error> {
+        Ok(self.client.take().is_some())
+    }
+}
+
+impl S3Blob {
+    const LOCKFILE_KEY: &'static str = "LOCK";
+
+    #[cfg(test)]
+    fn set_max_keys(&mut self, max_keys: i32) {
+        self.max_keys = max_keys;
+    }
+
+    async fn lock(&mut self, new_lock: LockInfo) -> Result<(), Error> {
+        let lockfile_path = self.get_path(Self::LOCKFILE_KEY);
+        // TODO: This is race-y. See the productionize comment on [S3Blob].
+        if let Some(existing) = self.get(Self::LOCKFILE_KEY).await? {
+            let _ = new_lock.check_reentrant_for(&lockfile_path, &mut existing.as_slice())?;
+        }
+        let contents = new_lock.to_string().into_bytes();
+        self.set(Self::LOCKFILE_KEY, contents, Atomicity::RequireAtomic)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Blob for S3Blob {
+    async fn close(&mut self) -> Result<bool, Error> {
+        Ok(self.client.take().is_some())
+    }
+}
+
+impl S3Blob {
+    /// Returns a new [S3Blob] which stores objects under the given bucket and
+    /// prefix.
+    ///
+    /// All calls to methods on [S3Blob] must be from a thread with a tokio
+    /// runtime guard.
+    //
+    // TODO: Figure out how to make this tokio runtime guard stuff more
+    // explicit.
+    pub fn new(config: Config, lock_info: LockInfo) -> Result<Self, Error> {
+        block_on(async {
+            let mut blob = S3Blob {
+                client: Some(config.client),
+                bucket: config.bucket,
+                prefix: config.prefix,
+                max_keys: 1_000,
+            };
+            let _ = blob.lock(lock_info).await?;
+            Ok(blob)
+        })
+    }
+}
+
+#[async_trait]
+impl Blob for S3Blob {
+    async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
+        // NB: S3 is always atomic, so we're free to ignore the atomic param.
+        let client = self.ensure_open()?;
+        let path = self.get_path(key);
+
+        let body = ByteStream::from(value);
+        client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(path)
+            .body(body)
+            .send()
+            .await
+            .map_err(|err| Error::from(err.to_string()))?;
+        Ok(())
+    }
+
     async fn delete(&mut self, key: &str) -> Result<(), Error> {
         let client = self.ensure_open()?;
         let path = self.get_path(key);
@@ -308,10 +326,6 @@ impl Blob for S3Blob {
             .await
             .map_err(|err| Error::from(err.to_string()))?;
         Ok(())
-    }
-
-    async fn close(&mut self) -> Result<bool, Error> {
-        Ok(self.client.take().is_some())
     }
 }
 

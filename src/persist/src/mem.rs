@@ -248,6 +248,39 @@ pub struct MemBlob {
 }
 
 impl MemBlob {
+    /// Open a pre-existing MemBlob.
+    fn open(core: Arc<Mutex<MemBlobCore>>, lock_info: LockInfo) -> Result<Self, Error> {
+        core.lock()?.open(lock_info)?;
+        Ok(Self { core: Some(core) })
+    }
+
+    fn core_lock<'c>(&'c self) -> Result<MutexGuard<'c, MemBlobCore>, Error> {
+        match self.core.as_ref() {
+            None => return Err("MemBlob has been closed".into()),
+            Some(core) => Ok(core.lock()?),
+        }
+    }
+}
+
+#[async_trait]
+impl Blob for MemBlob {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.core_lock()?.get(key)
+    }
+
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        self.core_lock()?.list_keys()
+    }
+
+    async fn close(&mut self) -> Result<bool, Error> {
+        match self.core.take() {
+            None => Ok(false), // Someone already called close.
+            Some(core) => core.lock()?.close(),
+        }
+    }
+}
+
+impl MemBlob {
     /// Constructs a new, empty MemBlob.
     pub fn new(lock_info: LockInfo) -> Self {
         MemBlob {
@@ -262,19 +295,6 @@ impl MemBlob {
     #[cfg(test)]
     pub fn new_no_reentrance(lock_info_details: &str) -> Self {
         Self::new(LockInfo::new_no_reentrance(lock_info_details.to_owned()))
-    }
-
-    /// Open a pre-existing MemBlob.
-    fn open(core: Arc<Mutex<MemBlobCore>>, lock_info: LockInfo) -> Result<Self, Error> {
-        core.lock()?.open(lock_info)?;
-        Ok(Self { core: Some(core) })
-    }
-
-    fn core_lock<'c>(&'c self) -> Result<MutexGuard<'c, MemBlobCore>, Error> {
-        match self.core.as_ref() {
-            None => return Err("MemBlob has been closed".into()),
-            Some(core) => Ok(core.lock()?),
-        }
     }
 
     #[cfg(test)]
@@ -302,8 +322,11 @@ impl Drop for MemBlob {
 
 #[async_trait]
 impl Blob for MemBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
-        self.core_lock()?.get(key)
+    async fn close(&mut self) -> Result<bool, Error> {
+        match self.core.take() {
+            None => Ok(false), // Someone already called close.
+            Some(core) => core.lock()?.close(),
+        }
     }
 
     async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
@@ -313,17 +336,6 @@ impl Blob for MemBlob {
 
     async fn delete(&mut self, key: &str) -> Result<(), Error> {
         self.core_lock()?.delete(key)
-    }
-
-    async fn list_keys(&self) -> Result<Vec<String>, Error> {
-        self.core_lock()?.list_keys()
-    }
-
-    async fn close(&mut self) -> Result<bool, Error> {
-        match self.core.take() {
-            None => Ok(false), // Someone already called close.
-            Some(core) => core.lock()?.close(),
-        }
     }
 }
 

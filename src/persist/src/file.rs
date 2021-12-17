@@ -278,33 +278,6 @@ pub struct FileBlob {
 }
 
 impl FileBlob {
-    const LOCKFILE_PATH: &'static str = "LOCK";
-
-    /// Returns a new [FileBlob] which stores files under the given dir.
-    ///
-    /// To ensure directory-wide mutual exclusion, a LOCK file is placed in
-    /// base_dir at construction time. If this file already exists (indicating
-    /// that another FileBlob is already using the dir), an error is returned
-    /// from `new`.
-    ///
-    /// The contents of `lock_info` are stored in the LOCK file and should
-    /// include anything that would help debug an unexpected LOCK file, such as
-    /// version, ip, worker number, etc.
-    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: LockInfo) -> Result<Self, Error> {
-        let base_dir = base_dir.as_ref();
-        fs::create_dir_all(&base_dir)?;
-        {
-            let _ = file_storage_lock(&Self::lockfile_path(&base_dir), lock_info)?;
-        }
-        Ok(FileBlob {
-            base_dir: Some(base_dir.to_path_buf()),
-        })
-    }
-
-    fn lockfile_path(base_dir: &Path) -> PathBuf {
-        base_dir.join(Self::LOCKFILE_PATH)
-    }
-
     fn blob_path(&self, key: &str) -> Result<PathBuf, Error> {
         self.base_dir
             .as_ref()
@@ -327,6 +300,107 @@ impl Blob for FileBlob {
         Ok(Some(buf))
     }
 
+    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+        let base_dir = match &self.base_dir {
+            Some(base_dir) => base_dir.canonicalize()?,
+            None => return Err(Error::from("FileBlob unexpectedly closed")),
+        };
+        let mut ret = vec![];
+
+        for entry in fs::read_dir(&base_dir)? {
+            let entry = entry?;
+            let path = entry.path().canonicalize()?;
+
+            if !path.is_file() {
+                // Ignore '.' and '..' directory entries if they come up.
+                if path == base_dir {
+                    continue;
+                } else if let Some(parent) = base_dir.parent() {
+                    if path == parent {
+                        continue;
+                    }
+                } else {
+                    return Err(Error::from(format!(
+                        "unexpectedly found directory while iterating through FileBlob: {}",
+                        path.display()
+                    )));
+                }
+            }
+
+            // The file name is guaranteed to be non-None iff the path is a
+            // normal file.
+            let file_name = path.file_name();
+            if let Some(name) = file_name {
+                let name = name.to_str();
+                if let Some(name) = name {
+                    ret.push(name.to_owned());
+                }
+            }
+        }
+        Ok(ret)
+    }
+
+    async fn close(&mut self) -> Result<bool, Error> {
+        if let Some(base_dir) = self.base_dir.as_ref() {
+            let lockfile_path = Self::lockfile_path(&base_dir);
+            fs::remove_file(lockfile_path)?;
+            self.base_dir = None;
+            Ok(true)
+        } else {
+            // Already closed. Close implementations must be idempotent.
+            Ok(false)
+        }
+    }
+}
+
+impl FileBlob {
+    const LOCKFILE_PATH: &'static str = "LOCK";
+
+    fn lockfile_path(base_dir: &Path) -> PathBuf {
+        base_dir.join(Self::LOCKFILE_PATH)
+    }
+}
+
+#[async_trait]
+impl Blob for FileBlob {
+    async fn close(&mut self) -> Result<bool, Error> {
+        if let Some(base_dir) = self.base_dir.as_ref() {
+            let lockfile_path = Self::lockfile_path(&base_dir);
+            fs::remove_file(lockfile_path)?;
+            self.base_dir = None;
+            Ok(true)
+        } else {
+            // Already closed. Close implementations must be idempotent.
+            Ok(false)
+        }
+    }
+}
+
+impl FileBlob {
+    /// Returns a new [FileBlob] which stores files under the given dir.
+    ///
+    /// To ensure directory-wide mutual exclusion, a LOCK file is placed in
+    /// base_dir at construction time. If this file already exists (indicating
+    /// that another FileBlob is already using the dir), an error is returned
+    /// from `new`.
+    ///
+    /// The contents of `lock_info` are stored in the LOCK file and should
+    /// include anything that would help debug an unexpected LOCK file, such as
+    /// version, ip, worker number, etc.
+    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: LockInfo) -> Result<Self, Error> {
+        let base_dir = base_dir.as_ref();
+        fs::create_dir_all(&base_dir)?;
+        {
+            let _ = file_storage_lock(&Self::lockfile_path(&base_dir), lock_info)?;
+        }
+        Ok(FileBlob {
+            base_dir: Some(base_dir.to_path_buf()),
+        })
+    }
+}
+
+#[async_trait]
+impl Blob for FileBlob {
     async fn set(&mut self, key: &str, value: Vec<u8>, atomic: Atomicity) -> Result<(), Error> {
         let file_path = self.blob_path(key)?;
         match atomic {
@@ -387,58 +461,6 @@ impl Blob for FileBlob {
         };
 
         Ok(())
-    }
-
-    async fn list_keys(&self) -> Result<Vec<String>, Error> {
-        let base_dir = match &self.base_dir {
-            Some(base_dir) => base_dir.canonicalize()?,
-            None => return Err(Error::from("FileBlob unexpectedly closed")),
-        };
-        let mut ret = vec![];
-
-        for entry in fs::read_dir(&base_dir)? {
-            let entry = entry?;
-            let path = entry.path().canonicalize()?;
-
-            if !path.is_file() {
-                // Ignore '.' and '..' directory entries if they come up.
-                if path == base_dir {
-                    continue;
-                } else if let Some(parent) = base_dir.parent() {
-                    if path == parent {
-                        continue;
-                    }
-                } else {
-                    return Err(Error::from(format!(
-                        "unexpectedly found directory while iterating through FileBlob: {}",
-                        path.display()
-                    )));
-                }
-            }
-
-            // The file name is guaranteed to be non-None iff the path is a
-            // normal file.
-            let file_name = path.file_name();
-            if let Some(name) = file_name {
-                let name = name.to_str();
-                if let Some(name) = name {
-                    ret.push(name.to_owned());
-                }
-            }
-        }
-        Ok(ret)
-    }
-
-    async fn close(&mut self) -> Result<bool, Error> {
-        if let Some(base_dir) = self.base_dir.as_ref() {
-            let lockfile_path = Self::lockfile_path(&base_dir);
-            fs::remove_file(lockfile_path)?;
-            self.base_dir = None;
-            Ok(true)
-        } else {
-            // Already closed. Close implementations must be idempotent.
-            Ok(false)
-        }
     }
 }
 
