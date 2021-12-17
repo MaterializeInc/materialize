@@ -37,6 +37,7 @@ cfg-if = "1.0.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "2.34.0", features = ["wrap_help"] }
 compile-time-run = "0.2.12"
+console-subscriber = { version = "0.1.0", optional = true }
 coord = { path = "../coord" }
 crossbeam-channel = "0.5.1"
 dataflow = { path = "../dataflow" }
@@ -138,3 +139,4 @@ walkdir = "2.3.2"
 # WARNING: For development use only! When enabled, may allow unrestricted read
 # access to the file system.
 dev-web = []
+tokio-console = ["console-subscriber", "tokio/tracing"]

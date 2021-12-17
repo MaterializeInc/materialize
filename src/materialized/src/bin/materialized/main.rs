@@ -326,6 +326,11 @@ struct Args {
     /// The interval at which to report telemetry data.
     #[structopt(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = repr::util::parse_duration), hidden = true)]
     telemetry_interval: Option<Duration>,
+
+    #[cfg(feature = "tokio-console")]
+    /// Turn on the console-subscriber to use materialize with `tokio-console`
+    #[structopt(long, hidden = true)]
+    tokio_console: bool,
 }
 
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
@@ -503,15 +508,24 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             Some("stderr") => {
                 // The user explicitly directed logs to stderr. Log only to
                 // stderr with the user-specified `filter`.
-                tracing_subscriber::registry()
+                let stack = tracing_subscriber::registry()
                     .with(MetricsRecorderLayer::new(log_message_counter))
                     .with(
                         fmt::layer()
                             .with_writer(io::stderr)
                             .with_ansi(atty::is(atty::Stream::Stderr))
                             .with_filter(filter),
-                    )
-                    .init()
+                    );
+
+                #[cfg(feature = "tokio-console")]
+                if args.tokio_console {
+                    stack.with(console_subscriber::spawn()).init()
+                } else {
+                    stack.init()
+                }
+
+                #[cfg(not(feature = "tokio-console"))]
+                stack.init()
             }
             log_file => {
                 // Logging to a file. If the user did not explicitly specify
@@ -520,7 +534,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     Some(_) => LevelFilter::OFF,
                     None => LevelFilter::WARN,
                 };
-                tracing_subscriber::registry()
+                let stack = tracing_subscriber::registry()
                     .with(MetricsRecorderLayer::new(log_message_counter))
                     .with({
                         let path = match log_file {
@@ -550,8 +564,17 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                             .with_ansi(atty::is(atty::Stream::Stderr))
                             .with_filter(stderr_level)
                             .with_filter(filter),
-                    )
-                    .init()
+                    );
+
+                #[cfg(feature = "tokio-console")]
+                if args.tokio_console {
+                    stack.with(console_subscriber::spawn()).init()
+                } else {
+                    stack.init()
+                }
+
+                #[cfg(not(feature = "tokio-console"))]
+                stack.init()
             }
         }
     }
