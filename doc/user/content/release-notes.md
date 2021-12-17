@@ -103,6 +103,9 @@ List new features before bug fixes.
 
 {{% version-header v0.13.0 %}}
 
+- Allow join trees that mix [`LATERAL`](/sql/join#lateral-subqueries)
+  elements with `RIGHT` and `FULL` joins {{% gh 6875 %}}.
+
 {{% version-header v0.12.0 %}}
 
 - Support [`PREPARE`](/sql/prepare/), [`EXECUTE`](/sql/execute/), and [`DEALLOCATE`](/sql/deallocate/)

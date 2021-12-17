@@ -199,14 +199,10 @@ impl FromHir {
                 self.model.make_quantifier(left_q_type, left_box, join_box);
 
                 // Right box
-                let right_box = if kind.is_lateral() {
-                    self.within_context(join_box, &mut |generator| -> BoxId {
-                        let right = right.take();
-                        generator.generate_internal(right)
-                    })
-                } else {
-                    self.generate_internal(*right)
-                };
+                let right_box = self.within_context(join_box, &mut |generator| -> BoxId {
+                    let right = right.take();
+                    generator.generate_internal(right)
+                });
                 self.model
                     .make_quantifier(right_q_type, right_box, join_box);
 

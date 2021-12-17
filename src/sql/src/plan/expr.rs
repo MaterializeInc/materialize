@@ -12,7 +12,6 @@
 //! similar to that file, with some differences which are noted below. It gets turned into that
 //! representation via a call to decorrelate().
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::mem;
@@ -467,8 +466,8 @@ pub struct ColumnRef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum JoinKind {
-    Inner { lateral: bool },
-    LeftOuter { lateral: bool },
+    Inner,
+    LeftOuter,
     RightOuter,
     FullOuter,
 }
@@ -479,10 +478,8 @@ impl fmt::Display for JoinKind {
             f,
             "{}",
             match self {
-                JoinKind::Inner { lateral: false } => "Inner",
-                JoinKind::Inner { lateral: true } => "InnerLateral",
-                JoinKind::LeftOuter { lateral: false } => "LeftOuter",
-                JoinKind::LeftOuter { lateral: true } => "LeftOuterLateral",
+                JoinKind::Inner => "Inner",
+                JoinKind::LeftOuter => "LeftOuter",
                 JoinKind::RightOuter => "RightOuter",
                 JoinKind::FullOuter => "FullOuter",
             }
@@ -491,9 +488,9 @@ impl fmt::Display for JoinKind {
 }
 
 impl JoinKind {
-    pub fn is_lateral(&self) -> bool {
+    pub fn can_be_correlated(&self) -> bool {
         match self {
-            JoinKind::Inner { lateral } | JoinKind::LeftOuter { lateral } => *lateral,
+            JoinKind::Inner | JoinKind::LeftOuter => true,
             JoinKind::RightOuter | JoinKind::FullOuter => false,
         }
     }
@@ -722,13 +719,8 @@ impl HirRelationExpr {
                     let nullable = t.nullable || left_nullable;
                     t.nullable(nullable)
                 });
-                let outers = if kind.is_lateral() {
-                    let mut outers = outers.to_vec();
-                    outers.push(RelationType::new(lt.clone().collect()));
-                    Cow::Owned(outers)
-                } else {
-                    Cow::Borrowed(outers)
-                };
+                let mut outers = outers.to_vec();
+                outers.push(RelationType::new(lt.clone().collect()));
                 let rt = right
                     .typ(&outers, params)
                     .column_types
@@ -804,6 +796,18 @@ impl HirRelationExpr {
     /// Pretty-print this HirRelationExpr to a string.
     pub fn pretty(&self) -> String {
         Explanation::new(self, &DummyHumanizer).to_string()
+    }
+
+    /// Reports whether this expression contains a column reference to its
+    /// direct parent scope.
+    pub fn is_correlated(&self) -> bool {
+        let mut correlated = false;
+        self.visit_columns(0, &mut |depth, col| {
+            if col.level > depth && col.level - depth == 1 {
+                correlated = true;
+            }
+        });
+        correlated
     }
 
     pub fn is_join_identity(&self) -> bool {
@@ -921,6 +925,35 @@ impl HirRelationExpr {
 
     pub fn select(self) -> HirScalarExpr {
         HirScalarExpr::Select(Box::new(self))
+    }
+
+    pub fn join(
+        self,
+        mut right: HirRelationExpr,
+        on: HirScalarExpr,
+        kind: JoinKind,
+    ) -> HirRelationExpr {
+        if self.is_join_identity() && !right.is_correlated() && on == HirScalarExpr::literal_true()
+        {
+            // The join can be elided, but we need to adjust column references
+            // on the right-hand side to account for the removal of the scope
+            // introduced by the join.
+            right.visit_columns_mut(0, &mut |depth, col| {
+                if col.level > depth {
+                    col.level -= 1;
+                }
+            });
+            right
+        } else if right.is_join_identity() && on == HirScalarExpr::literal_true() {
+            self
+        } else {
+            HirRelationExpr::Join {
+                left: Box::new(self),
+                right: Box::new(right),
+                on,
+                kind,
+            }
+        }
     }
 
     pub fn take(&mut self) -> HirRelationExpr {
@@ -1053,20 +1086,16 @@ impl HirRelationExpr {
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
     /// which will be incremented with each subquery entered and presented to the supplied
     /// function `f`.
-    pub fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
+    pub fn visit_columns<F>(&self, depth: usize, f: &mut F)
     where
-        F: FnMut(usize, &mut ColumnRef),
+        F: FnMut(usize, &ColumnRef),
     {
         match self {
             HirRelationExpr::Join {
-                kind,
-                on,
-                left,
-                right,
+                on, left, right, ..
             } => {
                 left.visit_columns(depth, f);
-                let right_depth = if kind.is_lateral() { depth + 1 } else { depth };
-                right.visit_columns(right_depth, f);
+                right.visit_columns(depth + 1, f);
                 // The ON clause doesn't belong in the lateral context
                 on.visit_columns(depth, f);
             }
@@ -1108,6 +1137,63 @@ impl HirRelationExpr {
             | HirRelationExpr::DeclareKeys { input, .. }
             | HirRelationExpr::Threshold { input } => {
                 input.visit_columns(depth, f);
+            }
+            HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => (),
+        }
+    }
+
+    /// Like `visit_columns`, but permits mutating the column references.
+    pub fn visit_columns_mut<F>(&mut self, depth: usize, f: &mut F)
+    where
+        F: FnMut(usize, &mut ColumnRef),
+    {
+        match self {
+            HirRelationExpr::Join {
+                on, left, right, ..
+            } => {
+                left.visit_columns_mut(depth, f);
+                right.visit_columns_mut(depth + 1, f);
+                // The ON clause doesn't belong in the lateral context
+                on.visit_columns_mut(depth, f);
+            }
+            HirRelationExpr::Map { scalars, input } => {
+                for scalar in scalars {
+                    scalar.visit_columns_mut(depth, f);
+                }
+                input.visit_columns_mut(depth, f);
+            }
+            HirRelationExpr::CallTable { exprs, .. } => {
+                for expr in exprs {
+                    expr.visit_columns_mut(depth, f);
+                }
+            }
+            HirRelationExpr::Filter { predicates, input } => {
+                for predicate in predicates {
+                    predicate.visit_columns_mut(depth, f);
+                }
+                input.visit_columns_mut(depth, f);
+            }
+            HirRelationExpr::Reduce {
+                aggregates, input, ..
+            } => {
+                for aggregate in aggregates {
+                    aggregate.visit_columns_mut(depth, f);
+                }
+                input.visit_columns_mut(depth, f);
+            }
+            HirRelationExpr::Union { base, inputs } => {
+                base.visit_columns_mut(depth, f);
+                for input in inputs {
+                    input.visit_columns_mut(depth, f);
+                }
+            }
+            HirRelationExpr::Project { input, .. }
+            | HirRelationExpr::Distinct { input }
+            | HirRelationExpr::TopK { input, .. }
+            | HirRelationExpr::Negate { input }
+            | HirRelationExpr::DeclareKeys { input, .. }
+            | HirRelationExpr::Threshold { input } => {
+                input.visit_columns_mut(depth, f);
             }
             HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => (),
         }
@@ -1170,14 +1256,10 @@ impl HirRelationExpr {
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
         match self {
             HirRelationExpr::Join {
-                kind,
-                on,
-                left,
-                right,
+                on, left, right, ..
             } => {
                 left.splice_parameters(params, depth);
-                let right_depth = if kind.is_lateral() { depth + 1 } else { depth };
-                right.splice_parameters(params, right_depth);
+                right.splice_parameters(params, depth + 1);
                 // The ON clause doesn't belong in the lateral context
                 on.splice_parameters(params, depth);
             }
@@ -1313,7 +1395,7 @@ impl HirScalarExpr {
                 *e = params[*i - 1].clone();
                 // Correct any column references in the parameter expression for
                 // its new depth.
-                e.visit_columns(0, &mut |d, col| {
+                e.visit_columns_mut(0, &mut |d, col| {
                     if col.level >= d {
                         col.level += depth
                     }
@@ -1489,9 +1571,9 @@ impl HirScalarExpr {
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
     /// which will be incremented with each subquery entered and presented to the supplied
     /// function `f`.
-    pub fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
+    pub fn visit_columns<F>(&self, depth: usize, f: &mut F)
     where
-        F: FnMut(usize, &mut ColumnRef),
+        F: FnMut(usize, &ColumnRef),
     {
         match self {
             HirScalarExpr::Literal(_, _)
@@ -1517,8 +1599,44 @@ impl HirScalarExpr {
                 expr.visit_columns(depth + 1, f);
             }
             HirScalarExpr::Windowing(expr) => {
-                expr.visit_expressions_mut(&mut |e| {
+                expr.visit_expressions(&mut |e| {
                     e.visit_columns(depth, f);
+                });
+            }
+        }
+    }
+
+    /// Like `visit_columns`, but permits mutating the column references.
+    pub fn visit_columns_mut<F>(&mut self, depth: usize, f: &mut F)
+    where
+        F: FnMut(usize, &mut ColumnRef),
+    {
+        match self {
+            HirScalarExpr::Literal(_, _)
+            | HirScalarExpr::Parameter(_)
+            | HirScalarExpr::CallNullary(_) => (),
+            HirScalarExpr::Column(col_ref) => f(depth, col_ref),
+            HirScalarExpr::CallUnary { expr, .. } => expr.visit_columns_mut(depth, f),
+            HirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.visit_columns_mut(depth, f);
+                expr2.visit_columns_mut(depth, f);
+            }
+            HirScalarExpr::CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    expr.visit_columns_mut(depth, f);
+                }
+            }
+            HirScalarExpr::If { cond, then, els } => {
+                cond.visit_columns_mut(depth, f);
+                then.visit_columns_mut(depth, f);
+                els.visit_columns_mut(depth, f);
+            }
+            HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
+                expr.visit_columns_mut(depth + 1, f);
+            }
+            HirScalarExpr::Windowing(expr) => {
+                expr.visit_expressions_mut(&mut |e| {
+                    e.visit_columns_mut(depth, f);
                 });
             }
         }
@@ -1642,10 +1760,18 @@ impl AggregateExpr {
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
     /// which will be incremented with each subquery entered and presented to the supplied
     /// function `f`.
-    pub fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
+    pub fn visit_columns<F>(&self, depth: usize, f: &mut F)
+    where
+        F: FnMut(usize, &ColumnRef),
+    {
+        self.expr.visit_columns(depth, f);
+    }
+
+    /// Like `visit_columns`, but permits mutating the column reference.
+    pub fn visit_columns_mut<F>(&mut self, depth: usize, f: &mut F)
     where
         F: FnMut(usize, &mut ColumnRef),
     {
-        self.expr.visit_columns(depth, f);
+        self.expr.visit_columns_mut(depth, f);
     }
 }

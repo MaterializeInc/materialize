@@ -36,8 +36,8 @@ use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     Assignment, AstInfo, Cte, DataType, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
-    Ident, InsertSource, IsExprConstruct, JoinConstraint, JoinOperator, Limit, OrderByExpr, Query,
-    Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement, SubscriptPosition,
+    Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, OrderByExpr,
+    Query, Raw, RawName, Select, SelectItem, SetExpr, SetOperator, Statement, SubscriptPosition,
     TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement,
     Value, Values,
 };
@@ -59,10 +59,11 @@ use crate::plan::expr::{
     CoercibleScalarExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind,
     ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, VariadicFunc, WindowExpr, WindowExprType,
 };
+use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
-use crate::plan::{plan_utils, Params};
+use crate::plan::Params;
 use crate::plan::{transform_ast, PlanContext};
 
 // Aug is the type variable assigned to an AST that has already been
@@ -852,7 +853,18 @@ fn handle_mutation_using_clause(
             .drain(..)
             .fold(Ok(plan_join_identity(&qcx)), |l, twj| {
                 let (left, left_scope) = l?;
-                plan_table_with_joins(&qcx, left, left_scope, &twj)
+                plan_join(
+                    qcx,
+                    left,
+                    left_scope,
+                    &Join {
+                        relation: TableFactor::NestedJoin {
+                            join: Box::new(twj),
+                            alias: None,
+                        },
+                        join_operator: JoinOperator::CrossJoin,
+                    },
+                )
             })?;
 
     if let Some(expr) = selection {
@@ -861,16 +873,11 @@ fn handle_mutation_using_clause(
         // `USING...` first for no real reason, but making a different decision
         // would require adjusting the column references on this relation
         // differently.
-        let (joined, joined_scope) = plan_join_operator(
-            &JoinOperator::CrossJoin,
-            qcx,
-            using_rel_expr.clone(),
-            using_scope,
-            qcx,
-            get.clone(),
-            outer_scope,
-            false,
-        )?;
+        let on = HirScalarExpr::literal_true();
+        let joined = using_rel_expr
+            .clone()
+            .join(get.clone(), on, JoinKind::Inner);
+        let joined_scope = using_scope.product(outer_scope)?;
 
         // Treat any `WHERE` clause as being executed in a subquery.
         let joined_relation_type = qcx.relation_type(&joined);
@@ -1453,7 +1460,7 @@ fn plan_values(
     // Build column names.
     let mut scope = Scope::empty(Some(qcx.outer_scope.clone()));
     for i in 0..ncols {
-        let name = Some(format!("column{}", i + 1).into());
+        let name = format!("column{}", i + 1);
         scope.items.push(ScopeItem::from_column_name(name));
     }
 
@@ -1534,7 +1541,18 @@ fn plan_view_select(
     let (mut relation_expr, from_scope) =
         from.iter().fold(Ok(plan_join_identity(qcx)), |l, twj| {
             let (left, left_scope) = l?;
-            plan_table_with_joins(qcx, left, left_scope, twj)
+            plan_join(
+                qcx,
+                left,
+                left_scope,
+                &Join {
+                    relation: TableFactor::NestedJoin {
+                        join: Box::new(twj.clone()),
+                        alias: None,
+                    },
+                    join_operator: JoinOperator::CrossJoin,
+                },
+            )
         })?;
 
     // Checks if an unknown column error was the result of not including that
@@ -1637,12 +1655,7 @@ fn plan_view_select(
                     scope_item.expr = group_expr.cloned();
                     scope_item
                 } else {
-                    ScopeItem {
-                        names: vec![],
-                        expr: group_expr.cloned(),
-                        nameable: true,
-                        visible_to_wildcard: true,
-                    }
+                    ScopeItem::from_expr(group_expr.cloned())
                 };
 
                 group_key.push(from_scope.len() + group_exprs.len());
@@ -1663,12 +1676,9 @@ fn plan_view_select(
         let mut agg_exprs = vec![];
         for sql_function in aggregates {
             agg_exprs.push(plan_aggregate(ecx, sql_function)?);
-            group_scope.items.push(ScopeItem {
-                names: vec![],
-                expr: Some(Expr::Function(sql_function.clone())),
-                nameable: true,
-                visible_to_wildcard: true,
-            });
+            group_scope
+                .items
+                .push(ScopeItem::from_expr(Expr::Function(sql_function.clone())));
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || having.is_some() {
             // apply GROUP BY / aggregates
@@ -1742,19 +1752,11 @@ fn plan_view_select(
             } else {
                 project_key.push(group_scope.len() + new_exprs.len());
                 new_exprs.push(expr);
-                map_scope.items.push(ScopeItem {
-                    names: column_name
-                        .iter()
-                        .map(|column_name| ScopeItemName {
-                            table_name: None,
-                            column_name: Some(column_name.clone()),
-                            priority: true,
-                        })
-                        .collect(),
-                    expr: None,
-                    nameable: true,
-                    visible_to_wildcard: true,
-                });
+                map_scope.items.push(ScopeItem::from_name(ScopeItemName {
+                    table_name: None,
+                    column_name: column_name.clone(),
+                    priority: true,
+                }));
             }
         }
         relation_expr = relation_expr.map(new_exprs);
@@ -2018,95 +2020,28 @@ fn plan_order_by_or_distinct_expr(
     }
 }
 
-fn plan_table_with_joins<'a>(
+fn plan_table_with_joins(
     qcx: &QueryContext,
-    left: HirRelationExpr,
-    left_scope: Scope,
-    table_with_joins: &'a TableWithJoins<Aug>,
+    table_with_joins: &TableWithJoins<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let pushed_left_was_join_identity = left.is_join_identity();
-    let mut lateral_visitor = LateralJoinVisitor::new();
-    lateral_visitor.visit_table_with_joins(&table_with_joins);
-    if !lateral_visitor.found() {
-        // NOTE: this branch builds the correct join tree, but it bricks LATERAL
-        // behavior. See #6875.
-        let (expr, scope) = plan_join_identity(qcx);
-        let (mut expr, mut scope) = plan_table_factor(
-            qcx,
-            expr,
-            scope,
-            &JoinOperator::CrossJoin,
-            &table_with_joins.relation,
-        )?;
-        for join in &table_with_joins.joins {
-            let (new_expr, new_scope) =
-                plan_table_factor(qcx, expr, scope, &join.join_operator, &join.relation)?;
-            expr = new_expr;
-            scope = new_scope;
-        }
-        plan_join_operator(
-            &JoinOperator::CrossJoin,
-            qcx,
-            left,
-            left_scope,
-            &qcx,
-            expr,
-            scope,
-            false,
-        )
-    } else {
-        // This branch is WRONG, but it mostly handles LATERAL correctly.
-        let (mut left, mut left_scope) = plan_table_factor(
-            qcx,
-            left,
-            left_scope,
-            &JoinOperator::CrossJoin,
-            &table_with_joins.relation,
-        )?;
-        for join in &table_with_joins.joins {
-            if !pushed_left_was_join_identity
-                && matches!(
-                    &join.join_operator,
-                    JoinOperator::FullOuter(..) | JoinOperator::RightOuter(..)
-                )
-            {
-                bail_unsupported!(
-                    6875,
-                    "join trees using both lateral and full/right outer joins"
-                );
-            }
-            let (new_left, new_left_scope) =
-                plan_table_factor(qcx, left, left_scope, &join.join_operator, &join.relation)?;
-            left = new_left;
-            left_scope = new_left_scope;
-        }
-        Ok((left, left_scope))
+    let (mut expr, mut scope) = plan_table_factor(qcx, &table_with_joins.relation)?;
+    for join in &table_with_joins.joins {
+        let (new_expr, new_scope) = plan_join(qcx, expr, scope, &join)?;
+        expr = new_expr;
+        scope = new_scope;
     }
+    Ok((expr, scope))
 }
 
 fn plan_table_factor(
-    left_qcx: &QueryContext,
-    left: HirRelationExpr,
-    left_scope: Scope,
-    join_operator: &JoinOperator<Aug>,
+    qcx: &QueryContext,
     table_factor: &TableFactor<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let lateral = matches!(
-        table_factor,
-        TableFactor::Function { .. } | TableFactor::Derived { lateral: true, .. }
-    );
-
-    let qcx = if lateral {
-        Cow::Owned(left_qcx.derived_context(left_scope.clone(), &left_qcx.relation_type(&left)))
-    } else {
-        Cow::Borrowed(left_qcx)
-    };
-
-    let (expr, scope) = match table_factor {
+    match table_factor {
         TableFactor::Table { name, alias } => {
             let (expr, scope) = qcx.resolve_table_name(name.clone())?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
-            (expr, scope)
+            Ok((expr, scope))
         }
 
         TableFactor::Function {
@@ -2121,7 +2056,7 @@ fn plan_table_factor(
                 allow_aggregates: false,
                 allow_subqueries: true,
             };
-            plan_table_function(ecx, &name, alias.as_ref(), args)?
+            plan_table_function(ecx, &name, alias.as_ref(), args)
         }
 
         TableFactor::RowsFrom { functions, alias } => {
@@ -2133,38 +2068,30 @@ fn plan_table_factor(
                 allow_aggregates: false,
                 allow_subqueries: true,
             };
-            plan_rows_from(ecx, functions, alias.as_ref())?
+            plan_rows_from(ecx, functions, alias.as_ref())
         }
 
         TableFactor::Derived {
-            lateral: _,
+            lateral,
             subquery,
             alias,
         } => {
             let mut qcx = (*qcx).clone();
+            if !lateral {
+                qcx.outer_scope.hide_lateral_items();
+            }
+            qcx.outer_scope.lateral_barrier = true;
             let (expr, scope) = plan_nested_query(&mut qcx, &subquery)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
-            (expr, scope)
+            Ok((expr, scope))
         }
 
         TableFactor::NestedJoin { join, alias } => {
-            let (identity, identity_scope) = plan_join_identity(&qcx);
-            let (expr, scope) = plan_table_with_joins(&qcx, identity, identity_scope, join)?;
+            let (expr, scope) = plan_table_with_joins(&qcx, join)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
-            (expr, scope)
+            Ok((expr, scope))
         }
-    };
-
-    plan_join_operator(
-        &join_operator,
-        left_qcx,
-        left,
-        left_scope,
-        &qcx,
-        expr,
-        scope,
-        lateral,
-    )
+    }
 }
 
 // ROWS FROM concatenates table functions into a single table, filling in
@@ -2254,22 +2181,18 @@ fn plan_rows_from(
     for (idx, func) in funcs.enumerate() {
         let (func, func_scope) = func;
         let next_column = scope.items.len() + idx + 1;
-        expr = HirRelationExpr::Join {
-            left: Box::new(expr),
-            right: Box::new(func),
-            on: HirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
-                expr1: Box::new(HirScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: 0,
-                })),
-                expr2: Box::new(HirScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: next_column,
-                })),
-            },
-            kind: JoinKind::FullOuter,
+        let on = HirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1: Box::new(HirScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: 0,
+            })),
+            expr2: Box::new(HirScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: next_column,
+            })),
         };
+        expr = expr.join(func, on, JoinKind::FullOuter);
         scope.items.extend(func_scope.items);
     }
     let expr = expr.project(project_outputs);
@@ -2550,7 +2473,7 @@ fn expand_select_item<'a>(
                 .items
                 .iter()
                 .enumerate()
-                .filter(|(_i, item)| item.visible_to_wildcard)
+                .filter(|(_i, item)| item.allow_unqualified_references)
                 .map(|(i, item)| {
                     let name = item.names.get(0).and_then(|n| n.column_name.clone());
                     (ExpandedSelectItem::InputOrdinal(i), name)
@@ -2569,108 +2492,35 @@ fn expand_select_item<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn plan_join_operator(
-    operator: &JoinOperator<Aug>,
+fn plan_join(
     left_qcx: &QueryContext,
     left: HirRelationExpr,
     left_scope: Scope,
-    right_qcx: &QueryContext,
-    right: HirRelationExpr,
-    right_scope: Scope,
-    lateral: bool,
+    join: &Join<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    match operator {
-        JoinOperator::Inner(constraint) => plan_join_constraint(
-            &constraint,
-            left_qcx,
-            left,
-            left_scope,
-            right_qcx,
-            right,
-            right_scope,
-            JoinKind::Inner { lateral },
-        ),
-        JoinOperator::LeftOuter(constraint) => plan_join_constraint(
-            &constraint,
-            left_qcx,
-            left,
-            left_scope,
-            right_qcx,
-            right,
-            right_scope,
-            JoinKind::LeftOuter { lateral },
-        ),
-        JoinOperator::RightOuter(constraint) => {
-            if lateral {
-                sql_bail!("the combining JOIN type must be INNER or LEFT for a LATERAL reference");
-            }
-            plan_join_constraint(
-                &constraint,
-                left_qcx,
-                left,
-                left_scope,
-                right_qcx,
-                right,
-                right_scope,
-                JoinKind::RightOuter,
-            )
-        }
-        JoinOperator::FullOuter(constraint) => {
-            if lateral {
-                sql_bail!("the combining JOIN type must be INNER or LEFT for a LATERAL reference");
-            }
-            plan_join_constraint(
-                &constraint,
-                left_qcx,
-                left,
-                left_scope,
-                right_qcx,
-                right,
-                right_scope,
-                JoinKind::FullOuter,
-            )
-        }
-        JoinOperator::CrossJoin => {
-            // Suppress no-op joins to keep raw query plans understandable. Note
-            // that LATERAL joins introduce a new inner scope for `right`, so
-            // they can't be trivially elided. (We *could* rewrite all the
-            // column references in `right`, but it doesn't seem worth it just
-            // to make the raw query plans nicer. The optimizer doesn't have
-            // trouble with the extra join.)
-            if left.is_join_identity() && !lateral {
-                Ok((right, right_scope))
-            } else if right.is_join_identity() {
-                Ok((left, left_scope))
-            } else {
-                let join = HirRelationExpr::Join {
-                    left: Box::new(left),
-                    right: Box::new(right),
-                    on: HirScalarExpr::literal_true(),
-                    kind: JoinKind::Inner { lateral },
-                };
-                Ok((join, left_scope.product(right_scope)?))
-            }
+    const ON_TRUE: JoinConstraint<Aug> = JoinConstraint::On(Expr::Value(Value::Boolean(true)));
+    let (kind, constraint) = match &join.join_operator {
+        JoinOperator::CrossJoin => (JoinKind::Inner, &ON_TRUE),
+        JoinOperator::Inner(constraint) => (JoinKind::Inner, constraint),
+        JoinOperator::LeftOuter(constraint) => (JoinKind::LeftOuter, constraint),
+        JoinOperator::RightOuter(constraint) => (JoinKind::RightOuter, constraint),
+        JoinOperator::FullOuter(constraint) => (JoinKind::FullOuter, constraint),
+    };
+
+    let mut right_qcx =
+        left_qcx.derived_context(left_scope.clone(), &left_qcx.relation_type(&left));
+    if !kind.can_be_correlated() {
+        for item in &mut right_qcx.outer_scope.items {
+            item.lateral_error_if_referenced = true;
         }
     }
-}
+    let (right, right_scope) = plan_table_factor(&right_qcx, &join.relation)?;
 
-#[allow(clippy::too_many_arguments)]
-fn plan_join_constraint<'a>(
-    constraint: &'a JoinConstraint<Aug>,
-    left_qcx: &QueryContext,
-    left: HirRelationExpr,
-    left_scope: Scope,
-    right_qcx: &QueryContext,
-    right: HirRelationExpr,
-    right_scope: Scope,
-    kind: JoinKind,
-) -> Result<(HirRelationExpr, Scope), PlanError> {
     let (expr, scope) = match constraint {
         JoinConstraint::On(expr) => {
             let mut product_scope = left_scope.product(right_scope)?;
             let ecx = &ExprContext {
-                qcx: &right_qcx,
+                qcx: &left_qcx,
                 name: "ON clause",
                 scope: &product_scope,
                 relation_type: &RelationType::new(
@@ -2705,12 +2555,7 @@ fn plan_join_constraint<'a>(
                     product_scope.items[l].names.extend(right_names);
                 }
             }
-            let joined = HirRelationExpr::Join {
-                left: Box::new(left),
-                right: Box::new(right),
-                on,
-                kind,
-            };
+            let joined = left.join(right, on, kind);
             (joined, product_scope)
         }
         JoinConstraint::Using(column_names) => plan_using_constraint(
@@ -2721,31 +2566,25 @@ fn plan_join_constraint<'a>(
             left_qcx,
             left,
             left_scope,
-            right_qcx,
+            &right_qcx,
             right,
             right_scope,
             kind,
         )?,
         JoinConstraint::Natural => {
-            let mut column_names = vec![];
-            for item in left_scope.items.iter() {
-                for name in &item.names {
-                    if let Some(column_name) = &name.column_name {
-                        if left_scope.resolve_column(column_name).is_ok()
-                            && right_scope.resolve_column(column_name).is_ok()
-                        {
-                            column_names.push(column_name.clone());
-                            break;
-                        }
-                    }
-                }
-            }
+            let left_column_names: HashSet<_> = left_scope.column_names().collect();
+            let right_column_names: HashSet<_> = right_scope.column_names().collect();
+            let column_names: Vec<_> = left_column_names
+                .intersection(&right_column_names)
+                .into_iter()
+                .filter_map(|n| n.cloned())
+                .collect();
             plan_using_constraint(
                 &column_names,
                 left_qcx,
                 left,
                 left_scope,
-                right_qcx,
+                &right_qcx,
                 right,
                 right_scope,
                 kind,
@@ -2803,25 +2642,15 @@ fn plan_using_constraint(
     let mut join_exprs = vec![];
     let mut map_exprs = vec![];
     let mut new_items = vec![];
-    let mut priority_cols = vec![];
-    let mut non_priority_cols = vec![];
+    let mut join_cols = vec![];
+    let mut hidden_cols = vec![];
 
     for column_name in column_names {
-        let (lhs, _) = left_scope.resolve_column(column_name)?;
-        let (mut rhs, _) = right_scope.resolve_column(column_name)?;
-        if lhs.level != 0 || rhs.level != 0 {
-            sql_bail!(
-                "Internal error: name {} in USING resolved to outer column",
-                column_name
-            )
-        }
+        let lhs = left_scope.resolve_using_column(column_name, JoinSide::Left)?;
+        let mut rhs = right_scope.resolve_using_column(column_name, JoinSide::Right)?;
 
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();
-
-        // Track that these columns must have their priority reset.
-        non_priority_cols.push(lhs.column);
-        non_priority_cols.push(rhs.column);
 
         // Join keys must be resolved to same type.
         let mut exprs = coerce_homogeneous_exprs(
@@ -2839,8 +2668,14 @@ fn plan_using_constraint(
         let (expr1, expr2) = (exprs.remove(0), exprs.remove(0));
 
         match kind {
-            JoinKind::LeftOuter { .. } | JoinKind::Inner { .. } => priority_cols.push(lhs.column),
-            JoinKind::RightOuter => priority_cols.push(rhs.column),
+            JoinKind::LeftOuter { .. } | JoinKind::Inner { .. } => {
+                join_cols.push(lhs.column);
+                hidden_cols.push(rhs.column);
+            }
+            JoinKind::RightOuter => {
+                join_cols.push(rhs.column);
+                hidden_cols.push(lhs.column);
+            }
             JoinKind::FullOuter => {
                 // Create a new column that will be the coalesced value of left and right
                 let names = both_scope.items[lhs.column]
@@ -2852,21 +2687,18 @@ fn plan_using_constraint(
                     .map(|column_name| ScopeItemName {
                         table_name: None,
                         column_name,
-                        priority: true,
+                        priority: false,
                     })
                     .collect::<Vec<_>>();
 
-                priority_cols.push(both_scope.items.len() + map_exprs.len());
+                join_cols.push(both_scope.items.len() + map_exprs.len());
+                hidden_cols.push(lhs.column);
+                hidden_cols.push(rhs.column);
                 map_exprs.push(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs: vec![expr1.clone(), expr2.clone()],
                 });
-                new_items.push(ScopeItem {
-                    names,
-                    expr: None,
-                    nameable: true,
-                    visible_to_wildcard: true,
-                });
+                new_items.push(ScopeItem::from_names(names));
             }
         }
 
@@ -2878,23 +2710,15 @@ fn plan_using_constraint(
     }
     both_scope.items.extend(new_items);
 
-    // Toggle which columns should (not)? return from `SELECT *`.
-    for c in &non_priority_cols {
-        for item_name in both_scope.items[*c].names.iter_mut() {
-            item_name.priority = false;
-        }
-        both_scope.items[*c].visible_to_wildcard = false;
-    }
-
-    for c in &priority_cols {
-        for item_name in both_scope.items[*c].names.iter_mut() {
-            item_name.priority = true;
-        }
-        both_scope.items[*c].visible_to_wildcard = true;
+    // The columns from the secondary side of the join remain accessible by
+    // their table-qualified name, but not by their column name alone. They are
+    // also excluded from `SELECT *`.
+    for c in hidden_cols {
+        both_scope.items[c].allow_unqualified_references = false;
     }
 
     // Reproject all returned elements to the front of the list.
-    let project_key = priority_cols
+    let project_key = join_cols
         .into_iter()
         .chain(0..both_scope.items.len())
         .unique()
@@ -2902,22 +2726,19 @@ fn plan_using_constraint(
 
     both_scope = both_scope.project(&project_key);
 
-    let both = HirRelationExpr::Join {
-        left: Box::new(left),
-        right: Box::new(right),
-        on: join_exprs
-            .into_iter()
-            .fold(HirScalarExpr::literal_true(), |expr1, expr2| {
-                HirScalarExpr::CallBinary {
-                    func: BinaryFunc::And,
-                    expr1: Box::new(expr1),
-                    expr2: Box::new(expr2),
-                }
-            }),
-        kind,
-    }
-    .map(map_exprs)
-    .project(project_key);
+    let on = join_exprs
+        .into_iter()
+        .fold(HirScalarExpr::literal_true(), |expr1, expr2| {
+            HirScalarExpr::CallBinary {
+                func: BinaryFunc::And,
+                expr1: Box::new(expr1),
+                expr2: Box::new(expr2),
+            }
+        });
+    let both = left
+        .join(right, on, kind)
+        .map(map_exprs)
+        .project(project_key);
     Ok((both, both_scope))
 }
 
@@ -4182,31 +4003,6 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, PlanError> {
     }
 }
 
-struct LateralJoinVisitor {
-    found: bool,
-}
-
-impl LateralJoinVisitor {
-    fn new() -> LateralJoinVisitor {
-        LateralJoinVisitor { found: false }
-    }
-
-    fn found(self) -> bool {
-        self.found
-    }
-}
-
-impl<'a, 'ast> Visit<'ast, Aug> for LateralJoinVisitor {
-    fn visit_table_factor(&mut self, node: &'ast TableFactor<Aug>) {
-        if matches!(
-            node,
-            TableFactor::Derived { lateral: true, .. } | TableFactor::Function { .. }
-        ) {
-            self.found = true;
-        }
-    }
-}
-
 /// This is used to collect aggregates from within an `Expr`.
 /// See the explanation of aggregate handling at the top of the file for more details.
 struct AggregateFuncVisitor<'a, 'ast> {
@@ -4384,7 +4180,7 @@ impl<'a> QueryContext<'a> {
                 let name = object.raw_name;
                 let cte = self.ctes.get(&id).unwrap();
                 let mut val = cte.val.clone();
-                val.visit_columns(0, &mut |depth, col| {
+                val.visit_columns_mut(0, &mut |depth, col| {
                     if col.level > depth {
                         col.level += cte.level_offset;
                     }
@@ -4483,8 +4279,11 @@ impl<'a> ExprContext<'a> {
     }
 
     fn derived_query_context(&self) -> QueryContext {
-        self.qcx
-            .derived_context(self.scope.clone(), self.relation_type)
+        let mut qcx = self
+            .qcx
+            .derived_context(self.scope.clone(), self.relation_type);
+        qcx.outer_scope.lateral_barrier = true;
+        qcx
     }
 
     pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {

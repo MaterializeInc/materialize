@@ -53,3 +53,23 @@ pub fn maybe_rename_columns(
 
     Ok(desc.with_names(new_names))
 }
+
+/// Specifies the side of a join.
+///
+/// Intended for use in error messages.
+#[derive(Debug, Clone, Copy)]
+pub enum JoinSide {
+    /// The left side.
+    Left,
+    /// The right side.
+    Right,
+}
+
+impl fmt::Display for JoinSide {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            JoinSide::Left => f.write_str("left"),
+            JoinSide::Right => f.write_str("right"),
+        }
+    }
+}

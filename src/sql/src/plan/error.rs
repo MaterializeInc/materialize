@@ -20,9 +20,10 @@ use repr::ColumnName;
 
 use crate::catalog::CatalogError;
 use crate::names::PartialName;
+use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum PlanError {
     Unsupported {
         feature: String,
@@ -36,7 +37,19 @@ pub enum PlanError {
         table: Option<PartialName>,
         column: ColumnName,
     },
+    WrongJoinTypeForLateralColumn {
+        table: Option<PartialName>,
+        column: ColumnName,
+    },
     AmbiguousColumn(ColumnName),
+    UnknownColumnInUsingClause {
+        column: ColumnName,
+        join_side: JoinSide,
+    },
+    AmbiguousColumnInUsingClause {
+        column: ColumnName,
+        join_side: JoinSide,
+    },
     MisqualifiedName(String),
     OverqualifiedDatabaseName(String),
     OverqualifiedSchemaName(String),
@@ -85,10 +98,28 @@ impl fmt::Display for PlanError {
                 "column {} must appear in the GROUP BY clause or be used in an aggregate function",
                 ColumnDisplay { table, column },
             ),
+            Self::WrongJoinTypeForLateralColumn { table, column } => write!(
+                f,
+                "column {} cannot be referenced from this part of the query: \
+                the combining JOIN type must be INNER or LEFT for a LATERAL reference",
+                ColumnDisplay { table, column },
+            ),
             Self::AmbiguousColumn(column) => write!(
                 f,
                 "column reference {} is ambiguous",
                 column.as_str().quoted()
+            ),
+            Self::UnknownColumnInUsingClause { column, join_side } => write!(
+                f,
+                "column {} specified in USING clause does not exist in {} table",
+                column.as_str().quoted(),
+                join_side,
+            ),
+            Self::AmbiguousColumnInUsingClause { column, join_side } => write!(
+                f,
+                "common column name {} appears more than once in {} table",
+                column.as_str().quoted(),
+                join_side,
             ),
             Self::MisqualifiedName(name) => write!(
                 f,

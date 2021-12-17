@@ -81,13 +81,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 ----
 %0 =
-| Constant ()
-
-%1 =
 | CallTable generate_series(-2, 2, 1)
-
-%2 =
-| InnerLateralJoin %0 %1 on true
 
 EOF
 
@@ -186,7 +180,7 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
 | CallTable generate_series(1, #^0, 1)
 
 %2 =
-| InnerLateralJoin %0 %1 on true
+| InnerJoin %0 %1 on true
 
 EOF
 
@@ -200,7 +194,7 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 | CallTable generate_series(i32toi64(100), i32toi64(#^0), 1)
 
 %2 =
-| InnerLateralJoin %0 %1 on true
+| InnerJoin %0 %1 on true
 
 EOF
 
@@ -209,7 +203,14 @@ EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, 10)
 ----
 %0 =
 | Get materialize.public.x (u3)
-| FlatMap generate_series(1, 10, 1)
+| ArrangeBy ()
+
+%1 =
+| Constant (1) (2) (3) (4) (5) (6) (7) (8) (9) (10)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 
 EOF
 
@@ -412,13 +413,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2, 1)
 ----
 %0 =
-| Constant ()
-
-%1 =
 | CallTable generate_series(-2, 2, 1)
-
-%2 =
-| InnerLateralJoin %0 %1 on true
 
 EOF
 
@@ -426,13 +421,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 1::bigint)
 ----
 %0 =
-| Constant ()
-
-%1 =
 | CallTable generate_series(i32toi64(-2), i32toi64(2), i32toi64(1))
-
-%2 =
-| InnerLateralJoin %0 %1 on true
 
 EOF
 

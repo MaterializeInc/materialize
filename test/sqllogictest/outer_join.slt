@@ -48,11 +48,15 @@ SELECT * FROM a CROSS JOIN b JOIN LATERAL(SELECT a.a FROM c) x ON TRUE;
 ----
 1 2 1
 
-query error join trees using both lateral and full/right outer joins not yet supported
+query III
 SELECT * FROM a, b FULL JOIN LATERAL(SELECT a.a FROM c) x ON TRUE;
+----
+1 2 1
 
-query error column "a.a" does not exist
+query III
 SELECT * FROM a CROSS JOIN (b FULL JOIN LATERAL(SELECT a.a FROM c) x ON TRUE);
+----
+1 2 1
 
 statement ok
 CREATE TABLE t1 (a int, b int);
@@ -66,5 +70,10 @@ INSERT INTO t1 VALUES (1, 2), (2, 3);
 statement ok
 INSERT INTO t2 VALUES (2, 4), (5, 7);
 
-query error join trees using both lateral and full/right outer joins not yet supported
+query IIII rowsort
 SELECT * FROM generate_series(1, 2), LATERAL (SELECT * FROM t1) _ NATURAL RIGHT JOIN t2;
+----
+1 2 3    4
+2 2 3    4
+1 5 NULL 7
+2 5 NULL 7
