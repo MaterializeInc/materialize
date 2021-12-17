@@ -17,6 +17,7 @@ use ore::id_gen::Gen;
 pub mod dot;
 mod hir;
 mod lowering;
+pub mod rewrite_engine;
 mod scalar_expr;
 #[cfg(test)]
 mod test;
@@ -353,6 +354,36 @@ impl Model {
         Ok(())
     }
 
+    /// Visit boxes in the query graph in pre-order
+    fn visit_pre_boxes_in_subgraph_mut<'a, F, E>(
+        &'a self,
+        f: &mut F,
+        start_box: BoxId,
+    ) -> Result<(), E>
+    where
+        F: FnMut(RefMut<'a, QueryBox>) -> Result<(), E>,
+    {
+        let mut visited = HashSet::new();
+        let mut stack = vec![start_box];
+        while !stack.is_empty() {
+            let box_id = stack.pop().unwrap();
+            if visited.insert(box_id) {
+                let query_box = self.boxes.get(&box_id).expect("a valid box identifier");
+                f(query_box.borrow_mut())?;
+
+                stack.extend(
+                    query_box
+                        .borrow()
+                        .quantifiers
+                        .iter()
+                        .rev()
+                        .map(|q| self.get_quantifier(*q).input_box),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Removes unreferenced objects from the model. May be invoked
     /// several times during query rewrites.
     #[allow(dead_code)]
@@ -526,6 +557,22 @@ impl QueryBox {
 
     fn is_select(&self) -> bool {
         matches!(self.box_type, BoxType::Select(_))
+    }
+
+    fn add_predicate(&mut self, predicate: BoxScalarExpr) {
+        match &mut self.box_type {
+            BoxType::Select(select) => select.predicates.push(predicate),
+            BoxType::OuterJoin(outer_join) => outer_join.predicates.push(predicate),
+            _ => unreachable!(),
+        }
+    }
+
+    fn get_predicates(&self) -> Option<&Vec<BoxScalarExpr>> {
+        match &self.box_type {
+            BoxType::Select(select) => Some(&select.predicates),
+            BoxType::OuterJoin(outer_join) => Some(&outer_join.predicates),
+            _ => None,
+        }
     }
 
     /// Correlation information of the quantifiers in this box. Returns a map
