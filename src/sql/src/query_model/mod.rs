@@ -20,6 +20,7 @@ use ore::id_gen::Gen;
 pub mod dot;
 mod hir;
 mod lowering;
+mod rewrites;
 mod scalar_expr;
 #[cfg(test)]
 mod test;
