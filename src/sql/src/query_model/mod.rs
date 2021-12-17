@@ -17,7 +17,7 @@ use itertools::Itertools;
 
 use ore::id_gen::Gen;
 
-pub mod dot;
+mod dot;
 mod hir;
 mod lowering;
 mod rewrites;
@@ -25,6 +25,9 @@ mod scalar_expr;
 #[cfg(test)]
 mod test;
 mod validator;
+
+pub use dot::DotGenerator;
+pub use rewrites::rewrite_model;
 
 pub use scalar_expr::*;
 
