@@ -9,10 +9,12 @@
 
 use crate::query_model::{
     BaseColumn, BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Get, Model,
-    QuantifierSet, QuantifierType,
+    QuantifierId, QuantifierSet, QuantifierType,
 };
 use itertools::Itertools;
-use repr::RelationType;
+use ore::collections::CollectionExt;
+use ore::id_gen::IdGen;
+use repr::{Datum, RelationType, ScalarType};
 use std::collections::HashMap;
 
 /// Maps a column reference to a specific column position.
@@ -25,10 +27,10 @@ type ColumnMap = HashMap<ColumnReference, usize>;
 impl Model {
     pub fn lower(&self) -> expr::MirRelationExpr {
         let mut lowerer = Lowerer::new(self);
-        let mut id_gen = ore::id_gen::IdGen::default();
+        let mut id_gen = IdGen::default();
         expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
-            .let_in(&mut id_gen, |_id_gen, get_outer| {
-                lowerer.apply(self.top_box, get_outer, &ColumnMap::new())
+            .let_in(&mut id_gen, |id_gen, get_outer| {
+                lowerer.apply(self.top_box, get_outer, &ColumnMap::new(), id_gen)
             })
     }
 }
@@ -48,6 +50,7 @@ impl<'a> Lowerer<'a> {
         box_id: BoxId,
         get_outer: expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
+        id_gen: &mut IdGen,
     ) -> expr::MirRelationExpr {
         use expr::MirRelationExpr as SR;
         let the_box = self.model.get_box(box_id).borrow();
@@ -108,7 +111,7 @@ impl<'a> Lowerer<'a> {
 
                 let outer_arity = get_outer.arity();
                 let (mut input, column_map) =
-                    self.lower_join(get_outer, outer_column_map, &the_box.quantifiers);
+                    self.lower_join(get_outer, outer_column_map, &the_box.quantifiers, id_gen);
                 let input_arity = input.arity();
 
                 // 2) Lower the filter component.
@@ -158,6 +161,7 @@ impl<'a> Lowerer<'a> {
         get_outer: expr::MirRelationExpr,
         outer_column_map: &ColumnMap,
         quantifiers: &QuantifierSet,
+        id_gen: &mut IdGen,
     ) -> (expr::MirRelationExpr, ColumnMap) {
         if let expr::MirRelationExpr::Get { .. } = &get_outer {
         } else {
@@ -169,17 +173,9 @@ impl<'a> Lowerer<'a> {
 
         let outer_arity = get_outer.arity();
 
-        // TODO(asenac) Lower scalar subquery quantifiers
-        assert!(quantifiers.iter().all(|q_id| {
-            self.model.get_quantifier(*q_id).borrow().quantifier_type == QuantifierType::Foreach
-        }));
-
         let join_inputs = quantifiers
             .iter()
-            .map(|q_id| {
-                let input_box = self.model.get_quantifier(*q_id).borrow().input_box;
-                self.apply(input_box, get_outer.clone(), outer_column_map)
-            })
+            .map(|q_id| self.lower_quantifier(*q_id, get_outer.clone(), outer_column_map, id_gen))
             .collect_vec();
 
         let join = if join_inputs.len() == 1 {
@@ -209,6 +205,65 @@ impl<'a> Lowerer<'a> {
         }
 
         (join, column_map)
+    }
+
+    /// Lowers the given quantifier by applying it to the outer relation.
+    fn lower_quantifier(
+        &mut self,
+        quantifier_id: QuantifierId,
+        get_outer: expr::MirRelationExpr,
+        outer_column_map: &ColumnMap,
+        id_gen: &mut IdGen,
+    ) -> expr::MirRelationExpr {
+        let quantifier = self.model.get_quantifier(quantifier_id).borrow();
+        let input_box = quantifier.input_box;
+        let mut input = self.apply(input_box, get_outer.clone(), outer_column_map, id_gen);
+
+        match &quantifier.quantifier_type {
+            QuantifierType::Foreach => {
+                // No special handling required
+            }
+            QuantifierType::Scalar => {
+                // Add the machinery to ensure the lowered plan always produce one row,
+                // but one row at most, per outer key.
+                let col_type = input.typ().column_types.into_last();
+
+                let outer_arity = get_outer.arity();
+                // We must determine a count for each `get_outer` prefix,
+                // and report an error if that count exceeds one.
+                let guarded = input.let_in(id_gen, |_id_gen, get_select| {
+                    // Count for each `get_outer` prefix.
+                    let counts = get_select.clone().reduce(
+                        (0..outer_arity).collect::<Vec<_>>(),
+                        vec![expr::AggregateExpr {
+                            func: expr::AggregateFunc::Count,
+                            expr: expr::MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool),
+                            distinct: false,
+                        }],
+                        None,
+                    );
+                    // Errors should result from counts > 1.
+                    let errors = counts
+                        .filter(vec![expr::MirScalarExpr::Column(outer_arity).call_binary(
+                            expr::MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+                            expr::BinaryFunc::Gt,
+                        )])
+                        .project((0..outer_arity).collect::<Vec<_>>())
+                        .map(vec![expr::MirScalarExpr::literal(
+                            Err(expr::EvalError::MultipleRowsFromSubquery),
+                            col_type.clone().scalar_type,
+                        )]);
+                    // Return `get_select` and any errors added in.
+                    get_select.union(errors)
+                });
+                // append Null to anything that didn't return any rows
+                let default = vec![(Datum::Null, col_type.nullable(true))];
+                input = get_outer.lookup(id_gen, guarded, default);
+            }
+            _ => panic!("Unsupported quantifier type"),
+        }
+
+        input
     }
 
     /// Join the given inputs on a shared common prefix.

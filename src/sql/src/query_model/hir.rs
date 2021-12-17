@@ -270,6 +270,18 @@ impl FromHir {
                 then: Box::new(self.generate_expr(*then, context_box)),
                 els: Box::new(self.generate_expr(*els, context_box)),
             },
+            HirScalarExpr::Select(mut expr) => {
+                let box_id = self.within_context(context_box, &mut move |generator| -> BoxId {
+                    generator.generate_select(expr.take())
+                });
+                let quantifier_id =
+                    self.model
+                        .make_quantifier(QuantifierType::Scalar, box_id, context_box);
+                BoxScalarExpr::ColumnReference(ColumnReference {
+                    quantifier_id,
+                    position: 0,
+                })
+            }
             _ => panic!("unsupported expression type {:?}", expr),
         }
     }
