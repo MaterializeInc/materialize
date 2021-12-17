@@ -198,7 +198,7 @@ where
                                 let mut datums = Vec::with_capacity(source_arity);
                                 datums.extend(key.iter());
                                 datums.extend(value.iter());
-                                evaluate(&datums, &predicates, &position_or, &mut row_packer)
+                                evaluate(&datums, &predicates, &position_or, &mut row_packer, 0)
                                     .map_err(DataflowError::from)
                             })
                             .transpose();
@@ -265,6 +265,11 @@ fn evaluate(
     predicates: &[MirScalarExpr],
     position_or: &[Option<usize>],
     row_packer: &mut repr::Row,
+    // key_columns is the number of columns in the front of `Datum`'s
+    // that are dedicated to the key. This is used to avoid
+    // repacking key values in so many places, and it relies on the fact that
+    // `position_or` never re-orders inputs.
+    key_columns: usize,
 ) -> Result<Option<Row>, EvalError> {
     let arena = RowArena::new();
     // Each predicate is tested in order.
@@ -273,10 +278,12 @@ fn evaluate(
             return Ok(None);
         }
     }
+
     // We pack dummy values in locations that do not reference
     // specific columns.
     row_packer.clear();
     row_packer.extend(position_or.iter().map(|x| match x {
+        Some(column) if column < &key_columns => Datum::Dummy,
         Some(column) => datums[*column],
         None => Datum::Dummy,
     }));
@@ -382,7 +389,10 @@ where
                                         None => Ok(None),
                                         Some(value) => value.and_then(|row| {
                                             let mut datums = Vec::with_capacity(source_arity);
+
+                                            let key_columns = decoded_key.iter().count();
                                             datums.extend(decoded_key.iter());
+
                                             datums.extend(row.iter());
                                             datums.extend(data.metadata.iter());
                                             evaluate(
@@ -390,6 +400,7 @@ where
                                                 &predicates,
                                                 &position_or,
                                                 &mut row_packer,
+                                                key_columns,
                                             )
                                             .map_err(DataflowError::from)
                                         }),
@@ -398,18 +409,43 @@ where
                                     // We store errors as well as non-None values, so that they can be
                                     // retracted if new rows show up for the same key.
                                     let new_value = decoded_value.transpose();
+
                                     let old_value = if let Some(new_value) = &new_value {
-                                        current_values.insert(decoded_key, new_value.clone())
+                                        current_values
+                                            .insert(decoded_key.clone(), new_value.clone())
                                     } else {
                                         current_values.remove(&decoded_key)
                                     };
+
+                                    // This closure re-uses `row_packer` to re-assemble rows with
+                                    // the keys that were replaced with `Datum::Dummy`
+                                    let mut repack_value = |row: Row| {
+                                        row_packer.clear();
+
+                                        row_packer.extend(decoded_key.iter());
+                                        // always skip all the keys
+                                        row_packer
+                                            .extend(row.iter().skip(decoded_key.iter().count()));
+
+                                        let r = row_packer.finish_and_reuse();
+                                        r
+                                    };
+
                                     if let Some(old_value) = old_value {
                                         // retract old value
-                                        session.give((old_value, cap.time().clone(), -1));
+                                        session.give((
+                                            old_value.map(&mut repack_value),
+                                            cap.time().clone(),
+                                            -1,
+                                        ));
                                     }
                                     if let Some(new_value) = new_value {
                                         // give new value
-                                        session.give((new_value, cap.time().clone(), 1));
+                                        session.give((
+                                            new_value.map(&mut repack_value),
+                                            cap.time().clone(),
+                                            1,
+                                        ));
                                     }
                                 }
                                 None => {}
