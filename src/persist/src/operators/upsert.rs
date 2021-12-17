@@ -124,7 +124,7 @@ where
     {
         let operator_name = format!("persistent_upsert({})", name);
 
-        let (restored_upsert_oks, _state_errs) = {
+        let (restored_upsert_oks, state_errs) = {
             let snapshot = persist_config.read_handle.snapshot();
             let (restored_oks, restored_errs) = self
                 .scope()
@@ -297,7 +297,7 @@ where
 
         (
             new_upsert_oks.concat(&restored_upsert_oks),
-            new_upsert_persist_errs,
+            new_upsert_persist_errs.concat(&state_errs),
         )
     }
 }
