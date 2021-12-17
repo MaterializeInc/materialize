@@ -28,8 +28,8 @@ use sql::ast::{
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
     CreateViewStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeed, CsrSeedCompiled,
     CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy, CsvColumns, DataType, Format, Function,
-    Ident, ProtobufSchema, Raw, RawName, SqlOption, Statement, TableFactor, TableFunction,
-    UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
+    Ident, ProtobufSchema, Raw, RawName, SqlOption, Statement, TableFunction, UnresolvedObjectName,
+    Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use sql::plan::resolve_names_stmt;
 use uuid::Uuid;
@@ -426,17 +426,11 @@ fn ast_use_pg_catalog_0_7_1(stmt: &mut sql::ast::Statement<Raw>) -> Result<(), a
             // find them.
             visit_mut::visit_function_mut(self, func)
         }
-        fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Raw>) {
-            if let TableFactor::Function {
-                function: TableFunction { ref mut name, .. },
-                ..
-            } = table_factor
-            {
-                normalize_function_name(name);
-            }
+        fn visit_table_function_mut(&mut self, func: &'ast mut TableFunction<Raw>) {
+            normalize_function_name(&mut func.name);
             // Function args can be functions themselves, so let the visitor
             // find them.
-            visit_mut::visit_table_factor_mut(self, table_factor)
+            visit_mut::visit_table_function_mut(self, func)
         }
     }
 

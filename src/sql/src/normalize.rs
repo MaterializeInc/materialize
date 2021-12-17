@@ -190,6 +190,25 @@ pub fn create_statement(
             }
         }
 
+        fn visit_table_function_mut(&mut self, func: &'ast mut TableFunction<Aug>) {
+            if let Err(e) = normalize_function_name(self.scx, &mut func.name) {
+                self.err = Some(e);
+                return;
+            }
+
+            match &mut func.args {
+                FunctionArgs::Star => (),
+                FunctionArgs::Args { args, order_by } => {
+                    for arg in args {
+                        self.visit_expr_mut(arg);
+                    }
+                    for expr in order_by {
+                        self.visit_order_by_expr_mut(expr);
+                    }
+                }
+            }
+        }
+
         fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
             match table_factor {
                 TableFactor::Table { name, alias, .. } => {
@@ -198,33 +217,8 @@ pub fn create_statement(
                         self.visit_table_alias_mut(alias);
                     }
                 }
-                TableFactor::Function {
-                    function: TableFunction { ref mut name, args },
-                    alias,
-                } => {
-                    if let Err(e) = normalize_function_name(self.scx, name) {
-                        self.err = Some(e);
-                        return;
-                    }
-
-                    match args {
-                        FunctionArgs::Star => (),
-                        FunctionArgs::Args { args, order_by } => {
-                            for expr in args {
-                                self.visit_expr_mut(expr);
-                            }
-                            for expr in order_by {
-                                self.visit_order_by_expr_mut(expr);
-                            }
-                        }
-                    }
-                    if let Some(alias) = alias {
-                        self.visit_table_alias_mut(alias);
-                    }
-                }
-                // We only need special behavior for `TableFactor::Table` and
-                // `TableFactor::Function`. Just visit the other types of table
-                // factors like normal.
+                // We only need special behavior for `TableFactor::Table`.
+                // Just visit the other types of table factors like normal.
                 _ => visit_mut::visit_table_factor_mut(self, table_factor),
             }
         }
