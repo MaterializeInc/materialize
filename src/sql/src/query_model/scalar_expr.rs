@@ -161,6 +161,50 @@ impl BoxScalarExpr {
         }
     }
 
+    pub fn visit<'a, F>(&'a self, f: &mut F)
+    where
+        F: FnMut(&'a Self),
+    {
+        self.visit1(|e| e.visit(f));
+        f(self);
+    }
+
+    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
+    where
+        F: FnMut(&'a mut Self),
+    {
+        use BoxScalarExpr::*;
+        match self {
+            ColumnReference(..) | BaseColumn(..) | Literal(..) | CallNullary(..) => (),
+            CallUnary { expr, .. } => f(expr),
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+            Aggregate { expr, .. } => {
+                f(expr);
+            }
+        }
+    }
+
+    pub fn visit_mut<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut Self),
+    {
+        self.visit1_mut(|e| e.visit_mut(f));
+        f(self);
+    }
+
     /// A generalization of `visit`. The function `pre` runs on a
     /// `BoxScalarExpr` before it runs on any of the child `BoxScalarExpr`s.
     /// The function `post` runs on child `BoxScalarExpr`s first before the
