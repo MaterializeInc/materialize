@@ -9,8 +9,6 @@
 
 //! Benchmarks for different persistent Write implementations.
 
-use std::fmt::Write;
-use std::mem::size_of;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,17 +17,16 @@ use criterion::measurement::WallTime;
 use criterion::{
     criterion_group, criterion_main, Bencher, BenchmarkGroup, BenchmarkId, Criterion, Throughput,
 };
-use rand::Rng;
-use tokio::runtime::Runtime;
-
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
+use rand::prelude::{SliceRandom, SmallRng};
+use rand::{Rng, SeedableRng};
+use tokio::runtime::Runtime;
 
 use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
-use persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use persist::indexed::encoding::{BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
 use persist::indexed::runtime::WriteReqBuilder;
@@ -37,6 +34,7 @@ use persist::indexed::Indexed;
 use persist::mem::MemRegistry;
 use persist::pfuture::{PFuture, PFutureHandle};
 use persist::storage::{Atomicity, Blob, LockInfo, Log, SeqNo};
+use persist::workload::DataGenerator;
 
 fn new_file_log(name: &str, parent: &Path) -> FileLog {
     let file_log_dir = parent.join(name);
@@ -51,33 +49,6 @@ fn new_file_blob(name: &str, parent: &Path) -> FileBlob {
         LockInfo::new_no_reentrance(name.to_owned()),
     )
     .expect("creating a FileBlob cannot fail")
-}
-
-fn generate_updates() -> ColumnarRecords {
-    let mut builder = ColumnarRecordsBuilder::default();
-    // Ensure that each key has the same number of bytes to make reasoning about
-    // throughput simpler
-    let val_bytes = Vec::new();
-    let mut key = String::new();
-    for x in 1_000_000..2_000_000 {
-        key.clear();
-        write!(&mut key, "{}", x).expect("write cannot fail");
-        builder.push(((key.as_bytes(), &val_bytes), 1, 1));
-    }
-
-    builder.finish()
-}
-
-fn get_encoded_len(updates: &ColumnarRecords) -> u64 {
-    let mut len = 0;
-
-    for ((key, val), _, _) in updates.iter() {
-        len += key.len();
-        len += val.len();
-        len += size_of::<u64>() + size_of::<isize>();
-    }
-
-    u64::cast_from(len)
 }
 
 // Benchmark the write throughput of Log::write_sync.
@@ -132,31 +103,36 @@ pub fn bench_writes_blob(c: &mut Criterion) {
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(1));
 
-    let mut data = vec![];
-
-    // Ensure that each value has the same number of bytes to make reasoning about
-    // throughput simpler
-    for i in 1_000_000..2_000_000 {
-        let base = format!("{}", i).as_bytes().to_vec();
-        data.extend_from_slice(&base);
+    let mut blob_val = vec![];
+    let data = DataGenerator::default();
+    for batch in data.batches() {
+        for ((k, v), t, d) in batch.iter() {
+            blob_val.extend_from_slice(k);
+            blob_val.extend_from_slice(v);
+            blob_val.extend_from_slice(&t.to_le_bytes());
+            blob_val.extend_from_slice(&d.to_le_bytes());
+        }
     }
-
-    let size = data.len() as u64;
-    group.throughput(Throughput::Bytes(size));
+    assert_eq!(data.goodput_bytes(), u64::cast_from(blob_val.len()));
+    group.throughput(Throughput::Bytes(data.goodput_bytes()));
 
     let mut mem_blob = MemRegistry::new()
         .blob_no_reentrance()
         .expect("creating a MemBlob cannot fail");
-    group.bench_with_input(BenchmarkId::new("mem", size), &data, |b, data| {
-        bench_set(&mut mem_blob, data.clone(), b)
-    });
+    group.bench_with_input(
+        BenchmarkId::new("mem", data.goodput_pretty()),
+        &blob_val,
+        |b, blob_val| bench_set(&mut mem_blob, blob_val.clone(), b),
+    );
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     let mut file_blob = new_file_blob("file_blob_set", temp_dir.path());
-    group.bench_with_input(BenchmarkId::new("file", size), &data, |b, data| {
-        bench_set(&mut file_blob, data.clone(), b)
-    });
+    group.bench_with_input(
+        BenchmarkId::new("file", data.goodput_pretty()),
+        &blob_val,
+        |b, blob_val| bench_set(&mut file_blob, blob_val.clone(), b),
+    );
 }
 
 fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, PFutureHandle<T>), L: Log, B: Blob>(
@@ -238,20 +214,17 @@ fn bench_writes_indexed_inner<B: Blob, L: Log>(
     name: &str,
     g: &mut BenchmarkGroup<WallTime>,
 ) -> Result<(), Error> {
-    let updates = generate_updates();
-    let size = get_encoded_len(&updates);
-    let updates = updates
-        .iter()
-        .map(|((key, val), t, d)| ((key.to_vec(), val.to_vec()), t, d))
-        .collect::<Vec<_>>();
-    let mut sorted_updates = updates.clone();
+    let data = DataGenerator::default();
+    let mut sorted_updates = data.records().collect::<Vec<_>>();
     sorted_updates.sort();
+    let mut unsorted_updates = sorted_updates.clone();
+    unsorted_updates.shuffle(&mut SmallRng::seed_from_u64(0));
 
-    g.throughput(Throughput::Bytes(size));
+    g.throughput(Throughput::Bytes(data.goodput_bytes()));
 
     let id = block_on(|res| index.register("0", "()", "()", res))?;
     g.bench_with_input(
-        BenchmarkId::new(&format!("{}_sorted", name), size),
+        BenchmarkId::new(&format!("{}_sorted", name), data.goodput_pretty()),
         &sorted_updates,
         |b, data| {
             bench_write(&mut index, id, data.clone(), b);
@@ -259,8 +232,8 @@ fn bench_writes_indexed_inner<B: Blob, L: Log>(
     );
 
     g.bench_with_input(
-        BenchmarkId::new(&format!("{}_unsorted", name), size),
-        &updates,
+        BenchmarkId::new(&format!("{}_unsorted", name), data.goodput_pretty()),
+        &unsorted_updates,
         |b, data| {
             bench_write(&mut index, id, data.clone(), b);
         },
@@ -322,17 +295,16 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
     let metrics = Metrics::register_with(&MetricsRegistry::new());
     let mut file_blob_cache = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics, file_blob);
 
-    let updates = generate_updates();
-    let size = get_encoded_len(&updates);
-    let updates = vec![updates.iter().collect::<ColumnarRecords>()];
-    group.throughput(Throughput::Bytes(size));
+    let data = DataGenerator::default();
+    let updates = data.batches().collect::<Vec<_>>();
+    group.throughput(Throughput::Bytes(data.goodput_bytes()));
     let batch = BlobUnsealedBatch {
         desc: SeqNo(0)..SeqNo(1),
         updates,
     };
 
     group.bench_with_input(
-        BenchmarkId::new("file_unsorted", size),
+        BenchmarkId::new("file_unsorted", data.goodput_pretty()),
         &batch,
         |b, batch| {
             bench_set_unsealed_batch(&mut file_blob_cache, batch.clone(), b);
@@ -340,7 +312,7 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("mem_unsorted", size),
+        BenchmarkId::new("mem_unsorted", data.goodput_pretty()),
         &batch,
         |b, batch| {
             bench_set_unsealed_batch(&mut mem_blob_cache, batch.clone(), b);

@@ -77,14 +77,19 @@ impl ColumnarRecords {
 }
 
 // TODO: deduplicate this with the other FromIterator implementation.
-impl<'a> FromIterator<&'a ((Vec<u8>, Vec<u8>), u64, isize)> for ColumnarRecords {
-    fn from_iter<T: IntoIterator<Item = &'a ((Vec<u8>, Vec<u8>), u64, isize)>>(iter: T) -> Self {
+impl<'a, K, V> FromIterator<&'a ((K, V), u64, isize)> for ColumnarRecords
+where
+    K: AsRef<[u8]> + 'a,
+    V: AsRef<[u8]> + 'a,
+{
+    fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, isize)>>(iter: T) -> Self {
         let iter = iter.into_iter();
         let size_hint = iter.size_hint();
 
         let mut builder = ColumnarRecordsBuilder::default();
         for record in iter.into_iter() {
             let ((key, val), ts, diff) = record;
+            let (key, val) = (key.as_ref(), val.as_ref());
             if builder.records.len() == 0 {
                 // Use the first record to attempt to pre-size the builder
                 // allocations. This uses the iter's size_hint's lower+1 to
@@ -99,14 +104,19 @@ impl<'a> FromIterator<&'a ((Vec<u8>, Vec<u8>), u64, isize)> for ColumnarRecords 
     }
 }
 
-impl<'a> FromIterator<((&'a [u8], &'a [u8]), u64, isize)> for ColumnarRecords {
-    fn from_iter<T: IntoIterator<Item = ((&'a [u8], &'a [u8]), u64, isize)>>(iter: T) -> Self {
+impl<K, V> FromIterator<((K, V), u64, isize)> for ColumnarRecords
+where
+    K: AsRef<[u8]>,
+    V: AsRef<[u8]>,
+{
+    fn from_iter<T: IntoIterator<Item = ((K, V), u64, isize)>>(iter: T) -> Self {
         let iter = iter.into_iter();
         let size_hint = iter.size_hint();
 
         let mut builder = ColumnarRecordsBuilder::default();
         for record in iter.into_iter() {
             let ((key, val), ts, diff) = record;
+            let (key, val) = (key.as_ref(), val.as_ref());
             if builder.records.len() == 0 {
                 // Use the first record to attempt to pre-size the builder
                 // allocations. This uses the iter's size_hint's lower+1 to
@@ -213,7 +223,7 @@ impl ColumnarRecordsBuilder {
         self.records.key_offsets.reserve(additional);
         self.records.key_data.reserve(additional * key_size_guess);
         self.records.val_offsets.reserve(additional);
-        self.records.key_data.reserve(additional * val_size_guess);
+        self.records.val_data.reserve(additional * val_size_guess);
         self.records.timestamps.reserve(additional);
         self.records.diffs.reserve(additional);
     }

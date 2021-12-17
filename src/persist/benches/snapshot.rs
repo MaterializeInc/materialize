@@ -9,15 +9,18 @@
 
 //! Benchmarks for reading from different parts of an [Indexed]
 
-use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
-
+use criterion::{
+    black_box, criterion_group, criterion_main, Bencher, BenchmarkId, Criterion, Throughput,
+};
 use ore::metrics::MetricsRegistry;
-use persist::error::Error;
-use persist::file::{FileBlob, FileLog};
+
+use persist::error::{Error, ErrorLog};
+use persist::file::FileBlob;
 use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamReadHandle};
 use persist::indexed::Snapshot;
 use persist::mem::MemRegistry;
 use persist::storage::{Blob, LockInfo};
+use persist::workload::{self, DataGenerator};
 use persist_types::Codec;
 
 fn read_full_snapshot<K: Codec + Ord, V: Codec + Ord>(
@@ -47,28 +50,26 @@ fn bench_runtime_snapshots<F>(c: &mut Criterion, name: &str, mut new_fn: F)
 where
     F: FnMut(usize) -> Result<RuntimeClient, Error>,
 {
-    let data_len = 100_000;
-    let data: Vec<((String, String), u64, isize)> = (0..data_len)
-        .map(|i| ((format!("key{}", i), format!("val{}", i)), i as u64, 1))
-        .collect();
+    let mut group = c.benchmark_group("snapshot");
 
     let mut runtime = new_fn(1).expect("creating index cannot fail");
     let (write, read) = runtime.create_or_load("0");
+    let data = DataGenerator::default();
 
     // Write the data out to the index's unsealed.
-    write
-        .write(data.iter())
-        .recv()
-        .expect("writing to index cannot fail");
-    c.bench_function(&format!("{}_unsealed_snapshot", name), |b| {
-        bench_snapshot(&read, data_len, b)
-    });
+    let goodput_bytes = workload::load(&write, &data, false).expect("writing to index cannot fail");
+    group.throughput(Throughput::Bytes(goodput_bytes));
+    group.bench_function(
+        BenchmarkId::new(format!("{}_unsealed_snapshot", name), data.goodput_pretty()),
+        |b| bench_snapshot(&read, data.record_count, b),
+    );
 
     // After a seal and a step, it's all moved into the trace part of the index.
-    write.seal(100_001).recv().expect("sealing update times");
-    c.bench_function(&format!("{}_trace_snapshot", name), |b| {
-        bench_snapshot(&read, data_len, b)
-    });
+    write.seal(u64::MAX).recv().expect("sealing update times");
+    group.bench_function(
+        BenchmarkId::new(format!("{}_trace_snapshot", name), data.goodput_pretty()),
+        |b| bench_snapshot(&read, data.record_count, b),
+    );
     runtime.stop().expect("stopping runtime cannot fail");
 }
 
@@ -79,14 +80,13 @@ pub fn bench_mem_snapshots(c: &mut Criterion) {
 pub fn bench_file_snapshots(c: &mut Criterion) {
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     bench_runtime_snapshots(c, "file", move |path| {
-        let log_dir = temp_dir.path().join(format!("snapshot_bench_log_{}", path));
         let blob_dir = temp_dir
             .path()
             .join(format!("snapshot_bench_blob_{}", path));
         let lock_info = LockInfo::new_no_reentrance("snapshot_bench".to_owned());
         runtime::start(
             RuntimeConfig::default(),
-            FileLog::new(log_dir, lock_info.clone())?,
+            ErrorLog,
             FileBlob::open_exclusive(blob_dir.into(), lock_info)?,
             build_info::DUMMY_BUILD_INFO,
             &MetricsRegistry::new(),
