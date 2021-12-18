@@ -151,6 +151,25 @@ Hint | Value type | Description
 
 For an example, see [Using query hints](#using-query-hints).
 
+### Column references
+
+Within a given `SELECT` statement, we refer to the columns from the tables in
+the `FROM` clause as the **input columns**, and columns in the `SELECT` list as
+the **output columns**.
+
+Expressions in the `SELECT` list, `WHERE` clause, and `HAVING` clause may refer
+only to input columns.
+
+Column references in the `ORDER BY` and `DISTINCT ON` clauses may be the name of
+an output column, the ordinal number of an output column, or an arbitrary
+expression of only input columns. If an unqualified name refers to both an input
+and output column, `ORDER BY` chooses the output column.
+
+Column references in the `GROUP BY` clause may be the name of an output column,
+the ordinal number of an output column, or an arbitrary expression of only input
+columns. If an unqualified name refers to both an input and output column,
+`GROUP BY` chooses the input column.
+
 ## Examples
 
 ### Creating a view

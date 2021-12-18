@@ -1259,7 +1259,8 @@ fn plan_query_inner(
                 allow_aggregates: true,
                 allow_subqueries: true,
             };
-            let (order_by, map_exprs) = plan_order_by_exprs(ecx, &q.order_by)?;
+            let output_columns: Vec<_> = scope.column_names().enumerate().collect();
+            let (order_by, map_exprs) = plan_order_by_exprs(ecx, &q.order_by, &output_columns)?;
             let finishing = RowSetFinishing {
                 order_by,
                 limit,
@@ -1613,7 +1614,7 @@ fn plan_view_select(
     };
 
     // Step 5. Handle GROUP BY clause.
-    let (group_scope, select_all_mapping) = {
+    let (mut group_scope, select_all_mapping) = {
         // Compute GROUP BY expressions.
         let ecx = &ExprContext {
             qcx,
@@ -1710,19 +1711,19 @@ fn plan_view_select(
     }
 
     // Step 7. Handle SELECT clause.
-    let (mut project_key, map_scope) = {
+    let output_columns = {
         let mut new_exprs = vec![];
-        let mut project_key = vec![];
-        let mut map_scope = group_scope.clone();
-        let ecx = &ExprContext {
-            qcx,
-            name: "SELECT clause",
-            scope: &group_scope,
-            relation_type: &qcx.relation_type(&relation_expr),
-            allow_aggregates: true,
-            allow_subqueries: true,
-        };
+        let mut new_type = qcx.relation_type(&relation_expr);
+        let mut output_columns = vec![];
         for (select_item, column_name) in &projection {
+            let ecx = &ExprContext {
+                qcx,
+                name: "SELECT clause",
+                scope: &group_scope,
+                relation_type: &new_type,
+                allow_aggregates: true,
+                allow_subqueries: true,
+            };
             let expr = match select_item {
                 ExpandedSelectItem::InputOrdinal(i) => {
                     if let Some(column) = select_all_mapping.get(&i).copied() {
@@ -1736,44 +1737,43 @@ fn plan_view_select(
                     .type_as_any(ecx)?,
             };
             if let HirScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
-                project_key.push(column);
-                // Mark the output name as prioritized, so that they shadow any
-                // input columns of the same name.
-                if let Some(column_name) = column_name {
-                    map_scope.items[column].names.push(ScopeItemName {
-                        table_name: None,
-                        column_name: Some(column_name.clone()),
-                        priority: true,
-                    });
-                }
+                // Simple column reference; no need to map on a new expression.
+                output_columns.push((column, column_name.as_ref()));
             } else {
-                project_key.push(group_scope.len() + new_exprs.len());
+                // Complicated expression that requires a map expression. We
+                // update `group_scope` as we go so that future expressions that
+                // are textually identical to this one can reuse it. This
+                // duplicate detection is required for proper determination of
+                // ambiguous column references with SQL92-style `ORDER BY`
+                // items. See `plan_order_by_or_distinct_expr` for more.
+                let typ = ecx.column_type(&expr);
+                new_type.column_types.push(typ);
                 new_exprs.push(expr);
-                map_scope.items.push(ScopeItem::from_name(ScopeItemName {
-                    table_name: None,
-                    column_name: column_name.clone(),
-                    priority: true,
-                }));
+                output_columns.push((group_scope.len(), column_name.as_ref()));
+                group_scope
+                    .items
+                    .push(ScopeItem::from_expr(select_item.as_expr().cloned()));
             }
         }
         relation_expr = relation_expr.map(new_exprs);
-        (project_key, map_scope)
+        output_columns
     };
+    let mut project_key: Vec<_> = output_columns.iter().map(|(i, _name)| *i).collect();
 
     // Step 8. Handle intrusive ORDER BY and DISTINCT.
     let order_by = {
         let relation_type = qcx.relation_type(&relation_expr);
-        let (mut order_by, mut map_exprs) = plan_projected_order_by_exprs(
+        let (mut order_by, mut map_exprs) = plan_order_by_exprs(
             &ExprContext {
                 qcx,
                 name: "ORDER BY clause",
-                scope: &map_scope,
+                scope: &group_scope,
                 relation_type: &relation_type,
                 allow_aggregates: true,
                 allow_subqueries: true,
             },
             order_by_exprs,
-            &project_key,
+            &output_columns,
         )
         .map_err(check_ungrouped_col)?;
 
@@ -1802,7 +1802,7 @@ fn plan_view_select(
                 let ecx = &ExprContext {
                     qcx,
                     name: "DISTINCT ON clause",
-                    scope: &map_scope,
+                    scope: &group_scope,
                     relation_type: &qcx.relation_type(&relation_expr),
                     allow_aggregates: true,
                     allow_subqueries: true,
@@ -1810,7 +1810,7 @@ fn plan_view_select(
 
                 let mut distinct_exprs = vec![];
                 for expr in exprs {
-                    let expr = plan_order_by_or_distinct_expr(ecx, expr, &project_key)
+                    let expr = plan_order_by_or_distinct_expr(ecx, expr, &output_columns)
                         .map_err(check_ungrouped_col)?;
                     distinct_exprs.push(expr);
                 }
@@ -1826,12 +1826,13 @@ fn plan_view_select(
                 //
                 // On the bright side, any columns that have already been
                 // computed by `ORDER BY` can be reused in the distinct key.
+                let arity = relation_type.arity();
                 for ord in order_by.iter().take(distinct_exprs.len()) {
                     // The unusual construction of `expr` here is to ensure the
                     // temporary column expression lives long enough.
                     let mut expr = &HirScalarExpr::column(ord.column);
-                    if ord.column >= map_scope.len() {
-                        expr = &map_exprs[ord.column - map_scope.len()];
+                    if ord.column >= arity {
+                        expr = &map_exprs[ord.column - arity];
                     };
                     match distinct_exprs.iter().position(move |e| e == expr) {
                         None => sql_bail!("SELECT DISTINCT ON expressions must match initial ORDER BY expressions"),
@@ -1850,7 +1851,7 @@ fn plan_view_select(
                         HirScalarExpr::Column(ColumnRef { level: 0, column }) => column,
                         _ => {
                             map_exprs.push(expr);
-                            map_scope.len() + map_exprs.len() - 1
+                            arity + map_exprs.len() - 1
                         }
                     };
                     distinct_key.push(column);
@@ -1953,25 +1954,21 @@ fn plan_group_by_expr<'a>(
 }
 
 /// Plans a slice of `ORDER BY` expressions.
+///
+/// See `plan_order_by_or_distinct_expr` for details on the `output_columns`
+/// parameter.
+///
+/// Returns the determined column orderings and a list of scalar expressions
+/// that must be mapped onto the underlying relation expression.
 fn plan_order_by_exprs(
     ecx: &ExprContext,
     order_by_exprs: &[OrderByExpr<Aug>],
-) -> Result<(Vec<ColumnOrder>, Vec<HirScalarExpr>), PlanError> {
-    let project_key: Vec<_> = (0..ecx.scope.len()).collect();
-    plan_projected_order_by_exprs(ecx, order_by_exprs, &project_key)
-}
-
-/// Like `plan_order_by_exprs`, except that any column ordinal references are
-/// projected via `project_key` rather than being accepted directly.
-fn plan_projected_order_by_exprs(
-    ecx: &ExprContext,
-    order_by_exprs: &[OrderByExpr<Aug>],
-    project_key: &[usize],
+    output_columns: &[(usize, Option<&ColumnName>)],
 ) -> Result<(Vec<ColumnOrder>, Vec<HirScalarExpr>), PlanError> {
     let mut order_by = vec![];
     let mut map_exprs = vec![];
     for obe in order_by_exprs {
-        let expr = plan_order_by_or_distinct_expr(ecx, &obe.expr, project_key)?;
+        let expr = plan_order_by_or_distinct_expr(ecx, &obe.expr, output_columns)?;
         // If the expression is a reference to an existing column,
         // do not introduce a new column to support it.
         let column = match expr {
@@ -1991,18 +1988,47 @@ fn plan_projected_order_by_exprs(
 
 /// Plans an expression that appears in an `ORDER BY` or `DISTINCT ON` clause.
 ///
-/// This is like `plan_expr_or_col_index`, except that any column ordinal
-/// references are projected via `project_key` rather than being accepted
-/// directly.
+/// The `output_columns` parameter describes, in order, the physical index and
+/// name of each expression in the `SELECT` list. For example, `[(3, "a")]`
+/// corresponds to a `SELECT` list with a single entry named "a" that can be
+/// found at index 3 in the underlying relation expression.
+///
+/// There are three cases to handle.
+///
+///    1. A simple numeric literal, as in `ORDER BY 1`. This is an ordinal
+///       reference to the specified output column.
+///    2. An unqualified identifier, as in `ORDER BY a`. This is a reference to
+///       an output column, if it exists; otherwise it is a reference to an
+///       input column.
+///    3. An arbitrary expression, as in `ORDER BY -a`. Column references in
+///       arbitrary expressions exclusively refer to input columns, never output
+///       columns.
 fn plan_order_by_or_distinct_expr(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
-    project_key: &[usize],
+    output_columns: &[(usize, Option<&ColumnName>)],
 ) -> Result<HirScalarExpr, PlanError> {
-    match check_col_index(&ecx.name, expr, project_key.len())? {
-        Some(i) => Ok(HirScalarExpr::column(project_key[i])),
-        None => plan_expr(ecx, expr)?.type_as_any(ecx),
+    if let Some(i) = check_col_index(&ecx.name, expr, output_columns.len())? {
+        return Ok(HirScalarExpr::column(output_columns[i].0));
     }
+
+    if let Expr::Identifier(names) = expr {
+        if let [name] = &names[..] {
+            let name = normalize::column_name(name.clone());
+            let mut iter = output_columns.iter().filter(|(_, n)| *n == Some(&name));
+            if let Some((i, _)) = iter.next() {
+                match iter.next() {
+                    // Per SQL92, names are not considered ambiguous if they
+                    // refer to identical target list expressions, as in
+                    // `SELECT a + 1 AS foo, a + 1 AS foo ... ORDER BY foo`.
+                    Some((i2, _)) if i != i2 => return Err(PlanError::AmbiguousColumn(name)),
+                    _ => return Ok(HirScalarExpr::column(*i)),
+                }
+            }
+        }
+    }
+
+    plan_expr(ecx, expr)?.type_as_any(ecx)
 }
 
 fn plan_table_with_joins(
@@ -2320,7 +2346,6 @@ fn plan_table_function_alias(
             item.names.push(ScopeItemName {
                 table_name: None,
                 column_name: Some(normalize::column_name(alias.name.clone())),
-                priority: false,
             });
         }
     }
@@ -2356,7 +2381,6 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
                     item: table_name.clone(),
                 }),
                 column_name,
-                priority: false,
             }];
         }
     }
@@ -2397,7 +2421,6 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ScopeItemNa
     name.map(|n| ScopeItemName {
         table_name: None,
         column_name: Some(n),
-        priority: false,
     })
 }
 
@@ -2405,6 +2428,15 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ScopeItemNa
 enum ExpandedSelectItem<'a> {
     InputOrdinal(usize),
     Expr(Cow<'a, Expr<Aug>>),
+}
+
+impl ExpandedSelectItem<'_> {
+    fn as_expr(&self) -> Option<&Expr<Aug>> {
+        match self {
+            ExpandedSelectItem::InputOrdinal(_) => None,
+            ExpandedSelectItem::Expr(expr) => Some(expr),
+        }
+    }
 }
 
 fn expand_select_item<'a>(
@@ -2680,7 +2712,6 @@ fn plan_using_constraint(
                     .map(|column_name| ScopeItemName {
                         table_name: None,
                         column_name,
-                        priority: false,
                     })
                     .collect::<Vec<_>>();
 

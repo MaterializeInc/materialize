@@ -44,7 +44,6 @@
 use std::collections::HashSet;
 
 use anyhow::bail;
-use itertools::Itertools;
 
 use repr::ColumnName;
 
@@ -59,30 +58,6 @@ use crate::plan::query::Aug;
 pub struct ScopeItemName {
     pub table_name: Option<PartialName>,
     pub column_name: Option<ColumnName>,
-    /// Whether this name is in the "priority" class or not.
-    ///
-    /// Names are divided into two classes: non-priority and priority. When
-    /// resolving a name, if the name appears as both a priority and
-    /// non-priority name, the priority name will be chosen. But if the same
-    /// name appears in the same class more than once (i.e., it appears as a
-    /// priority name twice), resolving that name will trigger an "ambiguous
-    /// name" error.
-    ///
-    /// This exists to support the special behavior of scoping in intrusive
-    /// `ORDER BY` clauses. For example, in the following `SELECT` statement
-    ///
-    ///   CREATE TABLE t (a int, b)
-    ///   SELECT 'outer' AS a, b FROM t ORDER BY a
-    ///
-    /// even though there are two columns named `a` in scope in the ORDER BY
-    /// (one from `t` and one declared in the select list), the column declared
-    /// in the select list has priority. Remember that if there are two columns
-    /// named `a` that are both in the priority class, as in
-    ///
-    ///   SELECT 'outer' AS a, a FROM t ORDER BY a
-    ///
-    /// this still needs to generate an "ambiguous name" error.
-    pub priority: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -167,7 +142,6 @@ impl ScopeItem {
         ScopeItem::from_name(ScopeItemName {
             table_name: None,
             column_name: Some(column_name.into()),
-            priority: false,
         })
     }
 
@@ -228,7 +202,6 @@ impl Scope {
                 ScopeItem::from_name(ScopeItemName {
                     table_name: table_name.clone(),
                     column_name: column_name.map(|n| n.into()),
-                    priority: false,
                 })
             })
             .collect();
@@ -305,8 +278,7 @@ impl Scope {
                     .iter()
                     .map(move |name| (level, column, item, name))
             })
-            .filter(|(level, _column, item, name)| (matches)(*level, item, name) && item.nameable)
-            .sorted_by_key(|(level, _column, _item, name)| (*level, !name.priority));
+            .filter(|(level, _column, item, name)| (matches)(*level, item, name) && item.nameable);
         match results.next() {
             None => Err(PlanError::UnknownColumn {
                 table: table_name.cloned(),
@@ -314,11 +286,8 @@ impl Scope {
             }),
             Some((level, column, item, name)) => {
                 if results
-                    .find(|(level2, column2, item, name2)| {
-                        column != *column2
-                            && level == *level2
-                            && item.nameable
-                            && name.priority == name2.priority
+                    .find(|(level2, column2, item, _name2)| {
+                        column != *column2 && level == *level2 && item.nameable
                     })
                     .is_some()
                 {
@@ -339,9 +308,6 @@ impl Scope {
 
     /// Resolves references to a column name to a single column, or errors if
     /// multiple columns are equally valid references.
-    ///
-    /// Note that you can influence the validity of references using
-    /// `[ScopeItemName]`'s `priority` field.
     pub fn resolve_column<'a>(
         &'a self,
         column_name: &ColumnName,

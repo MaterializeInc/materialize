@@ -107,6 +107,13 @@ List new features before bug fixes.
   clause. The bug occurred if functions beyond the second function in the clause
   produced more rows than the first function in the clause.
 
+- When using an arbitrary expression in an `ORDER BY` or `DISTINCT ON` clause,
+  only recognize references to input columns. Previously, Materialize would
+  recognize references to output columns as well.
+
+  See the [column references](/sql/select#column-references) section of the
+  `SELECT` documentation for details.
+
 {{% version-header v0.13.0 %}}
 
 - Allow join trees that mix [`LATERAL`](/sql/join#lateral-subqueries)
