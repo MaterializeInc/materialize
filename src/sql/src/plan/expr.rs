@@ -1408,6 +1408,14 @@ impl HirScalarExpr {
         })
     }
 
+    /// Constructs a column reference in the current scope.
+    pub fn column(index: usize) -> HirScalarExpr {
+        HirScalarExpr::Column(ColumnRef {
+            level: 0,
+            column: index,
+        })
+    }
+
     pub fn literal(datum: Datum, scalar_type: ScalarType) -> HirScalarExpr {
         let row = Row::pack(&[datum]);
         HirScalarExpr::Literal(row, scalar_type.nullable(datum.is_null()))

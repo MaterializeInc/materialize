@@ -959,10 +959,7 @@ where
     let mut map_exprs = vec![];
     let mut project_key = vec![];
     for (i, target_typ) in target_types.into_iter().enumerate() {
-        let expr = HirScalarExpr::Column(ColumnRef {
-            level: 0,
-            column: i,
-        });
+        let expr = HirScalarExpr::column(i);
         // We plan every cast and check the evaluated expressions rather than
         // checking the types directly because of some complex casting rules
         // between types not expressed in `ScalarType` equality.
@@ -1140,7 +1137,7 @@ pub fn plan_index_exprs<'a>(
 
 fn plan_expr_or_col_index(ecx: &ExprContext, e: &Expr<Aug>) -> Result<HirScalarExpr, PlanError> {
     match check_col_index(&ecx.name, e, ecx.relation_type.column_types.len())? {
-        Some(column) => Ok(HirScalarExpr::Column(ColumnRef { level: 0, column })),
+        Some(column) => Ok(HirScalarExpr::column(column)),
         _ => plan_expr(ecx, e)?.type_as_any(ecx),
     }
 }
@@ -1729,7 +1726,7 @@ fn plan_view_select(
             let expr = match select_item {
                 ExpandedSelectItem::InputOrdinal(i) => {
                     if let Some(column) = select_all_mapping.get(&i).copied() {
-                        HirScalarExpr::Column(ColumnRef { level: 0, column })
+                        HirScalarExpr::column(column)
                     } else {
                         return Err(PlanError::ungrouped_column(&from_scope.items[*i]));
                     }
@@ -1832,10 +1829,7 @@ fn plan_view_select(
                 for ord in order_by.iter().take(distinct_exprs.len()) {
                     // The unusual construction of `expr` here is to ensure the
                     // temporary column expression lives long enough.
-                    let mut expr = &HirScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: ord.column,
-                    });
+                    let mut expr = &HirScalarExpr::column(ord.column);
                     if ord.column >= map_scope.len() {
                         expr = &map_exprs[ord.column - map_scope.len()];
                     };
@@ -1909,13 +1903,7 @@ fn plan_group_by_expr<'a>(
     projection: &'a [(ExpandedSelectItem, Option<ColumnName>)],
 ) -> Result<(Option<&'a Expr<Aug>>, HirScalarExpr), PlanError> {
     let plan_projection = |column: usize| match &projection[column].0 {
-        ExpandedSelectItem::InputOrdinal(column) => Ok((
-            None,
-            HirScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: *column,
-            }),
-        )),
+        ExpandedSelectItem::InputOrdinal(column) => Ok((None, HirScalarExpr::column(*column))),
         ExpandedSelectItem::Expr(expr) => Ok((
             Some(expr.as_ref()),
             plan_expr(&ecx, expr)?.type_as_any(ecx)?,
@@ -2012,10 +2000,7 @@ fn plan_order_by_or_distinct_expr(
     project_key: &[usize],
 ) -> Result<HirScalarExpr, PlanError> {
     match check_col_index(&ecx.name, expr, project_key.len())? {
-        Some(i) => Ok(HirScalarExpr::Column(ColumnRef {
-            level: 0,
-            column: project_key[i],
-        })),
+        Some(i) => Ok(HirScalarExpr::column(project_key[i])),
         None => plan_expr(ecx, expr)?.type_as_any(ecx),
     }
 }
@@ -2165,14 +2150,8 @@ fn plan_rows_from(
         let next_column = scope.items.len() + idx + 1;
         let on = HirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
-            expr1: Box::new(HirScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: 0,
-            })),
-            expr2: Box::new(HirScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: next_column,
-            })),
+            expr1: Box::new(HirScalarExpr::column(0)),
+            expr2: Box::new(HirScalarExpr::column(next_column)),
         };
         // Update the outer column references in the RHS of the resulting join
         // since a new scope is always defined for the RHS of any join, even for
@@ -3103,17 +3082,9 @@ fn plan_list_subquery(
         func: VariadicFunc::ListCreate {
             elem_type: elem_type.clone(),
         },
-        exprs: vec![HirScalarExpr::Column(ColumnRef {
-            column: project_column,
-            level: 0,
-        })],
+        exprs: vec![HirScalarExpr::column(project_column)],
     })
-    .chain(finishing.order_by.iter().map(|co| {
-        HirScalarExpr::Column(ColumnRef {
-            column: co.column,
-            level: 0,
-        })
-    }))
+    .chain(finishing.order_by.iter().map(|co| HirScalarExpr::column(co.column)))
     .collect();
 
     // However, column references for `aggregation_projection` and `aggregation_order_by`
