@@ -2047,28 +2047,10 @@ fn plan_table_factor(
         TableFactor::Function {
             function: TableFunction { name, args },
             alias,
-        } => {
-            let ecx = &ExprContext {
-                qcx: &qcx,
-                name: "FROM table function",
-                scope: &Scope::empty(Some(qcx.outer_scope.clone())),
-                relation_type: &RelationType::empty(),
-                allow_aggregates: false,
-                allow_subqueries: true,
-            };
-            plan_table_function(ecx, &name, alias.as_ref(), args)
-        }
+        } => plan_table_function(qcx, &name, alias.as_ref(), args),
 
         TableFactor::RowsFrom { functions, alias } => {
-            let ecx = &ExprContext {
-                qcx: &qcx,
-                name: "FROM ROWS FROM",
-                scope: &Scope::empty(Some(qcx.outer_scope.clone())),
-                relation_type: &RelationType::empty(),
-                allow_aggregates: false,
-                allow_subqueries: true,
-            };
-            plan_rows_from(ecx, functions, alias.as_ref())
+            plan_rows_from(qcx, functions, alias.as_ref())
         }
 
         TableFactor::Derived {
@@ -2124,7 +2106,7 @@ fn plan_table_factor(
 // This function creates a HirRelationExpr that is identical to what is
 // produced by the former.
 fn plan_rows_from(
-    ecx: &ExprContext,
+    qcx: &QueryContext,
     functions: &[TableFunction<Aug>],
     alias: Option<&TableAlias>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
@@ -2142,7 +2124,7 @@ fn plan_rows_from(
     // For each table function, augment it with a row number. The row number column
     // is projected so it is the first column in each expression.
     for func in functions {
-        let (expr, mut scope) = plan_table_function(ecx, &func.name, None, &func.args)?;
+        let (expr, mut scope) = plan_table_function(qcx, &func.name, None, &func.args)?;
         let expr = expr.map(vec![HirScalarExpr::Windowing(WindowExpr {
             func: WindowExprType::Scalar(ScalarWindowExpr {
                 func: ScalarWindowFunc::RowNumber,
@@ -2210,7 +2192,7 @@ fn plan_rows_from(
 }
 
 fn plan_table_function(
-    ecx: &ExprContext,
+    qcx: &QueryContext,
     name: &UnresolvedObjectName,
     alias: Option<&TableAlias>,
     args: &FunctionArgs<Aug>,
@@ -2220,6 +2202,15 @@ fn plan_table_function(
         // `SELECT * FROM VALUES (1)`.
         sql_bail!("VALUES expression in FROM clause must be surrounded by parentheses");
     }
+
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "table function arguments",
+        scope: &Scope::empty(Some(qcx.outer_scope.clone())),
+        relation_type: &RelationType::empty(),
+        allow_aggregates: false,
+        allow_subqueries: true,
+    };
 
     let scalar_args = match args {
         FunctionArgs::Star => sql_bail!("{} does not accept * as an argument", name),
@@ -2255,7 +2246,7 @@ fn plan_table_function(
                     item: resolved_name.item.clone(),
                 }),
                 tf.column_names,
-                Some(ecx.qcx.outer_scope.clone()),
+                Some(qcx.outer_scope.clone()),
             );
             (call, scope)
         }
@@ -2274,7 +2265,7 @@ fn plan_table_function(
                     item: resolved_name.item.clone(),
                 }),
                 scope.column_names(),
-                Some(ecx.qcx.outer_scope.clone()),
+                Some(qcx.outer_scope.clone()),
             );
             (call, scope)
         }
