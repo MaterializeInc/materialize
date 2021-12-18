@@ -22,7 +22,6 @@ use chrono::{
 use hmac::{Hmac, Mac, NewMac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
-use ordered_float::OrderedFloat;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -138,15 +137,16 @@ pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
 fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
         Datum::Null => Datum::JsonNull,
-        Datum::Float64(f) => {
-            if f.is_finite() {
+        Datum::Numeric(n) => {
+            let n = n.into_inner();
+            if n.is_finite() {
                 a
-            } else if f.is_nan() {
+            } else if n.is_nan() {
                 Datum::String("NaN")
-            } else if f.is_sign_positive() {
-                Datum::String("Infinity")
-            } else {
+            } else if n.is_negative() {
                 Datum::String("-Infinity")
+            } else {
+                Datum::String("Infinity")
             }
         }
         _ => a,
@@ -155,8 +155,7 @@ fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
 
 fn cast_jsonb_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(a) => cast_int64_to_int16(a).map(|d| d.into()),
-        Datum::Float64(f) => cast_float64_to_int16(*f).map(|d| d.into()),
+        Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()).map(|d| d.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "smallint".into(),
@@ -166,8 +165,7 @@ fn cast_jsonb_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_jsonb_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(a) => cast_int64_to_int32(a).map(|d| d.into()),
-        Datum::Float64(f) => cast_float64_to_int32(*f).map(|f| f.into()),
+        Datum::Numeric(a) => cast_numeric_to_int32(a.into_inner()).map(|d| d.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "integer".into(),
@@ -177,8 +175,7 @@ fn cast_jsonb_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_jsonb_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(_) => Ok(a),
-        Datum::Float64(f) => cast_float64_to_int64(*f).map(|f| f.into()),
+        Datum::Numeric(a) => cast_numeric_to_int64(a.into_inner()).map(|d| d.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "bigint".into(),
@@ -188,8 +185,7 @@ fn cast_jsonb_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_jsonb_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(a) => Ok(cast_int64_to_float32(a).into()),
-        Datum::Float64(f) => cast_float64_to_float32(*f).map(|f| f.into()),
+        Datum::Numeric(a) => cast_numeric_to_float32(a.into_inner()).map(|d| d.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "real".into(),
@@ -199,8 +195,7 @@ fn cast_jsonb_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(a) => Ok(cast_int64_to_float64(a).into()),
-        Datum::Float64(_) => Ok(a),
+        Datum::Numeric(a) => cast_numeric_to_float64(a.into_inner()).map(|d| d.into()),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "double precision".into(),
@@ -210,8 +205,10 @@ fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_jsonb_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(a) => CastInt64ToNumeric(scale).call(a).map(|d| d.into()),
-        Datum::Float64(f) => CastFloat64ToNumeric(scale).call(*f).map(|d| d.into()),
+        Datum::Numeric(_) => match scale {
+            None => Ok(a),
+            Some(scale) => rescale_numeric(a, scale),
+        },
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
             to: "numeric".into(),
@@ -234,7 +231,7 @@ fn jsonb_type(d: Datum<'_>) -> &'static str {
         Datum::JsonNull => "null",
         Datum::False | Datum::True => "boolean",
         Datum::String(_) => "string",
-        Datum::Int64(_) | Datum::Float64(_) => "numeric",
+        Datum::Numeric(_) => "numeric",
         Datum::List(_) => "array",
         Datum::Map(_) => "object",
         _ => unreachable!("jsonb_type called on invalid datum {:?}", d),
@@ -1279,10 +1276,7 @@ fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             (Datum::JsonNull, Datum::JsonNull) => true,
             (Datum::False, Datum::False) => true,
             (Datum::True, Datum::True) => true,
-            (Datum::Int64(a), Datum::Int64(b)) => (a == b),
-            (Datum::Int64(a), Datum::Float64(b)) => (OrderedFloat(a as f64) == b),
-            (Datum::Float64(a), Datum::Int64(b)) => (a == OrderedFloat(b as f64)),
-            (Datum::Float64(a), Datum::Float64(b)) => (a == b),
+            (Datum::Numeric(a), Datum::Numeric(b)) => (a == b),
             (Datum::String(a), Datum::String(b)) => (a == b),
             (Datum::List(a), Datum::List(b)) => b
                 .iter()
@@ -1982,8 +1976,7 @@ fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
         Datum::Map(_) => Datum::String("object"),
         Datum::List(_) => Datum::String("array"),
         Datum::String(_) => Datum::String("string"),
-        Datum::Float64(_) => Datum::String("number"),
-        Datum::Int64(_) => Datum::String("number"),
+        Datum::Numeric(_) => Datum::String("number"),
         Datum::True | Datum::False => Datum::String("boolean"),
         Datum::JsonNull => Datum::String("null"),
         Datum::Null => Datum::Null,

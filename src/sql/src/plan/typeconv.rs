@@ -565,15 +565,16 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     use ScalarType::*;
 
     match ecx.scalar_type(&expr) {
-        Bool | Jsonb | Int64 | Float64 => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Int16 | Int32 => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Int64)
-            .expect("cast known to exist")
-            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Float32 | Numeric { .. } => {
-            plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
-                .expect("cast known to exist")
-                .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
-        }
+        Bool | Jsonb | Numeric { .. } => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Int16 | Int32 | Float32 | Float64 => plan_cast(
+            "to_jsonb",
+            ecx,
+            CastContext::Explicit,
+            expr,
+            &Numeric { scale: None },
+        )
+        .expect("cast known to exist")
+        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {

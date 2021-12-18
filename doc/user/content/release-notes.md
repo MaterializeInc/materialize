@@ -112,6 +112,11 @@ changes that have not yet been documented.
 
 - Add `pg_catalog.pg_roles` as a builtin view.
 
+- **Breaking change.** Change the internal representation of numbers in
+  [`jsonb`](/sql/types/jsonb). Previously, JSON numbers were stored as either
+  [`int8`](/sql/types/int8) or [`float8`](/sql/types/float8) values; now they
+  are always stored as [`numeric`](/sql/types/numeric) values.
+
 {{< comment >}}
 Only add new release notes above this line.
 

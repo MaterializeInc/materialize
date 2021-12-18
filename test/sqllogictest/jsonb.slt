@@ -43,8 +43,20 @@ SELECT '9223372036854775807'::jsonb
 ----
 9223372036854775807
 
-query error invalid input syntax for type jsonb: 9223372036854775808 is out of range for a jsonb number
-SELECT '9223372036854775808'::jsonb
+query T
+SELECT '999999999999999999999999999999999999999'::jsonb
+----
+999999999999999999999999999999999999999
+
+query error invalid input syntax for type jsonb: "1000000000000000000000000000000000000000" is out of range for type numeric: exceeds maximum precision 39 at line 1
+SELECT '1000000000000000000000000000000000000000'::jsonb
+
+# "NaN" is not a valid JSON number, but it is a valid numeric value. Validate
+# that the conversion to JSON converts NaN-valued numerics to strings.
+query T
+SELECT jsonb_typeof(to_jsonb('NaN'::numeric))
+----
+string
 
 statement ok
 CREATE TABLE test_jsonb (
@@ -855,7 +867,7 @@ SELECT '["1","2","3"]'::JSONB - ''
 query T
 SELECT '[1,"1",1.0]'::JSONB - '1'
 ----
-[1,1.0]
+[1,1]
 
 # query T
 # SELECT '[1,2,3]'::JSONB #- ARRAY['0']
@@ -1805,8 +1817,7 @@ SELECT ('1'::jsonb)::int;
 ----
 1
 
-# too big to fit in an int32
-query error 9999999999999999999 is out of range for a jsonb number at line 1
+query error integer out of range
 SELECT ('9999999999999999999'::jsonb)::int;
 
 # not a number
