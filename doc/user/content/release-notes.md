@@ -103,6 +103,10 @@ List new features before bug fixes.
 
 {{% version-header v0.14.0 %}}
 
+- Fix a bug that could cause wrong results in queries that used the `ROWS FROM`
+  clause. The bug occurred if functions beyond the second function in the clause
+  produced more rows than the first function in the clause.
+
 {{% version-header v0.13.0 %}}
 
 - Allow join trees that mix [`LATERAL`](/sql/join#lateral-subqueries)

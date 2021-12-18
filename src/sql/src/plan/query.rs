@@ -2061,112 +2061,127 @@ fn plan_table_factor(
     }
 }
 
-// ROWS FROM concatenates table functions into a single table, filling in
-// NULLs in places where one table function has fewer rows than another. We
-// can achieve this by augmenting each table function with a row number, doing
-// a FULL JOIN between each table function on the row number, then removing
-// (via Project) the row number columns. The following two SQL statemenst are
-// equivalent, with the former being the SQL version of the above explanation.
-//
-// SELECT
-//     gs1.generate_series, expand.x, expand.n, gs2.generate_series
-// FROM
-//     (SELECT row_number() OVER (), * FROM ROWS FROM (generate_series(1, 2))) AS gs1
-//     FULL JOIN (SELECT row_number() OVER (), * FROM ROWS FROM (information_schema._pg_expandarray(ARRAY[9])))
-//             AS expand ON gs1.row_number = expand.row_number
-//     FULL JOIN (SELECT row_number() OVER (), * FROM ROWS FROM (generate_series(3, 6))) AS gs2 ON
-//             gs1.row_number = gs2.row_number;
-//
-// and:
-//
-// SELECT
-//     *
-// FROM
-//     ROWS FROM (
-//         generate_series(1, 2),
-//         information_schema._pg_expandarray(ARRAY[9]),
-//         generate_series(3, 6)
-//     );
-//
-// This function creates a HirRelationExpr that is identical to what is
-// produced by the former.
+/// Plans a `ROWS FROM` expression.
+///
+/// `ROWS FROM` concatenates table functions into a single table, filling in
+/// `NULL`s in places where one table function has fewer rows than another. We
+/// can achieve this by augmenting each table function with a row number, doing
+/// a `FULL JOIN` between each table function on the row number and eventually
+/// projecting away the row number columns. Concretely, the following query
+/// using `ROWS FROM`
+///
+/// ```sql
+/// SELECT
+///     *
+/// FROM
+///     ROWS FROM (
+///         generate_series(1, 2),
+///         information_schema._pg_expandarray(ARRAY[9]),
+///         generate_series(3, 6)
+///     );
+/// ```
+///
+/// is equivalent to the following query that does not use `ROWS FROM`:
+///
+/// ```sql
+/// SELECT
+///     gs1.generate_series, expand.x, expand.n, gs2.generate_series
+/// FROM
+///     (SELECT row_number() OVER (), * FROM generate_series(1, 2)) AS gs1
+///     FULL JOIN (SELECT row_number() OVER (), * FROM information_schema._pg_expandarray(ARRAY[9])) AS expand
+///         ON gs1.row_number = expand.row_number
+///     FULL JOIN (SELECT row_number() OVER (), * FROM generate_series(3, 6)) AS gs3
+///         ON coalesce(gs1.row_number, expand.row_number) = gs3.row_number;
+/// ```
+///
+/// Note the call to `coalesce` in the last join condition, which ensures that
+/// `gs3` will align with whichever of `gs1` or `expand` has more rows.
+///
+/// This function creates a HirRelationExpr that follows the structure of the
+/// latter query.
 fn plan_rows_from(
     qcx: &QueryContext,
     functions: &[TableFunction<Aug>],
     alias: Option<&TableAlias>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let mut funcs = Vec::with_capacity(functions.len());
-    let mut project_outputs = Vec::new();
-    // last is the number of previous columns, including row number. It is used to
-    // project away the row number columns from the final plan.
-    let mut last = 0;
-    // Similar to table functions with one column, ROWS FROM that outputs a single
-    // column has an edge case aliasing behavior. Use the first function name below
-    // in plan_table_function_alias if this is the case. If there's more than one
-    // column or ROWS FROM argument it is ignored there. We do not parse ROWS FROM
-    // with 0 arguments, so we know the 0 index exists.
+    // Similar to table functions with one column, ROWS FROM that outputs a
+    // single column has an edge case aliasing behavior. Use the first function
+    // name below in plan_table_function_alias if this is the case. If there's
+    // more than one column or ROWS FROM argument it is ignored there. We do not
+    // parse ROWS FROM with 0 arguments, so we know the 0 index exists.
     let name = normalize::unresolved_object_name(functions[0].name.clone())?;
-    // For each table function, augment it with a row number. The row number column
-    // is projected so it is the first column in each expression.
-    for func in functions {
-        let (expr, mut scope) = plan_table_function(qcx, &func.name, None, &func.args)?;
-        let expr = expr.map(vec![HirScalarExpr::Windowing(WindowExpr {
-            func: WindowExprType::Scalar(ScalarWindowExpr {
-                func: ScalarWindowFunc::RowNumber,
-                order_by: vec![],
-            }),
-            partition: vec![],
-            order_by: vec![],
-        })]);
-        let mut outputs = Vec::with_capacity(scope.items.len());
-        // Re-jigger the outputs so the row number is first.
-        outputs.push(scope.items.len());
-        outputs.extend(0..scope.items.len());
-        let expr = expr.project(outputs);
-        last += 1;
-        // Use a Project to remove the row number columns.
-        project_outputs.extend(last..(last + scope.len()));
-        last += scope.len();
-        // Remove table names from the scope, but only if there's exactly one table
-        // function. This is similar to the single column rule above, but this applies
-        // even to table functions that produce more than one column.
-        if functions.len() != 1 {
-            for item in scope.items.iter_mut() {
-                for name in item.names.iter_mut() {
-                    name.table_name = None;
-                }
-            }
-        }
-        funcs.push((expr, scope));
-    }
-    let mut funcs = funcs.into_iter();
 
-    // Extract the first table function, which must exist.
-    let (mut expr, mut scope) = funcs.next().unwrap();
-
-    // Join remaining functions.
-    for (idx, func) in funcs.enumerate() {
-        let (mut func, func_scope) = func;
-        let next_column = scope.items.len() + idx + 1;
+    // Join together each of the table functions in turn. The last column is
+    // always the column to join against and is maintained to be the coalesence
+    // of the row number column for all prior functions.
+    let (mut left_expr, mut left_scope) = plan_rows_from_function(&qcx, &functions[0])?;
+    for function in &functions[1..] {
+        // The right hand side of a join must be planned in a new scope.
+        let qcx = qcx.empty_derived_context();
+        let (right_expr, right_scope) = plan_rows_from_function(&qcx, function)?;
+        let left_col = left_scope.len();
+        let right_col = left_scope.len() + 1 + right_scope.len();
         let on = HirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
-            expr1: Box::new(HirScalarExpr::column(0)),
-            expr2: Box::new(HirScalarExpr::column(next_column)),
+            expr1: Box::new(HirScalarExpr::column(left_col)),
+            expr2: Box::new(HirScalarExpr::column(right_col)),
         };
-        // Update the outer column references in the RHS of the resulting join
-        // since a new scope is always defined for the RHS of any join, even for
-        // FULL OUTER ones.
-        func.visit_columns_mut(0, &mut |depth, col| {
-            if col.level > depth {
-                col.level += 1;
-            }
-        });
-        expr = expr.join(func, on, JoinKind::FullOuter);
-        scope.items.extend(func_scope.items);
+        left_expr = left_expr
+            .join(right_expr, on, JoinKind::FullOuter)
+            .map(vec![HirScalarExpr::CallVariadic {
+                func: VariadicFunc::Coalesce,
+                exprs: vec![
+                    HirScalarExpr::column(left_col),
+                    HirScalarExpr::column(right_col),
+                ],
+            }])
+            .project(
+                (0..left_col) // non-row number columns from left function
+                    .chain(left_col + 1..right_col) // non-row number columns from right function
+                    .chain(iter::once(right_col + 1)) // new coalesced row number column
+                    .collect(),
+            );
+        left_scope.items.extend(right_scope.items);
     }
-    let expr = expr.project(project_outputs);
-    let scope = plan_table_function_alias(name, scope, alias)?;
 
+    // Project off the row number column.
+    let expr = left_expr.project((0..left_scope.len()).collect());
+
+    // Remove table names from the scope if there's more than one table
+    // function. This is similar to the single column rule above, but this
+    // applies even to table functions that produce more than one column.
+    if functions.len() != 1 {
+        for item in left_scope.items.iter_mut() {
+            for name in item.names.iter_mut() {
+                name.table_name = None;
+            }
+        }
+    }
+    let scope = plan_table_function_alias(name, left_scope, alias)?;
+
+    Ok((expr, scope))
+}
+
+/// Plans a table function within a `ROWS FROM` clause.
+///
+/// The resulting expression contains the planned table function plus an
+/// additional column containing the output of the `row_number()` window
+/// function. Beware: the returned scope does NOT include an entry for this
+/// column!
+fn plan_rows_from_function(
+    qcx: &QueryContext,
+    function: &TableFunction<Aug>,
+) -> Result<(HirRelationExpr, Scope), PlanError> {
+    let alias = None;
+    let (expr, scope) = plan_table_function(qcx, &function.name, alias, &function.args)?;
+    let expr = expr.map(vec![HirScalarExpr::Windowing(WindowExpr {
+        func: WindowExprType::Scalar(ScalarWindowExpr {
+            func: ScalarWindowFunc::RowNumber,
+            order_by: vec![],
+        }),
+        partition: vec![],
+        order_by: vec![],
+    })]);
     Ok((expr, scope))
 }
 
@@ -3084,7 +3099,12 @@ fn plan_list_subquery(
         },
         exprs: vec![HirScalarExpr::column(project_column)],
     })
-    .chain(finishing.order_by.iter().map(|co| HirScalarExpr::column(co.column)))
+    .chain(
+        finishing
+            .order_by
+            .iter()
+            .map(|co| HirScalarExpr::column(co.column)),
+    )
     .collect();
 
     // However, column references for `aggregation_projection` and `aggregation_order_by`
@@ -4137,6 +4157,13 @@ impl<'a> QueryContext<'a> {
             ids: HashSet::new(),
             recursion_guard: self.recursion_guard.clone(),
         }
+    }
+
+    /// Derives a `QueryContext` for a scope that contains no columns.
+    fn empty_derived_context(&self) -> QueryContext<'a> {
+        let scope = Scope::empty(Some(self.outer_scope.clone()));
+        let ty = RelationType::empty();
+        self.derived_context(scope, &ty)
     }
 
     /// Resolves `object` to a table expr, i.e. creating a `Get` or inlining a
