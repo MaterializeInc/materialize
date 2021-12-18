@@ -38,6 +38,7 @@ pub trait Rule {
 /// Entry-point of the normalization stage.
 pub fn rewrite_model(model: &mut Model) {
     let mut rules: Vec<Box<dyn Rule>> = vec![
+        Box::new(ColumnRemoval::new()),
         Box::new(SelectMerge::new()),
         Box::new(ConstantLifting::new()),
     ];
@@ -57,6 +58,13 @@ pub fn apply_rules_to_model(model: &mut Model, rules: &mut Vec<Box<dyn Rule>>) {
     }
 
     deep_apply_rules(rules, model, model.top_box, &mut HashSet::new());
+
+    for rule in rules
+        .iter_mut()
+        .filter(|r| matches!(r.rule_type(), RuleType::TopBoxOnly))
+    {
+        apply_rule(&mut **rule, model, model.top_box);
+    }
 }
 
 /// Apply a rewrite rule to a given box within the Model if it matches the condition.
@@ -248,5 +256,108 @@ impl Rule for ConstantLifting {
             });
             Ok(())
         });
+    }
+}
+
+struct ColumnRemoval {
+    remap: HashMap<BoxId, HashMap<usize, usize>>,
+}
+
+impl ColumnRemoval {
+    fn new() -> Self {
+        Self {
+            remap: HashMap::new(),
+        }
+    }
+}
+
+impl Rule for ColumnRemoval {
+    fn name(&self) -> &'static str {
+        "ColumnRemoval"
+    }
+
+    fn rule_type(&self) -> RuleType {
+        RuleType::TopBoxOnly
+    }
+
+    fn condition(&mut self, model: &Model, top_box: BoxId) -> bool {
+        self.remap.clear();
+        // used columns per box
+        let mut used_columns = HashMap::new();
+        for (_, b) in model.boxes.iter() {
+            let _ = b
+                .borrow()
+                .visit_expressions(&mut |expr: &BoxScalarExpr| -> Result<(), ()> {
+                    // TODO(asenac) Unions
+                    expr.visit(&mut |expr: &BoxScalarExpr| {
+                        if let BoxScalarExpr::ColumnReference(c) = expr {
+                            let box_id = model.get_quantifier(c.quantifier_id).input_box;
+                            used_columns
+                                .entry(box_id)
+                                .or_insert_with(BTreeSet::new)
+                                .insert(c.position);
+                        }
+                    });
+                    Ok(())
+                });
+        }
+        for (box_id, b) in model.boxes.iter().filter(|(box_id, _)| **box_id != top_box) {
+            let b = b.borrow();
+            // All columns projected by a DISTINCT box are used implictly
+            if b.distinct != DistinctOperation::Enforce {
+                let columns = used_columns.entry(*box_id).or_insert_with(BTreeSet::new);
+                if columns.len() != b.columns.len() {
+                    // Not all columns are used, re-map
+                    let mut remap = HashMap::new();
+                    for (new_position, position) in columns.iter().enumerate() {
+                        remap.insert(*position, new_position);
+                    }
+                    self.remap.insert(*box_id, remap);
+                }
+            }
+        }
+        !self.remap.is_empty()
+    }
+
+    fn action(&mut self, model: &mut Model, top_box: BoxId) {
+        loop {
+            for (box_id, b) in model.boxes.iter() {
+                if let Some(remap) = self.remap.get(box_id) {
+                    // Remove the unused columns projected by this box
+                    let mut b = b.borrow_mut();
+                    b.columns = b
+                        .columns
+                        .drain(..)
+                        .enumerate()
+                        .filter_map(|(position, c)| {
+                            if let Some(_) = remap.get(&position) {
+                                Some(c)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                }
+
+                let _ = b.borrow_mut().visit_expressions_mut(
+                    &mut |expr: &mut BoxScalarExpr| -> Result<(), ()> {
+                        expr.visit_mut(&mut |expr: &mut BoxScalarExpr| {
+                            if let BoxScalarExpr::ColumnReference(c) = expr {
+                                let box_id = model.get_quantifier(c.quantifier_id).input_box;
+                                if let Some(remap) = self.remap.get(&box_id) {
+                                    c.position = remap[&c.position];
+                                }
+                            }
+                        });
+                        Ok(())
+                    },
+                );
+            }
+            // Removing some column references may result in other columns
+            // to become unused
+            if !self.condition(model, top_box) {
+                break;
+            }
+        }
     }
 }
