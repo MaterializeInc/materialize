@@ -16,7 +16,7 @@ dataflow-types = { path = "../dataflow-types" }
 dec = "0.4.5"
 enum-kinds = "0.5.1"
 expr = { path = "../expr" }
-futures = "0.3.18"
+futures = "0.3.19"
 globset = "0.4.8"
 interchange = { path = "../interchange" }
 itertools = "0.10.3"

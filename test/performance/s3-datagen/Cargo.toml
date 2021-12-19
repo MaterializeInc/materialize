@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.51"
 aws-sdk-s3 = { version = "0.3.0", default-features = false }
 bytefmt = "0.1.7"
-futures = "0.3.18"
+futures = "0.3.19"
 indicatif = "0.16.2"
 mz-aws-util = { path = "../../../src/aws-util", features = ["s3"] }
 ore = { path = "../../../src/ore" }
