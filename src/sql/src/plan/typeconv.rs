@@ -238,11 +238,13 @@ lazy_static! {
             // TIMESTAMP
             (Timestamp, Date) => Assignment: CastTimestampToDate(func::CastTimestampToDate),
             (Timestamp, TimestampTz) => Implicit: CastTimestampToTimestampTz(func::CastTimestampToTimestampTz),
+            (Timestamp, Time) => Assignment: CastTimestampToTime(func::CastTimestampToTime),
             (Timestamp, String) => Assignment: CastTimestampToString(func::CastTimestampToString),
 
             // TIMESTAMPTZ
             (TimestampTz, Date) => Assignment: CastTimestampTzToDate(func::CastTimestampTzToDate),
             (TimestampTz, Timestamp) => Assignment: CastTimestampTzToTimestamp(func::CastTimestampTzToTimestamp),
+            (TimestampTz, Time) => Assignment: CastTimestampTzToTime(func::CastTimestampTzToTime),
             (TimestampTz, String) => Assignment: CastTimestampTzToString(func::CastTimestampTzToString),
 
             // INTERVAL

@@ -1278,11 +1278,25 @@ SELECT '01:02:03'::time::time;
 ----
  01:02:03
 
-query error CAST does not support casting from timestamp to time
+query T
 SELECT '2002 03-04'::timestamp::time
+----
+00:00:00
 
-query error CAST does not support casting from timestamp with time zone to time
+query T
+SELECT '2002 03-04 05:06:07'::timestamp::time
+----
+05:06:07
+
+query T
 SELECT '2003 04-05'::timestamptz::time
+----
+00:00:00
+
+query T
+SELECT '2003 04-05 06:07:08+00'::timestamptz::time
+----
+06:07:08
 
 query error CAST does not support casting from smallint to timestamp
 SELECT 1::smallint::timestamp

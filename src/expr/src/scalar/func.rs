@@ -3141,9 +3141,11 @@ pub enum UnaryFunc {
     CastTimestampToDate(CastTimestampToDate),
     CastTimestampToTimestampTz(CastTimestampToTimestampTz),
     CastTimestampToString(CastTimestampToString),
+    CastTimestampToTime(CastTimestampToTime),
     CastTimestampTzToDate(CastTimestampTzToDate),
     CastTimestampTzToTimestamp(CastTimestampTzToTimestamp),
     CastTimestampTzToString(CastTimestampTzToString),
+    CastTimestampTzToTime(CastTimestampTzToTime),
     CastBytesToString(CastBytesToString),
     CastStringToJsonb,
     CastJsonbToString,
@@ -3370,9 +3372,11 @@ derive_unary!(
     CastTimestampToString,
     CastTimestampTzToString,
     CastTimestampToDate,
+    CastTimestampToTime,
     CastTimestampTzToDate,
     CastTimestampToTimestampTz,
     CastTimestampTzToTimestamp,
+    CastTimestampTzToTime,
     CastDateToTimestamp,
     CastDateToTimestampTz,
     CastBytesToString,
@@ -3525,9 +3529,11 @@ impl UnaryFunc {
             | CastTimestampToString(_)
             | CastTimestampTzToString(_)
             | CastTimestampToDate(_)
+            | CastTimestampToTime(_)
             | CastTimestampTzToDate(_)
             | CastTimestampToTimestampTz(_)
             | CastTimestampTzToTimestamp(_)
+            | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
             | CastBytesToString(_)
@@ -3721,9 +3727,11 @@ impl UnaryFunc {
             | CastTimestampToString(_)
             | CastTimestampTzToString(_)
             | CastTimestampToDate(_)
+            | CastTimestampToTime(_)
             | CastTimestampTzToDate(_)
             | CastTimestampToTimestampTz(_)
             | CastTimestampTzToTimestamp(_)
+            | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
             | CastBytesToString(_)
@@ -3950,9 +3958,11 @@ impl UnaryFunc {
             | CastTimestampToString(_)
             | CastTimestampTzToString(_)
             | CastTimestampToDate(_)
+            | CastTimestampToTime(_)
             | CastTimestampTzToDate(_)
             | CastTimestampToTimestampTz(_)
             | CastTimestampTzToTimestamp(_)
+            | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
             | CastBytesToString(_)
@@ -4193,9 +4203,11 @@ impl UnaryFunc {
             | CastTimestampToString(_)
             | CastTimestampTzToString(_)
             | CastTimestampToDate(_)
+            | CastTimestampToTime(_)
             | CastTimestampTzToDate(_)
             | CastTimestampToTimestampTz(_)
             | CastTimestampTzToTimestamp(_)
+            | CastTimestampTzToTime(_)
             | CastDateToTimestamp(_)
             | CastDateToTimestampTz(_)
             | CastBytesToString(_)
