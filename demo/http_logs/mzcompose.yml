@@ -66,6 +66,7 @@ services:
       - materialized
     volumes:
       - .:/mounted
-    command: /mounted/setup.sh
+    entrypoint: /mounted/setup.sh
+
 volumes:
   logfile:
