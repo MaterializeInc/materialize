@@ -23,6 +23,7 @@ use std::fmt;
 
 use expr::explain::Indices;
 use expr::{ExprHumanizer, Id, RowSetFinishing};
+use ore::collections::CollectionExt;
 use ore::id_gen::IdGen;
 use ore::str::{bracketed, separated};
 use repr::{RelationType, ScalarType};
@@ -229,11 +230,11 @@ impl<'a> Explanation<'a> {
             // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
             let typ = node.expr.typ(outers, params);
             let mut outers = outers.to_vec();
-            outers.push(typ);
+            outers.insert(0, typ);
             for subquery in &mut node.subqueries {
                 subquery.explain_types_internal(&outers, params);
             }
-            node.typ = outers.pop();
+            node.typ = Some(outers.into_first());
         }
     }
 

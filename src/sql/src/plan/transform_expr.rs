@@ -159,11 +159,11 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
             HirRelationExpr::Map { scalars, input } => {
                 walk_relation(input, outers);
                 let mut outers = outers.to_vec();
-                outers.push(input.typ(&outers, &NO_PARAMS));
+                outers.insert(0, input.typ(&outers, &NO_PARAMS));
                 for scalar in scalars {
                     walk_scalar(scalar, &outers, false);
                     let (inner, outers) = outers
-                        .split_last_mut()
+                        .split_first_mut()
                         .expect("outers known to have at least one element");
                     let scalar_type = scalar.typ(&outers, inner, &NO_PARAMS);
                     inner.column_types.push(scalar_type);
@@ -172,14 +172,14 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
             HirRelationExpr::Filter { predicates, input } => {
                 walk_relation(input, outers);
                 let mut outers = outers.to_vec();
-                outers.push(input.typ(&outers, &NO_PARAMS));
+                outers.insert(0, input.typ(&outers, &NO_PARAMS));
                 for pred in predicates {
                     walk_scalar(pred, &outers, true);
                 }
             }
             HirRelationExpr::CallTable { exprs, .. } => {
                 let mut outers = outers.to_vec();
-                outers.push(RelationType::empty());
+                outers.insert(0, RelationType::empty());
                 for scalar in exprs {
                     walk_scalar(scalar, &outers, false);
                 }
@@ -187,7 +187,7 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
             HirRelationExpr::Join { left, right, .. } => {
                 walk_relation(left, outers);
                 let mut outers = outers.to_vec();
-                outers.push(left.typ(&outers, &NO_PARAMS));
+                outers.insert(0, left.typ(&outers, &NO_PARAMS));
                 walk_relation(right, &outers);
             }
             expr => expr.visit1_mut(&mut |expr| walk_relation(expr, outers)),

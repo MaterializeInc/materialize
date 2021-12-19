@@ -720,7 +720,7 @@ impl HirRelationExpr {
                     t.nullable(nullable)
                 });
                 let mut outers = outers.to_vec();
-                outers.push(RelationType::new(lt.clone().collect()));
+                outers.insert(0, RelationType::new(lt.clone().collect()));
                 let rt = right
                     .typ(&outers, params)
                     .column_types
@@ -1712,7 +1712,7 @@ impl AbstractExpr for HirScalarExpr {
                 if *level == 0 {
                     inner.column_types[*column].clone()
                 } else {
-                    outers[outers.len() - *level].column_types[*column].clone()
+                    outers[*level - 1].column_types[*column].clone()
                 }
             }
             HirScalarExpr::Parameter(n) => params[&n].clone().nullable(true),
@@ -1736,7 +1736,7 @@ impl AbstractExpr for HirScalarExpr {
             HirScalarExpr::Exists(_) => ScalarType::Bool.nullable(true),
             HirScalarExpr::Select(expr) => {
                 let mut outers = outers.to_vec();
-                outers.push(inner.clone());
+                outers.insert(0, inner.clone());
                 expr.typ(&outers, params)
                     .column_types
                     .into_element()

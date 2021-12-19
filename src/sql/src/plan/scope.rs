@@ -203,7 +203,7 @@ impl Scope {
         // given scopes A(B(C))
         // items from C should be preferred to items from B to items from A
         iter::once(self)
-            .chain(outer_scopes.iter().rev())
+            .chain(outer_scopes)
             .enumerate()
             .flat_map(|(level, scope)| {
                 scope

@@ -2056,16 +2056,14 @@ fn plan_table_factor(
                 // Since this derived table was not marked as `LATERAL`,
                 // make elements in outer scopes invisible until we reach the
                 // next lateral barrier.
-                for scope in qcx.outer_scopes.iter_mut().rev() {
+                for scope in &mut qcx.outer_scopes {
                     if scope.lateral_barrier {
                         break;
                     }
                     scope.items.clear();
                 }
             }
-            if let Some(scope) = qcx.outer_scopes.last_mut() {
-                scope.lateral_barrier = true;
-            }
+            qcx.outer_scopes[0].lateral_barrier = true;
             let (expr, scope) = plan_nested_query(&mut qcx, &subquery)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
             Ok((expr, scope))
@@ -2496,10 +2494,8 @@ fn plan_join(
 
     let mut right_qcx = left_qcx.derived_context(left_scope.clone(), left_qcx.relation_type(&left));
     if !kind.can_be_correlated() {
-        if let Some(scope) = right_qcx.outer_scopes.last_mut() {
-            for item in &mut scope.items {
-                item.lateral_error_if_referenced = true;
-            }
+        for item in &mut right_qcx.outer_scopes[0].items {
+            item.lateral_error_if_referenced = true;
         }
     }
     let (right, right_scope) = plan_table_factor(&right_qcx, &join.relation)?;
@@ -4071,17 +4067,9 @@ impl<'a> QueryContext<'a> {
             cte.level_offset += 1;
         }
 
-        let outer_scopes = self
-            .outer_scopes
-            .iter()
-            .cloned()
-            .chain(iter::once(scope))
-            .collect();
-        let outer_relation_types = self
-            .outer_relation_types
-            .iter()
-            .cloned()
-            .chain(iter::once(relation_type))
+        let outer_scopes = iter::once(scope).chain(self.outer_scopes.clone()).collect();
+        let outer_relation_types = iter::once(relation_type)
+            .chain(self.outer_relation_types.clone())
             .collect();
 
         QueryContext {
