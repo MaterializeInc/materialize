@@ -23,7 +23,7 @@ persist-types = { path = "../persist-types" }
 kafka-util = { path = "../kafka-util" }
 http = "0.2.5"
 log = "0.4.13"
-num_enum = "0.5.4"
+num_enum = "0.5.5"
 mz-aws-util = { path = "../aws-util" }
 ore = { path = "../ore" }
 persist = { path = "../persist" }
