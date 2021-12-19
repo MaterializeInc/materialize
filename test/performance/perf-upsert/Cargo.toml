@@ -11,7 +11,7 @@ bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 env_logger = "0.9.0"
 futures = "0.3.18"
-futures-channel = "0.3.16"
+futures-channel = "0.3.19"
 log = "0.4.13"
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 rand = "0.8.4"
