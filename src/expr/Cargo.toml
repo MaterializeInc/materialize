@@ -40,4 +40,4 @@ paste = "1"
 datadriven = "0.6.0"
 expr_test_util = { path = "../expr-test-util"}
 ore = { path = "../ore" }
-proc-macro2 = "1.0.33"
+proc-macro2 = "1.0.34"
