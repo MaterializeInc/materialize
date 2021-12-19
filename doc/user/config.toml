@@ -124,12 +124,6 @@ name = "Third-Party Tools"
 weight = 120
 
 [[menu.main]]
-name = "Using Debezium"
-parent = "third-party"
-url = "/guides/cdc-postgres"
-weight= 3
-
-[[menu.main]]
 identifier = "security"
 name = "Security"
 weight = 140

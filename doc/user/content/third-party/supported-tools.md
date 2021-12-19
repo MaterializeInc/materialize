@@ -12,7 +12,7 @@ weight: 1
 | Tool | Purpose |
 |------|---------|
 | [Docker](/third-party/docker) | Easily deploy Materialize and other required infrastructure.
-| [Debezium](/guides/cdc-postgres) | Propagate change data capture (CDC) data from an upstream database to Materialize.
+| [Debezium](/third-party/debezium) | Propagate change data capture (CDC) data from an upstream database to Materialize.
 
 
 ## Beta-level support
