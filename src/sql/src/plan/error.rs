@@ -67,10 +67,9 @@ pub enum PlanError {
 
 impl PlanError {
     pub(crate) fn ungrouped_column(item: &ScopeItem) -> PlanError {
-        let name = &item.names[0];
         PlanError::UngroupedColumn {
-            table: name.table_name.clone(),
-            column: name
+            table: item.table_name.clone(),
+            column: item
                 .column_name
                 .clone()
                 .unwrap_or_else(|| ColumnName::from("?column?")),

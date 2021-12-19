@@ -55,25 +55,20 @@ use crate::plan::plan_utils::JoinSide;
 use crate::plan::query::Aug;
 
 #[derive(Debug, Clone)]
-pub struct ScopeItemName {
-    pub table_name: Option<PartialName>,
-    pub column_name: Option<ColumnName>,
-}
-
-#[derive(Debug, Clone)]
 pub struct ScopeItem {
-    // The canonical name should appear first in the list (e.g., the name
-    // assigned by an alias.) Similarly, the name that specifies the canonical
-    // table must appear before names that specify non-canonical tables.
-    // This impacts the behavior of the `is_from_table` test.
-    pub names: Vec<ScopeItemName>,
+    /// The name of the table that produced this scope item, if any.
+    pub table_name: Option<PartialName>,
+    /// The name of the column, if any.
+    ///
+    /// If omitted, the scope item will not be resolvable.
+    pub column_name: Option<ColumnName>,
+    /// The expression from which this scope item is derived. Used by `GROUP
+    /// BY`.
     pub expr: Option<Expr<Aug>>,
-    // Whether this item is actually resolveable by its name. Non-nameable scope
-    // items are used e.g. in the scope created by an inner join, so that the
-    // duplicated key columns from the right relation do not cause ambiguous
-    // column names. Omitting the name entirely is not an option, since the name
-    // is used to label the column in the result set.
-    pub nameable: bool,
+    /// Whether the column is the return value of a function that produces only
+    /// a single column. This accounts for a strange PostgreSQL special case
+    /// around whole-row expansion.
+    pub from_single_column_function: bool,
     /// Controls whether the column is only accessible via a table-qualified
     /// reference. When false, the scope item is also excluded from `SELECT *`.
     ///
@@ -128,9 +123,10 @@ pub struct Scope {
 impl ScopeItem {
     fn empty() -> ScopeItem {
         ScopeItem {
-            names: vec![],
+            table_name: None,
+            column_name: None,
             expr: None,
-            nameable: true,
+            from_single_column_function: false,
             allow_unqualified_references: true,
             lateral_error_if_referenced: false,
             _private: (),
@@ -138,22 +134,18 @@ impl ScopeItem {
     }
 
     /// Constructs a new scope item from a bare column name.
-    pub fn from_column_name(column_name: impl Into<ColumnName>) -> ScopeItem {
-        ScopeItem::from_name(ScopeItemName {
-            table_name: None,
-            column_name: Some(column_name.into()),
-        })
+    pub fn from_column_name(column_name: ColumnName) -> ScopeItem {
+        ScopeItem::from_name(None, Some(column_name))
     }
 
-    /// Constructs a new scope item from a single name.
-    pub fn from_name(name: ScopeItemName) -> ScopeItem {
-        ScopeItem::from_names(vec![name])
-    }
-
-    /// Constructs a new scope item from several names.
-    pub fn from_names(names: impl IntoIterator<Item = ScopeItemName>) -> ScopeItem {
+    /// Constructs a new scope item from a name.
+    pub fn from_name(
+        table_name: Option<PartialName>,
+        column_name: Option<ColumnName>,
+    ) -> ScopeItem {
         let mut item = ScopeItem::empty();
-        item.names.extend(names);
+        item.table_name = table_name;
+        item.column_name = column_name;
         item
     }
 
@@ -165,15 +157,10 @@ impl ScopeItem {
     }
 
     pub fn is_from_table(&self, table_name: &PartialName) -> bool {
-        // Only consider the first name that specifies a table component.
-        // Even though there may be a later name that matches the table, the
-        // column is not actually considered to come from that table; it is just
-        // known to be equivalent to the *real* column from that table.
-        self.names
-            .iter()
-            .find_map(|n| n.table_name.as_ref())
-            .map(|n| n.matches(table_name))
-            .unwrap_or(false)
+        match &self.table_name {
+            None => false,
+            Some(n) => n.matches(table_name),
+        }
     }
 }
 
@@ -199,10 +186,7 @@ impl Scope {
         scope.items = column_names
             .into_iter()
             .map(|column_name| {
-                ScopeItem::from_name(ScopeItemName {
-                    table_name: table_name.clone(),
-                    column_name: column_name.map(|n| n.into()),
-                })
+                ScopeItem::from_name(table_name.clone(), column_name.map(|n| n.into()))
             })
             .collect();
         scope
@@ -210,19 +194,14 @@ impl Scope {
 
     /// Constructs an iterator over the canonical name for each column.
     pub fn column_names(&self) -> impl Iterator<Item = Option<&ColumnName>> {
-        self.items.iter().map(|item| {
-            item.names
-                .iter()
-                .filter_map(|n| n.column_name.as_ref())
-                .next()
-        })
+        self.items.iter().map(|item| item.column_name.as_ref())
     }
 
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
-    pub fn all_items(&self) -> Vec<(usize, usize, &ScopeItem)> {
+    pub fn all_items(&self) -> impl Iterator<Item = (ColumnRef, &ScopeItem)> {
         // These are in order of preference eg
         // given scopes A(B(C))
         // items from C should be preferred to items from B to items from A
@@ -231,7 +210,7 @@ impl Scope {
         let mut scope = self;
         loop {
             for (column, item) in scope.items.iter().enumerate() {
-                items.push((level, column, item));
+                items.push((ColumnRef { level, column }, item));
             }
             if let Some(outer_scope) = &scope.outer_scope {
                 scope = outer_scope;
@@ -240,7 +219,25 @@ impl Scope {
                 break;
             }
         }
-        items
+        items.into_iter()
+    }
+
+    /// Returns all items from the given table name in the closest scope.
+    ///
+    /// If no tables with the given name are in scope, returns an empty
+    /// iterator.
+    ///
+    /// NOTE(benesch): This is wrong for zero-arity relations, because we can't
+    /// distinguish between "no such table" and a table that exists but has no
+    /// columns. The current design of scope makes this difficult to fix,
+    /// unfortunately.
+    pub fn items_from_table(&self, table: &PartialName) -> Vec<(ColumnRef, &ScopeItem)> {
+        let mut seen_level = None;
+        self.all_items()
+            .filter(move |(column, item)| {
+                item.is_from_table(table) && *seen_level.get_or_insert(column.level) == column.level
+            })
+            .collect()
     }
 
     /// Marks all scope items unnameable until the first lateral barrier is
@@ -252,7 +249,7 @@ impl Scope {
         let mut scope = self;
         loop {
             for item in &mut scope.items {
-                item.nameable = false;
+                item.column_name = None;
             }
             match &mut scope.outer_scope {
                 Some(s) if !s.lateral_barrier => scope = s,
@@ -266,29 +263,21 @@ impl Scope {
         mut matches: M,
         table_name: Option<&PartialName>,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError>
+    ) -> Result<ColumnRef, PlanError>
     where
-        M: FnMut(usize, &ScopeItem, &ScopeItemName) -> bool,
+        M: FnMut(ColumnRef, &ScopeItem) -> bool,
     {
         let mut results = self
             .all_items()
-            .into_iter()
-            .flat_map(|(level, column, item)| {
-                item.names
-                    .iter()
-                    .map(move |name| (level, column, item, name))
-            })
-            .filter(|(level, _column, item, name)| (matches)(*level, item, name) && item.nameable);
+            .filter(|(column, item)| (matches)(*column, item));
         match results.next() {
             None => Err(PlanError::UnknownColumn {
                 table: table_name.cloned(),
                 column: column_name.clone(),
             }),
-            Some((level, column, item, name)) => {
+            Some((column, item)) => {
                 if results
-                    .find(|(level2, column2, item, _name2)| {
-                        column != *column2 && level == *level2 && item.nameable
-                    })
+                    .find(|(column2, _item)| column.level == column2.level)
                     .is_some()
                 {
                     return Err(PlanError::AmbiguousColumn(column_name.clone()));
@@ -301,21 +290,18 @@ impl Scope {
                     });
                 }
 
-                Ok((ColumnRef { level, column }, name))
+                Ok(column)
             }
         }
     }
 
     /// Resolves references to a column name to a single column, or errors if
     /// multiple columns are equally valid references.
-    pub fn resolve_column<'a>(
-        &'a self,
-        column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
+    pub fn resolve_column<'a>(&'a self, column_name: &ColumnName) -> Result<ColumnRef, PlanError> {
         let table_name = None;
         self.resolve_internal(
-            |_level, item, name| {
-                item.allow_unqualified_references && name.column_name.as_ref() == Some(column_name)
+            |_column, item| {
+                item.allow_unqualified_references && item.column_name.as_ref() == Some(column_name)
             },
             table_name,
             column_name,
@@ -330,7 +316,7 @@ impl Scope {
     ) -> Result<ColumnRef, PlanError> {
         match self.resolve_column(column_name) {
             // We found a column in level 0, which is acceptable.
-            Ok((column, _name)) if column.level == 0 => Ok(column),
+            Ok(column) if column.level == 0 => Ok(column),
             // Columns in outer scopes are not valid in USING clauses.
             Ok(_) => Err(PlanError::UnknownColumnInUsingClause {
                 column: column_name.clone(),
@@ -353,21 +339,21 @@ impl Scope {
         &'a self,
         table_name: &PartialName,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
+    ) -> Result<ColumnRef, PlanError> {
         let mut seen_at_level = None;
         self.resolve_internal(
-            |level, _item, name| {
+            |column, item| {
                 // Once we've matched a table name at a level, even if the
                 // column name did not match, we can never match an item from
                 // another level.
                 if let Some(seen_at_level) = seen_at_level {
-                    if seen_at_level != level {
+                    if seen_at_level != column.level {
                         return false;
                     }
                 }
-                if name.table_name.as_ref().map(|n| n.matches(table_name)) == Some(true) {
-                    seen_at_level = Some(level);
-                    name.column_name.as_ref() == Some(column_name)
+                if item.table_name.as_ref().map(|n| n.matches(table_name)) == Some(true) {
+                    seen_at_level = Some(column.level);
+                    item.column_name.as_ref() == Some(column_name)
                 } else {
                     false
                 }
@@ -381,7 +367,7 @@ impl Scope {
         &'a self,
         table_name: Option<&PartialName>,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
+    ) -> Result<ColumnRef, PlanError> {
         match table_name {
             None => self.resolve_column(column_name),
             Some(table_name) => self.resolve_table_column(table_name, column_name),
@@ -435,7 +421,6 @@ impl Scope {
     fn table_names(&self) -> HashSet<&PartialName> {
         self.items
             .iter()
-            .flat_map(|item| &item.names)
             .filter_map(|name| name.table_name.as_ref())
             .collect::<HashSet<&PartialName>>()
     }

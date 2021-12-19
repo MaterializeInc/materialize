@@ -114,6 +114,25 @@ List new features before bug fixes.
   See the [column references](/sql/select#column-references) section of the
   `SELECT` documentation for details.
 
+- **Breaking change.** Don't consider join equivalences when determining whether
+  a column is ungrouped. For example, Materialize now rejects this SQL query
+  because `t1.a` does not appear in the `GROUP BY` clause:
+
+  ```sql
+  SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t2.a
+  ```
+
+  Previous versions of Materialize permitted this query by noticing that the
+  `JOIN` clause guaranteed that `t1.a` and `t2.a` were equivalent, but this
+  behavior was incompatible with PostgreSQL.
+
+  To fix this query, rewrite it to consistently refer to `t1.a` in the `GROUP
+  BY` clause and the `SELECT` list:
+
+  ```sql
+  SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t1.a
+  ```
+
 {{% version-header v0.13.0 %}}
 
 - Allow join trees that mix [`LATERAL`](/sql/join#lateral-subqueries)

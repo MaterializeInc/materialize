@@ -60,7 +60,7 @@ use crate::plan::expr::{
     ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, VariadicFunc, WindowExpr, WindowExprType,
 };
 use crate::plan::plan_utils::{self, JoinSide};
-use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
+use crate::plan::scope::{Scope, ScopeItem};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::Params;
@@ -1459,7 +1459,7 @@ fn plan_values(
     let mut scope = Scope::empty(Some(qcx.outer_scope.clone()));
     for i in 0..ncols {
         let name = format!("column{}", i + 1);
-        scope.items.push(ScopeItem::from_column_name(name));
+        scope.items.push(ScopeItem::from_column_name(name.into()));
     }
 
     Ok((out, scope))
@@ -1558,7 +1558,7 @@ fn plan_view_select(
     let check_ungrouped_col = |e| match e {
         PlanError::UnknownColumn { table, column } => {
             match from_scope.resolve(table.as_ref(), &column) {
-                Ok((ColumnRef { level: 0, column }, _)) => {
+                Ok(ColumnRef { level: 0, column }) => {
                     PlanError::ungrouped_column(&from_scope.items[column])
                 }
                 _ => PlanError::UnknownColumn { table, column },
@@ -2178,9 +2178,7 @@ fn plan_rows_from(
     // applies even to table functions that produce more than one column.
     if functions.len() != 1 {
         for item in left_scope.items.iter_mut() {
-            for name in item.names.iter_mut() {
-                name.table_name = None;
-            }
+            item.table_name = None;
         }
     }
     let scope = plan_table_function_alias(name, left_scope, alias)?;
@@ -2246,7 +2244,7 @@ fn plan_table_function(
     };
     let resolved_name = normalize::unresolved_object_name(name.clone())?;
 
-    let (call, scope) = match resolve_func(ecx, name, args)? {
+    let (call, mut scope) = match resolve_func(ecx, name, args)? {
         Func::Table(impls) => {
             let tf = func::select_impl(
                 ecx,
@@ -2292,6 +2290,12 @@ fn plan_table_function(
         _ => sql_bail!("{} is not a table function", name),
     };
 
+    if let [item] = &mut scope.items[..] {
+        // If the function only produced a single value, mark the scope item.
+        // This impacts whole-row references.
+        item.from_single_column_function = true;
+    }
+
     let scope = plan_table_function_alias(resolved_name, scope, alias)?;
     Ok((call, scope))
 }
@@ -2335,19 +2339,6 @@ fn plan_table_function_alias(
         } else {
             plan_table_alias(scope, Some(&alias))?
         };
-        if let [item] = &mut *scope.items {
-            // The single column case also has the property that you can select the table
-            // name and get the column (not the full table row wrapped in a record), named
-            // by the table:
-            //
-            //     SELECT g FROM generate_series(1, 1) AS g(a);
-            //
-            // Returns `1` (not `(1)`) with a column named `g` (not `a`).
-            item.names.push(ScopeItemName {
-                table_name: None,
-                column_name: Some(normalize::column_name(alias.name.clone())),
-            });
-        }
     }
     Ok(scope)
 }
@@ -2373,22 +2364,20 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
             let column_name = columns
                 .get(i)
                 .map(|a| normalize::column_name(a.clone()))
-                .or_else(|| item.names.get(0).and_then(|name| name.column_name.clone()));
-            item.names = vec![ScopeItemName {
-                table_name: Some(PartialName {
-                    database: None,
-                    schema: None,
-                    item: table_name.clone(),
-                }),
-                column_name,
-            }];
+                .or_else(|| item.column_name.clone());
+            item.table_name = Some(PartialName {
+                database: None,
+                schema: None,
+                item: table_name.clone(),
+            });
+            item.column_name = column_name;
         }
     }
     Ok(scope)
 }
 
-fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ScopeItemName> {
-    let name = match expr {
+fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ColumnName> {
+    match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
         Expr::Function(func) => {
             let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
@@ -2413,15 +2402,10 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ScopeItemNa
             scope
                 .items
                 .first()
-                .and_then(|item| item.names.first())
                 .and_then(|name| name.column_name.clone())
         }
         _ => None,
-    };
-    name.map(|n| ScopeItemName {
-        table_name: None,
-        column_name: Some(n),
-    })
+    }
 }
 
 #[derive(Debug)]
@@ -2457,7 +2441,7 @@ fn expand_select_item<'a>(
                 .enumerate()
                 .filter(|(_i, item)| item.is_from_table(&table_name))
                 .map(|(i, item)| {
-                    let name = item.names.get(0).and_then(|n| n.column_name.clone());
+                    let name = item.column_name.clone();
                     (ExpandedSelectItem::InputOrdinal(i), name)
                 })
                 .collect();
@@ -2500,7 +2484,7 @@ fn expand_select_item<'a>(
                 .enumerate()
                 .filter(|(_i, item)| item.allow_unqualified_references)
                 .map(|(i, item)| {
-                    let name = item.names.get(0).and_then(|n| n.column_name.clone());
+                    let name = item.column_name.clone();
                     (ExpandedSelectItem::InputOrdinal(i), name)
                 })
                 .collect();
@@ -2511,7 +2495,7 @@ fn expand_select_item<'a>(
             let name = alias
                 .clone()
                 .map(normalize::column_name)
-                .or_else(|| invent_column_name(ecx, &expr).and_then(|n| n.column_name));
+                .or_else(|| invent_column_name(ecx, &expr));
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
     }
@@ -2543,7 +2527,7 @@ fn plan_join(
 
     let (expr, scope) = match constraint {
         JoinConstraint::On(expr) => {
-            let mut product_scope = left_scope.product(right_scope)?;
+            let product_scope = left_scope.product(right_scope)?;
             let ecx = &ExprContext {
                 qcx: &left_qcx,
                 name: "ON clause",
@@ -2560,26 +2544,6 @@ fn plan_join(
                 allow_subqueries: true,
             };
             let on = plan_expr(ecx, expr)?.type_as(ecx, &ScalarType::Bool)?;
-            if let JoinKind::Inner { .. } = kind {
-                for (l, r) in find_trivial_column_equivalences(&on) {
-                    // When we can statically prove that two columns are
-                    // equivalent after a join, the right column becomes
-                    // unnamable and the left column assumes both names. This
-                    // permits queries like
-                    //
-                    //     SELECT rhs.a FROM lhs JOIN rhs ON lhs.a = rhs.a
-                    //     GROUP BY lhs.a
-                    //
-                    // which otherwise would fail because rhs.a appears to be
-                    // a column that does not appear in the GROUP BY.
-                    //
-                    // Note that this is a MySQL-ism; PostgreSQL does not do
-                    // this sort of equivalence detection for ON constraints.
-                    product_scope.items[r].nameable = false;
-                    let right_names = product_scope.items[r].names.clone();
-                    product_scope.items[l].names.extend(right_names);
-                }
-            }
             let joined = left.join(right, on, kind);
             (joined, product_scope)
         }
@@ -2702,19 +2666,8 @@ fn plan_using_constraint(
                 hidden_cols.push(lhs.column);
             }
             JoinKind::FullOuter => {
-                // Create a new column that will be the coalesced value of left and right
-                let names = both_scope.items[lhs.column]
-                    .names
-                    .iter()
-                    .chain(both_scope.items[rhs.column].names.iter())
-                    .map(|scope_item_name| scope_item_name.column_name.clone())
-                    .unique()
-                    .map(|column_name| ScopeItemName {
-                        table_name: None,
-                        column_name,
-                    })
-                    .collect::<Vec<_>>();
-
+                // Create a new column that will be the coalesced value of left
+                // and right.
                 join_cols.push(both_scope.items.len() + map_exprs.len());
                 hidden_cols.push(lhs.column);
                 hidden_cols.push(rhs.column);
@@ -2722,7 +2675,7 @@ fn plan_using_constraint(
                     func: VariadicFunc::Coalesce,
                     exprs: vec![expr1.clone(), expr2.clone()],
                 });
-                new_items.push(ScopeItem::from_names(names));
+                new_items.push(ScopeItem::from_column_name(column_name.into()));
             }
         }
 
@@ -3487,58 +3440,55 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
         let table_name = normalize::unresolved_object_name(UnresolvedObjectName(names))?;
-        let (i, _name) = ecx.scope.resolve_table_column(&table_name, &col_name)?;
+        let i = ecx.scope.resolve_table_column(&table_name, &col_name)?;
         return Ok(HirScalarExpr::Column(i));
     }
 
     // If the name is unqualified, first check if it refers to a column.
     match ecx.scope.resolve_column(&col_name) {
-        Ok((i, _name)) => return Ok(HirScalarExpr::Column(i)),
+        Ok(i) => return Ok(HirScalarExpr::Column(i)),
         Err(PlanError::UnknownColumn { .. }) => (),
         Err(e) => return Err(e),
     }
 
-    // The name doesn't refer to a column. Check if it refers to a table. If it
-    // does, the expression is a record containing all the columns of the table.
-    //
-    // NOTE(benesch): `Scope` doesn't have an API for asking whether a given
-    // table is in scope, so we instead look at every column in the scope and
-    // ask what table it came from. Stupid, but it works.
-    let (exprs, field_names): (Vec<_>, Vec<_>) = ecx
-        .scope
-        .all_items()
-        .iter()
-        .filter(|(_level, _column, item)| {
-            item.is_from_table(&PartialName {
-                database: None,
-                schema: None,
-                item: col_name.as_str().to_owned(),
+    // The name doesn't refer to a column. Check if it is a whole-row reference
+    // to a table.
+    let items = ecx.scope.items_from_table(&PartialName {
+        database: None,
+        schema: None,
+        item: col_name.as_str().to_owned(),
+    });
+    match items.as_slice() {
+        // The name doesn't refer to a table either. Return an error.
+        [] => Err(PlanError::UnknownColumn {
+            table: None,
+            column: col_name,
+        }),
+        // The name refers to a table that is the result of a function that
+        // returned a single column. Per PostgreSQL, this is a special case
+        // that returns the value directly.
+        // See: https://github.com/postgres/postgres/blob/22592e10b/src/backend/parser/parse_expr.c#L2519-L2524
+        [(column, item)] if item.from_single_column_function => Ok(HirScalarExpr::Column(*column)),
+        // The name refers to a normal table. Return a record containing all the
+        // columns of the table.
+        _ => {
+            let (exprs, field_names): (Vec<_>, Vec<_>) = items
+                .into_iter()
+                .map(|(column, item)| {
+                    let expr = HirScalarExpr::Column(column);
+                    let name = item
+                        .column_name
+                        .clone()
+                        .unwrap_or_else(|| ColumnName::from(format!("f{}", column.column + 1)));
+                    (expr, name)
+                })
+                .unzip();
+            Ok(HirScalarExpr::CallVariadic {
+                func: VariadicFunc::RecordCreate { field_names },
+                exprs,
             })
-        })
-        .map(|(level, column, item)| {
-            let expr = HirScalarExpr::Column(ColumnRef {
-                level: *level,
-                column: *column,
-            });
-            let name = item
-                .names
-                .first()
-                .and_then(|n| n.column_name.clone())
-                .unwrap_or_else(|| ColumnName::from(format!("f{}", column + 1)));
-            (expr, name)
-        })
-        .unzip();
-    if !exprs.is_empty() {
-        return Ok(HirScalarExpr::CallVariadic {
-            func: VariadicFunc::RecordCreate { field_names },
-            exprs,
-        });
+        }
     }
-
-    Err(PlanError::UnknownColumn {
-        table: None,
-        column: col_name,
-    })
 }
 
 fn plan_op(
@@ -3858,48 +3808,6 @@ fn parser_datetimefield_to_adt(
         Minute => repr::adt::datetime::DateTimeField::Minute,
         Second => repr::adt::datetime::DateTimeField::Second,
     }
-}
-
-fn find_trivial_column_equivalences(expr: &HirScalarExpr) -> Vec<(usize, usize)> {
-    use BinaryFunc::*;
-    use HirScalarExpr::*;
-    let mut exprs = vec![expr];
-    let mut equivalences = vec![];
-    while let Some(expr) = exprs.pop() {
-        match expr {
-            CallBinary {
-                func: Eq,
-                expr1,
-                expr2,
-            } => {
-                if let (
-                    Column(ColumnRef {
-                        level: 0,
-                        column: l,
-                    }),
-                    Column(ColumnRef {
-                        level: 0,
-                        column: r,
-                    }),
-                ) = (&**expr1, &**expr2)
-                {
-                    if l != r {
-                        equivalences.push((*l, *r));
-                    }
-                }
-            }
-            CallBinary {
-                func: And,
-                expr1,
-                expr2,
-            } => {
-                exprs.push(expr1);
-                exprs.push(expr2);
-            }
-            _ => (),
-        }
-    }
-    equivalences
 }
 
 pub fn scalar_type_from_sql(
