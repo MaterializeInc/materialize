@@ -293,7 +293,7 @@ pub fn sql_impl(
         let ecx = ExprContext {
             qcx: &qcx,
             name: "static function definition",
-            scope: &Scope::empty(None),
+            scope: &Scope::empty(),
             relation_type: &RelationType::empty(),
             allow_aggregates: false,
             allow_subqueries: true,

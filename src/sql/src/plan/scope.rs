@@ -42,6 +42,7 @@
 //! than you might expect. But you have been warned. Tread carefully!
 
 use std::collections::HashSet;
+use std::iter;
 
 use anyhow::bail;
 
@@ -94,10 +95,8 @@ pub struct ScopeItem {
 
 #[derive(Debug, Clone)]
 pub struct Scope {
-    // items in this query
+    // The items in this scope.
     pub items: Vec<ScopeItem>,
-    // items inherited from an enclosing query
-    pub outer_scope: Option<Box<Scope>>,
     // Whether this scope starts a new chain of lateral outer scopes.
     //
     // It's easiest to understand with an example. Consider this query:
@@ -165,24 +164,19 @@ impl ScopeItem {
 }
 
 impl Scope {
-    pub fn empty(outer_scope: Option<Scope>) -> Self {
+    pub fn empty() -> Self {
         Scope {
             items: vec![],
-            outer_scope: outer_scope.map(Box::new),
             lateral_barrier: false,
         }
     }
 
-    pub fn from_source<I, N>(
-        table_name: Option<PartialName>,
-        column_names: I,
-        outer_scope: Option<Scope>,
-    ) -> Self
+    pub fn from_source<I, N>(table_name: Option<PartialName>, column_names: I) -> Self
     where
         I: IntoIterator<Item = Option<N>>,
         N: Into<ColumnName>,
     {
-        let mut scope = Scope::empty(outer_scope);
+        let mut scope = Scope::empty();
         scope.items = column_names
             .into_iter()
             .map(|column_name| {
@@ -201,25 +195,23 @@ impl Scope {
         self.items.len()
     }
 
-    pub fn all_items(&self) -> impl Iterator<Item = (ColumnRef, &ScopeItem)> {
+    pub fn all_items<'a>(
+        &'a self,
+        outer_scopes: &'a [Scope],
+    ) -> impl Iterator<Item = (ColumnRef, &ScopeItem)> + 'a {
         // These are in order of preference eg
         // given scopes A(B(C))
         // items from C should be preferred to items from B to items from A
-        let mut items = vec![];
-        let mut level = 0;
-        let mut scope = self;
-        loop {
-            for (column, item) in scope.items.iter().enumerate() {
-                items.push((ColumnRef { level, column }, item));
-            }
-            if let Some(outer_scope) = &scope.outer_scope {
-                scope = outer_scope;
-                level += 1;
-            } else {
-                break;
-            }
-        }
-        items.into_iter()
+        iter::once(self)
+            .chain(outer_scopes.iter().rev())
+            .enumerate()
+            .flat_map(|(level, scope)| {
+                scope
+                    .items
+                    .iter()
+                    .enumerate()
+                    .map(move |(column, item)| (ColumnRef { level, column }, item))
+            })
     }
 
     /// Returns all items from the given table name in the closest scope.
@@ -231,35 +223,22 @@ impl Scope {
     /// distinguish between "no such table" and a table that exists but has no
     /// columns. The current design of scope makes this difficult to fix,
     /// unfortunately.
-    pub fn items_from_table(&self, table: &PartialName) -> Vec<(ColumnRef, &ScopeItem)> {
+    pub fn items_from_table<'a>(
+        &'a self,
+        outer_scopes: &'a [Scope],
+        table: &PartialName,
+    ) -> Vec<(ColumnRef, &'a ScopeItem)> {
         let mut seen_level = None;
-        self.all_items()
+        self.all_items(outer_scopes)
             .filter(move |(column, item)| {
                 item.is_from_table(table) && *seen_level.get_or_insert(column.level) == column.level
             })
             .collect()
     }
 
-    /// Marks all scope items unnameable until the first lateral barrier is
-    /// encountered.
-    ///
-    /// This is useful for mutating the scope before planning a non-lateral
-    /// subquery.
-    pub fn hide_lateral_items(&mut self) {
-        let mut scope = self;
-        loop {
-            for item in &mut scope.items {
-                item.column_name = None;
-            }
-            match &mut scope.outer_scope {
-                Some(s) if !s.lateral_barrier => scope = s,
-                _ => break,
-            }
-        }
-    }
-
     fn resolve_internal<'a, M>(
         &'a self,
+        outer_scopes: &[Scope],
         mut matches: M,
         table_name: Option<&PartialName>,
         column_name: &ColumnName,
@@ -268,7 +247,7 @@ impl Scope {
         M: FnMut(ColumnRef, &ScopeItem) -> bool,
     {
         let mut results = self
-            .all_items()
+            .all_items(outer_scopes)
             .filter(|(column, item)| (matches)(*column, item));
         match results.next() {
             None => Err(PlanError::UnknownColumn {
@@ -297,9 +276,14 @@ impl Scope {
 
     /// Resolves references to a column name to a single column, or errors if
     /// multiple columns are equally valid references.
-    pub fn resolve_column<'a>(&'a self, column_name: &ColumnName) -> Result<ColumnRef, PlanError> {
+    pub fn resolve_column<'a>(
+        &'a self,
+        outer_scopes: &[Scope],
+        column_name: &ColumnName,
+    ) -> Result<ColumnRef, PlanError> {
         let table_name = None;
         self.resolve_internal(
+            outer_scopes,
             |_column, item| {
                 item.allow_unqualified_references && item.column_name.as_ref() == Some(column_name)
             },
@@ -311,10 +295,11 @@ impl Scope {
     /// Resolves a column name in a `USING` clause.
     pub fn resolve_using_column(
         &self,
+        outer_scopes: &[Scope],
         column_name: &ColumnName,
         join_side: JoinSide,
     ) -> Result<ColumnRef, PlanError> {
-        match self.resolve_column(column_name) {
+        match self.resolve_column(outer_scopes, column_name) {
             // We found a column in level 0, which is acceptable.
             Ok(column) if column.level == 0 => Ok(column),
             // Columns in outer scopes are not valid in USING clauses.
@@ -337,11 +322,13 @@ impl Scope {
 
     pub fn resolve_table_column<'a>(
         &'a self,
+        outer_scopes: &[Scope],
         table_name: &PartialName,
         column_name: &ColumnName,
     ) -> Result<ColumnRef, PlanError> {
         let mut seen_at_level = None;
         self.resolve_internal(
+            outer_scopes,
             |column, item| {
                 // Once we've matched a table name at a level, even if the
                 // column name did not match, we can never match an item from
@@ -365,12 +352,13 @@ impl Scope {
 
     pub fn resolve<'a>(
         &'a self,
+        outer_scopes: &[Scope],
         table_name: Option<&PartialName>,
         column_name: &ColumnName,
     ) -> Result<ColumnRef, PlanError> {
         match table_name {
-            None => self.resolve_column(column_name),
-            Some(table_name) => self.resolve_table_column(table_name, column_name),
+            None => self.resolve_column(outer_scopes, column_name),
+            Some(table_name) => self.resolve_table_column(outer_scopes, table_name, column_name),
         }
     }
 
@@ -405,7 +393,6 @@ impl Scope {
                 .into_iter()
                 .chain(right.items.into_iter())
                 .collect(),
-            outer_scope: self.outer_scope,
             lateral_barrier: false,
         })
     }
@@ -413,7 +400,6 @@ impl Scope {
     pub fn project(&self, columns: &[usize]) -> Self {
         Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
-            outer_scope: self.outer_scope.clone(),
             lateral_barrier: false,
         }
     }

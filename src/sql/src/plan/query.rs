@@ -841,7 +841,7 @@ pub fn plan_mutation_query_inner(
 fn handle_mutation_using_clause(
     qcx: &QueryContext,
     selection: Option<Expr<Aug>>,
-    mut using: Vec<TableWithJoins<Aug>>,
+    using: Vec<TableWithJoins<Aug>>,
     get: HirRelationExpr,
     outer_scope: Scope,
 ) -> Result<HirRelationExpr, PlanError> {
@@ -849,23 +849,21 @@ fn handle_mutation_using_clause(
     // statement's `FROM` target. This prevents `lateral` subqueries from
     // "seeing" the `FROM` target.
     let (mut using_rel_expr, using_scope) =
-        using
-            .drain(..)
-            .fold(Ok(plan_join_identity(&qcx)), |l, twj| {
-                let (left, left_scope) = l?;
-                plan_join(
-                    qcx,
-                    left,
-                    left_scope,
-                    &Join {
-                        relation: TableFactor::NestedJoin {
-                            join: Box::new(twj),
-                            alias: None,
-                        },
-                        join_operator: JoinOperator::CrossJoin,
+        using.into_iter().fold(Ok(plan_join_identity()), |l, twj| {
+            let (left, left_scope) = l?;
+            plan_join(
+                qcx,
+                left,
+                left_scope,
+                &Join {
+                    relation: TableFactor::NestedJoin {
+                        join: Box::new(twj),
+                        alias: None,
                     },
-                )
-            })?;
+                    join_operator: JoinOperator::CrossJoin,
+                },
+            )
+        })?;
 
     if let Some(expr) = selection {
         // Join `FROM` with `USING` tables, like `USING..., FROM`. This gives us
@@ -878,13 +876,10 @@ fn handle_mutation_using_clause(
             .clone()
             .join(get.clone(), on, JoinKind::Inner);
         let joined_scope = using_scope.product(outer_scope)?;
-
-        // Treat any `WHERE` clause as being executed in a subquery.
         let joined_relation_type = qcx.relation_type(&joined);
-        let subquery_qcx = qcx.derived_context(qcx.outer_scope.clone(), &joined_relation_type);
 
         let ecx = &ExprContext {
-            qcx: &subquery_qcx,
+            qcx: &qcx,
             name: "WHERE clause",
             scope: &joined_scope,
             relation_type: &joined_relation_type,
@@ -951,7 +946,7 @@ where
     let ecx = &ExprContext {
         qcx,
         name: "values",
-        scope: &Scope::empty(Some(qcx.outer_scope.clone())),
+        scope: &Scope::empty(),
         relation_type: &qcx.relation_type(&expr),
         allow_aggregates: false,
         allow_subqueries: true,
@@ -991,11 +986,7 @@ pub fn eval_as_of<'a>(
     scx: &'a StatementContext,
     mut expr: Expr<Raw>,
 ) -> Result<Timestamp, PlanError> {
-    let scope = Scope::from_source(
-        None,
-        iter::empty::<Option<ColumnName>>(),
-        Some(Scope::empty(None)),
-    );
+    let scope = Scope::from_source(None, iter::empty::<Option<ColumnName>>());
     let desc = RelationDesc::empty();
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
@@ -1045,7 +1036,7 @@ pub fn plan_default_expr(
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "DEFAULT expression",
-        scope: &Scope::empty(None),
+        scope: &Scope::empty(),
         relation_type: &RelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: false,
@@ -1068,7 +1059,7 @@ pub fn plan_params<'a>(
     }
 
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-    let scope = Scope::empty(None);
+    let scope = Scope::empty();
     let rel_type = RelationType::empty();
 
     let mut datums = Row::with_capacity(desc.param_types.len());
@@ -1108,7 +1099,7 @@ pub fn plan_index_exprs<'a>(
     on_desc: &RelationDesc,
     exprs: Vec<Expr<Raw>>,
 ) -> Result<(Vec<::expr::MirScalarExpr>, Vec<GlobalId>), PlanError> {
-    let scope = Scope::from_source(None, on_desc.iter_names(), Some(Scope::empty(None)));
+    let scope = Scope::from_source(None, on_desc.iter_names());
     let mut qcx = QueryContext::root(scx, QueryLifetime::Static);
 
     let resolved_exprs = exprs
@@ -1375,7 +1366,6 @@ fn plan_set_expr(
                 None,
                 // Column names are taken from the left, as in Postgres.
                 left_scope.column_names(),
-                Some(qcx.outer_scope.clone()),
             );
 
             Ok((relation_expr, scope))
@@ -1399,7 +1389,7 @@ fn plan_values(
     let ecx = &ExprContext {
         qcx,
         name: "values",
-        scope: &Scope::empty(Some(qcx.outer_scope.clone())),
+        scope: &Scope::empty(),
         relation_type: &RelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: true,
@@ -1456,7 +1446,7 @@ fn plan_values(
     };
 
     // Build column names.
-    let mut scope = Scope::empty(Some(qcx.outer_scope.clone()));
+    let mut scope = Scope::empty();
     for i in 0..ncols {
         let name = format!("column{}", i + 1);
         scope.items.push(ScopeItem::from_column_name(name.into()));
@@ -1465,14 +1455,10 @@ fn plan_values(
     Ok((out, scope))
 }
 
-fn plan_join_identity(qcx: &QueryContext) -> (HirRelationExpr, Scope) {
+fn plan_join_identity() -> (HirRelationExpr, Scope) {
     let typ = RelationType::new(vec![]);
     let expr = HirRelationExpr::constant(vec![vec![]], typ);
-    let scope = Scope::from_source(
-        None,
-        iter::empty::<Option<ColumnName>>(),
-        Some(qcx.outer_scope.clone()),
-    );
+    let scope = Scope::from_source(None, iter::empty::<Option<ColumnName>>());
     (expr, scope)
 }
 
@@ -1537,7 +1523,7 @@ fn plan_view_select(
 
     // Step 1. Handle FROM clause, including joins.
     let (mut relation_expr, from_scope) =
-        from.iter().fold(Ok(plan_join_identity(qcx)), |l, twj| {
+        from.iter().fold(Ok(plan_join_identity()), |l, twj| {
             let (left, left_scope) = l?;
             plan_join(
                 qcx,
@@ -1557,7 +1543,7 @@ fn plan_view_select(
     // column in the GROUP BY clause and produces a friendlier error instead.
     let check_ungrouped_col = |e| match e {
         PlanError::UnknownColumn { table, column } => {
-            match from_scope.resolve(table.as_ref(), &column) {
+            match from_scope.resolve(&qcx.outer_scopes, table.as_ref(), &column) {
                 Ok(ColumnRef { level: 0, column }) => {
                     PlanError::ungrouped_column(&from_scope.items[column])
                 }
@@ -1626,7 +1612,7 @@ fn plan_view_select(
         };
         let mut group_key = vec![];
         let mut group_exprs = vec![];
-        let mut group_scope = Scope::empty(Some(qcx.outer_scope.clone()));
+        let mut group_scope = Scope::empty();
         let mut select_all_mapping = BTreeMap::new();
         for group_expr in group_by {
             let (group_expr, expr) = plan_group_by_expr(ecx, group_expr, &projection)?;
@@ -1878,11 +1864,7 @@ fn plan_view_select(
     // accumulated in the scope during planning of this SELECT is erased. The
     // clean scope has at most one name for each column, and the names are not
     // associated with any table.
-    let scope = Scope::from_source(
-        None,
-        projection.into_iter().map(|(_expr, name)| name),
-        Some(qcx.outer_scope.clone()),
-    );
+    let scope = Scope::from_source(None, projection.into_iter().map(|(_expr, name)| name));
 
     Ok(SelectPlan {
         expr: relation_expr,
@@ -2071,9 +2053,19 @@ fn plan_table_factor(
         } => {
             let mut qcx = (*qcx).clone();
             if !lateral {
-                qcx.outer_scope.hide_lateral_items();
+                // Since this derived table was not marked as `LATERAL`,
+                // make elements in outer scopes invisible until we reach the
+                // next lateral barrier.
+                for scope in qcx.outer_scopes.iter_mut().rev() {
+                    if scope.lateral_barrier {
+                        break;
+                    }
+                    scope.items.clear();
+                }
             }
-            qcx.outer_scope.lateral_barrier = true;
+            if let Some(scope) = qcx.outer_scopes.last_mut() {
+                scope.lateral_barrier = true;
+            }
             let (expr, scope) = plan_nested_query(&mut qcx, &subquery)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
             Ok((expr, scope))
@@ -2130,13 +2122,6 @@ fn plan_rows_from(
     functions: &[TableFunction<Aug>],
     alias: Option<&TableAlias>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    // Similar to table functions with one column, ROWS FROM that outputs a
-    // single column has an edge case aliasing behavior. Use the first function
-    // name below in plan_table_function_alias if this is the case. If there's
-    // more than one column or ROWS FROM argument it is ignored there. We do not
-    // parse ROWS FROM with 0 arguments, so we know the 0 index exists.
-    let name = normalize::unresolved_object_name(functions[0].name.clone())?;
-
     // Join together each of the table functions in turn. The last column is
     // always the column to join against and is maintained to be the coalesence
     // of the row number column for all prior functions.
@@ -2181,7 +2166,7 @@ fn plan_rows_from(
             item.table_name = None;
         }
     }
-    let scope = plan_table_function_alias(name, left_scope, alias)?;
+    let scope = plan_table_function_alias(left_scope, alias)?;
 
     Ok((expr, scope))
 }
@@ -2224,7 +2209,7 @@ fn plan_table_function(
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "table function arguments",
-        scope: &Scope::empty(Some(qcx.outer_scope.clone())),
+        scope: &Scope::empty(),
         relation_type: &RelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: true,
@@ -2264,7 +2249,6 @@ fn plan_table_function(
                     item: resolved_name.item.clone(),
                 }),
                 tf.column_names,
-                Some(qcx.outer_scope.clone()),
             );
             (call, scope)
         }
@@ -2283,7 +2267,6 @@ fn plan_table_function(
                     item: resolved_name.item.clone(),
                 }),
                 scope.column_names(),
-                Some(qcx.outer_scope.clone()),
             );
             (call, scope)
         }
@@ -2296,24 +2279,19 @@ fn plan_table_function(
         item.from_single_column_function = true;
     }
 
-    let scope = plan_table_function_alias(resolved_name, scope, alias)?;
+    let scope = plan_table_function_alias(scope, alias)?;
     Ok((call, scope))
 }
 
 fn plan_table_function_alias(
-    name: PartialName,
     mut scope: Scope,
     alias: Option<&TableAlias>,
 ) -> Result<Scope, PlanError> {
     if let Some(alias) = alias {
         scope = if alias.columns.is_empty()
             && scope.len() == 1
-            && scope
-                .resolve_table_column(
-                    &name,
-                    &normalize::column_name(Ident::from(name.item.clone())),
-                )
-                .is_ok()
+            && scope.items[0].table_name.as_ref().map(|n| n.item.as_str())
+                == scope.items[0].column_name.as_ref().map(|n| n.as_str())
         {
             // Strange special case for table functions that ouput one column.
             // If a table alias is provided but not a column alias, the column
@@ -2516,11 +2494,12 @@ fn plan_join(
         JoinOperator::FullOuter(constraint) => (JoinKind::FullOuter, constraint),
     };
 
-    let mut right_qcx =
-        left_qcx.derived_context(left_scope.clone(), &left_qcx.relation_type(&left));
+    let mut right_qcx = left_qcx.derived_context(left_scope.clone(), left_qcx.relation_type(&left));
     if !kind.can_be_correlated() {
-        for item in &mut right_qcx.outer_scope.items {
-            item.lateral_error_if_referenced = true;
+        if let Some(scope) = right_qcx.outer_scopes.last_mut() {
+            for item in &mut scope.items {
+                item.lateral_error_if_referenced = true;
+            }
         }
     }
     let (right, right_scope) = plan_table_factor(&right_qcx, &join.relation)?;
@@ -2635,8 +2614,13 @@ fn plan_using_constraint(
     let mut hidden_cols = vec![];
 
     for column_name in column_names {
-        let lhs = left_scope.resolve_using_column(column_name, JoinSide::Left)?;
-        let mut rhs = right_scope.resolve_using_column(column_name, JoinSide::Right)?;
+        let lhs =
+            left_scope.resolve_using_column(&left_qcx.outer_scopes, column_name, JoinSide::Left)?;
+        let mut rhs = right_scope.resolve_using_column(
+            &right_qcx.outer_scopes,
+            column_name,
+            JoinSide::Right,
+        )?;
 
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();
@@ -3440,12 +3424,14 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
         let table_name = normalize::unresolved_object_name(UnresolvedObjectName(names))?;
-        let i = ecx.scope.resolve_table_column(&table_name, &col_name)?;
+        let i = ecx
+            .scope
+            .resolve_table_column(&ecx.qcx.outer_scopes, &table_name, &col_name)?;
         return Ok(HirScalarExpr::Column(i));
     }
 
     // If the name is unqualified, first check if it refers to a column.
-    match ecx.scope.resolve_column(&col_name) {
+    match ecx.scope.resolve_column(&ecx.qcx.outer_scopes, &col_name) {
         Ok(i) => return Ok(HirScalarExpr::Column(i)),
         Err(PlanError::UnknownColumn { .. }) => (),
         Err(e) => return Err(e),
@@ -3453,11 +3439,14 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
 
     // The name doesn't refer to a column. Check if it is a whole-row reference
     // to a table.
-    let items = ecx.scope.items_from_table(&PartialName {
-        database: None,
-        schema: None,
-        item: col_name.as_str().to_owned(),
-    });
+    let items = ecx.scope.items_from_table(
+        &ecx.qcx.outer_scopes,
+        &PartialName {
+            database: None,
+            schema: None,
+            item: col_name.as_str().to_owned(),
+        },
+    );
     match items.as_slice() {
         // The name doesn't refer to a table either. Return an error.
         [] => Err(PlanError::UnknownColumn {
@@ -4040,8 +4029,8 @@ pub struct QueryContext<'a> {
     pub scx: &'a StatementContext<'a>,
     /// The lifetime that the planned query will have.
     pub lifetime: QueryLifetime<'a>,
-    /// The scope of the outer relation expression.
-    pub outer_scope: Scope,
+    /// The scopes of the outer relation expression.
+    pub outer_scopes: Vec<Scope>,
     /// The type of the outer relation expressions.
     pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query, mapping their assigned LocalIds to their definition.
@@ -4062,7 +4051,7 @@ impl<'a> QueryContext<'a> {
         QueryContext {
             scx,
             lifetime,
-            outer_scope: Scope::empty(None),
+            outer_scopes: vec![],
             outer_relation_types: vec![],
             ctes: HashMap::new(),
             ids: HashSet::new(),
@@ -4076,22 +4065,30 @@ impl<'a> QueryContext<'a> {
 
     /// Generate a new `QueryContext` appropriate to be used in subqueries of
     /// `self`.
-    fn derived_context(&self, scope: Scope, relation_type: &RelationType) -> QueryContext<'a> {
+    fn derived_context(&self, scope: Scope, relation_type: RelationType) -> QueryContext<'a> {
         let mut ctes = self.ctes.clone();
         for (_, cte) in ctes.iter_mut() {
             cte.level_offset += 1;
         }
 
+        let outer_scopes = self
+            .outer_scopes
+            .iter()
+            .cloned()
+            .chain(iter::once(scope))
+            .collect();
+        let outer_relation_types = self
+            .outer_relation_types
+            .iter()
+            .cloned()
+            .chain(iter::once(relation_type))
+            .collect();
+
         QueryContext {
             scx: self.scx,
             lifetime: self.lifetime,
-            outer_scope: scope,
-            outer_relation_types: self
-                .outer_relation_types
-                .iter()
-                .chain(std::iter::once(relation_type))
-                .cloned()
-                .collect(),
+            outer_scopes,
+            outer_relation_types,
             ctes,
             ids: HashSet::new(),
             recursion_guard: self.recursion_guard.clone(),
@@ -4100,9 +4097,9 @@ impl<'a> QueryContext<'a> {
 
     /// Derives a `QueryContext` for a scope that contains no columns.
     fn empty_derived_context(&self) -> QueryContext<'a> {
-        let scope = Scope::empty(Some(self.outer_scope.clone()));
+        let scope = Scope::empty();
         let ty = RelationType::empty();
-        self.derived_context(scope, &ty)
+        self.derived_context(scope, ty)
     }
 
     /// Resolves `object` to a table expr, i.e. creating a `Get` or inlining a
@@ -4122,11 +4119,8 @@ impl<'a> QueryContext<'a> {
                     }
                 });
 
-                let scope = Scope::from_source(
-                    Some(name),
-                    cte.val_desc.iter_names().map(|n| n.cloned()),
-                    Some(self.outer_scope.clone()),
-                );
+                let scope =
+                    Scope::from_source(Some(name), cte.val_desc.iter_names().map(|n| n.cloned()));
 
                 // Inline `val` where its name was referenced. In an ideal
                 // world, multiple instances of this expression would be
@@ -4144,7 +4138,6 @@ impl<'a> QueryContext<'a> {
                 let scope = Scope::from_source(
                     Some(object.raw_name),
                     desc.iter_names().map(|n| n.cloned()),
-                    Some(self.outer_scope.clone()),
                 );
 
                 Ok((expr, scope))
@@ -4215,11 +4208,9 @@ impl<'a> ExprContext<'a> {
     }
 
     fn derived_query_context(&self) -> QueryContext {
-        let mut qcx = self
-            .qcx
-            .derived_context(self.scope.clone(), self.relation_type);
-        qcx.outer_scope.lateral_barrier = true;
-        qcx
+        let mut scope = self.scope.clone();
+        scope.lateral_barrier = true;
+        self.qcx.derived_context(scope, self.relation_type.clone())
     }
 
     pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {

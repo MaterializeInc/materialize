@@ -755,7 +755,7 @@ pub fn plan_hypothetical_cast(
     let ecx = ExprContext {
         qcx: &qcx,
         name: "plan_hypothetical_cast",
-        scope: &Scope::empty(None),
+        scope: &Scope::empty(),
         relation_type: &relation_type,
         allow_aggregates: false,
         allow_subqueries: true,
