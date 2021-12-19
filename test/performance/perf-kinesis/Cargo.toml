@@ -19,5 +19,5 @@ ore = { path = "../../../src/ore" }
 rand = "0.8.4"
 structopt = "0.3.25"
 test-util = { path = "../../test-util" }
-tokio = "1.13.0"
+tokio = "1.15.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
