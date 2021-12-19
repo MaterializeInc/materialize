@@ -42,6 +42,7 @@ pub enum PlanError {
         column: ColumnName,
     },
     AmbiguousColumn(ColumnName),
+    AmbiguousTable(PartialName),
     UnknownColumnInUsingClause {
         column: ColumnName,
         join_side: JoinSide,
@@ -107,6 +108,11 @@ impl fmt::Display for PlanError {
                 f,
                 "column reference {} is ambiguous",
                 column.as_str().quoted()
+            ),
+            Self::AmbiguousTable(table) => write!(
+                f,
+                "table reference {} is ambiguous",
+                table.item.as_str().quoted()
             ),
             Self::UnknownColumnInUsingClause { column, join_side } => write!(
                 f,

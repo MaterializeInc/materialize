@@ -47,6 +47,7 @@ use std::iter;
 use anyhow::bail;
 
 use repr::ColumnName;
+use ore::iter::IteratorExt;
 
 use crate::ast::Expr;
 use crate::names::PartialName;
@@ -195,22 +196,42 @@ impl Scope {
         self.items.len()
     }
 
+    /// Returns all items in the scope.
+    ///
+    /// Items are returned in order of preference, where the innermost scope has
+    /// the highest preference. For example, given scopes `A(B(C))`, items are
+    /// presented in the order `C`, `B`, `A`.
+    ///
+    /// Items are returned alongside the column reference that targets that item
+    /// and the item's "lateral level". The latter bears explaining. The lateral
+    /// level is the number of lateral barriers between this scope and the item.
+    /// See `Scope::lateral_barrier` for a diagram. Roughly speaking, items from
+    /// different levels but the same lateral level are items from different
+    /// joins in the same subquery, while items in different lateral levels are
+    /// items from different queries entirely. Rules about ambiguity apply
+    /// within an entire lateral level, not just within a single scope level.
+    ///
+    /// NOTE(benesch): Scope` really shows its weaknesses here. Ideally we'd
+    /// have separate types like `QueryScope` and `JoinScope` that more
+    /// naturally encode the concept of a "lateral level", or at least something
+    /// along those lines.
     pub fn all_items<'a>(
         &'a self,
         outer_scopes: &'a [Scope],
-    ) -> impl Iterator<Item = (ColumnRef, &ScopeItem)> + 'a {
-        // These are in order of preference eg
-        // given scopes A(B(C))
-        // items from C should be preferred to items from B to items from A
+    ) -> impl Iterator<Item = (ColumnRef, usize, &ScopeItem)> + 'a {
+        let mut lat_level = 0;
         iter::once(self)
             .chain(outer_scopes)
             .enumerate()
-            .flat_map(|(level, scope)| {
+            .flat_map(move |(level, scope)| {
+                if scope.lateral_barrier {
+                    lat_level += 1;
+                }
                 scope
                     .items
                     .iter()
                     .enumerate()
-                    .map(move |(column, item)| (ColumnRef { level, column }, item))
+                    .map(move |(column, item)| (ColumnRef { level, column }, lat_level, item))
             })
     }
 
@@ -227,13 +248,19 @@ impl Scope {
         &'a self,
         outer_scopes: &'a [Scope],
         table: &PartialName,
-    ) -> Vec<(ColumnRef, &'a ScopeItem)> {
+    ) -> Result<Vec<(ColumnRef, &'a ScopeItem)>, PlanError> {
         let mut seen_level = None;
-        self.all_items(outer_scopes)
-            .filter(move |(column, item)| {
-                item.is_from_table(table) && *seen_level.get_or_insert(column.level) == column.level
+        let items: Vec<_> = self
+            .all_items(outer_scopes)
+            .filter(move |(_column, lat_level, item)| {
+                item.is_from_table(table) && *seen_level.get_or_insert(*lat_level) == *lat_level
             })
-            .collect()
+            .map(|(column, _lat_level, item)| (column, item))
+            .collect();
+        if !items.iter().map(|(column, _)| column.level).all_equal() {
+            return Err(PlanError::AmbiguousTable(table.clone()));
+        }
+        Ok(items)
     }
 
     fn resolve_internal<'a, M>(
@@ -244,22 +271,26 @@ impl Scope {
         column_name: &ColumnName,
     ) -> Result<ColumnRef, PlanError>
     where
-        M: FnMut(ColumnRef, &ScopeItem) -> bool,
+        M: FnMut(ColumnRef, usize, &ScopeItem) -> bool,
     {
         let mut results = self
             .all_items(outer_scopes)
-            .filter(|(column, item)| (matches)(*column, item));
+            .filter(|(column, lat_level, item)| (matches)(*column, *lat_level, item));
         match results.next() {
             None => Err(PlanError::UnknownColumn {
                 table: table_name.cloned(),
                 column: column_name.clone(),
             }),
-            Some((column, item)) => {
+            Some((column, lat_level, item)) => {
                 if results
-                    .find(|(column2, _item)| column.level == column2.level)
+                    .find(|(_column, lat_level2, _item)| lat_level == *lat_level2)
                     .is_some()
                 {
-                    return Err(PlanError::AmbiguousColumn(column_name.clone()));
+                    if let Some(table_name) = table_name {
+                        return Err(PlanError::AmbiguousTable(table_name.clone()));
+                    } else {
+                        return Err(PlanError::AmbiguousColumn(column_name.clone()));
+                    }
                 }
 
                 if item.lateral_error_if_referenced {
@@ -284,7 +315,7 @@ impl Scope {
         let table_name = None;
         self.resolve_internal(
             outer_scopes,
-            |_column, item| {
+            |_column, _lat_level, item| {
                 item.allow_unqualified_references && item.column_name.as_ref() == Some(column_name)
             },
             table_name,
@@ -295,29 +326,20 @@ impl Scope {
     /// Resolves a column name in a `USING` clause.
     pub fn resolve_using_column(
         &self,
-        outer_scopes: &[Scope],
         column_name: &ColumnName,
         join_side: JoinSide,
     ) -> Result<ColumnRef, PlanError> {
-        match self.resolve_column(outer_scopes, column_name) {
-            // We found a column in level 0, which is acceptable.
-            Ok(column) if column.level == 0 => Ok(column),
-            // Columns in outer scopes are not valid in USING clauses.
-            Ok(_) => Err(PlanError::UnknownColumnInUsingClause {
-                column: column_name.clone(),
-                join_side,
-            }),
-            // Attach a bit more context to unknown and ambiguous column errors
-            // to match PostgreSQL.
-            Err(PlanError::AmbiguousColumn(column)) => {
-                Err(PlanError::AmbiguousColumnInUsingClause { column, join_side })
+        self.resolve_column(&[], column_name).map_err(|e| match e {
+            // Attach a bit more context to unknown and ambiguous column
+            // errors to match PostgreSQL.
+            PlanError::AmbiguousColumn(column) => {
+                PlanError::AmbiguousColumnInUsingClause { column, join_side }
             }
-            Err(PlanError::UnknownColumn { column, .. }) => {
-                Err(PlanError::UnknownColumnInUsingClause { column, join_side })
+            PlanError::UnknownColumn { column, .. } => {
+                PlanError::UnknownColumnInUsingClause { column, join_side }
             }
-            // Other errors are untouched.
-            Err(e) => Err(e),
-        }
+            _ => e,
+        })
     }
 
     pub fn resolve_table_column<'a>(
@@ -329,17 +351,17 @@ impl Scope {
         let mut seen_at_level = None;
         self.resolve_internal(
             outer_scopes,
-            |column, item| {
-                // Once we've matched a table name at a level, even if the
-                // column name did not match, we can never match an item from
-                // another level.
+            |_column, lat_level, item| {
+                // Once we've matched a table name at a lateral level, even if
+                // the column name did not match, we can never match an item
+                // from another lateral level.
                 if let Some(seen_at_level) = seen_at_level {
-                    if seen_at_level != column.level {
+                    if seen_at_level != lat_level {
                         return false;
                     }
                 }
                 if item.table_name.as_ref().map(|n| n.matches(table_name)) == Some(true) {
-                    seen_at_level = Some(column.level);
+                    seen_at_level = Some(lat_level);
                     item.column_name.as_ref() == Some(column_name)
                 } else {
                     false

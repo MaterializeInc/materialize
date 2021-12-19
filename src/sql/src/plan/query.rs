@@ -2610,13 +2610,8 @@ fn plan_using_constraint(
     let mut hidden_cols = vec![];
 
     for column_name in column_names {
-        let lhs =
-            left_scope.resolve_using_column(&left_qcx.outer_scopes, column_name, JoinSide::Left)?;
-        let mut rhs = right_scope.resolve_using_column(
-            &right_qcx.outer_scopes,
-            column_name,
-            JoinSide::Right,
-        )?;
+        let lhs = left_scope.resolve_using_column(column_name, JoinSide::Left)?;
+        let mut rhs = right_scope.resolve_using_column(column_name, JoinSide::Right)?;
 
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();
@@ -3442,7 +3437,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
             schema: None,
             item: col_name.as_str().to_owned(),
         },
-    );
+    )?;
     match items.as_slice() {
         // The name doesn't refer to a table either. Return an error.
         [] => Err(PlanError::UnknownColumn {
