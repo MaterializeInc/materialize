@@ -53,8 +53,8 @@ users attritioning off the site.
 
 ### Materialize
 
-Materialize presents an interface to ingest, parse, and query log the server's
-log files.
+Materialize presents an interface to ingest, parse, and query the server's log
+files.
 
 In this demo, Materialize...
 
@@ -167,9 +167,9 @@ arguments:
 Argument | Function
 ---------|---------
 `requests` | The source's name
-`file:///log/requests` | The location of the file (`/log/requests`) prefixed by `file://`
-`regex='...'` | The regex that structures our logs and generates column names, which we've outlined in [Impose structure with regex](#impose-a-structure-with-regex).
-`tail=true` | Indicates to Materialize that this file is dynamically updated and should be watched for new data.
+`/log/requests` | The location of the file
+`FORMAT REGEX '...'` | The regex that structures our logs and generates column names, which we've outlined in [Impose structure with regex](#impose-a-structure-with-regex).
+`tail = true` | Indicates to Materialize that this file is dynamically updated and should be watched for new data.
 
 In essence, what we've said here is that we want to continually read from the
 log file, and take each unseen string in it, and extract the columns we've
@@ -182,17 +182,16 @@ with `SHOW COLUMNS`.
 SHOW COLUMNS FROM requests;
 ```
 ```nofmt
-+-------------------+------------+--------+
-| name              | nullable   | type   |
-|-------------------+------------+--------|
-| ip                | true       | text   |
-| ts                | true       | text   |
-| path              | true       | text   |
-| search_kw         | true       | text   |
-| product_detail_id | true       | text   |
-| code              | true       | text   |
-| mz_line_no        | false      | int8   |
-+-------------------+------------+--------+
+       name        | nullable |  type
+-------------------+----------+--------
+ ip                | t        | text
+ ts                | t        | text
+ path              | t        | text
+ search_kw         | t        | text
+ product_detail_id | t        | text
+ code              | t        | text
+ mz_line_no        | f        | bigint
+(7 rows)
 ```
 
 This looks like we expect, so we're good to move on.
@@ -291,11 +290,10 @@ get a chance to see how Materialize can handle queries on our data.
     SHOW SOURCES;
     ```
     ```nofmt
-    +-----------+
-    | SOURCES   |
-    |-----------|
-    | requests  |
-    +-----------+
+       name
+    ----------
+     requests
+    (1 row)
     ```
 
     This source was created using the `CREATE SOURCE` statement we wrote
@@ -307,17 +305,16 @@ get a chance to see how Materialize can handle queries on our data.
     SHOW COLUMNS FROM requests;
     ```
     ```nofmt
-    +-------------------+------------+--------+
-    | name              | nullable   | type   |
-    |-------------------+------------+--------|
-    | ip                | true       | text   |
-    | ts                | true       | text   |
-    | path              | true       | text   |
-    | search_kw         | true       | text   |
-    | product_detail_id | true       | text   |
-    | code              | true       | text   |
-    | mz_line_no        | false      | int8   |
-    +-------------------+------------+--------+
+           name        | nullable |  type
+    -------------------+----------+--------
+     ip                | t        | text
+     ts                | t        | text
+     path              | t        | text
+     search_kw         | t        | text
+     product_detail_id | t        | text
+     code              | t        | text
+     mz_line_no        | f        | bigint
+    (7 rows)
     ```
 
     As you'll remember, this is the structure [we expected when creating a
@@ -333,9 +330,12 @@ get a chance to see how Materialize can handle queries on our data.
     SHOW VIEWS;
     ```
     ```nofmt
-    avg_dps_for_searcher
-    top_products
-    unique_visitors
+             name
+    ----------------------
+     avg_dps_for_searcher
+     top_products
+     unique_visitors
+    (3 rows)
     ```
 
     View | Description
@@ -344,10 +344,10 @@ get a chance to see how Materialize can handle queries on our data.
     `top_products` | Most commonly viewed product pages
     `unique_visitors` | Count of unique visitors, determined by IP address
 
-1. To see the query that underlies this view, use `SHOW CREATE VIEW`:
+1. To see the query that underlies a view, use `SHOW CREATE VIEW`:
 
     ```sql
-    SHOW CREATE VIEW avg_dps_for_searcher
+    SHOW CREATE VIEW unique_visitors;
     ```
 
     From these results, we can see that the query that this view describes is:

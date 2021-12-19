@@ -89,7 +89,7 @@ answers from your data warehouse.
 
 Metabase is an open-source tool to create visualizations of SQL queries'
 results, and then group them into dashboards. For instance, teams might use
-Metabase to monitor purchasing geographic purchasing patterns from their stores.
+Metabase to monitor geographic purchasing patterns from their stores.
 
 In our demo, we'll use Metabase to visualize the results of some TPC-H-like
 queries, and watch the visualizations update as quickly as Metabase allows.
@@ -272,7 +272,6 @@ Materialize to maintain for us.
     Field             | Enter...
     ----------------- | ----------------
     Database type     | **PostgreSQL**
-    Database          | **Materialize**
     Name              | **tpcch**
     Host              | **materialized**
     Port              | **6875**
