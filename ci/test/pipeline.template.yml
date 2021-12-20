@@ -55,7 +55,7 @@ steps:
     label: ":mac: clippy"
     command: bin/check
     env:
-      - CARGO_INCREMENTAL: "0"
+      CARGO_INCREMENTAL: "0"
     inputs:
       - Cargo.lock
       - "**/Cargo.toml"
