@@ -13,7 +13,7 @@ ore = { path = "../ore" }
 proc-macro2 = "1.0.34"
 repr = {path = "../repr"}
 repr_test_util = {path = "../repr-test-util"}
-serde = { version = "1.0.131", features = ["derive"] }
+serde = { version = "1.0.132", features = ["derive"] }
 serde_json = "1.0.73"
 
 [dev-dependencies]
