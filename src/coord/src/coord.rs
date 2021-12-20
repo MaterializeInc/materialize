@@ -518,6 +518,25 @@ where
                         self.new_frontiers(entry.id(), Some(0), self.logical_compaction_window_ms);
                     self.sources.insert(entry.id(), frontiers);
                 }
+                CatalogItem::Table(table) => {
+                    let since_ts = {
+                        match &table.persist {
+                            Some(persist) => Some(persist.since_ts),
+                            _ => None,
+                        }
+                    };
+
+                    let since_ts = since_ts.unwrap_or(0);
+                    let frontiers = self.new_frontiers(
+                        entry.id(),
+                        [since_ts],
+                        self.logical_compaction_window_ms,
+                    );
+
+                    // NOTE: Tables are not sources, but to a large part of the system they look
+                    // like they are, e.g. they are rendered as a SourceConnector::Local.
+                    self.sources.insert(entry.id(), frontiers);
+                }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
                         // Indexes on logging views are special, as they are
@@ -1391,8 +1410,15 @@ where
     ///
     /// TODO: In the future the coordinator should perhaps track a table's upper and
     /// since frontiers directly as it currently does for sources.
-    fn persisted_table_allow_compaction(&self, since_updates: &[(GlobalId, Antichain<Timestamp>)]) {
+    fn persisted_table_allow_compaction(
+        &mut self,
+        since_updates: &[(GlobalId, Antichain<Timestamp>)],
+    ) {
         let mut table_since_updates = vec![];
+
+        // Updates for the persistence source that is backing a table.
+        let mut table_source_since_updates = vec![];
+
         for (id, frontier) in since_updates.iter() {
             // HACK: Avoid the "failed to compact persisted tables" error log at
             // restart, by not trying to allow compaction on the minimum
@@ -1417,9 +1443,22 @@ where
                 {
                     if self.catalog.default_index_for(*on) == Some(*id) {
                         table_since_updates.push((persist.stream_id, frontier.clone()));
+                        table_source_since_updates.push((*on, frontier.clone()));
                     }
                 }
             }
+        }
+
+        // The persistence source that is backing a table on workers does not send frontier updates
+        // back to the coordinator. We update our internal bookkeeping here, because we also
+        // forward the compaction frontier here and therefore know that the since advances.
+        for (id, frontier) in table_source_since_updates {
+            let since_handle = self
+                .since_handles
+                .get_mut(&id)
+                .expect("missing since handle");
+
+            since_handle.maybe_advance(frontier);
         }
 
         if !table_since_updates.is_empty() {
@@ -2054,7 +2093,7 @@ where
                         id: table_id,
                         oid: table_oid,
                         name,
-                        item: CatalogItem::Table(table),
+                        item: CatalogItem::Table(table.clone()),
                     },
                     catalog::Op::CreateItem {
                         id: index_id,
@@ -2078,6 +2117,21 @@ where
         match df {
             Ok(df) => {
                 if let Some(df) = df {
+                    let since_ts = {
+                        match &table.persist {
+                            Some(persist) => Some(persist.since_ts),
+                            _ => None,
+                        }
+                    };
+
+                    let since_ts = since_ts.unwrap_or(0);
+                    let frontiers =
+                        self.new_frontiers(table_id, [since_ts], self.logical_compaction_window_ms);
+
+                    // NOTE: Tables are not sources, but to a large part of the system they look
+                    // like they are, e.g. they are rendered as a SourceConnector::Local.
+                    self.sources.insert(table_id, frontiers);
+
                     self.ship_dataflow(df).await?;
                 }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
@@ -3894,6 +3948,12 @@ where
             .await;
         }
         if !tables_to_drop.is_empty() {
+            // NOTE: When creating a persistent table we insert its compaction frontier (aka since)
+            // in `self.sources` to make sure that it is taken into account when rendering
+            // dataflows that use it. We must make sure to remove that here.
+            for &id in &tables_to_drop {
+                self.sources.remove(&id);
+            }
             self.broadcast(dataflow_types::client::Command::DropSources(tables_to_drop))
                 .await;
         }
