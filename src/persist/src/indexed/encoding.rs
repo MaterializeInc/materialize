@@ -869,6 +869,7 @@ impl From<&Description<u64>> for ProtoU64Description {
 #[cfg(test)]
 mod tests {
     use crate::error::Error;
+    use crate::workload::DataGenerator;
 
     use super::*;
 
@@ -1535,6 +1536,42 @@ mod tests {
         assert_eq!(
             b.validate(),
             Err(Error::from("duplicate batch key found in trace: "))
+        );
+    }
+
+    #[test]
+    fn encoded_batch_sizes() {
+        fn sizes(data: DataGenerator) -> (usize, usize) {
+            let unsealed = BlobUnsealedBatch {
+                desc: SeqNo(0)..SeqNo(1),
+                updates: data.batches().collect(),
+            };
+            let trace = BlobTraceBatch {
+                desc: Description::new(
+                    Antichain::from_elem(0),
+                    Antichain::from_elem(1),
+                    Antichain::from_elem(0),
+                ),
+                updates: data.records().collect(),
+            };
+            let (mut unsealed_buf, mut trace_buf) = (Vec::new(), Vec::new());
+            unsealed.encode(&mut unsealed_buf);
+            trace.encode(&mut trace_buf);
+            (unsealed_buf.len(), trace_buf.len())
+        }
+
+        let record_size_bytes = DataGenerator::default().record_size_bytes;
+        // Print all the sizes into one assert so we only have to update one
+        // place if sizes change.
+        assert_eq!(
+            format!(
+                "1/1={:?} 25/1={:?} 1000/1={:?} 1000/100={:?}",
+                sizes(DataGenerator::new(1, record_size_bytes, 1)),
+                sizes(DataGenerator::new(25, record_size_bytes, 25)),
+                sizes(DataGenerator::new(1_000, record_size_bytes, 1_000)),
+                sizes(DataGenerator::new(1_000, record_size_bytes, 1_000 / 100)),
+            ),
+            "1/1=(176, 136) 25/1=(2096, 2056) 1000/1=(80096, 80056) 1000/100=(87224, 80056)"
         );
     }
 }

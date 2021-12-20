@@ -239,12 +239,13 @@ mod tests {
                 key: "MERGED_KEY".into(),
                 desc: desc_from(0, 3, 2),
                 level: 1,
-                size_bytes: 162,
+                size_bytes: 0,
             },
         };
         let mut res = maintainer.compact_trace(req).recv()?;
         let merged_key = res.merged.key.clone();
         res.merged.key = "MERGED_KEY".into();
+        res.merged.size_bytes = 0;
         assert_eq!(res, expected_res);
 
         let b2 = blob.get_trace_batch_async(&merged_key).recv()?;
