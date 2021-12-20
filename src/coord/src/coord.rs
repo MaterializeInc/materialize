@@ -518,6 +518,25 @@ where
                         self.new_frontiers(entry.id(), Some(0), self.logical_compaction_window_ms);
                     self.sources.insert(entry.id(), frontiers);
                 }
+                CatalogItem::Table(table) => {
+                    let since_ts = {
+                        match &table.persist {
+                            Some(persist) => Some(persist.since_ts),
+                            _ => None,
+                        }
+                    };
+
+                    let since_ts = since_ts.unwrap_or(0);
+                    let frontiers = self.new_frontiers(
+                        entry.id(),
+                        [since_ts],
+                        self.logical_compaction_window_ms,
+                    );
+
+                    // NOTE: Tables are not sources, but to a large part of the system they look
+                    // like they are, e.g. they are rendered as a SourceConnector::Local.
+                    self.sources.insert(entry.id(), frontiers);
+                }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
                         // Indexes on logging views are special, as they are
@@ -3889,6 +3908,12 @@ where
             .await;
         }
         if !tables_to_drop.is_empty() {
+            // NOTE: When creating a persistent table we insert its compaction frontier (aka since)
+            // in `self.sources` to make sure that it is taken into account when rendering
+            // dataflows that use it. We must make sure to remove that here.
+            for &id in &tables_to_drop {
+                self.sources.remove(&id);
+            }
             self.broadcast(dataflow_types::client::Command::DropSources(tables_to_drop))
                 .await;
         }
