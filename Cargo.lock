@@ -3365,7 +3365,9 @@ name = "persist"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "aws-config",
  "aws-sdk-s3",
+ "aws-types",
  "bincode",
  "build-info",
  "criterion",

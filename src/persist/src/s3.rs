@@ -10,9 +10,11 @@
 //! An S3 implementation of [Blob] storage.
 
 use async_trait::async_trait;
+use aws_config::sts::AssumeRoleProvider;
 use aws_sdk_s3::ByteStream;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::SdkError;
+use aws_types::credentials::SharedCredentialsProvider;
 use futures_executor::block_on;
 
 use mz_aws_util::config::AwsConfig;
@@ -37,8 +39,22 @@ impl S3BlobConfig {
     /// Stores objects in the given bucket prepended with the (possibly empty)
     /// prefix. S3 credentials and region must be available in the process or
     /// environment.
-    pub async fn new(bucket: String, prefix: String) -> Result<Self, Error> {
-        let config = AwsConfig::load_from_env().await;
+    pub async fn new(
+        bucket: String,
+        prefix: String,
+        role_arn: Option<String>,
+    ) -> Result<Self, Error> {
+        let mut config = AwsConfig::load_from_env().await;
+        if let Some(role_arn) = role_arn {
+            let provider = AssumeRoleProvider::builder(role_arn).session_name("persist");
+            let provider = if let Some(region) = config.region() {
+                provider.region(region.clone())
+            } else {
+                provider
+            };
+            let provider = provider.build(config.credentials_provider().clone());
+            config.set_credentials_provider(SharedCredentialsProvider::new(provider));
+        }
         let client = mz_aws_util::s3::client(&config)
             .map_err(|err| format!("connecting client: {}", err))?;
         Ok(S3BlobConfig {
@@ -111,7 +127,8 @@ impl S3BlobConfig {
         // to worry about deleting any data that we create because the bucket is
         // set to auto-delete after 1 day.
         let prefix = Uuid::new_v4().to_string();
-        let config = S3BlobConfig::new(bucket, prefix).await?;
+        let role_arn = None;
+        let config = S3BlobConfig::new(bucket, prefix, role_arn).await?;
         Ok(Some(config))
     }
 }

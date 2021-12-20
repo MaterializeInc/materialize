@@ -9,6 +9,7 @@
 
 //! Materialize-specific persistence configuration.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,7 +68,24 @@ impl TryFrom<String> for PersistStorage {
                     .strip_prefix('/')
                     .unwrap_or_else(|| url.path())
                     .to_string();
-                Ok(PersistStorage::S3(PersistS3Storage { bucket, prefix }))
+                let mut query_params = url.query_pairs().collect::<HashMap<_, _>>();
+                let role_arn = query_params.remove("aws_role_arn").map(|x| x.into_owned());
+                if !query_params.is_empty() {
+                    return Err(format!(
+                        "unknown storage location params: {}",
+                        query_params
+                            .keys()
+                            .map(|x| x.to_owned())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                    .into());
+                }
+                Ok(PersistStorage::S3(PersistS3Storage {
+                    bucket,
+                    prefix,
+                    role_arn,
+                }))
             }
             p => Err(Error::from(format!("unknown storage provider: {}", p))),
         }
@@ -87,6 +105,8 @@ pub struct PersistS3Storage {
     /// A prefix prepended for all S3 object keys used by this storage. Empty is
     /// fine.
     pub prefix: String,
+    /// An AWS role ARN to assume.
+    pub role_arn: Option<String>,
 }
 
 /// Configuration of the persistence runtime and features.
@@ -161,7 +181,9 @@ impl PersistConfig {
                     )
                 }
                 PersistStorage::S3(s) => {
-                    let config = S3BlobConfig::new(s.bucket.clone(), s.prefix.clone()).await?;
+                    let config =
+                        S3BlobConfig::new(s.bucket.clone(), s.prefix.clone(), s.role_arn.clone())
+                            .await?;
                     let mut blob = S3Blob::open_exclusive(config, lock_info)?;
                     persist::storage::check_meta_version_maybe_delete_data(&mut blob)?;
                     runtime::start(
