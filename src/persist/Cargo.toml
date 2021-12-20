@@ -36,7 +36,7 @@ ore = { path = "../ore", default-features = false, features = ["metrics"] }
 persist-types = { path = "../persist-types" }
 protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 semver = { version = "1.0.4" }
-serde = { version = "1.0.131", features = ["derive"] }
+serde = { version = "1.0.132", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.15.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }
 uuid = { version = "0.8.2", features = ["v4"] }
