@@ -1749,7 +1749,10 @@ fn date_part_interval_inner(
         | DateTimeUnits::DayOfWeek
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+            feature: format!("'{}' timestamp units", units),
+            issue_no: None,
+        }),
     }
 }
 
@@ -1789,7 +1792,10 @@ where
         DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+            feature: format!("'{}' timestamp units", units),
+            issue_no: None,
+        }),
     }
 }
 
@@ -1798,16 +1804,16 @@ where
     T: TimestampLike,
 {
     let stride_ns = if stride.months != 0 {
-        Err(EvalError::FeatureNotSupported(
+        Err(EvalError::DateBinOutOfRange(
             "timestamps cannot be binned into intervals containing months or years".to_string(),
         ))
     } else if stride.duration <= 0 {
-        Err(EvalError::FeatureNotSupported(
+        Err(EvalError::DateBinOutOfRange(
             "stride must be greater than zero".to_string(),
         ))
     } else {
         i64::try_from(stride.duration).map_err(|_| {
-            EvalError::FeatureNotSupported("stride cannot exceed 2^63 nanoseconds".to_string())
+            EvalError::DateBinOutOfRange("stride cannot exceed 2^63 nanoseconds".to_string())
         })
     }?;
 
@@ -1817,7 +1823,7 @@ where
     let sub_stride = origin > source;
 
     let tm_diff = (source - origin.clone()).num_nanoseconds().ok_or_else(|| {
-        EvalError::FeatureNotSupported(
+        EvalError::DateBinOutOfRange(
             "source and origin must not differ more than 2^63 nanoseconds".to_string(),
         )
     })?;
@@ -1868,7 +1874,10 @@ where
         | DateTimeUnits::DayOfWeek
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+            feature: format!("'{}' timestamp units", units),
+            issue_no: None,
+        }),
     }
 }
 
@@ -2147,6 +2156,7 @@ pub enum BinaryFunc {
     LogNumeric,
     Power,
     PowerNumeric,
+    PgGetConstraintdef,
 }
 
 impl BinaryFunc {
@@ -2374,6 +2384,10 @@ impl BinaryFunc {
             BinaryFunc::LogNumeric => eager!(log_base_numeric),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerNumeric => eager!(power_numeric),
+            BinaryFunc::PgGetConstraintdef => Err(EvalError::Unsupported {
+                feature: "pg_get_constraintdef".to_string(),
+                issue_no: Some(9483),
+            }),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
@@ -2535,6 +2549,8 @@ impl BinaryFunc {
             | RoundNumeric | SubNumeric => {
                 ScalarType::Numeric { scale: None }.nullable(in_nullable)
             }
+
+            PgGetConstraintdef => ScalarType::String.nullable(in_nullable),
         }
     }
 
@@ -2627,6 +2643,7 @@ impl BinaryFunc {
                 | ModFloat32
                 | ModFloat64
                 | ModNumeric
+                | PgGetConstraintdef
         )
     }
 
@@ -2762,7 +2779,8 @@ impl BinaryFunc {
             | LogNumeric
             | Power
             | PowerNumeric
-            | RepeatString => false,
+            | RepeatString
+            | PgGetConstraintdef => false,
         }
     }
 
@@ -2922,6 +2940,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
+            BinaryFunc::PgGetConstraintdef => f.write_str("pg_get_constraintdef"),
         }
     }
 }
@@ -3015,9 +3034,6 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
     Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
 )]
 pub enum UnaryFunc {
-    NotImplemented {
-        function_name: String,
-    },
     Not(Not),
     IsNull(IsNull),
     IsTrue(IsTrue),
@@ -3217,6 +3233,7 @@ pub enum UnaryFunc {
     Sleep(Sleep),
     RescaleNumeric(u8),
     PgColumnSize(PgColumnSize),
+    PgGetConstraintdef(PgGetConstraintdef),
     MzRowSize(MzRowSize),
 }
 
@@ -3286,6 +3303,7 @@ derive_unary!(
     CastOidToRegType,
     CastRegTypeToOid,
     PgColumnSize,
+    PgGetConstraintdef,
     MzRowSize,
     IsNull,
     IsTrue,
@@ -3403,6 +3421,7 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
+            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | IsNull(_)
             | IsTrue(_)
@@ -3513,9 +3532,6 @@ impl UnaryFunc {
             | CastDateToTimestampTz(_)
             | CastBytesToString(_)
             | CastVarCharToString(_) => unreachable!(),
-            NotImplemented { function_name } => Err(EvalError::NotImplemented {
-                function_name: function_name.clone(),
-            }),
             CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
             CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
             CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
@@ -3601,6 +3617,7 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
+            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | IsNull(_)
             | IsTrue(_)
@@ -3727,8 +3744,7 @@ impl UnaryFunc {
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace
             | Upper
-            | Lower
-            | NotImplemented { .. } => ScalarType::String.nullable(nullable),
+            | Lower => ScalarType::String.nullable(nullable),
 
             CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
 
@@ -3830,6 +3846,7 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
+            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | IsNull(_)
             | IsTrue(_)
@@ -3964,7 +3981,6 @@ impl UnaryFunc {
             | TrimTrailingWhitespace
             | Upper
             | Lower => false,
-            NotImplemented { .. } => false,
             CastJsonbToNumeric(_) => false,
             TimezoneTime { .. } => false,
             TimezoneTimestampTz(_) => false,
@@ -4009,6 +4025,7 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
+            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | IsNull(_)
             | IsTrue(_)
@@ -4072,6 +4089,7 @@ impl UnaryFunc {
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
             | PgColumnSize(_)
+            | PgGetConstraintdef(_)
             | MzRowSize(_)
             | IsNull(_)
             | IsTrue(_)
@@ -4182,11 +4200,6 @@ impl UnaryFunc {
             | CastDateToTimestampTz(_)
             | CastBytesToString(_)
             | CastVarCharToString(_) => unreachable!(),
-            NotImplemented { function_name } => {
-                // NotImplemented is not implemented using `sqlfunc!` so is not
-                // `unreachable!` here
-                f.write_str(function_name)
-            }
             CastStringToJsonb => f.write_str("strtojsonb"),
             CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
             CastJsonbToString => f.write_str("jsonbtostr"),

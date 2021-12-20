@@ -1130,8 +1130,12 @@ impl CheckedRecursion for MirScalarExprVisitor {
     Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
 )]
 pub enum EvalError {
+    DateBinOutOfRange(String),
     DivisionByZero,
-    FeatureNotSupported(String),
+    Unsupported {
+        feature: String,
+        issue_no: Option<usize>,
+    },
     FloatOverflow,
     FloatUnderflow,
     NumericFieldOverflow,
@@ -1168,7 +1172,6 @@ pub enum EvalError {
     InvalidParameterValue(String),
     NegSqrt,
     UnknownUnits(String),
-    UnsupportedDateTimeUnits(DateTimeUnits),
     UnterminatedLikeEscapeSequence,
     Parse(ParseError),
     ParseHex(ParseHexError),
@@ -1184,17 +1187,19 @@ pub enum EvalError {
         target_type: String,
         length: usize,
     },
-    NotImplemented {
-        function_name: String,
-    },
 }
 
 impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            EvalError::DateBinOutOfRange(message) => f.write_str(message),
             EvalError::DivisionByZero => f.write_str("division by zero"),
-            EvalError::FeatureNotSupported(feature) => {
-                write!(f, "{}", feature)
+            EvalError::Unsupported { feature, issue_no } => {
+                write!(f, "{} not yet supported", feature)?;
+                if let Some(issue_no) = issue_no {
+                    write!(f, ", see https://github.com/MaterializeInc/materialize/issues/{} for more details", issue_no)?;
+                }
+                Ok(())
             }
             EvalError::FloatOverflow => f.write_str("value out of range: overflow"),
             EvalError::FloatUnderflow => f.write_str("value out of range: underflow"),
@@ -1244,9 +1249,6 @@ impl fmt::Display for EvalError {
             EvalError::InvalidRegexFlag(c) => write!(f, "invalid regular expression flag: {}", c),
             EvalError::InvalidParameterValue(s) => f.write_str(s),
             EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
-            EvalError::UnsupportedDateTimeUnits(units) => {
-                write!(f, "unsupported timestamp units '{}'", units)
-            }
             EvalError::UnterminatedLikeEscapeSequence => {
                 f.write_str("unterminated escape sequence in LIKE")
             }
@@ -1279,9 +1281,6 @@ impl fmt::Display for EvalError {
                 length,
             } => {
                 write!(f, "value too long for type {}({})", target_type, length)
-            }
-            EvalError::NotImplemented { function_name } => {
-                write!(f, "{} is not yet implemented", function_name)
             }
         }
     }
