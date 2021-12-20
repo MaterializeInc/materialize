@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.51"
 byteorder = "1.4.3"
-futures = "0.3.18"
+futures = "0.3.19"
 json = "0.12.4"
 ordered-float = { version = "2.8.0", features = ["serde"] }
 ore = { path = "../../src/ore" }
