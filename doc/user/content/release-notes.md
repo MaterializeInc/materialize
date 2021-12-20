@@ -101,6 +101,8 @@ List new features before bug fixes.
 
 {{< /comment >}}
 
+{{% version-header v0.14.0 %}}
+
 {{% version-header v0.13.0 %}}
 
 - Allow join trees that mix [`LATERAL`](/sql/join#lateral-subqueries)
