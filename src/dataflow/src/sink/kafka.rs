@@ -125,7 +125,16 @@ where
         let peers = sinked_collection.inner.scope().peers();
         let worker_index = sinked_collection.inner.scope().index();
         let active_write_worker = (usize::cast_from(sink_id.hashed()) % peers) == worker_index;
-        let shared_frontier = Rc::new(RefCell::new(Antichain::from_elem(0)));
+
+        // Only the active_write_worker will ever produce data so all other workers have
+        // an empty frontier.  It's necessary to insert all of these into `render_state.
+        // sink_write_frontier` below so we properly clear out default frontiers of
+        // non-active workers.
+        let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
+            Antichain::from_elem(0)
+        } else {
+            Antichain::new()
+        }));
 
         let token = kafka(
             sinked_collection,
@@ -141,11 +150,9 @@ where
             &metrics.kafka,
         );
 
-        if active_write_worker {
-            render_state
-                .sink_write_frontiers
-                .insert(sink_id, shared_frontier);
-        }
+        render_state
+            .sink_write_frontiers
+            .insert(sink_id, shared_frontier);
 
         Some(token)
     }
@@ -514,6 +521,10 @@ impl KafkaSinkState {
             assert!(write_frontier.less_equal(&min_frontier));
             write_frontier.clear();
             write_frontier.insert(min_frontier);
+        } else {
+            // If there's no longer an input frontier, we will no longer receive any data forever and, therefore, will
+            // never output more data
+            self.write_frontier.borrow_mut().clear();
         }
 
         Ok(())

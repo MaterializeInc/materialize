@@ -45,6 +45,7 @@ reqwest = { version = "0.11.7", features = ["native-tls-vendored"] }
 serde = "1.0.132"
 serde_json = { version = "1.0.73", features = ["raw_value"] }
 similar = "2.1.0"
+sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
 structopt = "0.3.25"
 tempfile = "3.2.0"

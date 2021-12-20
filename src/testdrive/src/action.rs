@@ -49,6 +49,7 @@ mod schema_registry;
 mod sleep;
 mod sql;
 mod sql_server;
+mod verify_timestamp_compaction;
 
 const DEFAULT_REGEX_REPLACEMENT: &str = "<regex_match>";
 
@@ -528,6 +529,10 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
                         }
                         continue;
                     }
+                    "verify-timestamp-compaction" => Box::new(
+                        verify_timestamp_compaction::build_verify_timestamp_compaction(builtin)
+                            .map_err(wrap_err)?,
+                    ),
                     _ => {
                         return Err(InputError {
                             msg: format!("unknown built-in command {}", builtin.name),

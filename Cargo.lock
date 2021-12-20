@@ -4983,6 +4983,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "sql",
  "sql-parser",
  "structopt",
  "tempfile",
