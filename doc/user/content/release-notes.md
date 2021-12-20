@@ -108,6 +108,34 @@ List new features before bug fixes.
 - Allow join trees that mix [`LATERAL`](/sql/join#lateral-subqueries)
   elements with `RIGHT` and `FULL` joins {{% gh 6875 %}}.
 
+- Add the [`generate_subscripts`](/sql/functions/#table-func) function, which
+  generates the valid subscripts of the selected dimension of an
+  [array](/sql/types/array).
+
+- Improve error messages when referencing a column that is inaccessible because
+  it was not included in a `GROUP BY` clause or used in an aggregate function
+  {{% gh 5314 %}}.
+
+- Avoid crashing when the `ON` clause of a
+  [`LATERAL`](/sql/join#lateral-subqueries) join contains a reference to a
+  column in an outer query {{% gh 9605 %}}.
+
+- Fix several bugs in the planning of `ROWS FROM` clauses that incorrectly
+  rejected certain valid column and function references {{% gh 9653 9657 %}}.
+
+- Correct results for certain queries where the condition in a `CASE` could
+  evaluate to `NULL` {{% gh 9285 %}}.
+
+- Correct results when filtering on `NULL` values in columns joined with
+  `USING` constraints {{% gh 7618 %}}.
+
+- Correct join associativity when using comma-separated `FROM` items
+  {{% gh 9489 %}}. Previously the comma operator had higher precedence than the
+  `JOIN` operator; now it correctly has lower precedence.
+
+  This bug could cause incorrect results in queries that combined `RIGHT` and
+  `FULL` [joins](/sql/join) with comma-separated `FROM` items.
+
 {{% version-header v0.12.0 %}}
 
 - Optionally emit the message partition, offset, and timestamp in [Kafka
@@ -121,23 +149,9 @@ List new features before bug fixes.
   [`pg_get_constraintdef`](/sql/functions#postgresql-compatibility-func)
   function.
 
-- Add the [`generate_subscripts`](/sql/functions/#table-func) function, which
-  generates the valid subscripts of the selected dimension of an
-  [array](/sql/types/array).
-
 - Avoid crashing when executing certain queries involving the
   [`mz_logical_timestamp`](/sql/functions/#date-and-time-func) function
   {{% gh 9504 %}}.
-
-- Fix a bug that caused incorrect results when filtering on `NULL` values in
-  columns joined with `USING` constraints {{% gh 7618 %}}.
-
-- Correct join associativity when using comma-separated `FROM` items
-  {{% gh 9489 %}}. Previously the comma operator had higher precedence than the
-  `JOIN` operator; now it correctly has lower precedence.
-
-  This bug could cause incorrect results in queries that combined `RIGHT` and
-  `FULL` [joins](/sql/join) with comma-separated `FROM` items.
 
 {{% version-header v0.11.0 %}}
 
