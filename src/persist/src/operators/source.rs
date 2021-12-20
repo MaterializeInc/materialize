@@ -29,6 +29,7 @@ pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyDat
     fn persisted_source(
         &mut self,
         read: StreamReadHandle<K, V>,
+        as_of_frontier: &Antichain<u64>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)>;
 }
 
@@ -41,6 +42,7 @@ where
     fn persisted_source(
         &mut self,
         read: StreamReadHandle<K, V>,
+        as_of_frontier: &Antichain<u64>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
         let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
         let snapshot = read.listen(listen_tx);
@@ -56,7 +58,7 @@ where
         let new = listen_source(self, snapshot_seal, listen_rx);
 
         // Replay the previously persisted data, if any.
-        let previous = self.replay(snapshot);
+        let previous = self.replay(snapshot, as_of_frontier);
 
         previous.concat(&new)
     }
@@ -164,7 +166,9 @@ mod tests {
         let (oks, errs) = timely::execute_directly(move |worker| {
             let (oks, errs) = worker.dataflow(|scope| {
                 let (_write, read) = p.create_or_load::<String, ()>("1");
-                let (ok_stream, err_stream) = scope.persisted_source(read).ok_err(split_ok_err);
+                let (ok_stream, err_stream) = scope
+                    .persisted_source(read, &Antichain::from_elem(0))
+                    .ok_err(split_ok_err);
                 (ok_stream.capture(), err_stream.capture())
             });
 
@@ -233,7 +237,9 @@ mod tests {
 
             worker.dataflow(|scope| {
                 let (_write, read) = p.create_or_load::<String, ()>("1");
-                let (oks, _rrs) = scope.persisted_source(read).ok_err(split_ok_err);
+                let (oks, _rrs) = scope
+                    .persisted_source(read, &Antichain::from_elem(0))
+                    .ok_err(split_ok_err);
 
                 oks.probe_with(&mut probe);
             });
@@ -277,7 +283,9 @@ mod tests {
         timely::execute(Config::process(2), move |worker| {
             worker.dataflow(|scope| {
                 let (write, read) = p.create_or_load("1");
-                let (ok_stream, _) = scope.persisted_source(read).ok_err(split_ok_err);
+                let (ok_stream, _) = scope
+                    .persisted_source(read, &Antichain::from_elem(0))
+                    .ok_err(split_ok_err);
 
                 // Write one thing from each worker again. This time at timestamp 2.
                 write
@@ -328,7 +336,9 @@ mod tests {
 
         let recv = timely::execute_directly(move |worker| {
             let recv = worker.dataflow(|scope| {
-                let (_, err_stream) = scope.persisted_source(read).ok_err(split_ok_err);
+                let (_, err_stream) = scope
+                    .persisted_source(read, &Antichain::from_elem(0))
+                    .ok_err(split_ok_err);
                 err_stream.capture()
             });
             recv
@@ -358,7 +368,7 @@ mod tests {
 
         let recv = timely::execute_directly(move |worker| {
             let recv = worker.dataflow(|scope| {
-                let stream = scope.persisted_source(read);
+                let stream = scope.persisted_source(read, &Antichain::from_elem(0));
                 stream.capture()
             });
 
@@ -412,7 +422,7 @@ mod tests {
                 }
                 worker.dataflow(|scope| {
                     let (_write, read) = p.create_or_load::<String, ()>("1");
-                    let data = scope.persisted_source(read);
+                    let data = scope.persisted_source(read, &Antichain::from_elem(0));
                     data.probe_with(&mut probe);
                 });
 
