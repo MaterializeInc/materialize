@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-psql -h materialized -p 6875 -d materialize << EOF
+psql -U materialize -h materialized -p 6875 -d materialize << EOF
 -- Flask request logs format
 CREATE SOURCE requests
 FROM FILE '/log/requests' WITH (tail = true)
