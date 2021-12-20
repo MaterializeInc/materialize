@@ -10,6 +10,8 @@
 //! An S3 implementation of [Blob] storage.
 
 use async_trait::async_trait;
+use aws_config::default_provider::{credentials, region};
+use aws_config::meta::region::ProvideRegion;
 use aws_config::sts::AssumeRoleProvider;
 use aws_sdk_s3::ByteStream;
 use aws_sdk_s3::Client as S3Client;
@@ -44,17 +46,17 @@ impl S3BlobConfig {
         prefix: String,
         role_arn: Option<String>,
     ) -> Result<Self, Error> {
-        let mut config = AwsConfig::load_from_env().await;
+        let mut loader = aws_config::from_env();
         if let Some(role_arn) = role_arn {
-            let provider = AssumeRoleProvider::builder(role_arn).session_name("persist");
-            let provider = if let Some(region) = config.region() {
-                provider.region(region.clone())
-            } else {
-                provider
-            };
-            let provider = provider.build(config.credentials_provider().clone());
-            config.set_credentials_provider(SharedCredentialsProvider::new(provider));
+            let mut role_provider = AssumeRoleProvider::builder(role_arn).session_name("persist");
+            if let Some(region) = region::default_provider().region().await {
+                role_provider = role_provider.region(region);
+            }
+            let default_provider =
+                SharedCredentialsProvider::new(credentials::default_provider().await);
+            loader = loader.credentials_provider(role_provider.build(default_provider));
         }
+        let config = AwsConfig::from_loader(loader).await;
         let client = mz_aws_util::s3::client(&config)
             .map_err(|err| format!("connecting client: {}", err))?;
         Ok(S3BlobConfig {
