@@ -128,8 +128,8 @@ async fn main() {
         Some(region) => {
             // Standard AWS region without a custom endpoint. Try to find actual
             // AWS credentials.
-            let mut config = AwsConfig::load_from_env().await;
-            config.set_region(Region::new(region));
+            let loader = aws_config::from_env().region(Region::new(region));
+            let config = AwsConfig::from_loader(loader).await;
             let account = async {
                 let sts_client = mz_aws_util::sts::client(&config)?;
                 Ok::<_, Box<dyn Error>>(
@@ -158,13 +158,15 @@ async fn main() {
             let endpoint = args
                 .aws_endpoint
                 .unwrap_or_else(|| "http://localhost:4566".parse().unwrap());
-            let mut config = AwsConfig::with_credentials_provider(Credentials::from_keys(
-                "dummy-access-key-id",
-                "dummy-secret-access-key",
-                None,
-            ));
+            let loader = aws_config::from_env()
+                .region(Region::new("us-east-1"))
+                .credentials_provider(Credentials::from_keys(
+                    "dummy-access-key-id",
+                    "dummy-secret-access-key",
+                    None,
+                ));
+            let mut config = AwsConfig::from_loader(loader).await;
             config.set_endpoint(Endpoint::immutable(endpoint));
-            config.set_region(Region::new("us-east-1"));
             let account = "000000000000".into();
             (config, account)
         }

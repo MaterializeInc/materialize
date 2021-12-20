@@ -20,8 +20,7 @@ use crate::util;
 /// Constructs a new AWS Kinesis client that respects the
 /// [system proxy configuration](mz_http_proxy#system-proxy-configuration).
 pub fn client(config: &AwsConfig) -> Result<Client, anyhow::Error> {
-    let mut builder = aws_sdk_kinesis::config::Config::builder().region(config.region().cloned());
-    builder.set_credentials_provider(Some(config.credentials_provider().clone()));
+    let mut builder = aws_sdk_kinesis::config::Builder::from(config.inner());
     if let Some(endpoint) = config.endpoint() {
         builder = builder.endpoint_resolver(endpoint.clone());
     }

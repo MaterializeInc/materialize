@@ -9,44 +9,48 @@
 
 //! AWS configuration.
 
-use aws_config::default_provider::{credentials, region};
-use aws_config::meta::region::ProvideRegion;
+use std::sync::Arc;
+
+use aws_config::{Config, ConfigLoader};
 use aws_smithy_http::endpoint::Endpoint;
-use aws_types::credentials::{ProvideCredentials, SharedCredentialsProvider};
+use aws_types::credentials::{Credentials, CredentialsError, ProvideCredentials};
 use aws_types::region::Region;
 
 /// Service agnostic configuration for AWS.
+///
+/// This wraps the upstream [`Config`] type to allow additionally configuring
+/// a global endpoint (e.g., LocalStack) to be used for all services.
 #[derive(Debug, Clone)]
 pub struct AwsConfig {
-    region: Option<Region>,
-    credentials_provider: SharedCredentialsProvider,
     endpoint: Option<Endpoint>,
+    // TODO(benesch): drop the `Arc` if awslabs/aws-sdk-rust#352 is resolved.
+    inner: Arc<Config>,
 }
 
 impl AwsConfig {
-    /// Creates a configuration using the specified credentials provider.
-    pub fn with_credentials_provider<P>(provider: P) -> AwsConfig
-    where
-        P: ProvideCredentials + 'static,
-    {
+    /// Creates a configuration from a [`ConfigLoader`].
+    pub async fn from_loader(loader: ConfigLoader) -> AwsConfig {
         AwsConfig {
-            region: None,
-            credentials_provider: SharedCredentialsProvider::new(provider),
             endpoint: None,
+            inner: Arc::new(loader.load().await),
         }
     }
 
     /// Loads the default configuration from the environment.
     pub async fn load_from_env() -> AwsConfig {
-        let region = region::default_provider().region().await;
-        let credentials_provider = {
-            let mut builder = credentials::DefaultCredentialsChain::builder();
-            builder.set_region(region.clone());
-            builder.build().await
-        };
-        let mut config = AwsConfig::with_credentials_provider(credentials_provider);
-        config.region = region;
-        config
+        AwsConfig::from_loader(aws_config::from_env()).await
+    }
+
+    /// Returns the inner [`Config`] object.
+    pub fn inner(&self) -> &Config {
+        &self.inner
+    }
+
+    /// Returns the currently configured endpoint, if any.
+    ///
+    /// This is a convenience method for `config.inner().region()`.
+    pub fn region(&self) -> Option<&Region> {
+        self.inner.region()
     }
 
     /// Sets the endpoint.
@@ -59,23 +63,13 @@ impl AwsConfig {
         self.endpoint.as_ref()
     }
 
-    /// Sets the region.
-    pub fn set_region(&mut self, region: Region) {
-        self.region = Some(region);
-    }
-
-    /// Returns the currently configured region, if any.
-    pub fn region(&self) -> Option<&Region> {
-        self.region.as_ref()
-    }
-
-    /// Sets the credentials provider.
-    pub fn set_credentials_provider(&mut self, credentials_provider: SharedCredentialsProvider) {
-        self.credentials_provider = credentials_provider;
-    }
-
-    /// Returns the currently configured credentials provider, if any.
-    pub fn credentials_provider(&self) -> &SharedCredentialsProvider {
-        &self.credentials_provider
+    /// Acquires credentials using the configured credentials provider.
+    pub async fn provide_credentials(&self) -> Result<Credentials, CredentialsError> {
+        match self.inner().credentials_provider() {
+            None => Err(CredentialsError::not_loaded(
+                "no credentials provider configured",
+            )),
+            Some(provider) => provider.provide_credentials().await,
+        }
     }
 }

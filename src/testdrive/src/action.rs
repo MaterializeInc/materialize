@@ -21,7 +21,6 @@ use async_trait::async_trait;
 use aws_sdk_kinesis::Client as KinesisClient;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
-use aws_types::credentials::ProvideCredentials;
 use futures::future::FutureExt;
 use lazy_static::lazy_static;
 use ore::result::ResultExt as _;
@@ -370,7 +369,6 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
     {
         let aws_credentials = state
             .aws_config
-            .credentials_provider()
             .provide_credentials()
             .await
             .err_ctx("fetching AWS credentials")?;

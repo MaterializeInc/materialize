@@ -17,13 +17,10 @@ use crate::util;
 /// Constructs a new AWS STS client that respects the
 /// [system proxy configuration](mz_http_proxy#system-proxy-configuration).
 pub fn client(config: &AwsConfig) -> Result<Client, anyhow::Error> {
-    let mut builder = aws_sdk_sts::config::Config::builder().region(config.region().cloned());
-    builder.set_credentials_provider(Some(config.credentials_provider().clone()));
+    let mut builder = aws_sdk_sts::config::Builder::from(config.inner());
     if let Some(endpoint) = config.endpoint() {
         builder = builder.endpoint_resolver(endpoint.clone());
     }
-    // TODO(#9644): maybe remove this
-    builder.set_sleep_impl(aws_smithy_async::rt::sleep::default_async_sleep());
     let conn = util::connector()?;
     Ok(Client::from_conf_conn(builder.build(), conn))
 }
