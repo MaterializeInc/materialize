@@ -28,7 +28,7 @@ crossbeam-channel = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures-util = "0.3.18"
-futures-executor = "0.3.16"
+futures-executor = "0.3.19"
 log = "0.4.13"
 md-5 = "0.9.0"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
@@ -38,7 +38,7 @@ protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 semver = { version = "1.0.4" }
 serde = { version = "1.0.131", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.13.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }
+tokio = { version = "1.15.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread"] }
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [build-dependencies]
