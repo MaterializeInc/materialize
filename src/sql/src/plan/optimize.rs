@@ -43,10 +43,9 @@ impl HirRelationExpr {
     pub fn optimize_and_lower(self, config: &OptimizerConfig) -> expr::MirRelationExpr {
         if config.qgm_optimizations {
             // create a query graph model from this HirRelationExpr
-            let model = Model::from(self);
+            let mut model = Model::from(self);
 
-            // @todo: perform optimizing algebraic rewrites on the qgm
-            // ...
+            crate::query_model::rewrite_engine::rewrite_model(&mut model);
 
             // decorrelate and lower the optimized query graph model into a MirRelationExpr
             model.lower()
