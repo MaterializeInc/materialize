@@ -252,11 +252,30 @@ impl PersisterWithConfig {
             None => return Ok(None),
         };
         let (write_handle, _) = persister.create_or_load(&stream_name);
+
+        let description = persister.get_description(&stream_name);
+        let description = match description {
+            Ok(description) => description,
+            Err(e) => {
+                let error_string = format!("Reading description for {}: {}", stream_name, e);
+                return Err(Error::String(error_string));
+            }
+        };
+
+        // TODO: We have a mismatch here: we know that these frontiers always contains only one
+        // element, because we only allow `u64` timestamps, but the return value suggests there could
+        // be more. Also: if the frontiers are truly multi-dimensional in the future, the logic that
+        // determines a common upper seal timestamp will become a bit more complicated.
+        let since_ts = description.since().iter().exactly_one().map_err(|_| {
+            format!("expected exactly one element in the persist compaction frontier")
+        })?;
+
         Ok(Some(TablePersistDetails {
             stream_name,
             // We need to get the stream_id now because we cannot get it later since most methods
             // in the coordinator/catalog aren't fallible.
             stream_id: write_handle.stream_id()?,
+            since_ts: *since_ts,
             write_handle,
         }))
     }
@@ -396,6 +415,13 @@ fn stream_desc_from_name(
 pub struct TablePersistDetails {
     pub stream_name: String,
     pub stream_id: PersistId,
+    /// The _current_ compaction frontier (aka _since_) of the persistent stream that is backing
+    /// this table.
+    ///
+    /// NOTE: This timestamp is determined when the coordinator starts up or when the table is
+    /// initially created. When a table is actively being written to when allowing compaction, this
+    /// will progress beyond this timestamp.
+    pub since_ts: u64,
     #[serde(skip)]
     pub write_handle: StreamWriteHandle<Row, ()>,
 }

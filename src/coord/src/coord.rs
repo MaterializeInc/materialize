@@ -532,6 +532,18 @@ where
                     );
                     self.sources.insert(entry.id(), frontiers);
                 }
+                CatalogItem::Table(table) => {
+                    println!("bootstrapping table: {:?}", table);
+                    let since_ts = {
+                        match &table.persist {
+                            Some(persist) => Some(persist.since_ts),
+                            _ => None,
+                        }
+                    };
+
+                    let since_ts = since_ts.unwrap_or(0);
+                    println!("should heed since ts: {}", since_ts);
+                }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
                         // Indexes on logging views are special, as they are
