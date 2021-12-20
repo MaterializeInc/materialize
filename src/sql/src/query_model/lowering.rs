@@ -55,13 +55,7 @@ impl<'a> Lowerer<'a> {
         use expr::MirRelationExpr as SR;
         let the_box = self.model.get_box(box_id);
 
-        assert_eq!(
-            the_box.distinct,
-            DistinctOperation::Preserve,
-            "DISTINCT is not supported yet"
-        );
-
-        match &the_box.box_type {
+        let input = match &the_box.box_type {
             BoxType::Get(Get { id }) => {
                 let typ = RelationType::new(
                     the_box
@@ -144,6 +138,12 @@ impl<'a> Lowerer<'a> {
                 )
             }
             _ => panic!(),
+        };
+
+        if the_box.distinct == DistinctOperation::Enforce {
+            input.distinct()
+        } else {
+            input
         }
     }
 

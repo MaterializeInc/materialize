@@ -357,3 +357,41 @@ select a, b, a from (select 1 as a, 2 as b) where (select true);
 | Project (#2..#4)
 ----
 ----
+
+lower
+select distinct c, b, a from x;
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map #2, #1, #0
+| Project (#3..#5)
+| Distinct group=(#0, #1, #2)
+----
+----
+
+lower
+select distinct b from x;
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map #1
+| Project (#3)
+| Distinct group=(#0)
+----
+----
