@@ -242,7 +242,7 @@ where
 
         let mut pending_futures = VecDeque::new();
 
-        seal_op.build(move |mut capabilities| {
+        seal_op.build_reschedule(move |mut capabilities| {
             let mut cap_set = if active_seal_operator {
                 CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
             } else {
@@ -261,7 +261,8 @@ where
                 });
 
                 if !active_seal_operator {
-                    return;
+                    // We are always complete if we're not the active seal operator.
+                    return false;
                 }
 
                 let mut new_input_frontier = Antichain::new();
@@ -366,6 +367,8 @@ where
                     cap_set.downgrade(input_frontier.iter());
                     pending_futures.clear();
                 }
+
+                !pending_futures.is_empty()
             }
         });
 
@@ -733,26 +736,15 @@ mod tests {
             // the seal operator into a retry loop with this seal operation.
             input.advance_to(1);
 
-            // We intentionally take a thousand steps here because taking fewer steps
-            // makes the failure much less likely. We can't simply wait for frontier
-            // advancement because persistence is unavailable, so sealing will fail.
-            for _ in 0..1_000 {
-                worker.step();
-            }
+            // Allow the operator to submit the seal request.
+            worker.step();
 
-            // We close the input before we make persistence available again to
-            // maximise the chances that we observe an empty frontier in the seal operator
-            // before the pending seal operation has a chance to succeed.
+            // We close the input, which will make the operator drop all its capabilities. The
+            // operator still has a pending seal request, so it will not be shut down.
             input.close();
-            // We want to have the pending seal succeed as soon as possible after input
-            // is closed. If we wait too long, timely's internal state will clean up
-            // enough state such that the operator is never invoked again when the
-            // seal succeeds.
+            // This will make the seal request succeed. If the operator tried to downgrade the (now
+            // nonexistent) capabilities, this would fail.
             unreliable.make_available();
-
-            for _ in 0..1_000 {
-                worker.step();
-            }
 
             // Once input has been closed, the frontier can safely advance without
             // it.
