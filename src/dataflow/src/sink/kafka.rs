@@ -125,6 +125,11 @@ where
         let peers = sinked_collection.inner.scope().peers();
         let worker_index = sinked_collection.inner.scope().index();
         let active_write_worker = (usize::cast_from(sink_id.hashed()) % peers) == worker_index;
+
+        // Only the active_write_worker will ever produce data so all other workers have
+        // an empty frontier.  It's necessary to insert all of these into `render_state.
+        // sink_write_frontier` below so we properly clear out default frontiers of
+        // non-active workers.
         let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
             Antichain::from_elem(0)
         } else {
