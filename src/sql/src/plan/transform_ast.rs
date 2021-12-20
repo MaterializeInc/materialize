@@ -376,6 +376,7 @@ impl<'a> Desugarer<'a> {
                         columns: vec![],
                         strict: false,
                     }),
+                    with_ordinality: false,
                 },
                 joins: vec![],
             });
@@ -474,6 +475,7 @@ impl<'a> Desugarer<'a> {
                                 columns: vec![binding.clone()],
                                 strict: true,
                             }),
+                            with_ordinality: false,
                         },
                         joins: vec![],
                     })

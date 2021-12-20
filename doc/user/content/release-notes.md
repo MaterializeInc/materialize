@@ -133,6 +133,11 @@ List new features before bug fixes.
   SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t1.a
   ```
 
+- Support the [`WITH ORDINALITY`] modifier for function calls in the `FROM`
+  clause {{% gh 8445 %}}. When present, the function produces an additional
+  `bigint` column named `ordinality` that numbers the returned rows, starting
+  with 1.
+
 {{% version-header v0.13.0 %}}
 
 - Allow join trees that mix [`LATERAL`](/sql/join#lateral-subqueries)

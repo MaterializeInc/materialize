@@ -3897,9 +3897,11 @@ impl<'a> Parser<'a> {
                 self.expect_token(&Token::LParen)?;
                 let args = self.parse_optional_args(false)?;
                 let alias = self.parse_optional_table_alias()?;
+                let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
                 return Ok(TableFactor::Function {
                     function: TableFunction { name, args },
                     alias,
+                    with_ordinality,
                 });
             }
         }
@@ -3982,9 +3984,11 @@ impl<'a> Parser<'a> {
             if self.consume_token(&Token::LParen) {
                 let args = self.parse_optional_args(false)?;
                 let alias = self.parse_optional_table_alias()?;
+                let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
                 Ok(TableFactor::Function {
                     function: TableFunction { name, args },
                     alias,
+                    with_ordinality,
                 })
             } else {
                 Ok(TableFactor::Table {
@@ -4000,7 +4004,12 @@ impl<'a> Parser<'a> {
         let functions = self.parse_comma_separated(Parser::parse_table_function)?;
         self.expect_token(&Token::RParen)?;
         let alias = self.parse_optional_table_alias()?;
-        Ok(TableFactor::RowsFrom { functions, alias })
+        let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
+        Ok(TableFactor::RowsFrom {
+            functions,
+            alias,
+            with_ordinality,
+        })
     }
 
     fn parse_table_function(&mut self) -> Result<TableFunction<Raw>, ParserError> {

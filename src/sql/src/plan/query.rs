@@ -2037,13 +2037,17 @@ fn plan_table_factor(
             Ok((expr, scope))
         }
 
-        TableFactor::Function { function, alias } => {
-            plan_solitary_table_function(qcx, function, alias.as_ref())
-        }
+        TableFactor::Function {
+            function,
+            alias,
+            with_ordinality,
+        } => plan_solitary_table_function(qcx, function, alias.as_ref(), *with_ordinality),
 
-        TableFactor::RowsFrom { functions, alias } => {
-            plan_rows_from(qcx, functions, alias.as_ref())
-        }
+        TableFactor::RowsFrom {
+            functions,
+            alias,
+            with_ordinality,
+        } => plan_rows_from(qcx, functions, alias.as_ref(), *with_ordinality),
 
         TableFactor::Derived {
             lateral,
@@ -2102,11 +2106,11 @@ fn plan_table_factor(
 /// SELECT
 ///     gs1.generate_series, expand.x, expand.n, gs2.generate_series
 /// FROM
-///     (SELECT row_number() OVER (), * FROM generate_series(1, 2)) AS gs1
-///     FULL JOIN (SELECT row_number() OVER (), * FROM information_schema._pg_expandarray(ARRAY[9])) AS expand
-///         ON gs1.row_number = expand.row_number
-///     FULL JOIN (SELECT row_number() OVER (), * FROM generate_series(3, 6)) AS gs3
-///         ON coalesce(gs1.row_number, expand.row_number) = gs3.row_number;
+///     generate_series(1, 2) WITH ORDINALITY AS gs1
+///     FULL JOIN information_schema._pg_expandarray(ARRAY[9]) WITH ORDINALITY AS expand
+///         ON gs1.ordinality = expand.ordinality
+///     FULL JOIN generate_series(3, 6) WITH ORDINALITY AS gs3
+///         ON coalesce(gs1.ordinality, expand.ordinality) = gs3.ordinality;
 /// ```
 ///
 /// Note the call to `coalesce` in the last join condition, which ensures that
@@ -2118,23 +2122,24 @@ fn plan_rows_from(
     qcx: &QueryContext,
     functions: &[TableFunction<Aug>],
     alias: Option<&TableAlias>,
+    with_ordinality: bool,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     // If there's only a single table function, planning proceeds as if `ROWS
     // FROM` hadn't been written at all.
     if let [function] = functions {
-        return plan_solitary_table_function(qcx, function, alias);
+        return plan_solitary_table_function(qcx, function, alias, with_ordinality);
     }
 
     // Join together each of the table functions in turn. The last column is
     // always the column to join against and is maintained to be the coalesence
     // of the row number column for all prior functions.
-    let (mut left_expr, mut left_scope) = plan_rows_from_function(&qcx, &functions[0])?;
+    let (mut left_expr, mut left_scope) = plan_table_function_internal(&qcx, &functions[0], true)?;
     for function in &functions[1..] {
         // The right hand side of a join must be planned in a new scope.
         let qcx = qcx.empty_derived_context();
-        let (right_expr, right_scope) = plan_rows_from_function(&qcx, function)?;
-        let left_col = left_scope.len();
-        let right_col = left_scope.len() + 1 + right_scope.len();
+        let (right_expr, right_scope) = plan_table_function_internal(&qcx, function, true)?;
+        let left_col = left_scope.len() - 1;
+        let right_col = left_scope.len() + right_scope.len() - 1;
         let on = HirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
             expr1: Box::new(HirScalarExpr::column(left_col)),
@@ -2150,16 +2155,21 @@ fn plan_rows_from(
                 ],
             }])
             .project(
-                (0..left_col) // non-row number columns from left function
-                    .chain(left_col + 1..right_col) // non-row number columns from right function
-                    .chain(iter::once(right_col + 1)) // new coalesced row number column
+                (0..left_col) // non-ordinality columns from left function
+                    .chain(left_col + 1..right_col) // non-ordinality columns from right function
+                    .chain(iter::once(right_col + 1)) // new coalesced ordinality column
                     .collect(),
             );
+        left_scope.items.pop();
         left_scope.items.extend(right_scope.items);
     }
 
-    // Project off the row number column.
-    let expr = left_expr.project((0..left_scope.len()).collect());
+    // If `WITH ORDINALITY` was not specified, project off the ordinality
+    // column.
+    if !with_ordinality {
+        left_expr = left_expr.project((0..left_scope.len() - 1).collect());
+        left_scope.items.pop();
+    }
 
     // Per PostgreSQL, all scope items take the name of the first function
     // (unless aliased).
@@ -2171,31 +2181,9 @@ fn plan_rows_from(
             item: normalize::unresolved_object_name(functions[0].name.clone())?.item,
         });
     }
-    let scope = plan_table_alias(left_scope, alias)?;
+    left_scope = plan_table_alias(left_scope, alias)?;
 
-    Ok((expr, scope))
-}
-
-/// Plans a table function within a `ROWS FROM` clause.
-///
-/// The resulting expression contains the planned table function plus an
-/// additional column containing the output of the `row_number()` window
-/// function. Beware: the returned scope does NOT include an entry for this
-/// column!
-fn plan_rows_from_function(
-    qcx: &QueryContext,
-    function: &TableFunction<Aug>,
-) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let (expr, scope) = plan_table_function(qcx, function)?;
-    let expr = expr.map(vec![HirScalarExpr::Windowing(WindowExpr {
-        func: WindowExprType::Scalar(ScalarWindowExpr {
-            func: ScalarWindowFunc::RowNumber,
-            order_by: vec![],
-        }),
-        partition: vec![],
-        order_by: vec![],
-    })]);
-    Ok((expr, scope))
+    Ok((left_expr, left_scope))
 }
 
 /// Plans a table function that appears alone, i.e., that is not part of a `ROWS
@@ -2205,38 +2193,42 @@ fn plan_solitary_table_function(
     qcx: &QueryContext,
     function: &TableFunction<Aug>,
     alias: Option<&TableAlias>,
+    with_ordinality: bool,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let (expr, mut scope) = plan_table_function(qcx, function)?;
+    let (expr, mut scope) = plan_table_function_internal(qcx, function, with_ordinality)?;
 
-    // If the function only produced a single value, mark the scope item as
-    // such. This impacts whole-row references.
-    if let [item] = &mut scope.items[..] {
+    let single_column_function = scope.len() == 1 + if with_ordinality { 1 } else { 0 };
+    if single_column_function {
+        let item = &mut scope.items[0];
+
+        // Mark that the function only produced a single column. This impacts
+        // whole-row references.
         item.from_single_column_function = true;
-    }
 
-    // Strange special case for solitary table functions that ouput one column
-    // whose name matches the name of the table function. If a table alias is
-    // provided, the column name is changed to the table alias's name.
-    // Concretely, the following query returns a column named `x` rather than a
-    // column named `generate_series`:
-    //
-    //     SELECT * FROM generate_series(1, 5) AS x
-    //
-    // Note that this case does not apply to e.g. `jsonb_array_elements`, since
-    // its output column is explicitly named `value`, not
-    // `jsonb_array_elements`.
-    //
-    // Note also that we may (correctly) change the column name again when we
-    // plan the table alias below if the `alias.columns` is non-empty.
-    if let Some(alias) = alias {
-        if let [ScopeItem {
-            table_name: Some(table_name),
-            column_name: Some(column_name),
-            ..
-        }] = &mut scope.items[..]
-        {
-            if table_name.item.as_str() == column_name.as_str() {
-                *column_name = normalize::column_name(alias.name.clone());
+        // Strange special case for solitary table functions that ouput one
+        // column whose name matches the name of the table function. If a table
+        // alias is provided, the column name is changed to the table alias's
+        // name. Concretely, the following query returns a column named `x`
+        // rather than a column named `generate_series`:
+        //
+        //     SELECT * FROM generate_series(1, 5) AS x
+        //
+        // Note that this case does not apply to e.g. `jsonb_array_elements`,
+        // since its output column is explicitly named `value`, not
+        // `jsonb_array_elements`.
+        //
+        // Note also that we may (correctly) change the column name again when
+        // we plan the table alias below if the `alias.columns` is non-empty.
+        if let Some(alias) = alias {
+            if let ScopeItem {
+                table_name: Some(table_name),
+                column_name: Some(column_name),
+                ..
+            } = item
+            {
+                if table_name.item.as_str() == column_name.as_str() {
+                    *column_name = normalize::column_name(alias.name.clone());
+                }
             }
         }
     }
@@ -2247,11 +2239,12 @@ fn plan_solitary_table_function(
 
 /// Plans a table function.
 ///
-/// You generally want to call `plan_rows_from_function` or
-/// `plan_solitary_table_function` instaed.
-fn plan_table_function(
+/// You generally should call `plan_rows_from` or `plan_solitary_table_function`
+/// instead to get the appropriate aliasing behavior.
+fn plan_table_function_internal(
     qcx: &QueryContext,
     TableFunction { name, args }: &TableFunction<Aug>,
+    with_ordinality: bool,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     if *name == UnresolvedObjectName::unqualified("values") {
         // Produce a nice error message for the common typo
@@ -2281,8 +2274,13 @@ fn plan_table_function(
         }
     };
     let resolved_name = normalize::unresolved_object_name(name.clone())?;
+    let scope_name = Some(PartialName {
+        database: None,
+        schema: None,
+        item: resolved_name.item.clone(),
+    });
 
-    let (call, scope) = match resolve_func(ecx, name, args)? {
+    let (mut expr, mut scope) = match resolve_func(ecx, name, args)? {
         Func::Table(impls) => {
             let tf = func::select_impl(
                 ecx,
@@ -2291,20 +2289,27 @@ fn plan_table_function(
                 scalar_args,
                 vec![],
             )?;
-            let scope = Scope::from_source(
-                Some(PartialName {
-                    database: None,
-                    schema: None,
-                    item: resolved_name.item.clone(),
-                }),
-                tf.column_names,
-            );
+            let scope = Scope::from_source(scope_name.clone(), tf.column_names);
             (tf.expr, scope)
         }
         _ => sql_bail!("{} is not a table function", name),
     };
 
-    Ok((call, scope))
+    if with_ordinality {
+        expr = expr.map(vec![HirScalarExpr::Windowing(WindowExpr {
+            func: WindowExprType::Scalar(ScalarWindowExpr {
+                func: ScalarWindowFunc::RowNumber,
+                order_by: vec![],
+            }),
+            partition: vec![],
+            order_by: vec![],
+        })]);
+        scope
+            .items
+            .push(ScopeItem::from_name(scope_name, Some("ordinality".into())));
+    }
+
+    Ok((expr, scope))
 }
 
 fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scope, PlanError> {
