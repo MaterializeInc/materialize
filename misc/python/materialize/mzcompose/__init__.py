@@ -319,16 +319,16 @@ class Composition:
     def invoke(
         self, *args: str, capture: bool = False, stdin: Optional[str] = None
     ) -> subprocess.CompletedProcess:
-        """Invoke `docker-compose` on the rendered composition.
+        """Invoke `docker compose` on the rendered composition.
 
         Args:
-            args: The arguments to pass to `docker-compose`.
+            args: The arguments to pass to `docker compose`.
             capture: Whether to capture the child's stdout stream.
             input: A string to provide as stdin for the command.
         """
 
         if not self.silent:
-            print(f"$ docker-compose {' '.join(args)}", file=sys.stderr)
+            print(f"$ docker compose {' '.join(args)}", file=sys.stderr)
 
         self.file.seek(0)
 
@@ -339,7 +339,8 @@ class Composition:
         try:
             return subprocess.run(
                 [
-                    "docker-compose",
+                    "docker",
+                    "compose",
                     *(["--log-level=ERROR"] if self.silent else []),
                     f"-f/dev/fd/{self.file.fileno()}",
                     "--project-directory",
@@ -355,12 +356,12 @@ class Composition:
         except subprocess.CalledProcessError as e:
             if e.stdout:
                 print(e.stdout)
-            raise UIError(f"running docker-compose failed (exit status {e.returncode})")
+            raise UIError(f"running docker compose failed (exit status {e.returncode})")
 
     def port(self, service: str, private_port: Union[int, str]) -> int:
         """Get the public port for a service's private port.
 
-        Delegates to `docker-compose port`. See that command's help for details.
+        Delegates to `docker compose port`. See that command's help for details.
 
         Args:
             service: The name of a service in the composition.
@@ -558,9 +559,9 @@ class Composition:
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
-        Delegates to `docker-compose run`. See that command's help for details.
+        Delegates to `docker compose run`. See that command's help for details.
         Note that unlike `docker compose run`, any services whose definitions
-        have changed are rebuilt (like `docker-compose up` would do) before the
+        have changed are rebuilt (like `docker compose up` would do) before the
         command is executed.
 
         Args:
@@ -570,7 +571,7 @@ class Composition:
             stdin: read STDIN from a string.
             env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
-            capture: Capture the stdout of the `docker-compose` invocation.
+            capture: Capture the stdout of the `docker compose` invocation.
         """
         # Restart any dependencies whose definitions have changed. The trick,
         # taken from Buildkite's Docker Compose plugin, is to run an `up`
@@ -597,7 +598,7 @@ class Composition:
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
-        Delegates to `docker-compose exec`.
+        Delegates to `docker compose exec`.
 
         Args:
             service: The service whose container will be used.
@@ -639,7 +640,7 @@ class Composition:
     def up(self, *services: str, detach: bool = True, persistent: bool = False) -> None:
         """Build, (re)create, and start the named services.
 
-        Delegates to `docker-compose up`. See that command's help for details.
+        Delegates to `docker compose up`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
@@ -664,7 +665,7 @@ class Composition:
     def down(self, destroy_volumes: bool = True, remove_orphans: bool = True) -> None:
         """Stop and remove resources.
 
-        Delegates to `docker-compose down`. See that command's help for details.
+        Delegates to `docker compose down`. See that command's help for details.
 
         Args:
             destroy_volumes: Remove named volumes and anonymous volumes attached
@@ -679,7 +680,7 @@ class Composition:
     def stop(self, *services: str) -> None:
         """Stop the docker containers for the named services.
 
-        Delegates to `docker-compose stop`. See that command's help for details.
+        Delegates to `docker compose stop`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
@@ -689,7 +690,7 @@ class Composition:
     def kill(self, *services: str, signal: str = "SIGKILL") -> None:
         """Force stop service containers.
 
-        Delegates to `docker-compose kill`. See that command's help for details.
+        Delegates to `docker compose kill`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
@@ -700,7 +701,7 @@ class Composition:
     def pause(self, *services: str) -> None:
         """Pause service containers.
 
-        Delegates to `docker-compose pause`. See that command's help for details.
+        Delegates to `docker compose pause`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
@@ -710,7 +711,7 @@ class Composition:
     def unpause(self, *services: str) -> None:
         """Unpause service containers
 
-        Delegates to `docker-compose unpause`. See that command's help for details.
+        Delegates to `docker compose unpause`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
@@ -722,7 +723,7 @@ class Composition:
     ) -> None:
         """Remove stopped service containers.
 
-        Delegates to `docker-compose rm`. See that command's help for details.
+        Delegates to `docker compose rm`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
