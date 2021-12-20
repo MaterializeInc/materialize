@@ -683,7 +683,7 @@ impl<'a> TableFuncRewriter<'a> {
                 if let Ok(item) = self.scx.resolve_function(func.name.clone()) {
                     match item.func()? {
                         Func::Aggregate(_) => Some("aggregate function calls"),
-                        Func::Set(_) | Func::Table(_) => {
+                        Func::Table(_) => {
                             if let Some(context) = self.disallowed_context.last() {
                                 sql_bail!("table functions are not allowed in {}", context);
                             }

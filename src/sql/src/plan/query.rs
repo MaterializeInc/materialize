@@ -2291,10 +2291,6 @@ fn plan_table_function(
                 scalar_args,
                 vec![],
             )?;
-            let call = HirRelationExpr::CallTable {
-                func: tf.func,
-                exprs: tf.exprs,
-            };
             let scope = Scope::from_source(
                 Some(PartialName {
                     database: None,
@@ -2303,25 +2299,7 @@ fn plan_table_function(
                 }),
                 tf.column_names,
             );
-            (call, scope)
-        }
-        Func::Set(impls) => {
-            let (call, scope) = func::select_impl(
-                ecx,
-                FuncSpec::Func(&resolved_name),
-                impls,
-                scalar_args,
-                vec![],
-            )?;
-            let scope = Scope::from_source(
-                Some(PartialName {
-                    database: None,
-                    schema: None,
-                    item: resolved_name.item.clone(),
-                }),
-                scope.column_names(),
-            );
-            (call, scope)
+            (tf.expr, scope)
         }
         _ => sql_bail!("{} is not a table function", name),
     };
@@ -3518,7 +3496,7 @@ fn plan_function<'a>(
         Func::Aggregate(_) => {
             sql_bail!("aggregate functions are not allowed in {}", ecx.name);
         }
-        Func::Table(_) | Func::Set(_) => {
+        Func::Table(_) => {
             sql_bail!("table functions are not allowed in {}", ecx.name);
         }
         Func::Scalar(impls) => impls,
