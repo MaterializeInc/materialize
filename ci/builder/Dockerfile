@@ -102,7 +102,8 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.8.0/shellcheck-v0.8.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.8.0/shellcheck \
     && rm shellcheck.tar.xz \
-    && pip install docker-compose==1.29.2
+    && curl -fsSL https://github.com/docker/compose/releases/download/v2.2.3/docker-compose-linux-$ARCH_GCC > /usr/local/bin/docker-compose \
+    && chmod +x /usr/local/bin/docker-compose
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
