@@ -77,10 +77,10 @@ shell-words = "1.0.0"
 sql = { path = "../sql" }
 structopt = "0.3.25"
 sysctl = "0.4.3"
-sysinfo = "0.21.2"
+sysinfo = "0.22.3"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.13.0", features = ["sync"] }
+tokio = { version = "1.15.0", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-stream = { version = "0.1.8", features = ["net"] }
 tracing = "0.1.29"
