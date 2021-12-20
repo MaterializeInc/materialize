@@ -69,6 +69,7 @@ To | Required context
 ---|--------
 [`boolean`](../boolean) (`integer` only) | Explicit
 [`numeric`](../numeric) | Implicit
+[`oid`](../oid) | Implicit
 [`real`/`double precision`](../float) | Implicit
 [`text`](../text) | Assignment
 
@@ -80,7 +81,7 @@ From | Required context
 ---|--------
 [`boolean`](../boolean) (`integer` only) | Explicit
 [`jsonb`](../jsonb) | Explicit
-[`oid`](../oid) (`integer` only) | Assignment
+[`oid`](../oid) (`integer` and `bigint` only) | Assignment
 [`numeric`](../numeric) | Assignment
 [`real`/`double precision`](../float) | Assignment
 [`text`](../text) | Explicit

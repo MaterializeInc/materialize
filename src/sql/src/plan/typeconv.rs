@@ -137,6 +137,7 @@ lazy_static! {
                 let s = to_type.unwrap_numeric_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(func::CastInt16ToNumeric(s))))
             }),
+            (Int16, Oid) => Implicit: CastInt16ToOid(func::CastInt16ToOid),
             (Int16, String) => Assignment: CastInt16ToString(func::CastInt16ToString),
 
             //INT32
@@ -165,10 +166,12 @@ lazy_static! {
             }),
             (Int64, Float32) => Implicit: CastInt64ToFloat32(func::CastInt64ToFloat32),
             (Int64, Float64) => Implicit: CastInt64ToFloat64(func::CastInt64ToFloat64),
+            (Int64, Oid) => Implicit: CastInt64ToOid(func::CastInt64ToOid),
             (Int64, String) => Assignment: CastInt64ToString(func::CastInt64ToString),
 
             // OID
             (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
+            (Oid, Int64) => Assignment: CastOidToInt32(func::CastOidToInt32),
             (Oid, String) => Explicit: CastInt32ToString(func::CastInt32ToString),
             (Oid, RegClass) => Assignment: CastOidToRegClass(func::CastOidToRegClass),
             (Oid, RegProc) => Assignment: CastOidToRegProc(func::CastOidToRegProc),

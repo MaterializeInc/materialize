@@ -107,15 +107,18 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- **Breaking change.** Change the internal representation of numbers in
+  [`jsonb`](/sql/types/jsonb). Previously, JSON numbers were stored as either
+  [`int8`](/sql/types/int8) or [`float8`](/sql/types/float8) values; now they
+  are always stored as [`numeric`](/sql/types/numeric) values.
+
 - Support casts from [`timestamp`] and [`timestamp with time zone`] to
   [`time`].
 
 - Add `pg_catalog.pg_roles` as a builtin view.
 
-- **Breaking change.** Change the internal representation of numbers in
-  [`jsonb`](/sql/types/jsonb). Previously, JSON numbers were stored as either
-  [`int8`](/sql/types/int8) or [`float8`](/sql/types/float8) values; now they
-  are always stored as [`numeric`](/sql/types/numeric) values.
+- Support casts from [`smallint`] and [`bigint`] to [`oid`], as well as
+  casts from [`oid`] to [`bigint`].
 
 {{< comment >}}
 Only add new release notes above this line.
@@ -825,7 +828,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   collision](/sql/identifiers#keyword-collision) documentation for details.
 
 - **Backwards-incompatible change.** Change the return type of
-  [`sum`](/sql/functions/#aggregate-func) over [`bigint`](/sql/types/integer)s
+  [`sum`](/sql/functions/#aggregate-func) over [`bigint`]s
   from `bigint` to [`numeric`](/sql/types/numeric). This avoids the possibility
   of overflow when summing many large numbers {{% gh 5218 %}}.
 
@@ -1672,6 +1675,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 * [Architecture overview](/overview/architecture/)
 
 [`array`]: /sql/types/array/
+[`bigint`]: /sql/types/integer#bigint-info
 [`bytea`]: /sql/types/bytea
 [`ALTER INDEX`]: /sql/alter-index
 [`COPY FROM`]: /sql/copy-from
@@ -1687,6 +1691,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`map`]: /sql/types/map/
 [`real`]: /sql/types/float4
 [`pgcrypto`]: https://www.postgresql.org/docs/current/pgcrypto.html
+[`smallint`]: /sql/types/integer#smallint-info
 [`SHOW CREATE SOURCE`]: /sql/show-create-source
 [`SHOW CREATE VIEW`]: /sql/show-create-view
 [`text`]: /sql/types/text
