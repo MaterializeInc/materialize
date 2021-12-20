@@ -46,8 +46,8 @@ use std::iter;
 
 use anyhow::bail;
 
-use repr::ColumnName;
 use ore::iter::IteratorExt;
+use repr::ColumnName;
 
 use crate::ast::Expr;
 use crate::names::PartialName;

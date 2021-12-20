@@ -581,6 +581,31 @@ g
 1
 
 query T colnames
+SELECT g FROM ROWS FROM (generate_series(1, 1)) AS g(a)
+----
+g
+1
+
+query T colnames
+SELECT jsonb_array_elements FROM ROWS FROM (jsonb_array_elements('[1]'), generate_series(1, 1));
+----
+jsonb_array_elements
+(1,1)
+
+query T colnames
+SELECT jsonb_array_elements.generate_series FROM ROWS FROM (jsonb_array_elements('[1]'), generate_series(1, 1));
+----
+generate_series
+1
+
+query T colnames
+SELECT repeat_row FROM ROWS FROM (repeat_row(2), generate_series(1, 1));
+----
+repeat_row
+()
+(1)
+
+query T colnames
 SELECT g.a FROM generate_series(1, 1) AS g(a)
 ----
 a
@@ -985,6 +1010,11 @@ generate_series
 
 query error column "_pg_expandarray" does not exist
 SELECT _pg_expandarray FROM ROWS FROM (generate_series(1, 1), information_schema._pg_expandarray(array[9]))
+
+query I
+SELECT generate_series.x FROM ROWS FROM (generate_series(1, 1), information_schema._pg_expandarray(array[9]))
+----
+9
 
 query I colnames
 SELECT x FROM ROWS FROM (generate_series(1, 1), information_schema._pg_expandarray(array[9]))

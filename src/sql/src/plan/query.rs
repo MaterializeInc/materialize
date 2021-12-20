@@ -2037,10 +2037,9 @@ fn plan_table_factor(
             Ok((expr, scope))
         }
 
-        TableFactor::Function {
-            function: TableFunction { name, args },
-            alias,
-        } => plan_table_function(qcx, &name, alias.as_ref(), args),
+        TableFactor::Function { function, alias } => {
+            plan_solitary_table_function(qcx, function, alias.as_ref())
+        }
 
         TableFactor::RowsFrom { functions, alias } => {
             plan_rows_from(qcx, functions, alias.as_ref())
@@ -2120,6 +2119,12 @@ fn plan_rows_from(
     functions: &[TableFunction<Aug>],
     alias: Option<&TableAlias>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
+    // If there's only a single table function, planning proceeds as if `ROWS
+    // FROM` hadn't been written at all.
+    if let [function] = functions {
+        return plan_solitary_table_function(qcx, function, alias);
+    }
+
     // Join together each of the table functions in turn. The last column is
     // always the column to join against and is maintained to be the coalesence
     // of the row number column for all prior functions.
@@ -2156,15 +2161,17 @@ fn plan_rows_from(
     // Project off the row number column.
     let expr = left_expr.project((0..left_scope.len()).collect());
 
-    // Remove table names from the scope if there's more than one table
-    // function. This is similar to the single column rule above, but this
-    // applies even to table functions that produce more than one column.
-    if functions.len() != 1 {
-        for item in left_scope.items.iter_mut() {
-            item.table_name = None;
-        }
+    // Per PostgreSQL, all scope items take the name of the first function
+    // (unless aliased).
+    // See: https://github.com/postgres/postgres/blob/639a86e36/src/backend/parser/parse_relation.c#L1701-L1705
+    for item in &mut left_scope.items {
+        item.table_name = Some(PartialName {
+            database: None,
+            schema: None,
+            item: normalize::unresolved_object_name(functions[0].name.clone())?.item,
+        });
     }
-    let scope = plan_table_function_alias(left_scope, alias)?;
+    let scope = plan_table_alias(left_scope, alias)?;
 
     Ok((expr, scope))
 }
@@ -2179,8 +2186,7 @@ fn plan_rows_from_function(
     qcx: &QueryContext,
     function: &TableFunction<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let alias = None;
-    let (expr, scope) = plan_table_function(qcx, &function.name, alias, &function.args)?;
+    let (expr, scope) = plan_table_function(qcx, function)?;
     let expr = expr.map(vec![HirScalarExpr::Windowing(WindowExpr {
         func: WindowExprType::Scalar(ScalarWindowExpr {
             func: ScalarWindowFunc::RowNumber,
@@ -2192,11 +2198,60 @@ fn plan_rows_from_function(
     Ok((expr, scope))
 }
 
+/// Plans a table function that appears alone, i.e., that is not part of a `ROWS
+/// FROM` clause that contains other table functions. Special aliasing rules
+/// apply.
+fn plan_solitary_table_function(
+    qcx: &QueryContext,
+    function: &TableFunction<Aug>,
+    alias: Option<&TableAlias>,
+) -> Result<(HirRelationExpr, Scope), PlanError> {
+    let (expr, mut scope) = plan_table_function(qcx, function)?;
+
+    // If the function only produced a single value, mark the scope item as
+    // such. This impacts whole-row references.
+    if let [item] = &mut scope.items[..] {
+        item.from_single_column_function = true;
+    }
+
+    // Strange special case for solitary table functions that ouput one column
+    // whose name matches the name of the table function. If a table alias is
+    // provided, the column name is changed to the table alias's name.
+    // Concretely, the following query returns a column named `x` rather than a
+    // column named `generate_series`:
+    //
+    //     SELECT * FROM generate_series(1, 5) AS x
+    //
+    // Note that this case does not apply to e.g. `jsonb_array_elements`, since
+    // its output column is explicitly named `value`, not
+    // `jsonb_array_elements`.
+    //
+    // Note also that we may (correctly) change the column name again when we
+    // plan the table alias below if the `alias.columns` is non-empty.
+    if let Some(alias) = alias {
+        if let [ScopeItem {
+            table_name: Some(table_name),
+            column_name: Some(column_name),
+            ..
+        }] = &mut scope.items[..]
+        {
+            if table_name.item.as_str() == column_name.as_str() {
+                *column_name = normalize::column_name(alias.name.clone());
+            }
+        }
+    }
+
+    let scope = plan_table_alias(scope, alias)?;
+    Ok((expr, scope))
+}
+
+/// Plans a table function.
+///
+/// You generally want to call `plan_rows_from_function` or
+/// `plan_solitary_table_function` instaed.
 fn plan_table_function(
     qcx: &QueryContext,
-    name: &UnresolvedObjectName,
-    alias: Option<&TableAlias>,
-    args: &FunctionArgs<Aug>,
+    TableFunction { name, args }: &TableFunction<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     if *name == UnresolvedObjectName::unqualified("values") {
         // Produce a nice error message for the common typo
@@ -2227,7 +2282,7 @@ fn plan_table_function(
     };
     let resolved_name = normalize::unresolved_object_name(name.clone())?;
 
-    let (call, mut scope) = match resolve_func(ecx, name, args)? {
+    let (call, scope) = match resolve_func(ecx, name, args)? {
         Func::Table(impls) => {
             let tf = func::select_impl(
                 ecx,
@@ -2271,52 +2326,7 @@ fn plan_table_function(
         _ => sql_bail!("{} is not a table function", name),
     };
 
-    if let [item] = &mut scope.items[..] {
-        // If the function only produced a single value, mark the scope item.
-        // This impacts whole-row references.
-        item.from_single_column_function = true;
-    }
-
-    let scope = plan_table_function_alias(scope, alias)?;
     Ok((call, scope))
-}
-
-fn plan_table_function_alias(
-    mut scope: Scope,
-    alias: Option<&TableAlias>,
-) -> Result<Scope, PlanError> {
-    if let Some(alias) = alias {
-        scope = if alias.columns.is_empty()
-            && scope.len() == 1
-            && scope.items[0].table_name.as_ref().map(|n| n.item.as_str())
-                == scope.items[0].column_name.as_ref().map(|n| n.as_str())
-        {
-            // Strange special case for table functions that ouput one column.
-            // If a table alias is provided but not a column alias, the column
-            // implicitly takes on the same alias in addition to its inherent
-            // name unless the column has a given name different from the function's name
-            // (like jsonb_array_elements, which has a single `value` column).
-            //
-            // Concretely, this means `SELECT x FROM generate_series(1, 5) AS x`
-            // returns a single column of type int, even though
-            //
-            //     CREATE TABLE t (a int)
-            //     SELECT x FROM t AS x
-            //
-            // would return a single column of type record(int).
-            plan_table_alias(
-                scope,
-                Some(&TableAlias {
-                    name: alias.name.clone(),
-                    columns: vec![alias.name.clone()],
-                    strict: true,
-                }),
-            )?
-        } else {
-            plan_table_alias(scope, Some(&alias))?
-        };
-    }
-    Ok(scope)
 }
 
 fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scope, PlanError> {
