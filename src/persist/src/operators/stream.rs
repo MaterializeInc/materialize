@@ -649,7 +649,7 @@ mod tests {
 
     #[test]
     fn seal_frontier_advance_only_on_success() -> Result<(), Error> {
-        ore::test::init_logging_default("trace");
+        ore::test::init_logging();
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
         let p = registry.runtime_unreliable(unreliable.clone())?;
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn conditional_seal() -> Result<(), Error> {
-        ore::test::init_logging_default("trace");
+        ore::test::init_logging();
         let mut registry = MemRegistry::new();
 
         let p = registry.runtime_no_reentrance()?;
@@ -878,7 +878,7 @@ mod tests {
 
     #[test]
     fn conditional_seal_frontier_advance_only_on_success() -> Result<(), Error> {
-        ore::test::init_logging_default("trace");
+        ore::test::init_logging();
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
         let p = registry.runtime_unreliable(unreliable.clone())?;
@@ -982,7 +982,7 @@ mod tests {
 
     #[test]
     fn retract_unsealed() -> Result<(), Error> {
-        ore::test::init_logging_default("trace");
+        ore::test::init_logging();
         let mut registry = MemRegistry::new();
         let p = registry.runtime_no_reentrance()?;
 
