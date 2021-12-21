@@ -295,7 +295,7 @@ impl FromHir {
     fn find_column_within_box(&self, box_id: BoxId, mut position: usize) -> ColumnReference {
         let b = self.model.get_box(box_id);
         for q_id in b.quantifiers.iter() {
-            let q = self.model.get_quantifier(*q_id).borrow();
+            let q = self.model.get_quantifier(*q_id);
             let ib = self.model.get_box(q.input_box);
             if position < ib.columns.len() {
                 return ColumnReference {

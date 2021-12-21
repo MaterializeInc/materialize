@@ -86,7 +86,7 @@ impl DotGenerator {
                 for q_id in b.quantifiers.iter() {
                     quantifiers.push(*q_id);
 
-                    let q = model.get_quantifier(*q_id).borrow();
+                    let q = model.get_quantifier(*q_id);
                     self.new_line(&format!(
                         "Q{0} [ {1} ]",
                         q_id,
@@ -113,7 +113,7 @@ impl DotGenerator {
         if quantifiers.len() > 0 {
             self.new_line("edge [ arrowhead = none, style = dashed ]");
             for q_id in quantifiers.iter() {
-                let q = model.get_quantifier(*q_id).borrow();
+                let q = model.get_quantifier(*q_id);
                 self.new_line(&format!(
                     "Q{0} -> boxhead{1} [ lhead = cluster{1} ]",
                     q_id, q.input_box

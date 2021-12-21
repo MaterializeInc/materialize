@@ -288,10 +288,21 @@ impl Model {
         id
     }
 
-    fn get_quantifier(&self, quantifier_id: QuantifierId) -> &RefCell<Quantifier> {
+    /// Get an immutable reference to the box identified by `box_id`.
+    fn get_quantifier(&self, quantifier_id: QuantifierId) -> Ref<'_, Quantifier> {
         self.quantifiers
             .get(&quantifier_id)
             .expect("a valid quantifier identifier")
+            .borrow()
+    }
+
+    /// Get a mutable reference to the box identified by `box_id`.
+    #[allow(dead_code)]
+    fn get_mut_quantifier(&self, quantifier_id: QuantifierId) -> RefMut<'_, Quantifier> {
+        self.quantifiers
+            .get(&quantifier_id)
+            .expect("a valid quantifier identifier")
+            .borrow_mut()
     }
 
     /// Visit boxes in the query graph in pre-order starting from `self.top_box`.
@@ -321,7 +332,7 @@ impl Model {
                         .quantifiers
                         .iter()
                         .rev()
-                        .map(|q| self.get_quantifier(*q).borrow().input_box),
+                        .map(|q| self.get_quantifier(*q).input_box),
                 );
             }
         }
@@ -352,9 +363,8 @@ impl QueryBox {
     fn add_all_input_columns(&mut self, model: &Model) {
         for quantifier_id in self.quantifiers.iter() {
             let q = model.get_quantifier(*quantifier_id);
-            let bq = q.borrow();
-            if !bq.quantifier_type.is_subquery() {
-                let input_box = model.get_box(bq.input_box);
+            if !q.quantifier_type.is_subquery() {
+                let input_box = model.get_box(q.input_box);
                 for (position, c) in input_box.columns.iter().enumerate() {
                     let expr = BoxScalarExpr::ColumnReference(ColumnReference {
                         quantifier_id: *quantifier_id,
@@ -443,7 +453,7 @@ impl QueryBox {
                     Ok(())
                 })
             };
-            let q = model.get_quantifier(*q_id).borrow();
+            let q = model.get_quantifier(*q_id);
             model
                 .visit_pre_boxes_in_subgraph(&mut f, q.input_box)
                 .unwrap();
