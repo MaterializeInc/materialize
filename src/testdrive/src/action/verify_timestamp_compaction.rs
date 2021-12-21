@@ -106,7 +106,7 @@ impl Action for VerifyTimestampsAction {
                             progress,
                         );
 
-                        if bindings.len() < self.max_size || progress {
+                        if bindings.len() <= self.max_size || progress {
                             Ok(())
                         } else {
                             Err(format!(
