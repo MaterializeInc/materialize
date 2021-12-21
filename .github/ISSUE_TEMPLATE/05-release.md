@@ -45,15 +45,6 @@ production readiness.
   bin/mkrelease new-rc weekly
   ```
 
-- [ ] Update the [release notes][] to include a new "unreleased" version so that new
-  changes don't get advertised as being part of this release as folks add notes.
-
-  > **NOTE:** the next "unreleased" version should always bump the middle
-  > component.
-  >
-  > For example, if the version being released is `v0.5.9`, `<NEXT_VERSION>` should always be
-  > `0.6.0`.
-
 - [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
 
   Without checking out `main`, perform:
@@ -84,9 +75,11 @@ production readiness.
 
 ### Review Release Notes
 
-Release notes should be updated by engineers as they merge PRs. The release notes
-team is responsible for reviewing release notes and the release announcement before
-a release is published.
+Release notes should be added to the "unstable" section by engineers as they
+merge PRs. Before announcing the release, the release notes team (Nikhil)
+migrates the relevant release notes to the dedicated "v0.X.Y" section header,
+based on which commits actually made it into the release, then reviews the list
+of PRs and adds release notes for any features or bugs that were missed.
 
 - [ ] Post the following message to the `#release` channel in slack, modifying the two
   issue links, one to point to the unreviewed PRs issue you went through above, and one
