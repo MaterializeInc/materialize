@@ -97,7 +97,7 @@ impl<B: Blob> BlobCache<B> {
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
-        let batch: BlobUnsealedBatch = bincode::deserialize(&bytes).map_err(|err| {
+        let batch: BlobUnsealedBatch = BlobUnsealedBatch::decode(&bytes).map_err(|err| {
             Error::from(format!("invalid unsealed batch at key {}: {}", key, err))
         })?;
 
@@ -160,9 +160,8 @@ impl<B: Blob> BlobCache<B> {
         }
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
-        // See https://github.com/bincode-org/bincode/issues/293 for why this is
-        // infallible.
-        let val = bincode::serialize(&batch).expect("infallible for BlobUnsealedBatch");
+        let mut val = Vec::new();
+        batch.encode(&mut val);
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
@@ -204,7 +203,7 @@ impl<B: Blob> BlobCache<B> {
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
-        let batch: BlobTraceBatch = bincode::deserialize(&bytes)
+        let batch: BlobTraceBatch = BlobTraceBatch::decode(&bytes)
             .map_err(|err| Error::from(format!("invalid trace batch at key {}: {}", key, err)))?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
@@ -258,9 +257,8 @@ impl<B: Blob> BlobCache<B> {
         }
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
-        // See https://github.com/bincode-org/bincode/issues/293 for why this is
-        // infallible.
-        let val = bincode::serialize(&batch).expect("infallible for BlobTraceBatch");
+        let mut val = Vec::new();
+        batch.encode(&mut val);
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();

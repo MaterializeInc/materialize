@@ -20,6 +20,7 @@ use std::{fmt, io};
 
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
+use persist_types::Codec;
 use protobuf::MessageField;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -552,6 +553,26 @@ impl BlobUnsealedBatch {
     }
 }
 
+// BlobUnsealedBatch doesn't really need to implement Codec (it's never stored
+// as a key or value in a persisted record) but it's nice to have a common
+// interface for this.
+impl Codec for BlobUnsealedBatch {
+    fn codec_name() -> String {
+        "bincode[BlobUnsealedBatch]".into()
+    }
+
+    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+        // See https://github.com/bincode-org/bincode/issues/293 for why this is
+        // infallible.
+        bincode::serialize_into(&mut ExtendWriteAdapter(buf), self)
+            .expect("infallible for BlobUnsealedBatch");
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        bincode::deserialize(buf).map_err(|err| err.to_string())
+    }
+}
+
 impl BlobTraceBatch {
     /// Asserts the documented invariants, returning an error if any are
     /// violated.
@@ -610,6 +631,26 @@ impl BlobTraceBatch {
             }
         }
         Ok(())
+    }
+}
+
+// BlobTraceBatch doesn't really need to implement Codec (it's never stored as a
+// key or value in a persisted record) but it's nice to have a common interface
+// for this.
+impl Codec for BlobTraceBatch {
+    fn codec_name() -> String {
+        "bincode[BlobTraceBatch]".into()
+    }
+
+    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+        // See https://github.com/bincode-org/bincode/issues/293 for why this is
+        // infallible.
+        bincode::serialize_into(&mut ExtendWriteAdapter(buf), self)
+            .expect("infallible for BlobTraceBatch");
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        bincode::deserialize(buf).map_err(|err| err.to_string())
     }
 }
 

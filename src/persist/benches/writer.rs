@@ -18,18 +18,21 @@ use criterion::measurement::WallTime;
 use criterion::{
     criterion_group, criterion_main, Bencher, BenchmarkGroup, BenchmarkId, Criterion, Throughput,
 };
+use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use persist::indexed::columnar::ColumnarRecords;
+use persist_types::Codec;
 use rand::prelude::{SliceRandom, SmallRng};
 use rand::{Rng, SeedableRng};
+use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 
 use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
-use persist::indexed::encoding::{BlobUnsealedBatch, Id};
+use persist::indexed::encoding::{BlobTraceBatch, BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
 use persist::indexed::runtime::WriteReqBuilder;
 use persist::indexed::Indexed;
@@ -270,6 +273,41 @@ pub fn bench_writes_indexed(c: &mut Criterion) {
     bench_writes_indexed_inner(file_indexed, "file", &mut group).expect("running benchmark failed");
 }
 
+pub fn bench_encode_batch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("encode_batch");
+
+    let data = DataGenerator::default();
+    group.throughput(Throughput::Bytes(data.goodput_bytes()));
+    let unsealed = BlobUnsealedBatch {
+        desc: SeqNo(0)..SeqNo(1),
+        updates: data.batches().collect::<Vec<_>>(),
+    };
+    let trace = BlobTraceBatch {
+        desc: Description::new(
+            Antichain::from_elem(0),
+            Antichain::from_elem(1),
+            Antichain::from_elem(0),
+        ),
+        updates: data.records().collect::<Vec<_>>(),
+    };
+
+    group.bench_function(BenchmarkId::new("unsealed", data.goodput_pretty()), |b| {
+        b.iter(|| {
+            // Intentionally alloc a new buf each iter.
+            let mut buf = Vec::new();
+            unsealed.encode(&mut buf);
+        })
+    });
+
+    group.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {
+        b.iter(|| {
+            // Intentionally alloc a new buf each iter.
+            let mut buf = Vec::new();
+            trace.encode(&mut buf);
+        })
+    });
+}
+
 pub fn bench_writes_blob_cache(c: &mut Criterion) {
     let mut group = c.benchmark_group("blob_cache_set_unsealed_batch");
 
@@ -320,10 +358,12 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
         },
     );
 }
+
 criterion_group!(
     benches,
     bench_writes_log,
     bench_writes_blob,
+    bench_encode_batch,
     bench_writes_blob_cache,
     bench_writes_indexed
 );
