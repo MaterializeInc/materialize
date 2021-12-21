@@ -1,0 +1,22 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+blank_issues_enabled: false
+contact_links:
+  - name: Community Slack
+    url: https://materialize.com/s/chat
+    about: Meet the Materialize community on Slack.
+  - name: GitHub discussions
+    url: https://github.com/MaterializeInc/materialize/discussions
+    about: Ask and answer long-form questions about Materialize.
+  - name: Security reports
+    url: https://materialize.com/securitydisclosure
+    about: >
+      If you've discovered a security issue, please review our responsible
+      disclosure policy.
