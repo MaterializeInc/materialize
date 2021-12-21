@@ -139,6 +139,8 @@ List new features before bug fixes.
 - Support casts from [`timestamp`] and [`timestamp with time zone`] to
   [`time`].
 
+- Add `pg_catalog.pg_roles` as a builtin view.
+
 {{% version-header v0.12.0 %}}
 
 - Optionally emit the message partition, offset, and timestamp in [Kafka
