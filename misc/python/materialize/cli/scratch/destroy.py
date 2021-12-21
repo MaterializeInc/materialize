@@ -15,7 +15,7 @@ import boto3
 from mypy_boto3_ec2.type_defs import FilterTypeDef
 
 from materialize.cli.scratch import check_required_vars
-from materialize.scratch import print_instances, whoami
+from materialize.scratch import print_instances, ui, whoami
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
@@ -30,10 +30,10 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         help="Destroy all of your instances (incompatible with specifying instance IDs)",
     )
     parser.add_argument(
-        "-n",
-        "--dry-run",
+        "-y",
+        "--yes",
         action="store_true",
-        help="Don't actually destroy any instances",
+        help="Don't ask for confirmation before destroying",
     )
     parser.add_argument("--output-format", choices=["table", "csv"], default="table")
 
@@ -44,7 +44,7 @@ def run(args: argparse.Namespace) -> None:
     filters: List[FilterTypeDef] = [
         {
             "Name": "instance-state-name",
-            "Values": ["pending", "running", "shutting-down", "stopping", "stopped"],
+            "Values": ["pending", "running", "stopping", "stopped"],
         }
     ]
     if args.all_mine:
@@ -70,11 +70,12 @@ def run(args: argparse.Namespace) -> None:
         )
     )
 
-    if args.dry_run:
-        print("Would destroy instances:")
-        print_instances(instances, args.output_format)
-    else:
-        for instance in instances:
-            instance.terminate()
-        print("Destroyed instances:")
-        print_instances(instances, args.output_format)
+    print("Destroying instances:")
+    print_instances(instances, args.output_format)
+
+    if not args.yes and not ui.confirm("Would you like to continue?"):
+        sys.exit(0)
+
+    for instance in instances:
+        instance.terminate()
+    print("Instances destroyed.")

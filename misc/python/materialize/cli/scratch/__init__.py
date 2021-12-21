@@ -9,11 +9,6 @@
 
 import os
 
-# Sane defaults for internal Materialize use in the scratch account
-DEFAULT_SUBNET_ID = "subnet-00bdfbd2d97eddb86"
-DEFAULT_SG_ID = "sg-06f780c8e23c0d944"
-DEFAULT_INSTPROF_NAME = "ssm-instance-profile"
-
 
 def check_required_vars() -> None:
     """Set reasonable default values for the

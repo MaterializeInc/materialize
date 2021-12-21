@@ -12,23 +12,18 @@
 import argparse
 import base64
 import csv
+import datetime
 import itertools
 import os
 import shlex
 import sys
 import time
-from datetime import timedelta
 from typing import List, NamedTuple, Optional, Union, cast
 
 import boto3
 
 from materialize import git, scratch, spawn, util
-from materialize.cli.scratch import (
-    DEFAULT_INSTPROF_NAME,
-    DEFAULT_SG_ID,
-    DEFAULT_SUBNET_ID,
-    check_required_vars,
-)
+from materialize.cli.scratch import check_required_vars
 from materialize.scratch import print_instances
 
 
@@ -278,10 +273,6 @@ sudo shutdown -h now # save some money
         launched += scratch.launch_cluster(
             descs=descs,
             nonce=f"{bench_id}-{i}-{rev}",
-            subnet_id=DEFAULT_SUBNET_ID,
-            security_group_id=DEFAULT_SG_ID,
-            instance_profile=DEFAULT_INSTPROF_NAME,
-            key_name=None,
             extra_tags={
                 "bench_id": bench_id,
                 "bench_rev": rev,
@@ -294,7 +285,7 @@ sudo shutdown -h now # save some money
                 "MZ_CB_GIT_REV": rev,
                 "MZ_CB_S3_ROOT": ns.s3_root,
             },
-            delete_after=scratch.now_plus(timedelta(days=1)),
+            delete_after=datetime.datetime.utcnow() + datetime.timedelta(days=1),
             git_rev=rev,
         )
 
