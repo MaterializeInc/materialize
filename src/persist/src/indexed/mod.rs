@@ -19,6 +19,7 @@ pub mod encoding;
 pub mod metrics;
 pub mod runtime;
 
+use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -40,8 +41,10 @@ use crate::indexed::encoding::{
     UnsealedBatchMeta,
 };
 use crate::indexed::metrics::Metrics;
+use crate::mem::MemBlob;
 use crate::pfuture::PFutureHandle;
 use crate::storage::{Blob, Log, SeqNo};
+use crate::unreliable::UnreliableBlob;
 
 #[derive(Debug)]
 enum PendingResponse {
@@ -512,7 +515,14 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 }
             }
             Err(e) => {
-                log::error!("unable to read back persisted metadata: {:?}", e);
+                if TypeId::of::<B>() == TypeId::of::<UnreliableBlob<MemBlob>>() {
+                    // This is a test and we've almost certainly used
+                    // UnreliableBlob to make storage unavailable, log it at a
+                    // lower level to keep test output a little less spammy.
+                    log::trace!("unable to read back persisted metadata: {:?}", e);
+                } else {
+                    log::error!("unable to read back persisted metadata: {:?}", e);
+                }
             }
         }
         Ok(())
@@ -543,7 +553,14 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 }
             }
             Err(e) => {
-                log::error!("unable to read back persisted metadata: {:?}", e);
+                if TypeId::of::<B>() == TypeId::of::<UnreliableBlob<MemBlob>>() {
+                    // This is a test and we've almost certainly used
+                    // UnreliableBlob to make storage unavailable, log it at a
+                    // lower level to keep test output a little less spammy.
+                    log::trace!("unable to read back persisted metadata: {:?}", e);
+                } else {
+                    log::error!("unable to read back persisted metadata: {:?}", e);
+                }
             }
         }
 
