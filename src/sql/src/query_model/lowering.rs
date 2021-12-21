@@ -53,7 +53,7 @@ impl<'a> Lowerer<'a> {
         id_gen: &mut IdGen,
     ) -> expr::MirRelationExpr {
         use expr::MirRelationExpr as SR;
-        let the_box = self.model.get_box(box_id).borrow();
+        let the_box = self.model.get_box(box_id);
 
         assert_eq!(
             the_box.distinct,
@@ -189,8 +189,8 @@ impl<'a> Lowerer<'a> {
         let mut column_map = outer_column_map.clone();
         let mut next_column = outer_arity;
         for q_id in quantifiers.iter() {
-            let input_box = self.model.get_quantifier(*q_id).borrow().input_box;
-            let arity = self.model.get_box(input_box).borrow().columns.len();
+            let input_box = self.model.get_quantifier(*q_id).input_box;
+            let arity = self.model.get_box(input_box).columns.len();
             for c in 0..arity {
                 column_map.insert(
                     ColumnReference {
@@ -215,7 +215,7 @@ impl<'a> Lowerer<'a> {
         outer_column_map: &ColumnMap,
         id_gen: &mut IdGen,
     ) -> expr::MirRelationExpr {
-        let quantifier = self.model.get_quantifier(quantifier_id).borrow();
+        let quantifier = self.model.get_quantifier(quantifier_id);
         let input_box = quantifier.input_box;
         let mut input = self.apply(input_box, get_outer.clone(), outer_column_map, id_gen);
 
