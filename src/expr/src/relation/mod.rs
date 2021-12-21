@@ -65,6 +65,7 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Get {
         /// The identifier for the collection to load.
+        #[mzreflect(ignore)]
         id: Id,
         /// Schema of the collection.
         typ: RelationType,
@@ -74,6 +75,7 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Let {
         /// The identifier to be used in `Get` variants to retrieve `value`.
+        #[mzreflect(ignore)]
         id: LocalId,
         /// The collection to be bound to `id`.
         value: Box<MirRelationExpr>,

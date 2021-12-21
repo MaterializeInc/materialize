@@ -24,19 +24,13 @@ use expr_test_util::generate_explanation;
 use lazy_static::lazy_static;
 use lowertest::*;
 use ore::now::{EpochMillis, NOW_ZERO};
-use repr::{ColumnType, RelationDesc, RelationType, ScalarType};
+use repr::{RelationDesc, RelationType, ScalarType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::query_model;
-
-gen_reflect_info_func!(
-    produce_rti,
-    [ScalarType, TestCatalogCommand],
-    [ColumnType, RelationType,]
-);
 
 lazy_static! {
     static ref DUMMY_CONFIG: CatalogConfig = CatalogConfig {
@@ -52,7 +46,11 @@ lazy_static! {
         now: NOW_ZERO.clone(),
         disable_user_indexes: false,
     };
-    static ref RTI: ReflectedTypeInfo = produce_rti();
+    static ref RTI: ReflectedTypeInfo = {
+        let mut rti = ReflectedTypeInfo::default();
+        TestCatalogCommand::add_to_reflected_type_info(&mut rti);
+        rti
+    };
 }
 
 /// A dummy [`CatalogItem`] implementation.

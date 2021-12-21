@@ -16,8 +16,12 @@ use proc_macro2::Span;
 use quote::{quote, ToTokens};
 use syn::{parse, Data, DeriveInput, Fields};
 
+/// Types defined outside of Materialize used to build test objects.
+const EXTERNAL_TYPES: &[&str] = &["String", "FixedOffset", "Tz", "NaiveDateTime", "Regex"];
+const SUPPORTED_ANGLE_TYPES: &[&str] = &["Vec", "Box", "Option"];
+
 /// Macro generating an implementation for the trait MzReflect
-#[proc_macro_derive(MzReflect)]
+#[proc_macro_derive(MzReflect, attributes(mzreflect))]
 pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
     // The intended trait implementation is
     // ```
@@ -51,15 +55,17 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
 
     let object_name = &ast.ident;
     let object_name_as_string = object_name.to_string();
-    let method_impl = if let Data::Enum(enumdata) = &ast.data {
+    let mut referenced_types = Vec::new();
+    let add_object_info = if let Data::Enum(enumdata) = &ast.data {
         let variants = enumdata
             .variants
             .iter()
             .map(|v| {
                 let variant_name = v.ident.to_string();
-                let (names, types) = get_field_names_types(&v.fields);
+                let (names, types_as_string, mut types_as_syn) = get_fields_names_types(&v.fields);
+                referenced_types.append(&mut types_as_syn);
                 quote! {
-                    result.insert(#variant_name, (vec![#(#names),*], vec![#(#types),*]));
+                    result.insert(#variant_name, (vec![#(#names),*], vec![#(#types_as_string),*]));
                 }
             })
             .collect::<Vec<_>>();
@@ -71,15 +77,22 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
             rti.enum_dict.insert(#object_name_as_string, result);
         }
     } else if let Data::Struct(structdata) = &ast.data {
-        let (names, types) = get_field_names_types(&structdata.fields);
+        let (names, types_as_string, mut types_as_syn) = get_fields_names_types(&structdata.fields);
+        referenced_types.append(&mut types_as_syn);
         quote! {
             if rti.struct_dict.contains_key(#object_name_as_string) { return; }
             rti.struct_dict.insert(#object_name_as_string,
-                (vec![#(#names),*], vec![#(#types),*]));
+                (vec![#(#names),*], vec![#(#types_as_string),*]));
         }
     } else {
         unreachable!("Not a struct or enum")
     };
+
+    let referenced_types = referenced_types
+        .into_iter()
+        .flat_map(extract_reflected_type)
+        .map(|typ| quote! { #typ::add_to_reflected_type_info(rti); })
+        .collect::<Vec<_>>();
 
     let gen = quote! {
       impl lowertest::MzReflect for #object_name {
@@ -87,7 +100,8 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
             rti: &mut lowertest::ReflectedTypeInfo
         )
         {
-           #method_impl
+           #add_object_info
+           #(#referenced_types)*
         }
       }
     };
@@ -167,31 +181,65 @@ pub fn gen_reflect_info_func(input: TokenStream) -> TokenStream {
 /* #region Helper methods */
 
 /// Gets the names and the types of the fields of an enum variant or struct.
-fn get_field_names_types(f: &syn::Fields) -> (Vec<String>, Vec<String>) {
+///
+/// The result has three parts:
+/// 1. The names of the fields. If the fields are unnamed, this is empty.
+/// 2. The types of the fields as strings.
+/// 3. The types of the fields as [syn::Type]
+///
+/// Fields with the attribute `#[mzreflect(ignore)]` are not returned.
+fn get_fields_names_types(f: &syn::Fields) -> (Vec<String>, Vec<String>, Vec<&syn::Type>) {
     match f {
         Fields::Named(named_fields) => {
             let (names, types): (Vec<_>, Vec<_>) = named_fields
                 .named
                 .iter()
-                .map(|n| {
-                    (
-                        n.ident.as_ref().unwrap().to_string(),
-                        get_type_as_string(&n.ty),
-                    )
-                })
+                .flat_map(get_field_name_type)
                 .unzip();
-            (names, types)
+            let (types_as_string, types_as_syn) = types.into_iter().unzip();
+            (names, types_as_string, types_as_syn)
         }
         Fields::Unnamed(unnamed_fields) => {
-            let types = unnamed_fields
+            let (types_as_string, types_as_syn): (Vec<_>, Vec<_>) = unnamed_fields
                 .unnamed
                 .iter()
-                .map(|u| get_type_as_string(&u.ty))
-                .collect::<Vec<_>>();
-            (Vec::new(), types)
+                .flat_map(get_field_name_type)
+                .map(|(_, (type_as_string, type_as_syn))| (type_as_string, type_as_syn))
+                .unzip();
+            (Vec::new(), types_as_string, types_as_syn)
         }
-        Fields::Unit => (Vec::new(), Vec::new()),
+        Fields::Unit => (Vec::new(), Vec::new(), Vec::new()),
     }
+}
+
+/// Gets the name and the type of a field of an enum variant or struct.
+///
+/// The result has three parts:
+/// 1. The name of the field. If the field is unnamed, this is empty.
+/// 2. The type of the field as a string.
+/// 3. The type of the field as [syn::Type].
+///
+/// Returns None if the field has the attribute `#[mzreflect(ignore)]`.
+fn get_field_name_type(f: &syn::Field) -> Option<(String, (String, &syn::Type))> {
+    for attr in f.attrs.iter() {
+        if let Ok(syn::Meta::List(meta_list)) = attr.parse_meta() {
+            if meta_list.path.segments.last().unwrap().ident == "mzreflect" {
+                for nested_meta in meta_list.nested.iter() {
+                    if let syn::NestedMeta::Meta(syn::Meta::Path(path)) = nested_meta {
+                        if path.segments.last().unwrap().ident == "ignore" {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let name = if let Some(name) = f.ident.as_ref() {
+        name.to_string()
+    } else {
+        "".to_string()
+    };
+    Some((name, (get_type_as_string(&f.ty), &f.ty)))
 }
 
 /// Gets the type name from the [`syn::Type`] object
@@ -200,6 +248,63 @@ fn get_type_as_string(t: &syn::Type) -> String {
     let mut token_stream = proc_macro2::TokenStream::new();
     t.to_tokens(&mut token_stream);
     token_stream.to_string()
+}
+
+/// If `t` is a supported type, extracts from `t` types defined in a
+/// Materialize package.
+///
+/// Returns an empty vector if `t` is of an unsupported type.
+///
+/// Supported types are:
+/// A plain path type A -> extracts A
+/// Box<A>, Vec<A>, Option<A> -> extracts A
+/// Tuple (A, (B, C)) -> extracts A, B, C.
+/// Remove A, B, C from expected results if they are primitive types or listed
+/// in [EXTERNAL_TYPES].
+fn extract_reflected_type(t: &syn::Type) -> Vec<&syn::Type> {
+    match t {
+        syn::Type::Path(tp) => {
+            let last_segment = tp.path.segments.last().unwrap();
+            let type_name = last_segment.ident.to_string();
+            match &last_segment.arguments {
+                syn::PathArguments::None => {
+                    if EXTERNAL_TYPES.contains(&&type_name[..])
+                        || type_name.starts_with(|c: char| c.is_lowercase())
+                    {
+                        // Ignore primitive types and types
+                        return Vec::new();
+                    } else {
+                        return vec![t];
+                    }
+                }
+                syn::PathArguments::AngleBracketed(args) => {
+                    if SUPPORTED_ANGLE_TYPES.contains(&&type_name[..]) {
+                        return args
+                            .args
+                            .iter()
+                            .flat_map(|arg| {
+                                if let syn::GenericArgument::Type(typ) = arg {
+                                    extract_reflected_type(typ)
+                                } else {
+                                    Vec::new()
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                    }
+                }
+                _ => {}
+            }
+        }
+        syn::Type::Tuple(tt) => {
+            return tt
+                .elems
+                .iter()
+                .flat_map(extract_reflected_type)
+                .collect::<Vec<_>>();
+        }
+        _ => {}
+    }
+    Vec::new()
 }
 
 /* #endregion */

@@ -1064,14 +1064,14 @@ impl fmt::Display for AggregateFunc {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CaptureGroupDesc {
     pub index: u32,
     pub name: Option<String>,
     pub nullable: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>);
 
 impl AnalyzedRegex {
