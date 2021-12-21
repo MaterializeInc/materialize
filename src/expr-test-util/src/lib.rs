@@ -14,52 +14,22 @@ use proc_macro2::TokenTree;
 use serde_json::Value;
 
 use expr::explain::ViewExplanation;
-use expr::func::{
-    CastDateToTimestamp, CastInt16ToInt32, CastInt32ToInt64, CastInt64ToFloat64, CastInt64ToInt32,
-    CastNumericToInt64, CastStringToBool, IsNull, NegInt32, Not,
+use expr::{
+    DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr,
 };
-use expr::*;
 use lowertest::*;
 use ore::result::ResultExt;
 use ore::str::separated;
 use repr::{ColumnType, RelationType, Row, ScalarType};
 use repr_test_util::*;
 
-gen_reflect_info_func!(
-    produce_rti,
-    [
-        BinaryFunc,
-        NullaryFunc,
-        UnaryFunc,
-        VariadicFunc,
-        MirScalarExpr,
-        ScalarType,
-        TableFunc,
-        AggregateFunc,
-        MirRelationExpr,
-        JoinImplementation,
-        EvalError,
-    ],
-    [
-        AggregateExpr,
-        CastDateToTimestamp,
-        CastInt16ToInt32,
-        CastInt32ToInt64,
-        CastInt64ToInt32,
-        CastInt64ToFloat64,
-        CastNumericToInt64,
-        CastStringToBool,
-        ColumnOrder,
-        ColumnType,
-        RelationType,
-        IsNull,
-        NegInt32,
-        Not
-    ]
-);
-
 lazy_static! {
-    pub static ref RTI: ReflectedTypeInfo = produce_rti();
+    pub static ref RTI: ReflectedTypeInfo = {
+        let mut rti = ReflectedTypeInfo::default();
+        EvalError::add_to_reflected_type_info(&mut rti);
+        MirRelationExpr::add_to_reflected_type_info(&mut rti);
+        rti
+    };
 }
 
 /// Builds a `MirScalarExpr` from a string.

@@ -67,21 +67,12 @@ mod tests {
         Unit,
     }
 
-    gen_reflect_info_func!(
-        produce_rti,
-        [TestEnum],
-        [
-            ZeroArg,
-            SingleUnnamedArg,
-            OptionalArg,
-            MultiUnnamedArg,
-            MultiNamedArg,
-            FirstArgEnum
-        ]
-    );
-
     lazy_static! {
-        static ref RTI: ReflectedTypeInfo = produce_rti();
+        static ref RTI: ReflectedTypeInfo = {
+            let mut rti = ReflectedTypeInfo::default();
+            TestEnum::add_to_reflected_type_info(&mut rti);
+            rti
+        };
     }
 
     #[derive(Default)]

@@ -5563,7 +5563,9 @@ mod test {
         // care about input and output nullabilities.
         let dummy_col_nullable_type = ScalarType::Bool.nullable(true);
         let dummy_col_nonnullable_type = ScalarType::Bool.nullable(false);
-        for (variant, (_, f_types)) in UnaryFunc::mz_enum_reflect() {
+        let mut rti = lowertest::ReflectedTypeInfo::default();
+        UnaryFunc::add_to_reflected_type_info(&mut rti);
+        for (variant, (_, f_types)) in rti.enum_dict["UnaryFunc"].iter() {
             if f_types.is_empty() {
                 let unary_unit_variant: UnaryFunc =
                     serde_json::from_str(&format!("\"{}\"", variant)).unwrap();

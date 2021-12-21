@@ -39,7 +39,7 @@ pub trait MzReflect {
 ///
 /// To add information required to construct a struct or enum,
 /// call `Type::add_to_reflected_type_info(enum_dict, struct_dict)`
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ReflectedTypeInfo {
     pub enum_dict:
         HashMap<&'static str, HashMap<&'static str, (Vec<&'static str>, Vec<&'static str>)>>,
@@ -48,7 +48,7 @@ pub struct ReflectedTypeInfo {
 
 /* #endregion */
 
-/* #region Utilities */
+/* #region Public Utilities */
 
 /// Converts `s` into a [proc_macro2::TokenStream]
 pub fn tokenize(s: &str) -> Result<TokenStream, String> {

@@ -184,7 +184,7 @@ impl RelationType {
 }
 
 /// The name of a column in a [`RelationDesc`].
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ColumnName(String);
 
 impl ColumnName {
