@@ -39,3 +39,68 @@ $ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=
 
 > SELECT COUNT(*) = 10000 FROM upsert_modification;
 true
+
+$ kafka-create-topic topic=textbytes
+
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
+fish:fish
+bìrd1:goose
+bírdmore:geese
+mammal1:moose
+bìrd1:
+
+> CREATE MATERIALIZED SOURCE texttext
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-textbytes-${testdrive.seed}'
+  FORMAT TEXT
+  INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
+  ENVELOPE UPSERT
+
+> CREATE MATERIALIZED SOURCE textbytes
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-textbytes-${testdrive.seed}'
+  FORMAT BYTES
+  INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
+  ENVELOPE UPSERT FORMAT TEXT
+
+> CREATE MATERIALIZED SOURCE bytesbytes
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-textbytes-${testdrive.seed}'
+  FORMAT BYTES
+  INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
+  ENVELOPE UPSERT
+
+> CREATE MATERIALIZED SOURCE bytestext
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-textbytes-${testdrive.seed}'
+  FORMAT TEXT
+  INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
+  ENVELOPE UPSERT FORMAT BYTES
+
+> select * from texttext
+key0          text  kafka_partition  mz_offset
+----------------------------------------------
+fish          fish  0                1
+bírdmore      geese 0                3
+mammal1       moose 0                4
+
+> select * from textbytes
+key0          data  kafka_partition  mz_offset
+----------------------------------------------
+fish          fish  0                1
+bírdmore      geese 0                3
+mammal1       moose 0                4
+
+> select * from bytestext
+key0            text  kafka_partition  mz_offset
+------------------------------------------------
+fish            fish  0                1
+b\xc3\xadrdmore geese 0                3
+mammal1         moose 0                4
+
+> select * from bytesbytes
+key0            data  kafka_partition  mz_offset
+------------------------------------------------
+fish            fish  0                1
+b\xc3\xadrdmore geese 0                3
+mammal1         moose 0                4

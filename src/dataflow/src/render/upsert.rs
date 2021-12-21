@@ -161,14 +161,25 @@ where
             //
             // This also means that we cannot push MFPs into the upsert operatot, as that would
             // mean persisting EvalErrors, which, also icky.
-            let stream = stream.flat_map(|decode_result| {
+            let mut row_packer = repr::Row::default();
+            let stream = stream.flat_map(move |decode_result| {
                 if decode_result.key.is_none() {
                     // This is the same behaviour as regular upsert. It's not pretty, though.
                     error!("Encountered empty key in: {:?}", decode_result);
                     return None;
                 }
                 let offset = decode_result.position;
-                Some((decode_result.key.unwrap(), decode_result.value, offset))
+
+                // Fold metadata into the value if there is in fact a valid value.
+                let value = if let Some(Ok(value)) = decode_result.value {
+                    row_packer.clear();
+                    row_packer.extend(value.iter());
+                    row_packer.extend(decode_result.metadata.iter());
+                    Some(Ok(row_packer.finish_and_reuse()))
+                } else {
+                    decode_result.value
+                };
+                Some((decode_result.key.unwrap(), value, offset))
             });
 
             let mut row_packer = repr::Row::default();
@@ -287,7 +298,7 @@ where
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
         "Upsert",
         move |_cap, _info| {
-            // This is a map of (time) -> (capability, ((key) -> (value with max // offset)))
+            // This is a map of (time) -> (capability, ((key) -> (value with max offset)))
             //
             // This is a BTreeMap because we want to ensure that if we receive (key1, value1, time
             // 5) and (key1, value2, time 7) that we send (key1, value1, time 5) before (key1,
