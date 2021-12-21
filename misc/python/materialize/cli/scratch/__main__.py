@@ -9,13 +9,12 @@
 
 import argparse
 
-from materialize import errors
 from materialize.cli.scratch import create, destroy, mine
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="subcommand")
+    parser = argparse.ArgumentParser("scratch")
+    subparsers = parser.add_subparsers(dest="subcommand", required=True)
     for name, configure, run in [
         ("create", create.configure_parser, create.run),
         ("mine", mine.configure_parser, mine.run),
@@ -26,10 +25,6 @@ def main() -> None:
         s.set_defaults(run=run)
 
     args = parser.parse_args()
-    # TODO - Pass `required=True` to parser.add_subparsers once we support 3.7
-    if not "run" in args:
-        raise errors.BadSpec("Must specify a command")
-
     args.run(args)
 
 
