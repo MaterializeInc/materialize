@@ -155,6 +155,10 @@ def launch(
                 },
             }
         ],
+        "MetadataOptions": {
+            # Allow Docker containers to access IMDSv2.
+            "HttpPutResponseHopLimit": 2,
+        },
     }
     if key_name:
         kwargs["KeyName"] = key_name
