@@ -28,6 +28,7 @@ pub mod pfuture;
 pub mod s3;
 pub mod storage;
 pub mod unreliable;
+pub mod workload;
 
 #[cfg(test)]
 pub mod golden_test;

@@ -1328,8 +1328,8 @@ mod tests {
     #[test]
     fn batch_consolidation() -> Result<(), Error> {
         let updates = vec![
-            (("1".into(), "".into()), 1, 1),
-            (("1".into(), "".into()), 1, 1),
+            (("1".as_bytes(), "".as_bytes()), 1, 1),
+            (("1".as_bytes(), "".as_bytes()), 1, 1),
         ];
 
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
@@ -1381,7 +1381,7 @@ mod tests {
 
     #[test]
     fn regression_empty_unsealed_batch() -> Result<(), Error> {
-        let updates = vec![];
+        let updates: Vec<((Vec<u8>, Vec<u8>), _, _)> = vec![];
 
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
         let id = block_on(|res| i.register("0", "", "", res))?;
@@ -1420,7 +1420,7 @@ mod tests {
             i.write(
                 vec![(
                     s1,
-                    vec![(("".into(), "".into()), 0, 1)]
+                    vec![(("".as_bytes(), "".as_bytes()), 0, 1)]
                         .iter()
                         .collect::<ColumnarRecords>(),
                 )],
@@ -1432,7 +1432,7 @@ mod tests {
             i.write(
                 vec![(
                     s2,
-                    vec![(("".into(), "".into()), 1, 1)]
+                    vec![(("".as_bytes(), "".as_bytes()), 1, 1)]
                         .iter()
                         .collect::<ColumnarRecords>(),
                 )],
@@ -1447,7 +1447,7 @@ mod tests {
             i.write(
                 vec![(
                     s1,
-                    vec![(("".into(), "".into()), 2, 1)]
+                    vec![(("".as_bytes(), "".as_bytes()), 2, 1)]
                         .iter()
                         .collect::<ColumnarRecords>(),
                 )],
@@ -1523,8 +1523,8 @@ mod tests {
     #[test]
     fn try_set_meta_matches_storage() -> Result<(), Error> {
         let updates = vec![
-            (("1".into(), "".into()), 2, 1),
-            (("2".into(), "".into()), 1, 1),
+            (("1".as_bytes(), "".as_bytes()), 2, 1),
+            (("2".as_bytes(), "".as_bytes()), 1, 1),
         ];
 
         let mut unreliable = UnreliableHandle::default();
@@ -1556,9 +1556,9 @@ mod tests {
         // answer (at the time of the bug, compaction did the right thing, which
         // is why we didn't catch it initially).
         let updates = vec![
-            (("1".into(), "".into()), 1, 1),
-            (("1".into(), "".into()), 10, -1),
-            (("2".into(), "".into()), 2, 1),
+            (("1".as_bytes(), "".as_bytes()), 1, 1),
+            (("1".as_bytes(), "".as_bytes()), 10, -1),
+            (("2".as_bytes(), "".as_bytes()), 2, 1),
         ];
         block_on_drain(&mut i, |i, res| {
             i.write(vec![(id, updates.iter().collect::<ColumnarRecords>())], res)
