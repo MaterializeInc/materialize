@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -251,8 +251,20 @@ impl Model {
         self.make_box(BoxType::Select(Select::default()))
     }
 
-    fn get_box(&self, box_id: BoxId) -> &RefCell<QueryBox> {
-        self.boxes.get(&box_id).expect("a valid box identifier")
+    /// Get an immutable reference to the box identified by `box_id`.
+    fn get_box(&self, box_id: BoxId) -> Ref<'_, QueryBox> {
+        self.boxes
+            .get(&box_id)
+            .expect("a valid box identifier")
+            .borrow()
+    }
+
+    /// Get a mutable reference to the box identified by `box_id`.
+    fn get_mut_box(&self, box_id: BoxId) -> RefMut<'_, QueryBox> {
+        self.boxes
+            .get(&box_id)
+            .expect("a valid box identifier")
+            .borrow_mut()
     }
 
     /// Create a new quantifier and adds it to the parent box
@@ -271,11 +283,8 @@ impl Model {
             alias: None,
         }));
         self.quantifiers.insert(id, q);
-        self.get_box(parent_box).borrow_mut().quantifiers.insert(id);
-        self.get_box(input_box)
-            .borrow_mut()
-            .ranging_quantifiers
-            .insert(id);
+        self.get_mut_box(parent_box).quantifiers.insert(id);
+        self.get_mut_box(input_box).ranging_quantifiers.insert(id);
         id
     }
 
@@ -286,25 +295,25 @@ impl Model {
     }
 
     /// Visit boxes in the query graph in pre-order starting from `self.top_box`.
-    fn visit_pre_boxes<F, E>(&self, f: &mut F) -> Result<(), E>
+    fn visit_pre_boxes<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&RefCell<QueryBox>) -> Result<(), E>,
+        F: FnMut(Ref<'a, QueryBox>) -> Result<(), E>,
     {
         self.visit_pre_boxes_in_subgraph(f, self.top_box)
     }
 
     /// Visit boxes in the query graph in pre-order
-    fn visit_pre_boxes_in_subgraph<F, E>(&self, f: &mut F, start_box: BoxId) -> Result<(), E>
+    fn visit_pre_boxes_in_subgraph<'a, F, E>(&'a self, f: &mut F, start_box: BoxId) -> Result<(), E>
     where
-        F: FnMut(&RefCell<QueryBox>) -> Result<(), E>,
+        F: FnMut(Ref<'a, QueryBox>) -> Result<(), E>,
     {
         let mut visited = HashSet::new();
         let mut stack = vec![start_box];
         while !stack.is_empty() {
             let box_id = stack.pop().unwrap();
             if visited.insert(box_id) {
-                let query_box = self.get_box(box_id);
-                f(query_box)?;
+                let query_box = self.boxes.get(&box_id).expect("a valid box identifier");
+                f(query_box.borrow())?;
 
                 stack.extend(
                     query_box
@@ -327,7 +336,6 @@ impl Model {
         let mut visited_quantifiers: HashSet<QuantifierId> = HashSet::new();
 
         let _ = self.visit_pre_boxes(&mut |b| -> Result<(), ()> {
-            let b = b.borrow();
             visited_boxes.insert(b.id);
             visited_quantifiers.extend(b.quantifiers.iter());
             Ok(())
@@ -346,7 +354,7 @@ impl QueryBox {
             let q = model.get_quantifier(*quantifier_id);
             let bq = q.borrow();
             if !bq.quantifier_type.is_subquery() {
-                let input_box = model.get_box(bq.input_box).borrow();
+                let input_box = model.get_box(bq.input_box);
                 for (position, c) in input_box.columns.iter().enumerate() {
                     let expr = BoxScalarExpr::ColumnReference(ColumnReference {
                         quantifier_id: *quantifier_id,
@@ -426,16 +434,14 @@ impl QueryBox {
             // collect the column references from the current context within
             // the subgraph under the current quantifier
             let mut column_refs = HashSet::new();
-            let mut f = |inner_box: &RefCell<QueryBox>| -> Result<(), ()> {
-                inner_box.borrow().visit_expressions(
-                    &mut |expr: &BoxScalarExpr| -> Result<(), ()> {
-                        expr.collect_column_references_from_context(
-                            &self.quantifiers,
-                            &mut column_refs,
-                        );
-                        Ok(())
-                    },
-                )
+            let mut f = |inner_box: Ref<'_, QueryBox>| -> Result<(), ()> {
+                inner_box.visit_expressions(&mut |expr: &BoxScalarExpr| -> Result<(), ()> {
+                    expr.collect_column_references_from_context(
+                        &self.quantifiers,
+                        &mut column_refs,
+                    );
+                    Ok(())
+                })
             };
             let q = model.get_quantifier(*q_id).borrow();
             model

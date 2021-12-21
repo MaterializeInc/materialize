@@ -14,7 +14,6 @@
 use crate::query_model::{BoxType, Model, Quantifier, QuantifierId, QueryBox};
 use itertools::Itertools;
 use ore::str::separated;
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::{self, Write};
 
@@ -61,8 +60,7 @@ impl DotGenerator {
         let mut quantifiers = Vec::new();
 
         model
-            .visit_pre_boxes(&mut |b: &RefCell<QueryBox>| -> Result<(), ()> {
-                let b = b.borrow();
+            .visit_pre_boxes(&mut |b| -> Result<(), ()> {
                 let box_id = b.id;
 
                 self.new_line(&format!("subgraph cluster{} {{", box_id));

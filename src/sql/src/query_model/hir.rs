@@ -51,7 +51,7 @@ impl FromHir {
     /// that the resulting graph starts with a Select box.
     fn generate_select(&mut self, expr: HirRelationExpr) -> BoxId {
         let mut box_id = self.generate_internal(expr);
-        if !self.model.get_box(box_id).borrow().is_select() {
+        if !self.model.get_box(box_id).is_select() {
             box_id = self.wrap_within_select(box_id);
         }
         box_id
@@ -66,11 +66,10 @@ impl FromHir {
                 }
                 if let expr::Id::Global(id) = id {
                     let result = self.model.make_box(BoxType::Get(Get { id }));
-                    let b = self.model.get_box(result);
+                    let mut b = self.model.get_mut_box(result);
                     self.gets_seen.insert(expr::Id::Global(id), result);
-                    b.borrow_mut().unique_keys.append(&mut typ.keys);
-                    b.borrow_mut()
-                        .columns
+                    b.unique_keys.append(&mut typ.keys);
+                    b.columns
                         .extend(typ.column_types.into_iter().enumerate().map(
                             |(position, column_type)| Column {
                                 expr: BoxScalarExpr::BaseColumn(BaseColumn {
@@ -97,7 +96,7 @@ impl FromHir {
                 let mut box_id = self.generate_select(*input);
 
                 loop {
-                    let old_arity = self.model.get_box(box_id).borrow().columns.len();
+                    let old_arity = self.model.get_box(box_id).columns.len();
 
                     // 1) Find a batch of scalars such that no scalar in the
                     // current batch depends on columns from the same batch.
@@ -117,8 +116,8 @@ impl FromHir {
                     // 2) Add the scalars in the batch to the box.
                     for scalar in scalars.drain(0..end_idx) {
                         let expr = self.generate_expr(scalar, box_id);
-                        let b = self.model.get_box(box_id);
-                        b.borrow_mut().columns.push(Column { expr, alias: None });
+                        let mut b = self.model.get_mut_box(box_id);
+                        b.columns.push(Column { expr, alias: None });
                     }
 
                     // 3) If there are scalars remaining, wrap the box so the
@@ -152,7 +151,7 @@ impl FromHir {
                 let quantifier_id =
                     self.model
                         .make_quantifier(QuantifierType::Foreach, input_box_id, select_id);
-                let mut select_box = self.model.get_box(select_id).borrow_mut();
+                let mut select_box = self.model.get_mut_box(select_id);
                 for position in outputs {
                     select_box.columns.push(Column {
                         expr: BoxScalarExpr::ColumnReference(ColumnReference {
@@ -212,8 +211,7 @@ impl FromHir {
 
                 // Default projection
                 self.model
-                    .get_box(join_box)
-                    .borrow_mut()
+                    .get_mut_box(join_box)
                     .add_all_input_columns(&self.model);
 
                 join_box
@@ -229,7 +227,7 @@ impl FromHir {
         let select_id = self.model.make_select_box();
         self.model
             .make_quantifier(QuantifierType::Foreach, box_id, select_id);
-        let mut select_box = self.model.get_box(select_id).borrow_mut();
+        let mut select_box = self.model.get_mut_box(select_id);
         select_box.add_all_input_columns(&self.model);
         select_id
     }
@@ -295,10 +293,10 @@ impl FromHir {
     /// set of input quantifiers of the given box) it returns the input the column
     /// belongs to and its offset within the projection of the underlying operator.
     fn find_column_within_box(&self, box_id: BoxId, mut position: usize) -> ColumnReference {
-        let b = self.model.get_box(box_id).borrow();
+        let b = self.model.get_box(box_id);
         for q_id in b.quantifiers.iter() {
             let q = self.model.get_quantifier(*q_id).borrow();
-            let ib = self.model.get_box(q.input_box).borrow();
+            let ib = self.model.get_box(q.input_box);
             if position < ib.columns.len() {
                 return ColumnReference {
                     quantifier_id: *q_id,
@@ -326,7 +324,7 @@ impl FromHir {
     /// The given box must support predicates, ie. it must be either a Select box
     /// or an OuterJoin one.
     fn add_predicate(&mut self, box_id: BoxId, predicate: BoxScalarExpr) {
-        let mut the_box = self.model.get_box(box_id).borrow_mut();
+        let mut the_box = self.model.get_mut_box(box_id);
         match &mut the_box.box_type {
             BoxType::Select(select) => select.predicates.push(Box::new(predicate)),
             BoxType::OuterJoin(outer_join) => outer_join.predicates.push(Box::new(predicate)),
