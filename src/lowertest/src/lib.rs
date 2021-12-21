@@ -19,7 +19,7 @@ use serde_json::Value;
 
 use ore::{result::ResultExt, str::separated, str::StrExt};
 
-pub use lowertest_derive::{gen_reflect_info_func, MzReflect};
+pub use lowertest_derive::MzReflect;
 
 /* #region Parts of the public interface related to collecting information
 about the fields of structs and enums. */

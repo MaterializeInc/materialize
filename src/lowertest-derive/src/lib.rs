@@ -11,8 +11,7 @@
 //!
 //! TODO: eliminate macros in favor of using `walkabout`?
 
-use proc_macro::{TokenStream, TokenTree};
-use proc_macro2::Span;
+use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse, Data, DeriveInput, Fields};
 
@@ -104,76 +103,6 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
            #(#referenced_types)*
         }
       }
-    };
-    gen.into()
-}
-
-/// Generates a function that generates `ReflectedTypeInfo`
-///
-/// Accepts two comma-separated arguments:
-/// * first is the name of the function to generate
-/// * second is a list of enums or structs that can be looked up in the
-/// `ReflectedTypeInfo`
-#[proc_macro]
-pub fn gen_reflect_info_func(input: TokenStream) -> TokenStream {
-    let mut input_iter = input.into_iter();
-    let func_name = if let Some(TokenTree::Ident(ident)) = input_iter.next() {
-        syn::Ident::new(&ident.to_string(), Span::call_site())
-    } else {
-        unreachable!("No function name specified")
-    };
-    // skip comma
-    input_iter.next();
-    let enum_dict = input_iter.next();
-    // skip comma
-    input_iter.next();
-    let struct_dict = input_iter.next();
-    let add_enums = if let Some(TokenTree::Group(group)) = enum_dict {
-        group
-            .stream()
-            .into_iter()
-            .filter_map(|tt| {
-                if let TokenTree::Ident(ident) = tt {
-                    let type_name = ident.to_string();
-                    let typ = syn::Ident::new(&type_name, Span::call_site());
-                    Some(quote! { #typ::add_to_reflected_type_info(&mut result) })
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-    } else {
-        vec![]
-    };
-    let add_structs = if let Some(TokenTree::Group(group)) = struct_dict {
-        group
-            .stream()
-            .into_iter()
-            .filter_map(|tt| {
-                if let TokenTree::Ident(ident) = tt {
-                    let type_name = ident.to_string();
-                    let typ = syn::Ident::new(&type_name, Span::call_site());
-                    Some(quote! { #typ::add_to_reflected_type_info(&mut result) })
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-    } else {
-        vec![]
-    };
-    let gen = quote! {
-        fn #func_name () -> ReflectedTypeInfo {
-            let mut enum_dict = std::collections::HashMap::new();
-            let mut struct_dict = std::collections::HashMap::new();
-            let mut result =  ReflectedTypeInfo {
-                enum_dict,
-                struct_dict
-            };
-            #(#add_enums);* ;
-            #(#add_structs);* ;
-            result
-        }
     };
     gen.into()
 }
