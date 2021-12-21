@@ -103,14 +103,14 @@ pub struct QueryBox {
 }
 
 /// A column projected by a `QueryBox`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Column {
     pub expr: BoxScalarExpr,
     pub alias: Option<Ident>,
 }
 
 /// Enum that describes the DISTINCT property of a `QueryBox`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum DistinctOperation {
     /// Distinctness of the output of the box must be enforced by
     /// the box.
@@ -138,7 +138,7 @@ pub struct Quantifier {
     pub alias: Option<Ident>,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum QuantifierType {
     /// An ALL subquery.
     All,
@@ -154,7 +154,7 @@ pub enum QuantifierType {
     Scalar,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BoxType {
     /// A table from the catalog.
     Get(Get),
@@ -182,26 +182,26 @@ pub enum BoxType {
     Windowing,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Get {
     id: expr::GlobalId,
 }
 
 /// The content of a Grouping box.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Grouping {
     pub key: Vec<BoxScalarExpr>,
 }
 
 /// The content of a OuterJoin box.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct OuterJoin {
     /// The predices in the ON clause of the outer join.
     pub predicates: Vec<BoxScalarExpr>,
 }
 
 /// The content of a Select box.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Select {
     /// The list of predicates applied by the box.
     pub predicates: Vec<BoxScalarExpr>,
@@ -213,13 +213,13 @@ pub struct Select {
     pub offset: Option<BoxScalarExpr>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TableFunction {
     pub parameters: Vec<BoxScalarExpr>,
     // @todo function metadata from the catalog
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Values {
     pub rows: Vec<Vec<BoxScalarExpr>>,
 }
@@ -252,6 +252,49 @@ impl Model {
 
     fn make_select_box(&mut self) -> BoxId {
         self.make_box(BoxType::Select(Select::default()))
+    }
+
+    /// Performs a shallow clone of the box
+    /// Note: correlated referenced are not updated, because that would require a deep clone.
+    fn clone_box(&mut self, box_id: BoxId) -> BoxId {
+        let new_id = self.box_id_gen.allocate_id();
+
+        let (new_box, quantifiers_to_clone) = {
+            let source_box = self.get_box(box_id);
+            let b = Box::new(RefCell::new(QueryBox {
+                id: new_id,
+                box_type: source_box.box_type.clone(),
+                columns: source_box.columns.clone(),
+                quantifiers: QuantifierSet::new(),
+                ranging_quantifiers: QuantifierSet::new(),
+                unique_keys: source_box.unique_keys.clone(),
+                distinct: source_box.distinct,
+            }));
+            (b, source_box.quantifiers.clone())
+        };
+        // Insert the box in order for `make_quantifier` to find it.
+        self.boxes.insert(new_id, new_box);
+        let cloned_quantifiers = quantifiers_to_clone
+            .iter()
+            .map(|q| {
+                let (quantifier_type, input_box) = {
+                    let q = self.get_quantifier(*q);
+                    (q.quantifier_type.clone(), q.input_box)
+                };
+                self.make_quantifier(quantifier_type, input_box, new_id)
+            })
+            .collect::<QuantifierSet>();
+        // Update any column reference within the cloned box to point to the
+        // new quantifiers
+        let quantifier_map = quantifiers_to_clone
+            .iter()
+            .zip(cloned_quantifiers.iter())
+            .map(|(old, new)| (*old, *new))
+            .collect::<HashMap<_, _>>();
+        let mut cloned_box = self.get_mut_box(new_id);
+        cloned_box.remap_column_references(&quantifier_map);
+        cloned_box.quantifiers = cloned_quantifiers;
+        new_id
     }
 
     fn swap_quantifiers(&mut self, b1: BoxId, b2: BoxId) {
@@ -301,6 +344,24 @@ impl Model {
         self.get_mut_box(parent_box).quantifiers.insert(id);
         self.get_mut_box(input_box).ranging_quantifiers.insert(id);
         id
+    }
+
+    /// Sets the input box of the given quantifier
+    fn update_input_box(&self, quantifier_id: QuantifierId, input_box: BoxId) {
+        let old_input_box = {
+            let mut q = self.get_mut_quantifier(quantifier_id);
+            let old_input_box = q.input_box;
+            q.input_box = input_box;
+            old_input_box
+        };
+
+        self.get_mut_box(old_input_box)
+            .ranging_quantifiers
+            .remove(&quantifier_id);
+
+        self.get_mut_box(input_box)
+            .ranging_quantifiers
+            .insert(quantifier_id);
     }
 
     /// Get an immutable reference to the box identified by `box_id`.
@@ -553,6 +614,19 @@ impl QueryBox {
             | BoxType::Get(_) => {}
         }
         Ok(())
+    }
+
+    fn remap_column_references(&mut self, quantifier_map: &HashMap<QuantifierId, QuantifierId>) {
+        let _ = self.visit_expressions_mut(&mut |expr: &mut BoxScalarExpr| -> Result<(), ()> {
+            expr.visit_mut(&mut |expr| {
+                if let BoxScalarExpr::ColumnReference(c) = expr {
+                    if let Some(new_quantifier) = quantifier_map.get(&c.quantifier_id) {
+                        c.quantifier_id = *new_quantifier;
+                    }
+                }
+            });
+            Ok(())
+        });
     }
 
     fn is_select(&self) -> bool {
