@@ -14,12 +14,13 @@ psycopg2==2.9.1
 pytest==6.2.5
 requests==2.23.0
 sqlparse==0.4.2
+scipy==1.7.3
 twine==3.7.1
 types-prettytable==2.1.0
 types-psutil==5.8.15
 types-psycopg2==2.9.1
 types-PyMYSQL==1.0.2
 types-PyYAML==6.0.1
-types-requests==2.25.11
+types-requests==2.26.2
 types-toml==0.10.1
 types-pkg-resources==0.1.3
