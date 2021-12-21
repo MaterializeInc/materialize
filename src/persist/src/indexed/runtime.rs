@@ -121,7 +121,7 @@ where
 
     // Start up the ticker thread.
     let ticker_tx = tx.clone();
-    let ticker_handle = tokio::spawn(async move {
+    let ticker_handle = pool.spawn(async move {
         // Try to keep worst case command response times to roughly `110% of
         // min_step_interval` by ensuring there's a tick relatively shortly
         // after a step becomes eligible. We could just as easily make this
@@ -143,6 +143,7 @@ where
     let handles = Mutex::new(Some(RuntimeHandles {
         impl_handle,
         ticker_handle,
+        ticker_pool: pool.clone(),
     }));
     let core = RuntimeCore {
         handles,
@@ -175,6 +176,7 @@ impl RuntimeId {
 struct RuntimeHandles {
     impl_handle: JoinHandle<()>,
     ticker_handle: tokio::task::JoinHandle<()>,
+    ticker_pool: Arc<Runtime>,
 }
 
 #[derive(Debug)]
@@ -226,13 +228,13 @@ impl RuntimeCore {
                 // put the panic message in this log.
                 log::error!("persist runtime thread panic'd");
             }
-            if let Err(_) = block_on(handles.ticker_handle) {
-                // If the thread panic'd, then by definition it has been
-                // stopped, so we can return an Ok. This is surprising, though,
-                // so log a message. Unfortunately, there isn't really a way to
-                // put the panic message in this log.
-                log::error!("persist ticker thread panic'd");
+            if let Err(err) = block_on(handles.ticker_handle) {
+                log::error!("persist ticker thread error'd: {:?}", err);
             }
+            // Thread a copy of the Arc<Runtime> being used to drive
+            // ticker_handle to make sure the runtime doesn't shut down before
+            // ticker_handle has a chance to finish cleanly.
+            drop(handles.ticker_pool);
             rx.recv()
         } else {
             Ok(())
