@@ -1630,7 +1630,19 @@ WHERE false",
     needs_logs: false,
 };
 
-// Next id BuiltinView: 5037
+pub const PG_ROLES: BuiltinView = BuiltinView {
+    name: "pg_roles",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_roles AS SELECT
+    name AS rolname,
+    '********'::pg_catalog.text AS rolpassword,
+    oid AS oid
+FROM mz_catalog.mz_roles",
+    id: GlobalId::System(5037),
+    needs_logs: false,
+};
+
+// Next id BuiltinView: 5038
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
@@ -1773,6 +1785,7 @@ lazy_static! {
             Builtin::View(&PG_CONSTRAINT),
             Builtin::View(&PG_TABLES),
             Builtin::View(&PG_ACCESS_METHODS),
+            Builtin::View(&PG_ROLES),
         ];
 
         // TODO(sploiselle): assign static global IDs to functions
