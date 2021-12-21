@@ -42,6 +42,8 @@ You can [cast](../../functions/cast) from the following types to `time`:
 
 - [`interval`](../interval) (by assignment)
 - [`text`](../text) (explicitly)
+- [`timestamp`](../timestamp) (by assignment)
+- [`timestamptz`](../timestamp) (by assignment)
 
 ### Valid operations
 

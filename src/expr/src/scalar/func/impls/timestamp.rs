@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 
 use repr::strconv;
 
@@ -57,5 +57,19 @@ sqlfunc!(
     #[sqlname = "tstztots"]
     fn cast_timestamp_tz_to_timestamp(a: DateTime<Utc>) -> NaiveDateTime {
         a.naive_utc()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "tstotime"]
+    fn cast_timestamp_to_time(a: NaiveDateTime) -> NaiveTime {
+        a.time()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "tstztotime"]
+    fn cast_timestamp_tz_to_time(a: DateTime<Utc>) -> NaiveTime {
+        a.naive_utc().time()
     }
 );

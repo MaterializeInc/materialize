@@ -136,6 +136,9 @@ List new features before bug fixes.
   This bug could cause incorrect results in queries that combined `RIGHT` and
   `FULL` [joins](/sql/join) with comma-separated `FROM` items.
 
+- Support casts from [`timestamp`] and [`timestamp with time zone`] to
+  [`time`].
+
 {{% version-header v0.12.0 %}}
 
 - Optionally emit the message partition, offset, and timestamp in [Kafka
@@ -1669,6 +1672,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`SHOW CREATE SOURCE`]: /sql/show-create-source
 [`SHOW CREATE VIEW`]: /sql/show-create-view
 [`text`]: /sql/types/text
+[`time`]: /sql/types/time
 [`timestamp`]: /sql/types/timestamp
 [`timestamp with time zone`]: /sql/types/timestamptz
 [pg-copy]: https://www.postgresql.org/docs/current/sql-copy.html
