@@ -242,7 +242,7 @@ where
 
         let mut pending_futures = VecDeque::new();
 
-        seal_op.build(move |mut capabilities| {
+        seal_op.build_reschedule(move |mut capabilities| {
             let mut cap_set = if active_seal_operator {
                 CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
             } else {
@@ -261,7 +261,8 @@ where
                 });
 
                 if !active_seal_operator {
-                    return;
+                    // We are always complete if we're not the active seal operator.
+                    return false;
                 }
 
                 let mut new_input_frontier = Antichain::new();
@@ -307,6 +308,7 @@ where
                                 &operator_name,
                                 pending_future.time,
                             );
+
                             // Explicitly downgrade the capability to the new time.
                             cap_set.downgrade(Some(pending_future.time));
                         }
@@ -359,10 +361,14 @@ where
                 input_frontier.clone_from(&new_input_frontier);
                 // We need to downgrade when the input frontier is empty. This basically releases
                 // all the capabilities so that downstream operators and eventually the worker can
-                // shut down.
+                // shut down. We also need to clear all pending futures to make sure we never
+                // attempt to downgrade any more capabilities.
                 if input_frontier.is_empty() {
                     cap_set.downgrade(input_frontier.iter());
+                    pending_futures.clear();
                 }
+
+                !pending_futures.is_empty()
             }
         });
 
@@ -643,7 +649,7 @@ mod tests {
 
     #[test]
     fn seal_frontier_advance_only_on_success() -> Result<(), Error> {
-        ore::test::init_logging_default("trace");
+        ore::test::init_logging();
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
         let p = registry.runtime_unreliable(unreliable.clone())?;
@@ -691,9 +697,69 @@ mod tests {
         Ok(())
     }
 
+    /// Test to make sure we handle closing the seal operator correctly and don't
+    /// incorrectly process any seal futures after the operator has been closed.
+    #[test]
+    fn regression_9419_seal_close() -> Result<(), Error> {
+        ore::test::init_logging();
+        let mut registry = MemRegistry::new();
+        let mut unreliable = UnreliableHandle::default();
+        let p = registry.runtime_unreliable(unreliable.clone())?;
+
+        timely::execute_directly(move |worker| {
+            let (mut input, mut placeholder, probe) = worker.dataflow(|scope| {
+                let (write, _read) = p.create_or_load::<(), ()>("primary");
+                let mut input = Handle::new();
+                let stream = input.to_stream(scope);
+                // We need to create a placeholder stream to force the dataflow to stay around
+                // even after the actual input has been closed.
+                let mut placeholder = Handle::new();
+                let placeholder_stream = placeholder.to_stream(scope);
+
+                let sealed_stream = stream.seal("test", write);
+
+                let stream = placeholder_stream.concat(&sealed_stream);
+                let probe = stream.probe();
+
+                (input, placeholder, probe)
+            });
+
+            // Send data here mostly to avoid having to dictate types to the
+            // compiler.
+            input.send((((), ()), 0, 1));
+            placeholder.send((((), ()), 0, 1));
+
+            placeholder.advance_to(1);
+            unreliable.make_unavailable();
+
+            // Advance the frontier while persist is unavailable in order to force
+            // the seal operator into a retry loop with this seal operation.
+            input.advance_to(1);
+
+            // Allow the operator to submit the seal request.
+            worker.step();
+
+            // We close the input, which will make the operator drop all its capabilities. The
+            // operator still has a pending seal request, so it will not be shut down.
+            input.close();
+            // This will make the seal request succeed. If the operator tried to downgrade the (now
+            // nonexistent) capabilities, this would fail.
+            unreliable.make_available();
+
+            // Once input has been closed, the frontier can safely advance without
+            // it.
+            placeholder.advance_to(2);
+            while probe.less_than(&2) {
+                worker.step();
+            }
+        });
+
+        Ok(())
+    }
+
     #[test]
     fn conditional_seal() -> Result<(), Error> {
-        ore::test::init_logging_default("trace");
+        ore::test::init_logging();
         let mut registry = MemRegistry::new();
 
         let p = registry.runtime_no_reentrance()?;
@@ -812,7 +878,7 @@ mod tests {
 
     #[test]
     fn conditional_seal_frontier_advance_only_on_success() -> Result<(), Error> {
-        ore::test::init_logging_default("trace");
+        ore::test::init_logging();
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
         let p = registry.runtime_unreliable(unreliable.clone())?;
@@ -916,7 +982,7 @@ mod tests {
 
     #[test]
     fn retract_unsealed() -> Result<(), Error> {
-        ore::test::init_logging_default("trace");
+        ore::test::init_logging();
         let mut registry = MemRegistry::new();
         let p = registry.runtime_no_reentrance()?;
 
