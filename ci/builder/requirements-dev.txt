@@ -21,6 +21,7 @@ psutil==5.9.0
 pydantic==1.9.0
 pytest==6.2.5
 scipy==1.7.3
+sqlparse==0.4.2
 twine==3.7.1
 types-prettytable==2.1.2
 types-psutil==5.8.19
