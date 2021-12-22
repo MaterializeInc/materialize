@@ -21,12 +21,14 @@ recommended.
 
 Binary tarballs require a recent version of their stated platform:
 
-* macOS Intel binary tarballs require macOS 10.14+ from v0.1.0 – v0.9.0 and
-  macOS 10.15+ from v0.9.1 onwards.
+* macOS Intel binary tarballs require:
+    * macOS 10.13+ from v0.1.0 – v0.9.0
+    * macOS 10.14+ from v0.9.1 – v0.13.0
+    * macOS 10.15+ from v0.14 onwards
 * macOS ARM binary tarballs require macOS 11+.
 * Linux Intel binary tarballs require a glibc-based Linux distribution with a
   kernel version of v2.6.32+ and a glibc version of 2.12.1+.
-* Linux ARM binary tarballs require a glibc-based Linux distrubtion with a
+* Linux ARM binary tarballs require a glibc-based Linux distribution with a
   kernel version of v3.10+ and a glibc version of 2.17+.
 
 ## Unstable builds

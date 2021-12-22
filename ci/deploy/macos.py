@@ -7,46 +7,22 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import argparse
-import os
 from pathlib import Path
 
 from materialize import spawn
-from materialize.xcompile import KRB5_CONF_OVERRIDES, Arch
+from materialize.xcompile import Arch
 
 from . import deploy_util
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("arch", choices=[Arch.X86_64, Arch.AARCH64], type=Arch)
-    args = parser.parse_args()
-
-    target = f"{args.arch}-apple-darwin"
-
-    print(f"--- Ensuring rustup target {target} exists")
-    spawn.runv(["rustup", "target", "add", target])
+    target = f"{Arch.host()}-apple-darwin"
 
     print("--- Building materialized release binary")
-    spawn.runv(
-        ["cargo", "build", "--target", target, "--bin", "materialized", "--release"],
-        env=dict(
-            os.environ,
-            # Cross compiling from x86_64-apple-darwin to aarch64-apple-darwin
-            # or vice-versa is unusual because you don't need a purpose-built
-            # cross compiler. Instead, you just pass the `--target` flag to
-            # clang. CMake understands this, but autoconf does not. So
-            # explicitly set the `--target` flag to help our autoconf-based C
-            # dependencies along.
-            CFLAGS=f"--target={target}",
-            **KRB5_CONF_OVERRIDES,
-        ),
-    )
+    spawn.runv(["cargo", "build", "--bin", "materialized", "--release"])
 
-    print("--- Uploading binary tarball")
-    deploy_util.deploy_tarball(
-        target, Path("target") / target / "release" / "materialized"
-    )
+    print(f"--- Uploading {target} binary tarball")
+    deploy_util.deploy_tarball(target, Path("target") / "release" / "materialized")
 
 
 if __name__ == "__main__":

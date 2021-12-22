@@ -75,45 +75,63 @@ real backtrace.
 ## macOS agent
 
 We run two macOS agents on Buildkite, via [MacStadium], to produce our macOS
-binaries. These agents are manually configured. Ask Nikhil for access if you need
-it.
+binaries. These agents are manually configured. Ask Nikhil for access if you
+need it.
 
 The basic configuration is as follows:
 
-```
+```shell
 % brew install buildkite/buildkite/buildkite-agent
+# On M1: /opt/homebrew/etc/buildkite-agent/buildkite-agent.cfg
 % vim /usr/local/etc/buildkite-agent/buildkite-agent.cfg
-tags="queue=mac,queue=mac-VERSION"
+tags="queue=mac,queue=mac-{x86_64|aarch64}"
 name="mac-X"
 <otherwise edit to match config above>
-% brew services start buildkite-agent
 % brew install cmake postgresql python3 [other materialize dependencies...]
 % curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# On M1: /opt/homebrew/etc/buildkite-agent/hooks/environment
 % cat /usr/local/etc/buildkite-agent/hooks/environment
 export AWS_ACCESS_KEY_ID=<redacted>
 export AWS_SECRET_ACCESS_KEY=<redacted>
 export PATH=$HOME/.cargo/bin:$PATH
+% brew services start buildkite-agent
 ```
 
 Our goal is to build binaries that will run on the last three macOS versions on
-both Intel and ARM machines. This matches what Homebrew does. That means
-building the binaries on a machine running the oldest version of macOS that we
-intend to support. (macOS is backwards compatible but not forwards compatible:
-binaries built on a newer version of macOS will not run on any older versions of
-macOS.)
-
-Normally we'd run one such build agent on an x86_64 machine and instruct it to
-build both x86_64 binaries and cross-compile aarch64 binaries. But the situation
-is a bit complicated right now, since the ARM architecture has only been
-supported for the last *two* releases, not three. So currently we run two
-build agents, both x86_64 machines, one with Mojave installed and one with
-Big Sur installed. We use the Mojave agent to build x86_64 binaries, and the
-Big Sur agent to build aarch64 binaries. When the next version of macOS drops
-in 2022, we can decommission the Mojave agent and use the Big Sur agent to build
-both x86_64 and aarch64 binaries.
+both Intel and ARM machines. This matches the versions that Homebrew supports.
+That means building the binaries on a machine running the oldest version of
+macOS that we intend to support. (macOS is backwards compatible but not forwards
+compatible: binaries built on a newer version of macOS will not run on any older
+versions of macOS.) Note that at the moment the earliest version of macOS that
+supports ARM is macOS 11, so ARM binaries don't yet work on the three most
+recent macOS versions.
 
 The agent runs as the default MacStadium `administrator` user, since there isn't
 an easy way to isolate builds on macOS.
+
+The GitHub Actions runner also needs to be installed for CI on
+[MaterializeInc/homebrew-crosstools]. Running two separate CI agents on the same
+machine is not ideal, as both Buildkite and GitHub Actions might schedule jobs
+on the same agent concurrently. But homebrew-crosstools is not active enough to
+warrant its own dedicated agent; nor is it easy to run CI for a Homebrew tap on
+Buildkite. Homebrew's CI tooling is very tightly coupled to GitHub Actions.
+
+To configure a GitHub Actions agent:
+
+1. Follow the instructions for creating a self-hosted runner in our GitHub
+   Enterprise account: https://github.com/enterprises/materializeinc/settings/actions/runners/new
+
+2. Run `./config.sh` and follow the interactive configuration prompts, applying
+   the label `macos-x86_64` or `macos-aarch64` depending on the platform.
+
+3. Skip the step that says `run.sh` and run `./svc.sh install && ./svc.sh start`
+   instead to install a launchd configuration that automatically starts the
+   GitHub Actions agent on boot.
+
+4. On ARM, the service needs to run under Rosetta until [actions/runner#805]
+   is resolved. Prefix the calls to `config.sh` and `svc.sh` with `arch -x86_64`
+   to accomplish this, as in `arch -x86_64 ./config.sh`.
+
 
 ## Agent security
 
@@ -210,9 +228,11 @@ $ ps ax | grep <FAULTY-PROCESS-NAME>
 $ gdb -p <FAULTY-PROCESS-PID>
 ```
 
+[autouseradd]: https://github.com/benesch/autouseradd
 [Buildkite]: https://buildkite.com
 [Docker Compose]: https://docs.docker.com/compose/
-[autouseradd]: https://github.com/benesch/autouseradd
-[materializer GitHub user]: https://github.com/materializer
-[materialized-docker]: https://hub.docker.com/repository/docker/materialize/materialized
 [MacStadium]: https://www.macstadium.com
+[materialized-docker]: https://hub.docker.com/repository/docker/materialize/materialized
+[MaterializeInc/homebrew-crosstools]: https://github.com/MaterializeInc/homebrew-crosstools
+[materializer GitHub user]: https://github.com/materializer
+[actions/runner#805]: https://github.com/actions/runner/issues/805
