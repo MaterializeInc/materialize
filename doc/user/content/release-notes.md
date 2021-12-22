@@ -101,7 +101,23 @@ List new features before bug fixes.
 
 {{< /comment >}}
 
-{{% version-header v0.14.0 %}}
+## Unstable
+
+These changes are present in [unstable builds](/versions/#unstable-builds) and
+are slated for inclusion in the next stable release. There may be additional
+changes that have not yet been documented.
+
+- Support casts from [`timestamp`] and [`timestamp with time zone`] to
+  [`time`].
+
+- Add `pg_catalog.pg_roles` as a builtin view.
+
+{{< comment >}}
+Only add new release notes above this line.
+
+The presence of this comment ensures that PRs that are alive across a release
+boundary don't silently merge their release notes into the wrong place.
+{{</ comment >}}
 
 {{% version-header v0.13.0 %}}
 
@@ -135,11 +151,6 @@ List new features before bug fixes.
 
   This bug could cause incorrect results in queries that combined `RIGHT` and
   `FULL` [joins](/sql/join) with comma-separated `FROM` items.
-
-- Support casts from [`timestamp`] and [`timestamp with time zone`] to
-  [`time`].
-
-- Add `pg_catalog.pg_roles` as a builtin view.
 
 {{% version-header v0.12.0 %}}
 
