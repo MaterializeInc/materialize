@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use lowertest::MzStructReflect;
 use repr::adt::numeric::{self, Numeric};
+use repr::adt::system::Oid;
 use repr::{strconv, ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
@@ -61,6 +62,14 @@ sqlfunc!(
     #[preserves_uniqueness = true]
     fn cast_int64_to_int32(a: i64) -> Result<i32, EvalError> {
         i32::try_from(a).or(Err(EvalError::Int32OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "i64tooid"]
+    #[preserves_uniqueness = true]
+    fn cast_int64_to_oid(a: i64) -> Result<Oid, EvalError> {
+        i32::try_from(a).map(Oid).or(Err(EvalError::OidOutOfRange))
     }
 );
 

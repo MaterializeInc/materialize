@@ -1144,6 +1144,7 @@ pub enum EvalError {
     Int16OutOfRange,
     Int32OutOfRange,
     Int64OutOfRange,
+    OidOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
     InvalidBase64Equals,
@@ -1209,6 +1210,7 @@ impl fmt::Display for EvalError {
             EvalError::Int16OutOfRange => f.write_str("smallint out of range"),
             EvalError::Int32OutOfRange => f.write_str("integer out of range"),
             EvalError::Int64OutOfRange => f.write_str("bigint out of range"),
+            EvalError::OidOutOfRange => f.write_str("OID out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
             EvalError::InvalidBase64Equals => {

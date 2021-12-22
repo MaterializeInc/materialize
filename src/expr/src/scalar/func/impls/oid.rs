@@ -20,6 +20,14 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    #[sqlname = "oidtoi64"]
+    #[preserves_uniqueness = true]
+    fn cast_oid_to_int64(a: Oid) -> i64 {
+        i64::from(a.0)
+    }
+);
+
+sqlfunc!(
     #[sqlname = "oidtoregclass"]
     #[preserves_uniqueness = true]
     fn cast_oid_to_reg_class(a: Oid) -> RegClass {

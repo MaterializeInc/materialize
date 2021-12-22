@@ -3057,6 +3057,7 @@ pub enum UnaryFunc {
     CastInt16ToFloat64(CastInt16ToFloat64),
     CastInt16ToInt32(CastInt16ToInt32),
     CastInt16ToInt64(CastInt16ToInt64),
+    CastInt16ToOid(CastInt16ToOid),
     CastInt16ToString(CastInt16ToString),
     CastInt32ToBool(CastInt32ToBool),
     CastInt32ToFloat32(CastInt32ToFloat32),
@@ -3069,6 +3070,7 @@ pub enum UnaryFunc {
     CastInt32ToInt64(CastInt32ToInt64),
     CastInt32ToString(CastInt32ToString),
     CastOidToInt32(CastOidToInt32),
+    CastOidToInt64(CastOidToInt64),
     CastOidToRegClass(CastOidToRegClass),
     CastRegClassToOid(CastRegClassToOid),
     CastOidToRegProc(CastOidToRegProc),
@@ -3083,6 +3085,7 @@ pub enum UnaryFunc {
     CastInt64ToNumeric(CastInt64ToNumeric),
     CastInt64ToFloat32(CastInt64ToFloat32),
     CastInt64ToFloat64(CastInt64ToFloat64),
+    CastInt64ToOid(CastInt64ToOid),
     CastInt64ToString(CastInt64ToString),
     CastFloat32ToInt16(CastFloat32ToInt16),
     CastFloat32ToInt32(CastFloat32ToInt32),
@@ -3268,6 +3271,7 @@ derive_unary!(
     CastInt16ToFloat64,
     CastInt16ToInt32,
     CastInt16ToInt64,
+    CastInt16ToOid,
     CastInt16ToString,
     CastInt16ToNumeric,
     CastInt32ToBool,
@@ -3286,11 +3290,13 @@ derive_unary!(
     CastInt64ToNumeric,
     CastInt64ToFloat32,
     CastInt64ToFloat64,
+    CastInt64ToOid,
     CastInt64ToString,
     CastFloat32ToNumeric,
     CastFloat64ToNumeric,
     CastInt32ToNumeric,
     CastOidToInt32,
+    CastOidToInt64,
     CastOidToRegClass,
     CastRegClassToOid,
     CastOidToRegProc,
@@ -3444,6 +3450,7 @@ impl UnaryFunc {
             | CastInt16ToFloat64(_)
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
+            | CastInt16ToOid(_)
             | CastInt16ToString(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
@@ -3456,6 +3463,7 @@ impl UnaryFunc {
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
             | CastOidToInt32(_)
+            | CastOidToInt64(_)
             | CastOidToRegClass(_)
             | CastRegClassToOid(_)
             | CastOidToRegProc(_)
@@ -3480,6 +3488,7 @@ impl UnaryFunc {
             | CastInt64ToNumeric(_)
             | CastInt64ToFloat32(_)
             | CastInt64ToFloat64(_)
+            | CastInt64ToOid(_)
             | CastInt64ToString(_)
             | CastFloat32ToNumeric(_)
             | CastFloat64ToNumeric(_)
@@ -3642,6 +3651,7 @@ impl UnaryFunc {
             | CastInt16ToFloat64(_)
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
+            | CastInt16ToOid(_)
             | CastInt16ToString(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
@@ -3654,6 +3664,7 @@ impl UnaryFunc {
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
             | CastOidToInt32(_)
+            | CastOidToInt64(_)
             | CastOidToRegClass(_)
             | CastRegClassToOid(_)
             | CastOidToRegProc(_)
@@ -3678,6 +3689,7 @@ impl UnaryFunc {
             | CastInt64ToNumeric(_)
             | CastInt64ToFloat32(_)
             | CastInt64ToFloat64(_)
+            | CastInt64ToOid(_)
             | CastInt64ToString(_)
             | CastFloat32ToNumeric(_)
             | CastFloat64ToNumeric(_)
@@ -3873,6 +3885,7 @@ impl UnaryFunc {
             | CastInt16ToFloat64(_)
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
+            | CastInt16ToOid(_)
             | CastInt16ToString(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
@@ -3885,6 +3898,7 @@ impl UnaryFunc {
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
             | CastOidToInt32(_)
+            | CastOidToInt64(_)
             | CastOidToRegClass(_)
             | CastRegClassToOid(_)
             | CastOidToRegProc(_)
@@ -3909,6 +3923,7 @@ impl UnaryFunc {
             | CastInt64ToNumeric(_)
             | CastInt64ToFloat32(_)
             | CastInt64ToFloat64(_)
+            | CastInt64ToOid(_)
             | CastInt64ToString(_)
             | CastFloat32ToNumeric(_)
             | CastFloat64ToNumeric(_)
@@ -4118,6 +4133,7 @@ impl UnaryFunc {
             | CastInt16ToFloat64(_)
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
+            | CastInt16ToOid(_)
             | CastInt16ToString(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
@@ -4130,6 +4146,7 @@ impl UnaryFunc {
             | CastInt32ToRegProc(_)
             | CastInt32ToRegType(_)
             | CastOidToInt32(_)
+            | CastOidToInt64(_)
             | CastOidToRegClass(_)
             | CastRegClassToOid(_)
             | CastOidToRegProc(_)
@@ -4154,6 +4171,7 @@ impl UnaryFunc {
             | CastInt64ToNumeric(_)
             | CastInt64ToFloat32(_)
             | CastInt64ToFloat64(_)
+            | CastInt64ToOid(_)
             | CastInt64ToString(_)
             | CastFloat32ToNumeric(_)
             | CastFloat64ToNumeric(_)

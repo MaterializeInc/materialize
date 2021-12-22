@@ -1417,3 +1417,31 @@ query T
 SELECT '2003 04-05'::timestamptz::timestamptz;
 ----
 2003-04-05 00:00:00+00
+
+query T
+SELECT 14::smallint::oid;
+----
+14
+
+query T
+SELECT 14::bigint::oid;
+----
+14
+
+query T
+SELECT 14::oid::bigint;
+----
+14
+
+query T
+SELECT 14::oid = 14::bigint;
+----
+true
+
+query T
+SELECT 14::oid = 14::smallint;
+----
+true
+
+query error OID out of range
+SELECT 120129019392::bigint::oid;
