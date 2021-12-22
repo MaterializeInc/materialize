@@ -1630,37 +1630,41 @@ impl<'a> SchemaNode<'a> {
             },
             (Null, SchemaPiece::Null) => AvroValue::Null,
             (Bool(b), SchemaPiece::Boolean) => AvroValue::Boolean(*b),
-            (Number(n), piece) => {
-                match piece {
-                    SchemaPiece::Int => {
-                        let i =
-                            n.as_i64()
-                                .and_then(|i| i32::try_from(i).ok())
-                                .ok_or_else(|| {
-                                    ParseSchemaError(format!("{} is not a 32-bit integer", n))
-                                })?;
-                        AvroValue::Int(i)
-                    }
-                    SchemaPiece::Long => {
-                        let i = n.as_i64().ok_or_else(|| {
-                            ParseSchemaError(format!("{} is not a 64-bit integer", n))
+            (Number(n), piece) => match piece {
+                SchemaPiece::Int => {
+                    let i = n
+                        .as_i64()
+                        .and_then(|i| i32::try_from(i).ok())
+                        .ok_or_else(|| {
+                            ParseSchemaError(format!("{} is not a 32-bit integer", n))
                         })?;
-                        AvroValue::Long(i)
-                    }
-                    SchemaPiece::Float => {
-                        // Unwrap is okay -- in standard json, (i.e., not using the `arbitrary_precision`
-                        // feature of serde), all numbers are representible as doubles.
-                        AvroValue::Float(n.as_f64().unwrap() as f32)
-                    }
-                    SchemaPiece::Double => AvroValue::Double(n.as_f64().unwrap()),
-                    _ => {
-                        return Err(ParseSchemaError(format!(
-                            "Unexpected number in default: {}",
-                            n
-                        )))
-                    }
+                    AvroValue::Int(i)
                 }
-            }
+                SchemaPiece::Long => {
+                    let i = n.as_i64().ok_or_else(|| {
+                        ParseSchemaError(format!("{} is not a 64-bit integer", n))
+                    })?;
+                    AvroValue::Long(i)
+                }
+                SchemaPiece::Float => {
+                    let f = n
+                        .as_f64()
+                        .ok_or_else(|| ParseSchemaError(format!("{} is not a 32-bit float", n)))?;
+                    AvroValue::Float(f as f32)
+                }
+                SchemaPiece::Double => {
+                    let f = n
+                        .as_f64()
+                        .ok_or_else(|| ParseSchemaError(format!("{} is not a 64-bit float", n)))?;
+                    AvroValue::Double(f)
+                }
+                _ => {
+                    return Err(ParseSchemaError(format!(
+                        "Unexpected number in default: {}",
+                        n
+                    )))
+                }
+            },
             (String(s), piece)
                 if s.eq_ignore_ascii_case("nan")
                     && (piece == &SchemaPiece::Float || piece == &SchemaPiece::Double) =>

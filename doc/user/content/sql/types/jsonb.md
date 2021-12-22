@@ -60,9 +60,8 @@ SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::jsonb);
   - Number
   - Boolean
   - Null
-- Numbers in `jsonb` elements are all equivalent to `float` in SQL.
-    - To operate on elements as `int`s, you must cast them to `float` and then
-      to, e.g. `::float::int`.
+- Numbers in `jsonb` elements are all equivalent to
+  [`numeric`](/sql/types/numeric) in SQL.
 
 ### Valid casts
 

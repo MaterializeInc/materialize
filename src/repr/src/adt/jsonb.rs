@@ -79,10 +79,13 @@ use std::fmt;
 use std::io;
 use std::str::{self, FromStr};
 
+use dec::OrderedDecimal;
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
-use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
+use serde::ser::{Serialize, SerializeMap, SerializeSeq, SerializeStruct, Serializer};
 
 use self::vec_stack::VecStack;
+use crate::adt::numeric::Numeric;
+use crate::strconv;
 use crate::{Datum, Row};
 
 /// An owned JSON value backed by a [`Row`].
@@ -260,12 +263,19 @@ impl JsonbPacker {
     }
 }
 
+// The magic internal key name that serde_json uses to indicate that an
+// arbitrary-precision number should be serialized or deserialized. Yes, this is
+// technically private API, but there's no other way to hook into this machinery
+// that doesn't involve all the allocations that come with `serde_json::Value`.
+// See the comments in `JsonbDatum::Serialize` and `Collector::visit_map` for
+// details.
+const SERDE_JSON_NUMBER_TOKEN: &str = "$serde_json::private::Number";
+
 #[derive(Debug)]
 enum Command<'de> {
     Null,
     Bool(bool),
-    Int64(i64),
-    Float64(f64),
+    Numeric(OrderedDecimal<Numeric>),
     String(Cow<'de, str>),
     Array(usize), // further commands
     Map(usize),   // further commands
@@ -308,7 +318,7 @@ impl<'a, 'de> Visitor<'de> for Collector<'a, 'de> {
     where
         E: de::Error,
     {
-        self.0.push(Command::Int64(value));
+        self.0.push(Command::Numeric(OrderedDecimal(value.into())));
         Ok(())
     }
 
@@ -317,16 +327,13 @@ impl<'a, 'de> Visitor<'de> for Collector<'a, 'de> {
     where
         E: de::Error,
     {
-        let value = i64::try_from(value).map_err(|_| {
-            de::Error::custom(format!("{} is out of range for a jsonb number", value))
-        })?;
-        self.0.push(Command::Int64(value));
+        self.0.push(Command::Numeric(OrderedDecimal(value.into())));
         Ok(())
     }
 
     #[inline]
     fn visit_f64<E>(self, value: f64) -> Result<(), E> {
-        self.0.push(Command::Float64(value));
+        self.0.push(Command::Numeric(OrderedDecimal(value.into())));
         Ok(())
     }
 
@@ -359,12 +366,104 @@ impl<'a, 'de> Visitor<'de> for Collector<'a, 'de> {
     where
         V: MapAccess<'de>,
     {
-        self.0.push(Command::Map(0));
-        let start = self.0.len();
-        while visitor.next_key_seed(Collector(self.0))?.is_some() {
-            visitor.next_value_seed(Collector(self.0))?;
+        // To support arbitrary-precision numbers, serde_json pretends the JSON
+        // contained a map like the following:
+        //
+        //     {"$serde_json::private::Number": "NUMBER AS STRING"}
+        //
+        // The code here sniffs out that special map and emits just the numeric
+        // value.
+
+        #[derive(Debug)]
+        enum KeyClass<'de> {
+            Number,
+            MapKey(Cow<'de, str>),
         }
-        self.0[start - 1] = Command::Map(self.0.len() - start);
+
+        struct KeyClassifier;
+
+        impl<'de> DeserializeSeed<'de> for KeyClassifier {
+            type Value = KeyClass<'de>;
+
+            fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                deserializer.deserialize_str(self)
+            }
+        }
+
+        impl<'de> Visitor<'de> for KeyClassifier {
+            type Value = KeyClass<'de>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string key")
+            }
+
+            #[inline]
+            fn visit_borrowed_str<E>(self, key: &'de str) -> Result<Self::Value, E> {
+                match key {
+                    SERDE_JSON_NUMBER_TOKEN => Ok(KeyClass::Number),
+                    _ => Ok(KeyClass::MapKey(Cow::Borrowed(key))),
+                }
+            }
+
+            #[inline]
+            fn visit_str<E>(self, key: &str) -> Result<Self::Value, E> {
+                match key {
+                    SERDE_JSON_NUMBER_TOKEN => Ok(KeyClass::Number),
+                    _ => Ok(KeyClass::MapKey(Cow::Owned(key.to_owned()))),
+                }
+            }
+        }
+
+        struct NumberParser;
+
+        impl<'de> DeserializeSeed<'de> for NumberParser {
+            type Value = OrderedDecimal<Numeric>;
+
+            fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                deserializer.deserialize_str(self)
+            }
+        }
+
+        impl<'de> Visitor<'de> for NumberParser {
+            type Value = OrderedDecimal<Numeric>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a valid number")
+            }
+
+            #[inline]
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                strconv::parse_numeric(value).map_err(de::Error::custom)
+            }
+        }
+
+        match visitor.next_key_seed(KeyClassifier)? {
+            Some(KeyClass::Number) => {
+                let n = visitor.next_value_seed(NumberParser)?;
+                self.0.push(Command::Numeric(n));
+            }
+            Some(KeyClass::MapKey(key)) => {
+                self.0.push(Command::Map(0));
+                let start = self.0.len();
+                self.0.push(Command::String(key));
+                visitor.next_value_seed(Collector(self.0))?;
+                while visitor.next_key_seed(Collector(self.0))?.is_some() {
+                    visitor.next_value_seed(Collector(self.0))?;
+                }
+                self.0[start - 1] = Command::Map(self.0.len() - start);
+            }
+            None => self.0.push(Command::Map(0)),
+        }
+
         Ok(())
     }
 }
@@ -389,8 +488,7 @@ fn pack_value<'a, 'scratch>(
     match &value[0] {
         Command::Null => packer.push(Datum::JsonNull),
         Command::Bool(b) => packer.push(if *b { Datum::True } else { Datum::False }),
-        Command::Int64(n) => packer.push(Datum::Int64(*n)),
-        Command::Float64(n) => packer.push(Datum::Float64((*n).into())),
+        Command::Numeric(n) => packer.push(Datum::Numeric(*n)),
         Command::String(s) => packer.push(Datum::String(s)),
         Command::Array(further) => {
             let range = &value[1..][..*further];
@@ -483,8 +581,21 @@ impl Serialize for JsonbDatum<'_> {
             Datum::JsonNull => serializer.serialize_none(),
             Datum::True => serializer.serialize_bool(true),
             Datum::False => serializer.serialize_bool(false),
-            Datum::Int64(n) => serializer.serialize_i64(n),
-            Datum::Float64(f) => serializer.serialize_f64(*f),
+            Datum::Numeric(n) => {
+                // To serialize an arbitrary-precision number, we present
+                // serde_json with the following magic struct:
+                //
+                //     struct $serde_json::private::Number {
+                //          $serde_json::private::Number: <NUMBER VALUE>,
+                //     }
+                //
+                let mut s = serializer.serialize_struct(SERDE_JSON_NUMBER_TOKEN, 1)?;
+                s.serialize_field(
+                    SERDE_JSON_NUMBER_TOKEN,
+                    &n.into_inner().to_standard_notation_string(),
+                )?;
+                s.end()
+            }
             Datum::String(s) => serializer.serialize_str(s),
             Datum::List(list) => {
                 let mut seq = serializer.serialize_seq(None)?;
