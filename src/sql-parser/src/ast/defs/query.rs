@@ -410,10 +410,12 @@ pub enum TableFactor<T: AstInfo> {
     Function {
         function: TableFunction<T>,
         alias: Option<TableAlias>,
+        with_ordinality: bool,
     },
     RowsFrom {
         functions: Vec<TableFunction<T>>,
         alias: Option<TableAlias>,
+        with_ordinality: bool,
     },
     Derived {
         lateral: bool,
@@ -440,14 +442,25 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                     f.write_node(alias);
                 }
             }
-            TableFactor::Function { function, alias } => {
+            TableFactor::Function {
+                function,
+                alias,
+                with_ordinality,
+            } => {
                 f.write_node(function);
                 if let Some(alias) = &alias {
                     f.write_str(" AS ");
                     f.write_node(alias);
                 }
+                if *with_ordinality {
+                    f.write_str(" WITH ORDINALITY");
+                }
             }
-            TableFactor::RowsFrom { functions, alias } => {
+            TableFactor::RowsFrom {
+                functions,
+                alias,
+                with_ordinality,
+            } => {
                 f.write_str("ROWS FROM(");
                 f.write_node(&display::comma_separated(functions));
                 if let Some(alias) = alias {
@@ -455,6 +468,9 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                     f.write_node(alias);
                 }
                 f.write_str(")");
+                if *with_ordinality {
+                    f.write_str(" WITH ORDINALITY");
+                }
             }
             TableFactor::Derived {
                 lateral,

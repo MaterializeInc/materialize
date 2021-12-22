@@ -184,6 +184,7 @@ Optimized
 Option
 Or
 Order
+Ordinality
 Outer
 Over
 Partition

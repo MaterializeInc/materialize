@@ -720,7 +720,7 @@ impl HirRelationExpr {
                     t.nullable(nullable)
                 });
                 let mut outers = outers.to_vec();
-                outers.push(RelationType::new(lt.clone().collect()));
+                outers.insert(0, RelationType::new(lt.clone().collect()));
                 let rt = right
                     .typ(&outers, params)
                     .column_types
@@ -1408,6 +1408,14 @@ impl HirScalarExpr {
         })
     }
 
+    /// Constructs a column reference in the current scope.
+    pub fn column(index: usize) -> HirScalarExpr {
+        HirScalarExpr::Column(ColumnRef {
+            level: 0,
+            column: index,
+        })
+    }
+
     pub fn literal(datum: Datum, scalar_type: ScalarType) -> HirScalarExpr {
         let row = Row::pack(&[datum]);
         HirScalarExpr::Literal(row, scalar_type.nullable(datum.is_null()))
@@ -1704,7 +1712,7 @@ impl AbstractExpr for HirScalarExpr {
                 if *level == 0 {
                     inner.column_types[*column].clone()
                 } else {
-                    outers[outers.len() - *level].column_types[*column].clone()
+                    outers[*level - 1].column_types[*column].clone()
                 }
             }
             HirScalarExpr::Parameter(n) => params[&n].clone().nullable(true),
@@ -1728,7 +1736,7 @@ impl AbstractExpr for HirScalarExpr {
             HirScalarExpr::Exists(_) => ScalarType::Bool.nullable(true),
             HirScalarExpr::Select(expr) => {
                 let mut outers = outers.to_vec();
-                outers.push(inner.clone());
+                outers.insert(0, inner.clone());
                 expr.typ(&outers, params)
                     .column_types
                     .into_element()

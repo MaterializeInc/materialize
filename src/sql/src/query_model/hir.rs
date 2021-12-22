@@ -93,7 +93,14 @@ impl FromHir {
                 }))
             }
             HirRelationExpr::Map { input, mut scalars } => {
-                let mut box_id = self.generate_select(*input);
+                let mut box_id = self.generate_internal(*input);
+                // We could install the predicates in `input_box` if it happened
+                // to be a `Select` box. However, that would require pushing down
+                // the predicates through its projection, since the predicates are
+                // written in terms of elements in `input`'s projection.
+                // Instead, we just install a new `Select` box for holding the
+                // predicate, and let normalization tranforms simplify the graph.
+                box_id = self.wrap_within_select(box_id);
 
                 loop {
                     let old_arity = self.model.get_box(box_id).columns.len();
@@ -136,7 +143,7 @@ impl FromHir {
                 // the predicates through its projection, since the predicates are
                 // written in terms of elements in `input`'s projection.
                 // Instead, we just install a new `Select` box for holding the
-                // predicate, and let normalization tranforms simply the graph.
+                // predicate, and let normalization tranforms simplify the graph.
                 let select_id = self.wrap_within_select(input_box);
                 for predicate in predicates {
                     let expr = self.generate_expr(predicate, select_id);

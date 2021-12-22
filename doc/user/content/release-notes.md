@@ -127,6 +127,41 @@ The presence of this comment ensures that PRs that are alive across a release
 boundary don't silently merge their release notes into the wrong place.
 {{</ comment >}}
 
+- Fix a bug that could cause wrong results in queries that used the `ROWS FROM`
+  clause. The bug occurred if functions beyond the second function in the clause
+  produced more rows than the first function in the clause.
+
+- When using an arbitrary expression in an `ORDER BY` or `DISTINCT ON` clause,
+  only recognize references to input columns. Previously, Materialize would
+  recognize references to output columns as well.
+
+  See the [column references](/sql/select#column-references) section of the
+  `SELECT` documentation for details.
+
+- **Breaking change.** Don't consider join equivalences when determining whether
+  a column is ungrouped. For example, Materialize now rejects this SQL query
+  because `t1.a` does not appear in the `GROUP BY` clause:
+
+  ```sql
+  SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t2.a
+  ```
+
+  Previous versions of Materialize permitted this query by noticing that the
+  `JOIN` clause guaranteed that `t1.a` and `t2.a` were equivalent, but this
+  behavior was incompatible with PostgreSQL.
+
+  To fix this query, rewrite it to consistently refer to `t1.a` in the `GROUP
+  BY` clause and the `SELECT` list:
+
+  ```sql
+  SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t1.a
+  ```
+
+- Support the [`WITH ORDINALITY`] modifier for function calls in the `FROM`
+  clause {{% gh 8445 %}}. When present, the function produces an additional
+  `bigint` column named `ordinality` that numbers the returned rows, starting
+  with 1.
+
 {{% version-header v0.13.0 %}}
 
 - Allow join trees that mix [`LATERAL`](/sql/join#lateral-subqueries)

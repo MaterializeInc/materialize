@@ -18,20 +18,16 @@ CREATE TABLE t2 (a int)
 statement ok
 CREATE TABLE t3 (a int)
 
-# This works in MySQL, but not PostgreSQL.
-query I
+# These queries work in MySQL but not PostgreSQL. We used to support them,
+# back before we'd fully committed to PostgreSQL compatibility.
+query error column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t2.a
-----
 
-# As above, this works in MySQL, but not PostgreSQL.
-query I
+query error column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a LEFT JOIN t3 ON t2.a = t3.a GROUP BY t2.a
-----
 
-# Same as last query, but with associativity reversed.
-query I
+query error column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT t1.a FROM t1 JOIN (t2 JOIN t3 ON t2.a = t3.a) ON t1.a = t2.a GROUP BY t3.a
-----
 
 # Ensure that reflexive equality expressions do not cause the specified column
 # to become unnameable. See #5765.
@@ -121,3 +117,23 @@ SELECT column1, column1 as column2 FROM (VALUES (1))
 ----
 column1  column2
 1  1
+
+# Ensure that table references only expand to columns in the innermost scope.
+# Past versions of Materialize had a bug that would cause the following query
+# to produce (1,2,3,4).
+query T
+SELECT (SELECT v FROM (VALUES (1, 2)) v) FROM (VALUES (3, 4)) v
+----
+(1,2)
+
+query error column reference "f1" is ambiguous
+SELECT * FROM (SELECT 1 f1) s1 CROSS JOIN ((SELECT 2 f1) s2 CROSS JOIN LATERAL (SELECT f1) s3)
+
+query error column reference "a" is ambiguous
+SELECT * FROM (SELECT 1 a) t1 CROSS JOIN ((SELECT 1 a) t1 CROSS JOIN LATERAL (SELECT a) t2) t3;
+
+query error table reference "t1" is ambiguous
+SELECT * FROM (SELECT 1 a) t1 CROSS JOIN ((SELECT 1 a) t1 CROSS JOIN LATERAL (SELECT t1.a) t2) t3;
+
+query error table reference "t1" is ambiguous
+SELECT * FROM (SELECT 1 a) t1 CROSS JOIN ((SELECT 1 a) t1 CROSS JOIN LATERAL (SELECT t1) t2) t3;

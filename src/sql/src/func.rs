@@ -293,7 +293,7 @@ pub fn sql_impl(
         let ecx = ExprContext {
             qcx: &qcx,
             name: "static function definition",
-            scope: &Scope::empty(None),
+            scope: &Scope::empty(),
             relation_type: &RelationType::empty(),
             allow_aggregates: false,
             allow_subqueries: true,
@@ -339,7 +339,7 @@ fn sql_impl_func(expr: &'static str) -> Operation<HirScalarExpr> {
 // As this is a full SQL statement, it returns a set of rows, similar to a
 // table function. The SELECT's projection's names are used and should be
 // aliased if needed.
-fn sql_impl_table_func(sql: &'static str) -> Operation<(HirRelationExpr, Scope)> {
+fn sql_impl_table_func(sql: &'static str) -> Operation<TableFuncPlan> {
     let query = match sql_parser::parser::parse_statements(sql)
         .expect("static function definition failed to parse")
         .expect_element("static function definition must have exactly one statement")
@@ -347,9 +347,7 @@ fn sql_impl_table_func(sql: &'static str) -> Operation<(HirRelationExpr, Scope)>
         Statement::Select(SelectStatement { query, as_of: None }) => query,
         _ => panic!("static function definition expected SELECT statement"),
     };
-    let invoke = move |qcx: &QueryContext,
-                       types: Vec<ScalarType>|
-          -> Result<(HirRelationExpr, Scope), PlanError> {
+    let invoke = move |qcx: &QueryContext, types: Vec<ScalarType>| {
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
         let mut scx = qcx.scx.clone();
@@ -372,9 +370,12 @@ fn sql_impl_table_func(sql: &'static str) -> Operation<(HirRelationExpr, Scope)>
 
     Operation::variadic(move |ecx, args| {
         let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
-        let (mut out, scope) = invoke(&ecx.qcx, types)?;
-        out.splice_parameters(&args, 0);
-        Ok((out, scope))
+        let (mut expr, scope) = invoke(&ecx.qcx, types)?;
+        expr.splice_parameters(&args, 0);
+        Ok(TableFuncPlan {
+            expr,
+            column_names: scope.column_names().map(|n| n.cloned()).collect(),
+        })
     })
 }
 
@@ -1267,18 +1268,16 @@ macro_rules! builtins {
 
 #[derive(Debug)]
 pub struct TableFuncPlan {
-    pub func: TableFunc,
-    pub exprs: Vec<HirScalarExpr>,
+    pub expr: HirRelationExpr,
     pub column_names: Vec<Option<ColumnName>>,
 }
+
 #[derive(Debug)]
 pub enum Func {
     Scalar(Vec<FuncImpl<HirScalarExpr>>),
     Aggregate(Vec<FuncImpl<(HirScalarExpr, AggregateFunc)>>),
     Table(Vec<FuncImpl<TableFuncPlan>>),
     ScalarWindow(Vec<FuncImpl<ScalarWindowFunc>>),
-    // Similar to Table, but directly exposes a relation.
-    Set(Vec<FuncImpl<(HirRelationExpr, Scope)>>),
 }
 
 impl Func {
@@ -1288,7 +1287,6 @@ impl Func {
             Func::Aggregate(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
             Func::Table(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
             Func::ScalarWindow(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
-            Func::Set(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
         }
     }
 }
@@ -1970,22 +1968,28 @@ lazy_static! {
             "generate_series" => Table {
                 params!(Int32, Int32, Int32) => Operation::variadic(move |_ecx, exprs| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesInt32,
-                        exprs,
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::GenerateSeriesInt32,
+                            exprs,
+                        },
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1066;
                 params!(Int32, Int32) => Operation::binary(move |_ecx, start, stop| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesInt32,
-                        exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32)],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::GenerateSeriesInt32,
+                            exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32)],
+                        },
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1067;
                 params!(Int64, Int64, Int64) => Operation::variadic(move |_ecx, exprs| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesInt64,
-                        exprs,
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::GenerateSeriesInt64,
+                            exprs,
+                        },
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1068;
@@ -1993,22 +1997,28 @@ lazy_static! {
                     let row = Row::pack(&[Datum::Int64(1)]);
                     let column_type = ColumnType { scalar_type: ScalarType::Int64, nullable: false };
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesInt64,
-                        exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::GenerateSeriesInt64,
+                            exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
+                        },
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1069;
                 params!(Timestamp, Timestamp, Interval) => Operation::variadic(move |_ecx, exprs| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesTimestamp,
-                        exprs,
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::GenerateSeriesTimestamp,
+                            exprs,
+                        },
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 938;
                 params!(TimestampTz, TimestampTz, Interval) => Operation::variadic(move |_ecx, exprs| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesTimestampTz,
-                        exprs,
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::GenerateSeriesTimestampTz,
+                            exprs,
+                        },
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 939;
@@ -2017,8 +2027,10 @@ lazy_static! {
             "generate_subscripts" => Table {
                 params!(ArrayAny, Int32) => Operation::variadic(move |_ecx, exprs| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSubscriptsArray,
-                        exprs,
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::GenerateSubscriptsArray,
+                            exprs,
+                        },
                         column_names: vec![Some("generate_subscripts".into())],
                     })
                 }), 1192;
@@ -2027,8 +2039,10 @@ lazy_static! {
             "jsonb_array_elements" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::JsonbArrayElements { stringify: false },
-                        exprs: vec![jsonb],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::JsonbArrayElements { stringify: false },
+                            exprs: vec![jsonb],
+                        },
                         column_names: vec![Some("value".into())],
                     })
                 }), 3219;
@@ -2036,8 +2050,10 @@ lazy_static! {
             "jsonb_array_elements_text" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::JsonbArrayElements { stringify: true },
-                        exprs: vec![jsonb],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::JsonbArrayElements { stringify: true },
+                            exprs: vec![jsonb],
+                        },
                         column_names: vec![Some("value".into())],
                     })
                 }), 3465;
@@ -2045,8 +2061,10 @@ lazy_static! {
             "jsonb_each" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::JsonbEach { stringify: false },
-                        exprs: vec![jsonb],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::JsonbEach { stringify: false },
+                            exprs: vec![jsonb],
+                        },
                         column_names: vec![Some("key".into()), Some("value".into())],
                     })
                 }), 3208;
@@ -2054,8 +2072,10 @@ lazy_static! {
             "jsonb_each_text" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::JsonbEach { stringify: true },
-                        exprs: vec![jsonb],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::JsonbEach { stringify: true },
+                            exprs: vec![jsonb],
+                        },
                         column_names: vec![Some("key".into()), Some("value".into())],
                     })
                 }), 3932;
@@ -2063,8 +2083,10 @@ lazy_static! {
             "jsonb_object_keys" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::JsonbObjectKeys,
-                        exprs: vec![jsonb],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::JsonbObjectKeys,
+                            exprs: vec![jsonb],
+                        },
                         column_names: vec![Some("jsonb_object_keys".into())],
                     })
                 }), 3931;
@@ -2081,7 +2103,7 @@ lazy_static! {
     pub static ref INFORMATION_SCHEMA_BUILTINS: HashMap<&'static str, Func> = {
         use ParamType::*;
         builtins! {
-            "_pg_expandarray" => Set {
+            "_pg_expandarray" => Table {
                 // See: https://github.com/postgres/postgres/blob/16e3ad5d143795b05a21dc887c2ab384cce4bcb8/src/backend/catalog/information_schema.sql#L43
                 params!(ArrayAny) => sql_impl_table_func("
                     SELECT
@@ -2110,8 +2132,10 @@ lazy_static! {
                     };
                     let ncols = usize::try_from(ncols).expect("known to be greater than zero");
                     Ok(TableFuncPlan {
-                        func: TableFunc::CsvExtract(ncols),
-                        exprs: vec![input],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::CsvExtract(ncols),
+                            exprs: vec![input],
+                        },
                         column_names: (1..=ncols).map(|i| Some(format!("column{}", i).into())).collect(),
                     })
                 }), oid::FUNC_CSV_EXTRACT_OID;
@@ -2191,8 +2215,10 @@ lazy_static! {
                         })
                         .collect();
                     Ok(TableFuncPlan {
-                        func: TableFunc::RegexpExtract(regex),
-                        exprs: vec![haystack],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::RegexpExtract(regex),
+                            exprs: vec![haystack],
+                        },
                         column_names,
                     })
                 }), oid::FUNC_REGEXP_EXTRACT_OID;
@@ -2201,8 +2227,10 @@ lazy_static! {
                 params!(Int64) => Operation::unary(move |ecx, n| {
                     ecx.require_experimental_mode("repeat_row")?;
                     Ok(TableFuncPlan {
-                        func: TableFunc::Repeat,
-                        exprs: vec![n],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::Repeat,
+                            exprs: vec![n],
+                        },
                         column_names: vec![]
                     })
                 }), oid::FUNC_REPEAT_OID;
@@ -2211,16 +2239,20 @@ lazy_static! {
                 vec![ArrayAny] => Operation::unary(move |ecx, e| {
                     let el_typ =  ecx.scalar_type(&e).unwrap_array_element_type().clone();
                     Ok(TableFuncPlan {
-                        func: TableFunc::UnnestArray{ el_typ },
-                        exprs: vec![e],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::UnnestArray { el_typ },
+                            exprs: vec![e],
+                        },
                         column_names: vec![Some("unnest".into())],
                     })
                 }), 2331;
                 vec![ListAny] => Operation::unary(move |ecx, e| {
                     let el_typ =  ecx.scalar_type(&e).unwrap_list_element_type().clone();
                     Ok(TableFuncPlan {
-                        func: TableFunc::UnnestList{ el_typ },
-                        exprs: vec![e],
+                        expr: HirRelationExpr::CallTable {
+                            func: TableFunc::UnnestList { el_typ },
+                            exprs: vec![e],
+                        },
                         column_names: vec![Some("unnest".into())],
                     })
                 }), oid::FUNC_UNNEST_LIST_OID;

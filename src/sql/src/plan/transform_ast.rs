@@ -376,6 +376,7 @@ impl<'a> Desugarer<'a> {
                         columns: vec![],
                         strict: false,
                     }),
+                    with_ordinality: false,
                 },
                 joins: vec![],
             });
@@ -474,6 +475,7 @@ impl<'a> Desugarer<'a> {
                                 columns: vec![binding.clone()],
                                 strict: true,
                             }),
+                            with_ordinality: false,
                         },
                         joins: vec![],
                     })
@@ -683,7 +685,7 @@ impl<'a> TableFuncRewriter<'a> {
                 if let Ok(item) = self.scx.resolve_function(func.name.clone()) {
                     match item.func()? {
                         Func::Aggregate(_) => Some("aggregate function calls"),
-                        Func::Set(_) | Func::Table(_) => {
+                        Func::Table(_) => {
                             if let Some(context) = self.disallowed_context.last() {
                                 sql_bail!("table functions are not allowed in {}", context);
                             }

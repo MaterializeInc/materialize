@@ -42,6 +42,7 @@ pub enum PlanError {
         column: ColumnName,
     },
     AmbiguousColumn(ColumnName),
+    AmbiguousTable(PartialName),
     UnknownColumnInUsingClause {
         column: ColumnName,
         join_side: JoinSide,
@@ -67,10 +68,9 @@ pub enum PlanError {
 
 impl PlanError {
     pub(crate) fn ungrouped_column(item: &ScopeItem) -> PlanError {
-        let name = &item.names[0];
         PlanError::UngroupedColumn {
-            table: name.table_name.clone(),
-            column: name
+            table: item.table_name.clone(),
+            column: item
                 .column_name
                 .clone()
                 .unwrap_or_else(|| ColumnName::from("?column?")),
@@ -108,6 +108,11 @@ impl fmt::Display for PlanError {
                 f,
                 "column reference {} is ambiguous",
                 column.as_str().quoted()
+            ),
+            Self::AmbiguousTable(table) => write!(
+                f,
+                "table reference {} is ambiguous",
+                table.item.as_str().quoted()
             ),
             Self::UnknownColumnInUsingClause { column, join_side } => write!(
                 f,
