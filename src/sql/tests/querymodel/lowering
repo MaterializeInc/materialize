@@ -357,3 +357,92 @@ select a, b, a from (select 1 as a, 2 as b) where (select true);
 | Project (#2..#4)
 ----
 ----
+
+lower
+select distinct c, b, a from x;
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map #2, #1, #0
+| Project (#3..#5)
+| Distinct group=(#0, #1, #2)
+----
+----
+
+lower
+select distinct b from x;
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map #1
+| Project (#3)
+| Distinct group=(#0)
+----
+----
+
+lower
+select b from x group by c, b;
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map #0, #1, #2, #2, #1
+| Project (#3..#7)
+| Map #3, #4
+| Project (#5, #6)
+| Distinct group=(#0, #1)
+| Project (#0, #1)
+| Map #1
+| Project (#2)
+----
+----
+
+lower
+select min(a), c, count(*), b, max(a) from x group by c, b;
+----
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get ? (u0)
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Map #0, #1, #2, #2, #1
+| Project (#3..#7)
+| Map #3, #4, #0, true
+| Project (#5..#8)
+| Reduce group=(#0, #1)
+| | agg min(#2)
+| | agg count(#3)
+| | agg max(#2)
+| Project (#0..#4)
+| Map #2, #0, #3, #1, #4
+| Project (#5..#9)
+----
+----

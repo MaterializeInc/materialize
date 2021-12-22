@@ -55,13 +55,7 @@ impl<'a> Lowerer<'a> {
         use expr::MirRelationExpr as SR;
         let the_box = self.model.get_box(box_id);
 
-        assert_eq!(
-            the_box.distinct,
-            DistinctOperation::Preserve,
-            "DISTINCT is not supported yet"
-        );
-
-        match &the_box.box_type {
+        let input = match &the_box.box_type {
             BoxType::Get(Get { id }) => {
                 let typ = RelationType::new(
                     the_box
@@ -143,7 +137,86 @@ impl<'a> Lowerer<'a> {
                         .collect_vec(),
                 )
             }
+            BoxType::Grouping(grouping) => {
+                // Note: a grouping box must only contain a single quantifier but we can still
+                // re-use `lower_join` for single quantifier joins
+                let (mut input, column_map) =
+                    self.lower_join(get_outer, outer_column_map, &the_box.quantifiers, id_gen);
+
+                // Build the reduction
+                let group_key = grouping
+                    .key
+                    .iter()
+                    .map(|k| Self::lower_expression(k, &column_map))
+                    .collect_vec();
+                let aggregates = the_box
+                    .columns
+                    .iter()
+                    .filter_map(|c| {
+                        if let BoxScalarExpr::Aggregate {
+                            func,
+                            expr,
+                            distinct,
+                        } = &c.expr
+                        {
+                            Some(expr::AggregateExpr {
+                                func: func.clone(),
+                                expr: Self::lower_expression(expr, &column_map),
+                                distinct: *distinct,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect_vec();
+                input = SR::Reduce {
+                    input: Box::new(input),
+                    group_key,
+                    aggregates,
+                    monotonic: false,
+                    expected_group_size: None,
+                };
+
+                // Put the columns in the same order as projected by the Grouping box by
+                // adding an additional projection.
+                //
+                // The aggregate expression are usually projected after the grouping key.
+                // However, as a result of query rewrite, aggregate expression may be
+                // replaced with grouping key items. For example, the following query:
+                //
+                //   select a, max(b), max(a) from t group by a;
+                //
+                // could be rewritten as:
+                //
+                //   select a, max(b), a from t group by a;
+                //
+                // resulting in a Grouping box projecting [a, max(b), a]. Even though
+                // another query rewrite should remove duplicated columns in the projection
+                // of the Grouping box, we should be able to lower any semantically valid
+                // query graph.
+                let mut aggregate_count = 0;
+                let projection = the_box.columns.iter().map(|c| {
+                    if let BoxScalarExpr::Aggregate { .. } = &c.expr {
+                        let aggregate_pos = grouping.key.len() + aggregate_count;
+                        aggregate_count += 1;
+                        aggregate_pos
+                    } else {
+                        grouping
+                            .key
+                            .iter()
+                            .position(|k| c.expr == **k)
+                            .expect("expression in the projection of a Grouping box not included in the grouping key")
+                    }
+                }).collect_vec();
+                input.project(projection)
+            }
             _ => panic!(),
+        };
+
+        if the_box.distinct == DistinctOperation::Enforce {
+            input.distinct()
+        } else {
+            input
         }
     }
 

@@ -15,6 +15,7 @@ use repr::*;
 
 use crate::plan::expr::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
 use crate::query_model::{QuantifierId, QuantifierSet};
+use expr::AggregateFunc;
 
 /// Representation for scalar expressions within a query graph model.
 ///
@@ -61,6 +62,14 @@ pub enum BoxScalarExpr {
         then: Box<BoxScalarExpr>,
         els: Box<BoxScalarExpr>,
     },
+    Aggregate {
+        /// Names the aggregation function.
+        func: AggregateFunc,
+        /// An expression which extracts from each row the input to `func`.
+        expr: Box<BoxScalarExpr>,
+        /// Should the aggregation be applied only to distinct results in each group.
+        distinct: bool,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -106,6 +115,19 @@ impl fmt::Display for BoxScalarExpr {
             BoxScalarExpr::If { cond, then, els } => {
                 write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)
             }
+            BoxScalarExpr::Aggregate {
+                func,
+                expr,
+                distinct,
+            } => {
+                write!(
+                    f,
+                    "{}({}{})",
+                    *func,
+                    if *distinct { "distinct " } else { "" },
+                    expr
+                )
+            }
         }
     }
 }
@@ -132,6 +154,9 @@ impl BoxScalarExpr {
                 f(cond);
                 f(then);
                 f(els);
+            }
+            Aggregate { expr, .. } => {
+                f(expr);
             }
         }
     }

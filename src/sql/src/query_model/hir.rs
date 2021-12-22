@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use crate::plan::expr::{HirScalarExpr, JoinKind};
 use crate::query_model::{
-    BaseColumn, BoxId, BoxScalarExpr, BoxType, Column, ColumnReference, Get, Model, OuterJoin,
-    QuantifierType, Select, Values,
+    BaseColumn, BoxId, BoxScalarExpr, BoxType, Column, ColumnReference, DistinctOperation, Get,
+    Grouping, Model, OuterJoin, QuantifierType, Select, Values,
 };
 
 use crate::plan::expr::HirRelationExpr;
@@ -135,6 +135,88 @@ impl FromHir {
                     box_id = self.wrap_within_select(box_id);
                 }
                 box_id
+            }
+            HirRelationExpr::Distinct { input } => {
+                let select_id = self.generate_select(*input);
+                let mut select_box = self.model.get_mut_box(select_id);
+                select_box.distinct = DistinctOperation::Enforce;
+                select_id
+            }
+            HirRelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+                expected_group_size: _,
+            } => {
+                // An intermediate Select Box is generated between the input box and
+                // the resulting grouping box so that the grouping key and the arguments
+                // of the aggregations contain only column references
+                let input_box_id = self.generate_internal(*input);
+                let select_id = self.model.make_select_box();
+                let input_q_id =
+                    self.model
+                        .make_quantifier(QuantifierType::Foreach, input_box_id, select_id);
+                let group_box_id = self
+                    .model
+                    .make_box(BoxType::Grouping(Grouping { key: Vec::new() }));
+                let select_q_id =
+                    self.model
+                        .make_quantifier(QuantifierType::Foreach, select_id, group_box_id);
+                let mut key = Vec::new();
+                for k in group_key.into_iter() {
+                    // Make sure the input select box projects the source column needed
+                    let input_col_ref = BoxScalarExpr::ColumnReference(ColumnReference {
+                        quantifier_id: input_q_id,
+                        position: k,
+                    });
+                    let position = self
+                        .model
+                        .get_mut_box(select_id)
+                        .add_column_if_not_exists(input_col_ref);
+                    // Reference of the column projected by the input select box
+                    let select_box_col_ref = BoxScalarExpr::ColumnReference(ColumnReference {
+                        quantifier_id: select_q_id,
+                        position,
+                    });
+                    // Add it to the grouping key and to the projection of the
+                    // Grouping box
+                    key.push(Box::new(select_box_col_ref.clone()));
+                    self.model.get_mut_box(group_box_id).columns.push(Column {
+                        expr: select_box_col_ref,
+                        alias: None,
+                    });
+                }
+                for aggregate in aggregates.into_iter() {
+                    // Any computed expression passed as an argument of an aggregate
+                    // function is computed by the input select box.
+                    let input_expr = self.generate_expr(*aggregate.expr, select_id);
+                    let position = self
+                        .model
+                        .get_mut_box(select_id)
+                        .add_column_if_not_exists(input_expr);
+                    // Reference of the column projected by the input select box
+                    let col_ref = BoxScalarExpr::ColumnReference(ColumnReference {
+                        quantifier_id: select_q_id,
+                        position,
+                    });
+                    // Add the aggregate expression to the projection of the Grouping
+                    // box
+                    let aggregate = BoxScalarExpr::Aggregate {
+                        func: aggregate.func.into_expr(),
+                        expr: Box::new(col_ref),
+                        distinct: aggregate.distinct,
+                    };
+                    self.model.get_mut_box(group_box_id).columns.push(Column {
+                        expr: aggregate,
+                        alias: None,
+                    });
+                }
+
+                // Update the key of the grouping box
+                if let BoxType::Grouping(g) = &mut self.model.get_mut_box(group_box_id).box_type {
+                    g.key.extend(key);
+                }
+                group_box_id
             }
             HirRelationExpr::Filter { input, predicates } => {
                 let input_box = self.generate_internal(*input);

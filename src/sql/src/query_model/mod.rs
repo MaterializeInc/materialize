@@ -379,6 +379,19 @@ impl QueryBox {
         }
     }
 
+    /// Append the given expression as a new column in the projection of the box
+    /// if there isn't already a column with the same expression. Returns the
+    /// position of the first column in the projection with the same expression.
+    fn add_column_if_not_exists(&mut self, expr: BoxScalarExpr) -> usize {
+        if let Some(position) = self.columns.iter().position(|c| c.expr == expr) {
+            position
+        } else {
+            let position = self.columns.len();
+            self.columns.push(Column { expr, alias: None });
+            position
+        }
+    }
+
     /// Visit all the expressions in this query box.
     fn visit_expressions<F, E>(&self, f: &mut F) -> Result<(), E>
     where
