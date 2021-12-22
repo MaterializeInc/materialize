@@ -481,16 +481,16 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
     // Configure tracing.
     {
-        use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+        use tracing_subscriber::filter::{LevelFilter, Targets};
         use tracing_subscriber::fmt;
         use tracing_subscriber::layer::{Layer, SubscriberExt};
         use tracing_subscriber::util::SubscriberInitExt;
 
-        let env_filter = EnvFilter::try_new(args.log_filter)
+        let filter = Targets::from_str(&args.log_filter)
             .context("parsing --log-filter option")?
             // Ensure panics are logged, even if the user has specified
             // otherwise.
-            .add_directive("panic=error".parse().unwrap());
+            .with_target("panic", LevelFilter::ERROR);
 
         let log_message_counter: ThirdPartyMetric<IntCounterVec> = metrics_registry
             .register_third_party_visible(metric!(
@@ -501,15 +501,15 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
 
         match args.log_file.as_deref() {
             Some("stderr") => {
-                // The user explicitly directed logs to stderr. Log only to stderr
-                // with the user-specified `env_filter`.
+                // The user explicitly directed logs to stderr. Log only to
+                // stderr with the user-specified `filter`.
                 tracing_subscriber::registry()
                     .with(MetricsRecorderLayer::new(log_message_counter))
-                    .with(env_filter)
                     .with(
                         fmt::layer()
                             .with_writer(io::stderr)
-                            .with_ansi(atty::is(atty::Stream::Stderr)),
+                            .with_ansi(atty::is(atty::Stream::Stderr))
+                            .with_filter(filter),
                     )
                     .init()
             }
@@ -522,7 +522,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                 };
                 tracing_subscriber::registry()
                     .with(MetricsRecorderLayer::new(log_message_counter))
-                    .with(env_filter)
                     .with({
                         let path = match log_file {
                             Some(log_file) => PathBuf::from(log_file),
@@ -538,15 +537,19 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                             .create(true)
                             .open(&path)
                             .with_context(|| format!("creating log file: {}", path.display()))?;
-                        fmt::layer().with_ansi(false).with_writer(move || {
-                            file.try_clone().expect("failed to clone log file")
-                        })
+                        fmt::layer()
+                            .with_ansi(false)
+                            .with_writer(move || {
+                                file.try_clone().expect("failed to clone log file")
+                            })
+                            .with_filter(filter.clone())
                     })
                     .with(
                         fmt::layer()
                             .with_writer(io::stderr)
                             .with_ansi(atty::is(atty::Stream::Stderr))
-                            .with_filter(stderr_level),
+                            .with_filter(stderr_level)
+                            .with_filter(filter),
                     )
                     .init()
             }
