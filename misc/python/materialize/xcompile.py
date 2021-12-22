@@ -80,7 +80,7 @@ def cargo(arch: Arch, subcommand: str, rustflags: List[str]) -> List[str]:
     _target = target(arch)
     _target_env = _target.upper().replace("-", "_")
 
-    ldflags = []
+    ldflags: List[str] = []
     rustflags += ["-Clink-arg=-Wl,--compress-debug-sections=zlib"]
 
     if not sys.platform == "darwin":
