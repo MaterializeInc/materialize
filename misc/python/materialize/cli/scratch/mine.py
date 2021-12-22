@@ -8,13 +8,13 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-from typing import Callable
+from typing import List
 
 import boto3
-from mypy_boto3_ec2.service_resource import Instance
+from mypy_boto3_ec2.type_defs import FilterTypeDef
 
 from materialize.cli.scratch import check_required_vars
-from materialize.scratch import launched_by, print_instances, tags, whoami
+from materialize.scratch import print_instances, whoami
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
@@ -30,10 +30,10 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    filter: Callable[[Instance], bool] = (
-        (lambda _i: True) if args.all else (lambda i: launched_by(tags(i)) in args.who)
+    filters: List[FilterTypeDef] = []
+    if not args.all:
+        filters.append({"Name": "tag:LaunchedBy", "Values": args.who})
+    print_instances(
+        list(boto3.resource("ec2").instances.filter(Filters=filters)),
+        args.output_format,
     )
-
-    ists = [i for i in boto3.resource("ec2").instances.all() if filter(i)]
-
-    print_instances(ists, args.output_format)

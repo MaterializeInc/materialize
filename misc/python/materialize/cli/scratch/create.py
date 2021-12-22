@@ -8,27 +8,22 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import datetime
 import json
 import sys
-from datetime import timedelta
 from typing import Any, Dict, List
 
-from materialize import util
-from materialize.cli.scratch import (
-    DEFAULT_INSTPROF_NAME,
+from materialize.cli.scratch import check_required_vars
+from materialize.scratch import (
     DEFAULT_SG_ID,
     DEFAULT_SUBNET_ID,
-    check_required_vars,
-)
-from materialize.scratch import (
     MachineDesc,
     launch_cluster,
-    now_plus,
     print_instances,
     whoami,
 )
 
-MAX_AGE = timedelta(weeks=1)
+MAX_AGE = datetime.timedelta(weeks=1)
 
 
 def multi_json(s: str) -> List[Dict[Any, Any]]:
@@ -59,14 +54,12 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--key-name", type=str, required=False)
     parser.add_argument("--security-group-id", type=str, default=DEFAULT_SG_ID)
     parser.add_argument("--extra-tags", type=str, required=False)
-    parser.add_argument("--instance-profile", type=str, default=DEFAULT_INSTPROF_NAME)
-    parser.add_argument("--no-instance-profile", action="store_const", const=True)
+    parser.add_argument("--instance-profile", type=str)
     parser.add_argument("--output-format", choices=["table", "csv"], default="table")
     parser.add_argument("--git-rev", type=str, default="HEAD")
 
 
 def run(args: argparse.Namespace) -> None:
-    instance_profile = None if args.no_instance_profile else args.instance_profile
     extra_tags = {}
     if args.extra_tags:
         extra_tags = json.loads(args.extra_tags)
@@ -94,19 +87,15 @@ def run(args: argparse.Namespace) -> None:
         for obj in multi_json(sys.stdin.read())
     ]
 
-    nonce = util.nonce(8)
-
-    delete_after = now_plus(MAX_AGE)
     instances = launch_cluster(
         descs,
-        nonce,
-        args.subnet_id,
-        args.key_name,
-        args.security_group_id,
-        instance_profile,
-        extra_tags,
-        delete_after,
-        args.git_rev,
+        subnet_id=args.subnet_id,
+        key_name=args.key_name,
+        security_group_id=args.security_group_id,
+        instance_profile=args.instance_profile,
+        extra_tags=extra_tags,
+        delete_after=datetime.datetime.utcnow() + MAX_AGE,
+        git_rev=args.git_rev,
         extra_env={},
     )
 

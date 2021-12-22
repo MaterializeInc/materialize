@@ -1,6 +1,7 @@
 black==21.9b0
 boto3-stubs[ec2,kinesis,s3,sqs,ssm,sts]==1.20.22
 boto3==1.19.9
+ec2instanceconnectcli==1.0.2
 flake8==4.0.1
 humanize==3.11.0
 isort==5.9.3

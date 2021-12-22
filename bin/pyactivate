@@ -16,8 +16,7 @@ import os
 import platform
 import subprocess
 import sys
-import sysconfig
-import venv  # type: ignore
+import venv
 from pathlib import Path
 from typing import List, Optional
 
@@ -50,7 +49,7 @@ def main(args: List[str]) -> int:
 
     # If we're not in the CI builder container, activate a virtualenv with the
     # necessary dependencies.
-    if os.environ.get("MZ_DEV_CI_BUILDER", False):
+    if os.environ.get("MZ_DEV_CI_BUILDER"):
         python = "python3"
     else:
         python = str(activate_venv(py_dir, dev))
@@ -63,10 +62,11 @@ def main(args: List[str]) -> int:
 
 
 def activate_venv(py_dir: Path, dev: bool = False) -> Path:
-    """Bootstrap and activate a virtualenv at py_dir/venv"""
+    """Bootstrap and activate a virtualenv at py_dir/venv."""
     venv_dir = py_dir / "venv"
     stamp_path = venv_dir / "dep_stamp"
-    python = venv_dir / "bin" / "python"
+    bin_dir = venv_dir / "bin"
+    python = bin_dir / "python"
     logger.debug("venv_dir={} python={}".format(venv_dir, python))
 
     # Create a virtualenv, if necessary. virtualenv creation is not atomic, so
@@ -129,11 +129,16 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
     if dev:
         acquire_deps(venv_dir, "dev")
 
+    # The virtualenv's `bin` dir takes precedence over all existing PATH
+    # entries. This is normally handled by the `activate` shell script, but
+    # we won't be calling that.
+    os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ["PATH"]
+
     return python
 
 
 def acquire_deps(venv_dir: Path, variant: Optional[str] = None) -> None:
-    """Install normal/development dependencencies into the virtualenv"""
+    """Install normal/development dependencies into the virtualenv."""
 
     stamp_path = venv_dir / (f"{variant}_dep_stamp" if variant else "dep_stamp")
 

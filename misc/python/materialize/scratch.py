@@ -11,13 +11,13 @@
 
 import asyncio
 import csv
+import datetime
 import os
 import shlex
 import sys
-import tempfile
-from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from subprocess import CalledProcessError
-from typing import Dict, List, NamedTuple, Optional
+from typing import IO, Dict, List, NamedTuple, Optional, Union
 
 import boto3
 from mypy_boto3_ec2.service_resource import Instance
@@ -28,10 +28,15 @@ from mypy_boto3_ec2.type_defs import (
 )
 from prettytable import PrettyTable
 
-from materialize import git, spawn, ssh, ui
+from materialize import git, spawn, ui, util
+
+# Sane defaults for internal Materialize use in the scratch account
+DEFAULT_SUBNET_ID = "subnet-00bdfbd2d97eddb86"
+DEFAULT_SG_ID = "sg-06f780c8e23c0d944"
 
 SPEAKER = ui.speaker("scratch> ")
-ROOT = os.environ["MZ_ROOT"]
+ROOT = Path(os.environ["MZ_ROOT"])
+SSH_COMMAND = ["mssh", "-o", "StrictHostKeyChecking=off"]
 
 
 def tags(i: Instance) -> Dict[str, str]:
@@ -52,12 +57,12 @@ def launched_by(tags: Dict[str, str]) -> Optional[str]:
     return tags.get("LaunchedBy")
 
 
-def delete_after(tags: Dict[str, str]) -> Optional[datetime]:
+def delete_after(tags: Dict[str, str]) -> Optional[datetime.datetime]:
     unix = tags.get("scratch-delete-after")
     if not unix:
         return None
     unix = int(float(unix))
-    return datetime.fromtimestamp(unix)
+    return datetime.datetime.fromtimestamp(unix)
 
 
 def print_instances(ists: List[Instance], format: str) -> None:
@@ -95,11 +100,6 @@ def print_instances(ists: List[Instance], format: str) -> None:
         raise RuntimeError("Unknown format passed to print_instances")
 
 
-def now_plus(offset: timedelta) -> int:
-    """Return a Unix timestamp representing the current time plus a given offset"""
-    return int(datetime.now(timezone.utc).timestamp() + offset.total_seconds())
-
-
 def launch(
     *,
     key_name: Optional[str],
@@ -112,13 +112,13 @@ def launch(
     security_group_id: str,
     instance_profile: Optional[str],
     nonce: str,
-    delete_after: int,
+    delete_after: datetime.datetime,
 ) -> Instance:
     """Launch and configure an ec2 instance with the given properties."""
 
     if display_name:
         tags["Name"] = display_name
-    tags["scratch-delete-after"] = str(delete_after)
+    tags["scratch-delete-after"] = str(delete_after.timestamp())
     tags["nonce"] = nonce
     tags["git_ref"] = git.describe()
 
@@ -131,7 +131,7 @@ def launch(
         network_interface["SubnetId"] = subnet_id
 
     SPEAKER(f"launching instance {display_name or '(unnamed)'}")
-    with open(ROOT + "/misc/load-tests/provision.bash") as f:
+    with open(ROOT / "misc" / "load-tests" / "provision.bash") as f:
         provisioning_script = f.read()
     kwargs: RunInstancesRequestRequestTypeDef = {
         "MinCount": 1,
@@ -155,13 +155,16 @@ def launch(
                 },
             }
         ],
+        "MetadataOptions": {
+            # Allow Docker containers to access IMDSv2.
+            "HttpPutResponseHopLimit": 2,
+        },
     }
     if key_name:
         kwargs["KeyName"] = key_name
     if instance_profile:
         kwargs["IamInstanceProfile"] = {"Name": instance_profile}
     i = boto3.resource("ec2").create_instances(**kwargs)[0]
-    print(i.tags)
 
     return i
 
@@ -172,41 +175,8 @@ class CommandResult(NamedTuple):
     stderr: str
 
 
-async def run_ssm(
-    instance_id: str, commands: List[str], timeout: int = 60
-) -> CommandResult:
-    id = boto3.client("ssm").send_command(
-        InstanceIds=[instance_id],
-        DocumentName="AWS-RunShellScript",
-        Parameters={"commands": commands},
-    )["Command"]["CommandId"]
-
-    async for remaining in ui.async_timeout_loop(timeout, 5):
-        invocation_dne = boto3.client("ssm").exceptions.InvocationDoesNotExist
-        SPEAKER(f"Waiting for commands to finish running: {remaining}s remaining")
-        try:
-            result = boto3.client("ssm").get_command_invocation(
-                CommandId=id, InstanceId=instance_id
-            )
-        except invocation_dne:
-            continue
-        if result["Status"] != "InProgress":
-            return CommandResult(
-                status=result["Status"],
-                stdout=result["StandardOutputContent"],
-                stderr=result["StandardErrorContent"],
-            )
-
-    raise RuntimeError(
-        f"Command {commands} on instance {instance_id} did not run in a reasonable amount of time"
-    )
-
-
 async def setup(
     i: Instance,
-    subnet_id: Optional[str],
-    local_pub_key: str,
-    identity_file: str,
     git_rev: str,
 ) -> None:
     def is_ready(i: Instance) -> bool:
@@ -222,42 +192,11 @@ async def setup(
             done = True
             break
 
-    if not done:
-        raise RuntimeError(
-            f"Instance {i} did not become ready in a reasonable amount of time"
-        )
-
-    done = False
-    invalid_instance = boto3.client("ssm").exceptions.InvalidInstanceId
-
-    commands = [
-        "mkdir -p ~ubuntu/.ssh",
-        f"echo {local_pub_key} >> ~ubuntu/.ssh/authorized_keys",
-    ]
-    import pprint
-
-    print("Running commands:")
-    pprint.pprint(commands)
-    async for remaining in ui.async_timeout_loop(180, 5):
-        try:
-            await run_ssm(i.instance_id, commands, 180)
-            done = True
-            break
-        except invalid_instance:
-            pass
-
-    if not done:
-        raise RuntimeError(f"Failed to run SSM commands on instance {i}")
-
     done = False
     async for remaining in ui.async_timeout_loop(180, 5):
+        SPEAKER(f"Checking whether SSH works yet: {remaining}s remaining")
         try:
-            ssh.runv(
-                ["[", "-f", "/DONE", "]"],
-                "ubuntu",
-                i.public_ip_address,
-                identity_file=identity_file,
-            )
+            mssh(i.instance_id, "true")
             done = True
             break
         except CalledProcessError:
@@ -268,35 +207,25 @@ async def setup(
             "Instance did not finish setup in a reasonable amount of time"
         )
 
-    mkrepo(i, identity_file, git_rev)
+    if not done:
+        raise RuntimeError(
+            f"Instance {i} did not become ready in a reasonable amount of time"
+        )
+
+    mkrepo(i, git_rev)
 
 
-def mkrepo(i: Instance, identity_file: str, rev: str) -> None:
-    """Create a Materialize repository on the remote ec2 instance and push the present repository to it."""
-    ssh.runv(
-        ["git", "init", "--bare", "/home/ubuntu/materialize/.git"],
-        "ubuntu",
-        i.public_ip_address,
-        identity_file=identity_file,
+def mkrepo(i: Instance, rev: str) -> None:
+    mssh(i.instance_id, "git init --bare materialize/.git")
+    spawn.runv(
+        ["git", "push", f"ubuntu@{i.instance_id}:materialize/.git"],
+        cwd=ROOT,
+        env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
     )
-    os.chdir(ROOT)
-    os.environ["GIT_SSH_COMMAND"] = f"ssh -i {identity_file}"
-    head_rev = git.rev_parse(rev)
-    git.push(
-        f"ubuntu@{i.public_ip_address}:~/materialize/.git",
-        f"refs/heads/scratch_{head_rev}",
-    )
-    ssh.runv(
-        ["git", "-C", "/home/ubuntu/materialize", "config", "core.bare", "false"],
-        "ubuntu",
-        i.public_ip_address,
-        identity_file=identity_file,
-    )
-    ssh.runv(
-        ["git", "-C", "/home/ubuntu/materialize", "checkout", head_rev],
-        "ubuntu",
-        i.public_ip_address,
-        identity_file=identity_file,
+    rev = git.rev_parse(rev)
+    mssh(
+        i.instance_id,
+        f"cd materialize && git config core.bare false && git checkout {rev}",
     )
 
 
@@ -310,31 +239,24 @@ class MachineDesc(NamedTuple):
     checkout: bool = True
 
 
-async def setup_all(
-    instances: List[Instance],
-    subnet_id: str,
-    local_pub_key: str,
-    identity_file: str,
-    git_rev: str,
-) -> None:
-    await asyncio.gather(
-        *(setup(i, subnet_id, local_pub_key, identity_file, git_rev) for i in instances)
-    )
-
-
 def launch_cluster(
     descs: List[MachineDesc],
-    nonce: str,
-    subnet_id: str,
-    key_name: Optional[str],
-    security_group_id: str,
-    instance_profile: Optional[str],
-    extra_tags: Dict[str, str],
-    delete_after: int,  # Unix timestamp.
-    git_rev: str,
-    extra_env: Dict[str, str],
+    *,
+    nonce: Optional[str] = None,
+    subnet_id: str = DEFAULT_SUBNET_ID,
+    key_name: Optional[str] = None,
+    security_group_id: str = DEFAULT_SG_ID,
+    instance_profile: Optional[str] = None,
+    extra_tags: Dict[str, str] = {},
+    delete_after: datetime.datetime,
+    git_rev: str = "HEAD",
+    extra_env: Dict[str, str] = {},
 ) -> List[Instance]:
     """Launch a cluster of instances with a given nonce"""
+
+    if not nonce:
+        nonce = util.nonce(8)
+
     instances = [
         launch(
             key_name=key_name,
@@ -352,67 +274,30 @@ def launch_cluster(
         for d in descs
     ]
 
-    # Generate temporary ssh key for running commands remotely
-    tmpdir = tempfile.TemporaryDirectory()
-
-    identity_file = f"{tmpdir.name}/id_rsa"
-    spawn.runv(["ssh-keygen", "-t", "rsa", "-N", "", "-f", identity_file])
-    with open(f"{tmpdir.name}/id_rsa.pub") as pk:
-        local_pub_key = pk.read().strip()
-
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
         asyncio.gather(
             *(
-                setup(
-                    i,
-                    subnet_id,
-                    local_pub_key,
-                    identity_file,
-                    (git_rev if d.checkout else "HEAD"),
-                )
+                setup(i, git_rev if d.checkout else "HEAD")
                 for (i, d) in zip(instances, descs)
             )
         )
     )
+
     hosts_str = "".join(
         (f"{i.private_ip_address}\t{d.name}\n" for (i, d) in zip(instances, descs))
     )
-
-    env = [f"{k}={v}" for k, v in extra_env.items()]
-
     for i in instances:
-        ssh.runv(
-            [f"echo {shlex.quote(hosts_str)} | sudo tee -a /etc/hosts"],
-            "ubuntu",
-            i.public_ip_address,
-            identity_file=identity_file,
-        )
+        mssh(i.instance_id, "sudo tee -a /etc/hosts", stdin=hosts_str.encode())
 
+    env = " ".join(f"{k}={shlex.quote(v)}" for k, v in extra_env.items())
     for (i, d) in zip(instances, descs):
         if d.launch_script:
-            ssh.runv(
-                [
-                    "cd",
-                    "~/materialize",
-                    ";",
-                ]
-                + env
-                + [
-                    "nohup",
-                    "bash",
-                    "-c",
-                    shlex.quote(d.launch_script),
-                    ">~/mzscratch-startup.out",
-                    "2>~/mzscratch-startup.err",
-                    "&",
-                ],
-                "ubuntu",
-                i.public_ip_address,
-                identity_file=identity_file,
+            mssh(
+                i.instance_id,
+                f"cd materialize && {env} nohup bash -c {shlex.quote(d.launch_script)} &> mzscratch.log &",
             )
 
-    tmpdir.cleanup()
     return instances
 
 
@@ -438,7 +323,7 @@ def get_old_instances() -> List[InstanceTypeDef]:
         if delete_after is None:
             return False
         delete_after = float(delete_after)
-        return datetime.now(timezone.utc).timestamp() > delete_after
+        return datetime.datetime.utcnow().timestamp() > delete_after
 
     return [
         i
@@ -446,3 +331,28 @@ def get_old_instances() -> List[InstanceTypeDef]:
         for i in r["Instances"]
         if is_running(i) and is_old(i)
     ]
+
+
+def mssh(
+    instance: str, command: str, *, stdin: Union[None, int, IO[bytes], bytes] = None
+) -> None:
+    """Runs a command over SSH via EC2 Instance Connect."""
+    # The actual invocation of SSH that `spawn.runv` wants to print is
+    # unreadable quoted garbage, so we do our own printing here before the shell
+    # quoting.
+    if command:
+        print(f"ubuntu@{instance}$ {command}", file=sys.stderr)
+        # Eval and quote to work around:
+        # https://github.com/aws/aws-ec2-instance-connect-cli/pull/26
+        command = f"eval {shlex.quote(command)}"
+    else:
+        print(f"$ mssh ubuntu@{instance}")
+    spawn.runv(
+        [
+            *SSH_COMMAND,
+            f"ubuntu@{instance}",
+            command,
+        ],
+        stdin=stdin,
+        print_to=open(os.devnull, "w"),
+    )

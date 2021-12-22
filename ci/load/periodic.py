@@ -10,11 +10,6 @@
 import datetime
 
 from materialize import scratch
-from materialize.cli.scratch import (
-    DEFAULT_INSTPROF_NAME,
-    DEFAULT_SG_ID,
-    DEFAULT_SUBNET_ID,
-)
 
 
 def main() -> None:
@@ -36,16 +31,9 @@ def main() -> None:
     now = datetime.datetime.utcnow()
     scratch.launch_cluster(
         [desc],
-        now.replace(tzinfo=datetime.timezone.utc).isoformat(),
-        DEFAULT_SUBNET_ID,
-        None,
-        DEFAULT_SG_ID,
-        DEFAULT_INSTPROF_NAME,
-        {},
-        # Keep alive for at least a day
-        int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 3600 * 24,
-        "HEAD",
-        {},
+        nonce=now.replace(tzinfo=datetime.timezone.utc).isoformat(),
+        # Keep alive for at least a day.
+        delete_after=datetime.datetime.utcnow() + datetime.timedelta(days=1),
     )
 
 

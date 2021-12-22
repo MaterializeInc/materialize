@@ -56,15 +56,21 @@ is run in the background. After kicking off the launch script (but without waiti
 Each cluster's `/etc/hosts` file is modified to point to the other members of the cluster by name; for example, from another machine
 the operator could ping the above-described machine with `ping chbench`.
 
-#### Access
+#### SSH access
 
-By default, `bin/scratch` arranges machines for SSM access. Developers may use the AWS SSM command-line tool to access machines given their instance IDs. For example:
+SSH access to the instances is provided by [EC2 instance connect]. If you
+specify a custom AMI, you need to make sure it's an AMI that supports EC2
+instance connect.
+
+To SSH to an instance:
 
 ```
-AWS_PROFILE=mz-scratch-admin AWS_DEFAULT_REGION=us-east-2 aws ssm start-session --target   i-064432ea480ef7e10
+bin/scratch ssh INSTANCE-ID
 ```
 
-Once the remote shell is opened, run `sudo su - ubuntu` to access the main (`ubuntu`) account on the host.
+If you need to, you can install and use the `mssh` command provided by the
+underlying [EC2 connect CLI] directly, but it's usually much easier to go
+through `bin/scratch ssh`.
 
 ### `bin/scratch mine`
 
@@ -89,3 +95,16 @@ This subcommand terminates a list of machines given by Instance ID on the comman
 ```
 bin/scratch destroy i-02790a4efb77b06b4
 ```
+
+As a convenience, you can also destroy all of your instances with the
+`--all-mine` option:
+
+```
+bin/scratch destroy --all-mine
+```
+
+Pass `--dry-run` if you want to see what instances `bin/scratch destroy` would
+destroy without actually destroyin them.
+
+[EC2 instance connect]: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Connect-using-EC2-Instance-Connect.html
+[ec2instanceconnectcli]: https://github.com/aws/aws-ec2-instance-connect-cli
