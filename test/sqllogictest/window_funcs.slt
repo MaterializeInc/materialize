@@ -110,8 +110,11 @@ WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
 ORDER BY row_number, x
 ----
-%0 =
+%0 = Let l0 =
 | CallTable wrap2("a", 1, "b", 2, "c", 1)
+
+%1 =
+| Get %0 (l0)
 | Map row_number() over (#0) order by (#0)
 | Project (#2, #0)
 
@@ -132,11 +135,8 @@ ORDER BY row_number, x
 | Get %0 (l0)
 | FlatMap wrap2("a", 1, "b", 2, "c", 1)
 
-%2 = Let l2 =
+%2 =
 | Get %1 (l1)
-
-%3 =
-| Get %2 (l2)
 | Reduce group=(#0)
 | | agg row_number(record_create(list_create(record_create(#0, #1)), #0))
 | FlatMap unnest_list(#1)

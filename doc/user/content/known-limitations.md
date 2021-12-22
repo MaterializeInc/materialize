@@ -31,9 +31,6 @@ us know on the linked-to GitHub issue.
 ### Common table expressions (CTEs)
 
 - CTEs only support `SELECT` queries. {{% gh 4867 %}}
-- Materialize inlines the CTE where it's referenced, which could cause
-  unexpected performance characteristics for especially complex expressions. {{%
-  gh 4867 %}}
 - `WITH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
 
 ### Joins

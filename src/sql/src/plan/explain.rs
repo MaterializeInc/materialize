@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use expr::explain::Indices;
-use expr::{ExprHumanizer, Id, RowSetFinishing};
+use expr::{ExprHumanizer, Id, LocalId, RowSetFinishing};
 use ore::collections::CollectionExt;
 use ore::id_gen::IdGen;
 use ore::str::{bracketed, separated};
@@ -45,6 +45,10 @@ pub struct Explanation<'a> {
     finishing: Option<RowSetFinishing>,
     /// Records the chain ID that was assigned to each expression.
     expr_chains: HashMap<*const HirRelationExpr, u64>,
+    /// Records the chain ID that was assigned to each let.
+    local_id_chains: HashMap<LocalId, u64>,
+    /// Records the local ID that corresponds to a chain ID, if any.
+    chain_local_ids: HashMap<u64, LocalId>,
     /// The ID of the current chain. Incremented while constructing the
     /// `Explanation`.
     chain: u64,
@@ -71,6 +75,9 @@ impl<'a> fmt::Display for Explanation<'a> {
                     writeln!(f)?;
                 }
                 write!(f, "%{} =", node.chain)?;
+                if let Some(local_id) = self.chain_local_ids.get(&node.chain) {
+                    write!(f, " Let {} =", local_id)?;
+                }
                 writeln!(f)?;
             }
             prev_chain = node.chain;
@@ -102,13 +109,14 @@ impl<'a> Explanation<'a> {
         expr: &'a HirRelationExpr,
         expr_humanizer: &'a dyn ExprHumanizer,
     ) -> Explanation<'a> {
-        Self::new_internal(expr, expr_humanizer, &mut IdGen::default())
+        Self::new_internal(expr, expr_humanizer, &mut IdGen::default(), HashMap::new())
     }
 
     pub fn new_internal(
         expr: &'a HirRelationExpr,
         expr_humanizer: &'a dyn ExprHumanizer,
         id_gen: &mut IdGen,
+        local_id_chains: HashMap<LocalId, u64>,
     ) -> Explanation<'a> {
         use HirRelationExpr::*;
 
@@ -137,19 +145,25 @@ impl<'a> Explanation<'a> {
                 | DeclareKeys { input, .. }
                 | Threshold { input, .. } => walk(input, explanation, id_gen),
                 // For join and union, each input needs to go in its own chain.
-                Join { left, right, .. } => {
-                    walk(left, explanation, id_gen);
-                    explanation.chain = id_gen.allocate_id();
-                    walk(right, explanation, id_gen);
-                    explanation.chain = id_gen.allocate_id();
-                }
+                Join { left, right, .. } => walk_many(
+                    std::iter::once(&**left).chain(std::iter::once(&**right)),
+                    explanation,
+                    id_gen,
+                ),
                 Union { base, inputs, .. } => {
-                    walk(base, explanation, id_gen);
+                    walk_many(std::iter::once(&**base).chain(inputs), explanation, id_gen)
+                }
+                Let { id, body, value } => {
+                    // Similarly the definition of a let goes in its own chain.
+                    walk(value, explanation, id_gen);
                     explanation.chain = id_gen.allocate_id();
-                    for input in inputs {
-                        walk(input, explanation, id_gen);
-                        explanation.chain = id_gen.allocate_id();
-                    }
+
+                    // Keep track of the chain ID <-> local ID correspondence.
+                    let value_chain = explanation.expr_chain(value);
+                    explanation.local_id_chains.insert(*id, value_chain);
+                    explanation.chain_local_ids.insert(value_chain, *id);
+
+                    walk(body, explanation, id_gen);
                 }
             }
 
@@ -158,6 +172,7 @@ impl<'a> Explanation<'a> {
             match expr {
                 Constant { .. }
                 | Get { .. }
+                | Let { .. }
                 | Project { .. }
                 | Distinct { .. }
                 | Negate { .. }
@@ -181,8 +196,12 @@ impl<'a> Explanation<'a> {
             for scalar in scalars {
                 scalar.visit(&mut |scalar| match scalar {
                     HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
-                        let subquery =
-                            Explanation::new_internal(expr, explanation.expr_humanizer, id_gen);
+                        let subquery = Explanation::new_internal(
+                            expr,
+                            explanation.expr_humanizer,
+                            id_gen,
+                            explanation.local_id_chains.clone(),
+                        );
                         explanation.expr_chains.insert(
                             &**expr as *const HirRelationExpr,
                             subquery.nodes.last().unwrap().chain,
@@ -205,11 +224,34 @@ impl<'a> Explanation<'a> {
                 .insert(expr as *const HirRelationExpr, explanation.chain);
         }
 
+        fn walk_many<'a, E>(exprs: E, explanation: &mut Explanation<'a>, id_gen: &mut IdGen)
+        where
+            E: IntoIterator<Item = &'a HirRelationExpr>,
+        {
+            for expr in exprs {
+                // Elide chains that would consist only a of single Get node.
+                if let HirRelationExpr::Get {
+                    id: Id::Local(id), ..
+                } = expr
+                {
+                    explanation.expr_chains.insert(
+                        expr as *const HirRelationExpr,
+                        explanation.local_id_chains[id],
+                    );
+                } else {
+                    walk(expr, explanation, id_gen);
+                    explanation.chain = id_gen.allocate_id();
+                }
+            }
+        }
+
         let mut explanation = Explanation {
             expr_humanizer,
             nodes: vec![],
             finishing: None,
             expr_chains: HashMap::new(),
+            local_id_chains,
+            chain_local_ids: HashMap::new(),
             chain: id_gen.allocate_id(),
         };
         walk(expr, &mut explanation, id_gen);
@@ -247,6 +289,8 @@ impl<'a> Explanation<'a> {
         use HirRelationExpr::*;
 
         match node.expr {
+            // Lets are annotated on the chain ID that they correspond to.
+            Let { .. } => (),
             Constant { rows, .. } => {
                 write!(f, "| Constant")?;
                 for row in rows {
@@ -255,9 +299,14 @@ impl<'a> Explanation<'a> {
                 writeln!(f)?;
             }
             Get { id, .. } => match id {
-                Id::Local(_) => {
-                    unreachable!("SQL expressions do not support Lets yet")
-                }
+                Id::Local(local_id) => writeln!(
+                    f,
+                    "| Get %{} ({})",
+                    self.local_id_chains
+                        .get(local_id)
+                        .map_or_else(|| "?".to_owned(), |i| i.to_string()),
+                    local_id,
+                )?,
                 Id::LocalBareSource => writeln!(f, "| Get Local Bare Source")?,
                 Id::Global(id) => writeln!(
                     f,
