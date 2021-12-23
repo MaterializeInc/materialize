@@ -95,7 +95,7 @@ checksum = "d298738b6e47e1034e560e5afe63aa488fea34e25ec11b855a76f0d7b8e73134"
 dependencies = [
  "askama_derive",
  "askama_escape",
- "askama_shared",
+ "askama_shared 0.11.1",
 ]
 
 [[package]]
@@ -104,16 +104,16 @@ version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca2925c4c290382f9d2fa3d1c1b6a63fa1427099721ecca4749b154cc9c25522"
 dependencies = [
- "askama_shared",
+ "askama_shared 0.11.1",
  "proc-macro2",
  "syn",
 ]
 
 [[package]]
 name = "askama_escape"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90c108c1a94380c89d2215d0ac54ce09796823cca0fd91b299cfff3b33e346fb"
+checksum = "9a1bb320f97e6edf9f756bf015900038e43c7700e059688e5724a928c8f3b8d5"
 
 [[package]]
 name = "askama_shared"
@@ -123,13 +123,31 @@ checksum = "2582b77e0f3c506ec4838a25fa8a5f97b9bed72bb6d3d272ea1c031d8bd373bc"
 dependencies = [
  "askama_escape",
  "humansize",
- "nom",
+ "nom 6.0.1",
  "num-traits",
  "percent-encoding",
  "proc-macro2",
  "quote",
  "serde",
  "serde_json",
+ "syn",
+ "toml",
+]
+
+[[package]]
+name = "askama_shared"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dae03eebba55a2697a376e58b573a29fe36893157173ac8df312ad85f3c0e012"
+dependencies = [
+ "askama_escape",
+ "humansize",
+ "nom 7.1.0",
+ "num-traits",
+ "percent-encoding",
+ "proc-macro2",
+ "quote",
+ "serde",
  "syn",
  "toml",
 ]
@@ -2616,7 +2634,7 @@ version = "0.13.1-dev"
 dependencies = [
  "anyhow",
  "askama",
- "askama_shared",
+ "askama_shared 0.12.0",
  "assert_cmd",
  "async-trait",
  "atty",
@@ -2798,6 +2816,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "minimal-lexical"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
 name = "miniz_oxide"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2974,6 +2998,17 @@ dependencies = [
  "bitvec",
  "lexical-core",
  "memchr",
+ "version_check",
+]
+
+[[package]]
+name = "nom"
+version = "7.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b1d11e1ef389c76fe5b81bcaf2ea32cf88b62bc494e19f493d0b30e7a930109"
+dependencies = [
+ "memchr",
+ "minimal-lexical",
  "version_check",
 ]
 
