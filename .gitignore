@@ -21,4 +21,4 @@ venv
 node_modules
 coverage
 **/*.swp
-test/feature-benchmark/tmp
+test/feature-benchmark/tmp/*.td
