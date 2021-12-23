@@ -11,7 +11,7 @@
 
 #![cfg(test)]
 
-use crate::query_model::{BoxType, Model, Quantifier, QuantifierId, QueryBox};
+use crate::query_model::{BoxId, BoxType, Model, Quantifier, QuantifierId, QueryBox};
 use itertools::Itertools;
 use ore::str::separated;
 use std::collections::BTreeMap;
@@ -47,7 +47,17 @@ impl DotGenerator {
     }
 
     /// Generates a graphviz graph for the given model, labeled with `label`.
-    pub fn generate(mut self, model: &Model, label: &str) -> Result<String, anyhow::Error> {
+    pub fn generate(self, model: &Model, label: &str) -> Result<String, anyhow::Error> {
+        self.generate_subgraph(model, model.top_box, label)
+    }
+
+    /// Generates a graphviz graph for the given subgraph of the model, labeled with `label`.
+    pub fn generate_subgraph(
+        mut self,
+        model: &Model,
+        start_box: BoxId,
+        label: &str,
+    ) -> Result<String, anyhow::Error> {
         self.new_line("digraph G {");
         self.inc();
         self.new_line("compound = true");
@@ -60,54 +70,57 @@ impl DotGenerator {
         let mut quantifiers = Vec::new();
 
         model
-            .visit_pre_boxes(&mut |b| -> Result<(), ()> {
-                let box_id = b.id;
+            .visit_pre_boxes_in_subgraph(
+                &mut |b| -> Result<(), ()> {
+                    let box_id = b.id;
 
-                self.new_line(&format!("subgraph cluster{} {{", box_id));
-                self.inc();
-                self.new_line(
-                    &DotLabel::SingleRow(&format!("Box{}:{}", box_id, Self::get_box_title(&b)))
-                        .to_string(),
-                );
-                self.new_line(&format!(
-                    "boxhead{} [ shape = record, {} ]",
-                    box_id,
-                    Self::get_box_head(&b)
-                ));
-
-                self.new_line("{");
-                self.inc();
-                self.new_line("rank = same");
-
-                if b.quantifiers.len() > 0 {
-                    self.new_line("node [ shape = circle ]");
-                }
-
-                for q_id in b.quantifiers.iter() {
-                    quantifiers.push(*q_id);
-
-                    let q = model.get_quantifier(*q_id);
+                    self.new_line(&format!("subgraph cluster{} {{", box_id));
+                    self.inc();
+                    self.new_line(
+                        &DotLabel::SingleRow(&format!("Box{}:{}", box_id, Self::get_box_title(&b)))
+                            .to_string(),
+                    );
                     self.new_line(&format!(
-                        "Q{0} [ {1} ]",
-                        q_id,
-                        DotLabel::SingleRow(&format!(
-                            "Q{0}({1}){2}",
-                            q_id,
-                            q.quantifier_type,
-                            Self::get_quantifier_alias(&q)
-                        ))
+                        "boxhead{} [ shape = record, {} ]",
+                        box_id,
+                        Self::get_box_head(&b)
                     ));
-                }
 
-                self.add_correlation_info(model, &b);
+                    self.new_line("{");
+                    self.inc();
+                    self.new_line("rank = same");
 
-                self.dec();
-                self.new_line("}");
-                self.dec();
-                self.new_line("}");
+                    if b.quantifiers.len() > 0 {
+                        self.new_line("node [ shape = circle ]");
+                    }
 
-                Ok(())
-            })
+                    for q_id in b.quantifiers.iter() {
+                        quantifiers.push(*q_id);
+
+                        let q = model.get_quantifier(*q_id);
+                        self.new_line(&format!(
+                            "Q{0} [ {1} ]",
+                            q_id,
+                            DotLabel::SingleRow(&format!(
+                                "Q{0}({1}){2}",
+                                q_id,
+                                q.quantifier_type,
+                                Self::get_quantifier_alias(&q)
+                            ))
+                        ));
+                    }
+
+                    self.add_correlation_info(model, &b);
+
+                    self.dec();
+                    self.new_line("}");
+                    self.dec();
+                    self.new_line("}");
+
+                    Ok(())
+                },
+                start_box,
+            )
             .unwrap();
 
         if quantifiers.len() > 0 {
