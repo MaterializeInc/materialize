@@ -26,7 +26,7 @@ class Local(Executor):
 
     def Td(self, input: str) -> Any:
         with NamedTemporaryFile(
-            mode="w", dir="tmp", prefix="tmp-", suffix=".td"
+            mode="w", prefix="feature-benchmark-", suffix=".td"
         ) as td_file:
             td_file.write(input)
             td_file.flush()
@@ -68,7 +68,10 @@ class Docker(Executor):
 
     def Td(self, input: str) -> Any:
         with NamedTemporaryFile(
-            mode="w", dir="tmp", prefix="tmp-", suffix=".td"
+            mode="w",
+            dir=self._workflow.composition.path / "tmp",
+            prefix="tmp-",
+            suffix=".td",
         ) as td_file:
             td_file.write(input)
             td_file.flush()
