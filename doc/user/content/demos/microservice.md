@@ -154,7 +154,7 @@ From here, we'll start publishing these messages on a Kafka topic.
 
 Requirement | Purpose | Demo value
 ------------|---------|-----------
-**Source URL** | Where to listen for new messages (`hostname/topic_name`) | `kafka://localhost/events`
+**Source URL** | Where to listen for new messages (`hostname/topic_name`) | `kafka://localhost/billing`
 **Schema** | How to decode messages | [Generated `FileDescriptorSet`](#generating-protobuf-schemafiledescriptorset)
 **Message name** | The top-level message to decode | `billing.Batch`
 
@@ -257,19 +257,19 @@ And here is how we can import that into Materialize.
 
 ```sql
 CREATE SOURCE price_source
-FROM 'file:///prices.csv'
+FROM FILE 'prices.csv'
 FORMAT CSV WITH 3 COLUMNS;
 ```
 
 This creates a source with the following columns:
 
 ```nofmt
-   name     | nullable | type
-------------+----------+------
- column1    | false    | text
- column2    | false    | text
- column3    | false    | text
- mz_line_no | true     | int8
+    name    | nullable |  type
+------------+----------+--------
+ column1    | f        | text
+ column2    | f        | text
+ column3    | f        | text
+ mz_line_no | f        | bigint
 ```
 
 We'll then create a materialized view for this data, as well as convert its units from seconds to milliseconds. This isn't strictly necessary because we could just `SELECT` from `pricing_source`, but is more performant in our case.
@@ -426,7 +426,7 @@ In a future iteration, we'll make this demo more interactive.
    a bit of time (upwards of 3 minutes, even on very fast connections).
 
    If the command succeeds, it will have started all of the necessary
-   infrastructure will be started and will have generated ~1000 events.
+   infrastructure and will have generated ~1000 events.
 
 ### Understanding sources & views
 
@@ -436,7 +436,7 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
 1. Launch `psql` (or any Materialize CLI client), connecting to `materialize`:
 
     ```shell
-    psql -h localhost -p 6875 -d materialize
+    psql -U materialize -h localhost -p 6875 -d materialize
     ```
 
 1. Show the source we've created:
@@ -445,7 +445,7 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
     SHOW SOURCES;
     ```
     ```nofmt
-        SOURCES
+          name
     ----------------
      billing_source
      price_source
@@ -473,7 +473,7 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
     ```
     ```nofmt
                id           |        batch_id        |           interval_start            |            interval_end             |       meter       | value | client_id | vm_id | cpu_num | memory_gb | disk_gb
-   ------------------------+------------------------+-------------------------------------+-------------------------------------+-------------------+-------+-----------+-------+---------+-----------+---------
+    ------------------------+------------------------+-------------------------------------+-------------------------------------+-------------------+-------+-----------+-------+---------+-----------+---------
        AkrKbvQ8mOMt64WHAEQw | vB_PDgD_SWm8rG0pxCsa4w | 2020-01-28T10:36:03.331566645+00:00 | 2020-01-28T10:43:41.331566645+00:00 | execution_time_ms |    32 |        12 |  1771 |       1 |        16 |     128
     ```
 
@@ -492,13 +492,13 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
     SELECT * FROM billing_agg_by_month ORDER BY sum DESC LIMIT 5;
     ```
     ```nofmt
-    month  | client_id |       meter       | cpu_num | memory_gb | disk_gb |  sum
+      month  | client_id |       meter       | cpu_num | memory_gb | disk_gb |  sum
     ---------+-----------+-------------------+---------+-----------+---------+-------
-    2021-09 |        16 | execution_time_ms |       1 |        16 |     128 | 25330
-    2021-09 |        86 | execution_time_ms |       1 |        16 |     128 | 24587
-    2021-09 |        38 | execution_time_ms |       2 |         8 |     128 | 24575
-    2021-09 |        97 | execution_time_ms |       1 |        16 |     128 | 24488
-    2021-09 |        50 | execution_time_ms |       2 |        16 |     128 | 24319
+     2021-09 |        16 | execution_time_ms |       1 |        16 |     128 | 25330
+     2021-09 |        86 | execution_time_ms |       1 |        16 |     128 | 24587
+     2021-09 |        38 | execution_time_ms |       2 |         8 |     128 | 24575
+     2021-09 |        97 | execution_time_ms |       1 |        16 |     128 | 24488
+     2021-09 |        50 | execution_time_ms |       2 |        16 |     128 | 24319
     ```
 
 1. Now, we can look at our customers' monthly bills by selecting from
@@ -508,13 +508,13 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
     SELECT * FROM billing_monthly_statement ORDER BY monthly_bill DESC LIMIT 5;
     ```
     ```nofmt
-    month  | client_id | execution_time_ms | cpu_num | memory_gb | monthly_bill
+      month  | client_id | execution_time_ms | cpu_num | memory_gb | monthly_bill
     ---------+-----------+-------------------+---------+-----------+--------------
-    2021-09 |        51 |             22709 |       2 |        16 |         3542
-    2021-09 |        93 |             22134 |       2 |        16 |         3541
-    2021-09 |        58 |             23555 |       2 |        16 |         3533
-    2021-09 |        89 |             21936 |       2 |        16 |         3509
-    2021-09 |        55 |             22352 |       2 |        16 |         3486
+     2021-09 |        51 |             22709 |       2 |        16 |         3542
+     2021-09 |        93 |             22134 |       2 |        16 |         3541
+     2021-09 |        58 |             23555 |       2 |        16 |         3533
+     2021-09 |        89 |             21936 |       2 |        16 |         3509
+     2021-09 |        55 |             22352 |       2 |        16 |         3486
     ```
 
 1. We an also perform arbitrary `SELECT`s on our views to explore new aggregations we might want to materialize with their own views. For example, we can view each user's total monthly bill:
