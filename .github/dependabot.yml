@@ -43,5 +43,6 @@ updates:
     # want to rebuild more often than we need to.
     interval: monthly
     time: "22:00"
+  open-pull-requests-limit: 10
   reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
