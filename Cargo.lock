@@ -2471,9 +2471,9 @@ dependencies = [
 
 [[package]]
 name = "krb5-src"
-version = "0.2.4+1.18.2"
+version = "0.3.1+1.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a01c2b7c3b70ca41646dafc8fc3b6053a8a0da9301251e8da8548fb067462d81"
+checksum = "57fe5be675c272d885d49be528b3b048e38974a0579b0e691da2fb3f3c41eaca"
 dependencies = [
  "duct",
  "openssl-sys",
@@ -4360,9 +4360,9 @@ dependencies = [
 
 [[package]]
 name = "sasl2-sys"
-version = "0.1.11"
+version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "342a1dfdd8f3d1072fecf792ebf99070a439362984f19c3103b15a5b1e2bd197"
+checksum = "5c50936b766924ec8f5118bcd3d6e5dc7ac25263df4f2ea450fe7919281a4544"
 dependencies = [
  "cc",
  "duct",
