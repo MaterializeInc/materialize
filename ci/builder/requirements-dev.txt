@@ -20,7 +20,7 @@ twine==3.7.1
 types-prettytable==2.1.1
 types-psutil==5.8.15
 types-psycopg2==2.9.4
-types-PyMYSQL==1.0.2
+types-PyMYSQL==1.0.7
 types-PyYAML==6.0.1
 types-requests==2.25.11
 types-toml==0.10.1
