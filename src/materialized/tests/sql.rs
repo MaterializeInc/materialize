@@ -306,10 +306,17 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         assert_eq!(rows[i].get::<_, String>("data"), format!("line {}", i + 1));
     }
 
-    let err = client_reads
-        .batch_execute("TAIL v AS OF 1")
-        .unwrap_db_error();
+    // Wait until compaction kicks in and we get an error on trying to read from the cursor.
+    let err = loop {
+        client_reads.batch_execute("COMMIT; BEGIN; DECLARE c CURSOR FOR TAIL v AS OF 1")?;
+
+        if let Err(err) = client_reads.query("FETCH ALL c", &[]) {
+            break err;
+        }
+    };
+
     assert!(err
+        .unwrap_db_error()
         .message()
         .starts_with("Timestamp (1) is not valid for all inputs"));
 
@@ -491,7 +498,7 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
             }
 
             let ts: MzTimestamp = row.get("mz_timestamp");
-            assert!(last_ts < ts);
+            assert!(last_ts <= ts);
             last_ts = ts;
         }
 
@@ -789,6 +796,102 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     // v` had disconnected, and would hang forever waiting for data to be
     // written to `path`, which in this test never comes. So if this function
     // exits, things are working correctly.
+
+    Ok(())
+}
+
+#[test]
+fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().workers(3);
+    let server = util::start_server(config)?;
+    let mut client_interactive = server.connect(postgres::NoTls)?;
+    let mut client_tail = server.connect(postgres::NoTls)?;
+
+    let verify_rw_pair = move |rows: &[Row], expected_data: &str| -> bool {
+        for (i, row) in rows.iter().enumerate() {
+            match row.get::<_, Option<String>>("data") {
+                // Ensure all rows with data have the expected data, and that rows
+                // without data are only ever the last row.
+                Some(inner) => assert_eq!(inner, expected_data.to_owned()),
+                // Only verify if row without data is last row
+                None => {
+                    if i + 1 != rows.len() {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if rows.len() != 2 {
+            return false;
+        }
+
+        // First row reflects write. Written rows have not progressed, and all
+        // writes occur at the same timestamp.
+        assert_eq!(rows[0].get::<_, Option<bool>>("mz_progressed"), Some(false));
+        // Two writes with the same data have their diffs compacted
+        assert_eq!(rows[0].get::<_, Option<i64>>("mz_diff"), Some(2));
+
+        // Second row reflects closing timestamp, manufactured by the read
+        assert_eq!(rows[1].get::<_, Option<bool>>("mz_progressed"), Some(true));
+        assert_eq!(rows[1].get::<_, Option<i64>>("mz_diff"), None);
+
+        true
+    };
+
+    client_interactive.batch_execute("CREATE TABLE t1 (data text)")?;
+
+    client_tail.batch_execute(
+        "COMMIT; BEGIN;
+         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
+    )?;
+
+    // Keep trying until you either panic or are able to verify the expected behavior.
+    loop {
+        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
+        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
+        let _ = client_interactive.query("SELECT * FROM T1", &[])?;
+        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
+        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
+
+        let first_rows = client_tail.query("FETCH ALL c1", &[])?;
+        let first_rows_verified = verify_rw_pair(&first_rows, "first");
+
+        let _ = client_interactive.query("SELECT * FROM t1", &[])?;
+
+        let second_rows = client_tail.query("FETCH ALL c1", &[])?;
+        let second_rows_verified = verify_rw_pair(&second_rows, "second");
+
+        if first_rows_verified && second_rows_verified {
+            // Closing open write timestamp only advances time 1 unit
+            let first_write_ts = first_rows[0].get::<_, MzTimestamp>("mz_timestamp");
+            let first_closed_ts = first_rows[1].get::<_, MzTimestamp>("mz_timestamp");
+            assert_eq!(first_closed_ts.0 - first_write_ts.0, 1);
+
+            // We cannot make as strong of claims about the second set of timestamps
+            // because we let more time lapse by having an interceding `FETCH`.
+            let second_write_ts = second_rows[0].get::<_, MzTimestamp>("mz_timestamp");
+            let second_closed_ts = second_rows[1].get::<_, MzTimestamp>("mz_timestamp");
+            assert!(first_write_ts < second_write_ts);
+            assert!(second_write_ts < second_closed_ts);
+            break;
+        }
+    }
+
+    // Ensure reads don't advance timestamp.
+    loop {
+        let first_read =
+            client_interactive.query("SELECT *, mz_logical_timestamp() FROM t1", &[])?;
+        let second_read =
+            client_interactive.query("SELECT *, mz_logical_timestamp() FROM t1", &[])?;
+        if first_read[0].get::<_, MzTimestamp>("mz_logical_timestamp")
+            == second_read[0].get::<_, MzTimestamp>("mz_logical_timestamp")
+        {
+            break;
+        }
+    }
 
     Ok(())
 }
