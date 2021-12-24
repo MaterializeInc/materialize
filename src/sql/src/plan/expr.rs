@@ -295,10 +295,18 @@ impl ScalarWindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// Scalar Window functions
 pub enum ScalarWindowFunc {
     RowNumber,
+}
+
+impl fmt::Display for ScalarWindowFunc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ScalarWindowFunc::RowNumber => f.write_str("row_number"),
+        }
+    }
 }
 
 /// A `CoercibleScalarExpr` is a [`HirScalarExpr`] whose type is not fully

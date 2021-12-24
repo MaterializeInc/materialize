@@ -1851,7 +1851,9 @@ impl CheckedRecursion for MirRelationExprVisitor {
 }
 
 /// Specification for an ordering by a column.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzStructReflect)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, MzStructReflect,
+)]
 pub struct ColumnOrder {
     /// The column index.
     pub column: usize,
