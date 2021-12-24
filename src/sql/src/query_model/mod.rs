@@ -177,6 +177,8 @@ pub enum BoxType {
     /// Operator that produces a set of rows, with potentially
     /// correlated values.
     Values(Values),
+    /// Windowing operator
+    Windowing,
 }
 
 #[derive(Debug)]
@@ -249,6 +251,18 @@ impl Model {
 
     fn make_select_box(&mut self) -> BoxId {
         self.make_box(BoxType::Select(Select::default()))
+    }
+
+    fn swap_quantifiers(&mut self, b1: BoxId, b2: BoxId) {
+        let mut b1_b = self.get_mut_box(b1);
+        let mut b2_b = self.get_mut_box(b2);
+        std::mem::swap(&mut b1_b.quantifiers, &mut b2_b.quantifiers);
+        for q_id in b1_b.quantifiers.iter() {
+            self.get_mut_quantifier(*q_id).parent_box = b1;
+        }
+        for q_id in b2_b.quantifiers.iter() {
+            self.get_mut_quantifier(*q_id).parent_box = b2;
+        }
     }
 
     /// Get an immutable reference to the box identified by `box_id`.
@@ -445,7 +459,67 @@ impl QueryBox {
                     f(p)?;
                 }
             }
-            BoxType::Except | BoxType::Union | BoxType::Intersect | BoxType::Get(_) => {}
+            BoxType::Windowing
+            | BoxType::Except
+            | BoxType::Union
+            | BoxType::Intersect
+            | BoxType::Get(_) => {}
+        }
+        Ok(())
+    }
+
+    /// Visit all the expressions in this query box.
+    fn visit_expressions_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut BoxScalarExpr) -> Result<(), E>,
+    {
+        for c in self.columns.iter_mut() {
+            f(&mut c.expr)?;
+        }
+        match &mut self.box_type {
+            BoxType::Select(select) => {
+                for p in select.predicates.iter_mut() {
+                    f(p)?;
+                }
+                if let Some(order_key) = &mut select.order_key {
+                    for p in order_key.iter_mut() {
+                        f(p)?;
+                    }
+                }
+                if let Some(limit) = &mut select.limit {
+                    f(limit)?;
+                }
+                if let Some(offset) = &mut select.offset {
+                    f(offset)?;
+                }
+            }
+            BoxType::OuterJoin(outer_join) => {
+                for p in outer_join.predicates.iter_mut() {
+                    f(p)?;
+                }
+            }
+            BoxType::Grouping(grouping) => {
+                for p in grouping.key.iter_mut() {
+                    f(p)?;
+                }
+            }
+            BoxType::Values(values) => {
+                for row in values.rows.iter_mut() {
+                    for value in row.iter_mut() {
+                        f(value)?;
+                    }
+                }
+            }
+            BoxType::TableFunction(table_function) => {
+                for p in table_function.parameters.iter_mut() {
+                    f(p)?;
+                }
+            }
+            BoxType::Windowing
+            | BoxType::Except
+            | BoxType::Union
+            | BoxType::Intersect
+            | BoxType::Get(_) => {}
         }
         Ok(())
     }
@@ -496,6 +570,7 @@ impl BoxType {
             BoxType::TableFunction(..) => "TableFunction",
             BoxType::Union => "Union",
             BoxType::Values(..) => "Values",
+            BoxType::Windowing => "Windowing",
         }
     }
 }

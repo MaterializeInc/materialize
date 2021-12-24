@@ -10,7 +10,7 @@
 //! Generates a Query Graph Model from a [HirRelationExpr].
 
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::plan::expr::{HirScalarExpr, JoinKind};
 use crate::query_model::{
@@ -44,6 +44,7 @@ impl FromHir {
             gets_seen: HashMap::new(),
         };
         generator.model.top_box = generator.generate_select(expr);
+        fixup::fixup_model(&mut generator.model);
         generator.model
     }
 
@@ -379,6 +380,30 @@ impl FromHir {
                     position: 0,
                 })
             }
+            HirScalarExpr::Windowing(expr) => {
+                let func = match expr.func {
+                    crate::plan::expr::WindowExprType::Scalar(scalar) => {
+                        // Note: the order_by information in `scalar.order_by` is redundant.
+                        // We only need to preserve here the expressions the input will be
+                        // sorted by, not the columns that will contain the result of evaluating
+                        // those expressions.
+                        crate::query_model::scalar_expr::WindowExprType::Scalar(scalar.func)
+                    }
+                };
+                BoxScalarExpr::Windowing(crate::query_model::WindowExpr {
+                    func,
+                    partition: expr
+                        .partition
+                        .into_iter()
+                        .map(|e| self.generate_expr(e, context_box))
+                        .collect(),
+                    order_by: expr
+                        .order_by
+                        .into_iter()
+                        .map(|e| self.generate_expr(e, context_box))
+                        .collect(),
+                })
+            }
             _ => panic!("unsupported expression type {:?}", expr),
         }
     }
@@ -428,6 +453,202 @@ impl FromHir {
             BoxType::Select(select) => select.predicates.push(predicate),
             BoxType::OuterJoin(outer_join) => outer_join.predicates.push(predicate),
             _ => unreachable!(),
+        }
+    }
+}
+
+/// Special transformations to fix semantically invalid constructions allowed
+/// temporarily for the sake of keeping the generator above as simple as possible.
+mod fixup {
+
+    use super::*;
+
+    pub(crate) fn fixup_model(model: &mut Model) {
+        let mut windowing_fixup = Windowing::new();
+
+        let boxes = model.boxes.keys().cloned().collect_vec();
+        for box_id in boxes {
+            if windowing_fixup.condition(model, box_id) {
+                windowing_fixup.action(model, box_id);
+            }
+        }
+    }
+
+    struct Windowing {
+        /// Window function expression found in a select box that
+        /// must be pushed down to a Windowing box
+        to_pushdown: BTreeSet<BoxScalarExpr>,
+    }
+
+    impl Windowing {
+        fn new() -> Self {
+            Self {
+                to_pushdown: BTreeSet::new(),
+            }
+        }
+
+        /// Returns true if the given box is a Select box containing Windowing expressions.
+        fn condition(&mut self, model: &Model, box_id: BoxId) -> bool {
+            self.to_pushdown.clear();
+            let b = model.get_box(box_id);
+            if b.is_select() {
+                let _ = b.visit_expressions(&mut |expr: &BoxScalarExpr| -> Result<(), ()> {
+                    expr.visit(&mut |expr: &BoxScalarExpr| {
+                        if let BoxScalarExpr::Windowing(_) = expr {
+                            self.to_pushdown.insert(expr.clone());
+                        }
+                    });
+                    Ok(())
+                });
+
+                !self.to_pushdown.is_empty()
+            } else {
+                false
+            }
+        }
+
+        /// Pushes down the windowing expressions in the given Select box into
+        /// a Windowing box that will be the only input of the Select box. Since
+        /// Windowing must happen after the Join, all the input quantifiers of
+        /// the given Select box are pushed down into a new Select box that
+        /// becomes the only input of the Windowing box.
+        ///
+        /// The Windowing box forwards all the columns from its input and adds
+        /// new columns for the computation of the windowing expressions. The
+        /// windowing expressions in the original Select box are then replaced
+        /// with column references to the corresponding column in the Windowing
+        /// box. Also, all the column references in the original Select box
+        /// are updated to make them point to the columns forwarded by the
+        /// new Windowing box.
+        //
+        // Input sub-graph:
+        //
+        // +-----------------------------------------+
+        // | Box0: Select with Windowing expressions |
+        // |                                         |
+        // | +----+   +----+                         |
+        // | | Q1 |   | Q2 | ...                     |
+        // | +----+   +----+                         |
+        // |    |        |                           |
+        // +----|--------|---------------------------+
+        //      |        |
+        //   +------+ +------+
+        //   | BoxA | | BoxB |
+        //   +------+ +------+
+        //
+        // Output sub-graph:
+        //
+        // +--------------+
+        // | Box0: Select |
+        // |              |
+        // | +----+       |
+        // | | QA |       |
+        // | +----+       |
+        // |    |         |
+        // +----|---------+
+        //      |
+        // +-----------------+
+        // | BoxC: Windowing |
+        // |                 |
+        // | +----+          |
+        // | | QB |          |
+        // | +----+          |
+        // |    |            |
+        // +----|------------+
+        //      |
+        // +---------------------+
+        // | BoxD: Select        |
+        // |                     |
+        // | +----+   +----+     |
+        // | | Q1 |   | Q2 | ... |
+        // | +----+   +----+     |
+        // |    |        |       |
+        // +----|--------|-------+
+        //      |        |
+        //   +------+ +------+
+        //   | BoxA | | BoxB |
+        //   +------+ +------+
+        fn action(&mut self, model: &mut Model, box_id: BoxId) {
+            let new_select_box = model.make_select_box();
+            model.swap_quantifiers(box_id, new_select_box);
+            model
+                .get_mut_box(new_select_box)
+                .add_all_input_columns(model);
+
+            let expr_map = model
+                .get_box(new_select_box)
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (c.expr.clone(), i))
+                .collect::<HashMap<BoxScalarExpr, usize>>();
+
+            let windowing_box = model.make_box(BoxType::Windowing);
+            let windowing_input_q =
+                model.make_quantifier(QuantifierType::Foreach, new_select_box, windowing_box);
+
+            // Fill the windowing box
+            {
+                let mut windowing_box = model.get_mut_box(windowing_box);
+                windowing_box.add_all_input_columns(model);
+                for mut window_expr in self.to_pushdown.iter().cloned() {
+                    // Update any parameters the window function may have
+                    window_expr.visit_mut(&mut |expr: &mut BoxScalarExpr| {
+                        if let Some(position) = expr_map.get(expr) {
+                            *expr = BoxScalarExpr::ColumnReference(ColumnReference {
+                                quantifier_id: windowing_input_q,
+                                position: *position,
+                            });
+                        }
+                    });
+                    windowing_box.add_column(window_expr);
+                }
+            }
+
+            let windowing_output_q =
+                model.make_quantifier(QuantifierType::Foreach, windowing_box, box_id);
+
+            // Update all the expression in the box to point to columns projected by the
+            // windowing box
+            // 1) convert the window functions into column references
+            let first_window_expr = expr_map.len();
+            let window_function_map = self
+                .to_pushdown
+                .iter()
+                .cloned()
+                .zip(first_window_expr..)
+                .collect::<HashMap<_, _>>();
+            let _ = model.get_mut_box(box_id).visit_expressions_mut(
+                &mut |expr: &mut BoxScalarExpr| -> Result<(), ()> {
+                    expr.visit_mut(&mut |expr: &mut BoxScalarExpr| {
+                        if let Some(position) = window_function_map.get(expr) {
+                            *expr = BoxScalarExpr::ColumnReference(ColumnReference {
+                                quantifier_id: windowing_output_q,
+                                position: *position,
+                            });
+                        }
+                    });
+                    Ok(())
+                },
+            );
+            // 2) replace column references to make them point to the new quantifier
+            // Note: the 1) and 2) could be fused if we had a `visit_pre_mut` method.
+            // Otherwise, any column reference if the parameters of a window function
+            // will be updated before the window function itself is converted into
+            // a column reference.
+            let _ = model.get_mut_box(box_id).visit_expressions_mut(
+                &mut |expr: &mut BoxScalarExpr| -> Result<(), ()> {
+                    expr.visit_mut(&mut |expr: &mut BoxScalarExpr| {
+                        if let Some(position) = expr_map.get(expr) {
+                            *expr = BoxScalarExpr::ColumnReference(ColumnReference {
+                                quantifier_id: windowing_output_q,
+                                position: *position,
+                            });
+                        }
+                    });
+                    Ok(())
+                },
+            );
         }
     }
 }
