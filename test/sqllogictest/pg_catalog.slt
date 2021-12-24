@@ -109,3 +109,13 @@ SELECT oid, rolname FROM pg_roles ORDER BY oid
 ----
 20007  materialize
 20008  mz_system
+
+query TIIO colnames
+SELECT proname, pronamespace, oid, proargdefaults
+FROM pg_catalog.pg_proc
+WHERE proname='substring'
+ORDER BY oid
+----
+proname    pronamespace  oid  proargdefaults
+substring  20003         936  NULL
+substring  20003         937  NULL

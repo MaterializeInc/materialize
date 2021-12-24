@@ -120,6 +120,8 @@ changes that have not yet been documented.
 - Support casts from [`smallint`] and [`bigint`] to [`oid`], as well as
   casts from [`oid`] to [`bigint`].
 
+- Add `pronamespace` and `proargdefaults` columns to `pg_catalog.pg_proc`.
+
 {{< comment >}}
 Only add new release notes above this line.
 
