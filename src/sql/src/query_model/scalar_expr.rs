@@ -300,8 +300,29 @@ impl BoxScalarExpr {
     /// quantifiers, even though it may contain other column references from other
     /// contexts.
     pub fn is_constant_within_context(&self, context: &QuantifierSet) -> bool {
-        let mut column_refs = HashSet::new();
-        self.collect_column_references_from_context(context, &mut column_refs);
-        column_refs.is_empty()
+        use BoxScalarExpr::*;
+        match self {
+            Literal(..) => true,
+            ColumnReference(c) => !context.contains(&c.quantifier_id),
+            CallUnary { expr, .. } => expr.is_constant_within_context(context),
+            CallBinary { expr1, expr2, .. } => {
+                expr1.is_constant_within_context(context)
+                    && expr2.is_constant_within_context(context)
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    if !expr.is_constant_within_context(context) {
+                        return false;
+                    }
+                }
+                true
+            }
+            If { cond, then, els } => {
+                cond.is_constant_within_context(context)
+                    && then.is_constant_within_context(context)
+                    && els.is_constant_within_context(context)
+            }
+            Aggregate { .. } | CallNullary(..) | BaseColumn(..) | Windowing(..) => false,
+        }
     }
 }
