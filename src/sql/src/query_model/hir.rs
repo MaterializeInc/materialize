@@ -124,7 +124,7 @@ impl FromHir {
                     for scalar in scalars.drain(0..end_idx) {
                         let expr = self.generate_expr(scalar, box_id);
                         let mut b = self.model.get_mut_box(box_id);
-                        b.columns.push(Column { expr, alias: None });
+                        b.add_column(expr);
                     }
 
                     // 3) If there are scalars remaining, wrap the box so the
@@ -181,10 +181,9 @@ impl FromHir {
                     // Add it to the grouping key and to the projection of the
                     // Grouping box
                     key.push(select_box_col_ref.clone());
-                    self.model.get_mut_box(group_box_id).columns.push(Column {
-                        expr: select_box_col_ref,
-                        alias: None,
-                    });
+                    self.model
+                        .get_mut_box(group_box_id)
+                        .add_column(select_box_col_ref);
                 }
                 for aggregate in aggregates.into_iter() {
                     // Any computed expression passed as an argument of an aggregate
@@ -206,10 +205,7 @@ impl FromHir {
                         expr: Box::new(col_ref),
                         distinct: aggregate.distinct,
                     };
-                    self.model.get_mut_box(group_box_id).columns.push(Column {
-                        expr: aggregate,
-                        alias: None,
-                    });
+                    self.model.get_mut_box(group_box_id).add_column(aggregate);
                 }
 
                 // Update the key of the grouping box
@@ -242,13 +238,10 @@ impl FromHir {
                         .make_quantifier(QuantifierType::Foreach, input_box_id, select_id);
                 let mut select_box = self.model.get_mut_box(select_id);
                 for position in outputs {
-                    select_box.columns.push(Column {
-                        expr: BoxScalarExpr::ColumnReference(ColumnReference {
-                            quantifier_id,
-                            position,
-                        }),
-                        alias: None,
-                    });
+                    select_box.add_column(BoxScalarExpr::ColumnReference(ColumnReference {
+                        quantifier_id,
+                        position,
+                    }));
                 }
                 select_id
             }
