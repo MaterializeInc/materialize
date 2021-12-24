@@ -54,6 +54,8 @@ pub fn rewrite_model(model: &mut Model) {
     apply_rules_to_model(model, &mut decorrelation_rules);
 
     model.garbage_collect();
+
+    model.update_ids();
 }
 
 /// Transform the model by applying a list of rewrite rules.

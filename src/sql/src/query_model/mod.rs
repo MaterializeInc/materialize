@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -460,6 +461,59 @@ impl Model {
         self.boxes.retain(|b, _| visited_boxes.contains(b));
         self.quantifiers
             .retain(|q, _| visited_quantifiers.contains(q));
+    }
+
+    /// Updates the IDs of all the objects in the graph
+    fn update_ids(&mut self) {
+        self.box_id_gen = Default::default();
+        self.quantifier_id_gen = Default::default();
+
+        let quantifier_map = self
+            .quantifiers
+            .iter()
+            .map(|(q_id, _)| *q_id)
+            .sorted()
+            .map(|q_id| (q_id, self.quantifier_id_gen.allocate_id()))
+            .collect::<HashMap<QuantifierId, QuantifierId>>();
+        let box_map = self
+            .boxes
+            .iter()
+            .map(|(box_id, _)| *box_id)
+            .sorted()
+            .map(|box_id| (box_id, self.box_id_gen.allocate_id()))
+            .collect::<HashMap<BoxId, BoxId>>();
+
+        self.quantifiers = self
+            .quantifiers
+            .drain()
+            .map(|(q_id, q)| {
+                let new_id = *quantifier_map.get(&q_id).unwrap();
+                let mut b_q = q.borrow_mut();
+                b_q.id = new_id;
+                b_q.input_box = *box_map.get(&b_q.input_box).unwrap();
+                drop(b_q);
+                (new_id, q)
+            })
+            .collect();
+        self.boxes = self
+            .boxes
+            .drain()
+            .map(|(box_id, b)| {
+                let new_id = *box_map.get(&box_id).unwrap();
+                let mut b_b = b.borrow_mut();
+                b_b.id = new_id;
+                b_b.quantifiers = b_b
+                    .quantifiers
+                    .iter()
+                    .map(|q_id| *quantifier_map.get(q_id).unwrap())
+                    .collect();
+                b_b.remap_column_references(&quantifier_map);
+                drop(b_b);
+                (new_id, b)
+            })
+            .collect();
+
+        self.top_box = *box_map.get(&self.top_box).unwrap();
     }
 }
 
