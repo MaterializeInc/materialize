@@ -86,6 +86,23 @@ impl FromHir {
                     panic!("unsupported get id {:?}", id);
                 }
             }
+            HirRelationExpr::Let {
+                name: _,
+                id,
+                value,
+                body,
+            } => {
+                let id = expr::Id::Local(id);
+                let value_box = self.generate_internal(*value);
+                let prev_value = self.gets_seen.insert(id.clone(), value_box);
+                let body_box = self.generate_internal(*body);
+                if let Some(prev_value) = prev_value {
+                    self.gets_seen.insert(id, prev_value);
+                } else {
+                    self.gets_seen.remove(&id);
+                }
+                body_box
+            }
             HirRelationExpr::Constant { rows, typ } => {
                 assert!(typ.arity() == 0, "expressions are not yet supported",);
                 self.model.make_box(BoxType::Values(Values {
