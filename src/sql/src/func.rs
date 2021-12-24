@@ -1604,6 +1604,14 @@ lazy_static! {
                 // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
                 params!(Int64) => sql_impl_func("CASE WHEN $1 = 6 THEN 'UTF8' ELSE NULL END"), 1597;
             },
+            "pg_backend_pid" => Scalar {
+                params!() => Operation::nullary(|_ecx| {
+                    Ok(HirScalarExpr::literal(
+                        Datum::from(-1),
+                        ScalarType::Int32,
+                    ))
+                }), 2026;
+            },
             // pg_get_constraintdef gives more info about a constraint with in the `pg_constraint`
             // view. It currently returns no information as the `pg_constraint` view is empty in
             // materialize
