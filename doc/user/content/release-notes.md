@@ -122,6 +122,9 @@ changes that have not yet been documented.
 
 - Add `pronamespace` and `proargdefaults` columns to `pg_catalog.pg_proc`.
 
+- Add `pg_backend_pid` as a dummy function for compatibility with pgcli and
+  Apache Superset.
+
 {{< comment >}}
 Only add new release notes above this line.
 
