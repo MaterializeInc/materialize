@@ -13,7 +13,7 @@ use std::fmt;
 use ore::str::separated;
 use repr::*;
 
-use crate::plan::expr::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
+use crate::plan::expr::{BinaryFunc, NullaryFunc, ScalarWindowFunc, UnaryFunc, VariadicFunc};
 use crate::query_model::{QuantifierId, QuantifierSet};
 use expr::AggregateFunc;
 
@@ -31,7 +31,7 @@ use expr::AggregateFunc;
 ///
 /// Scalar expressions only make sense within the context of a
 /// [`crate::query_model::QueryBox`], and hence, their name.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 pub enum BoxScalarExpr {
     /// A reference to a column from a quantifier that either lives in
     /// the same box as the expression or is a sibling quantifier of
@@ -70,18 +70,33 @@ pub enum BoxScalarExpr {
         /// Should the aggregation be applied only to distinct results in each group.
         distinct: bool,
     },
+    Windowing(WindowExpr),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
 pub struct ColumnReference {
     pub quantifier_id: QuantifierId,
     pub position: usize,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 pub struct BaseColumn {
     pub position: usize,
     pub column_type: repr::ColumnType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Represents the invocation of a window function over a partition with an optional
+/// order.
+pub struct WindowExpr {
+    pub func: WindowExprType,
+    pub partition: Vec<BoxScalarExpr>,
+    pub order_by: Vec<BoxScalarExpr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum WindowExprType {
+    Scalar(ScalarWindowFunc),
 }
 
 impl fmt::Display for BoxScalarExpr {
@@ -128,6 +143,31 @@ impl fmt::Display for BoxScalarExpr {
                     expr
                 )
             }
+            BoxScalarExpr::Windowing(expr) => {
+                match &expr.func {
+                    WindowExprType::Scalar(func) => write!(f, "{}()", func)?,
+                }
+                write!(f, " over (")?;
+                for (i, e) in expr.partition.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    e.fmt(f)?;
+                }
+                write!(f, ")")?;
+
+                if !expr.order_by.is_empty() {
+                    write!(f, " order by (")?;
+                    for (i, e) in expr.order_by.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        e.fmt(f)?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -157,6 +197,14 @@ impl BoxScalarExpr {
             }
             Aggregate { expr, .. } => {
                 f(expr);
+            }
+            Windowing(expr) => {
+                for expr in expr.partition.iter() {
+                    f(expr);
+                }
+                for expr in expr.order_by.iter() {
+                    f(expr);
+                }
             }
         }
     }
@@ -193,6 +241,14 @@ impl BoxScalarExpr {
             }
             Aggregate { expr, .. } => {
                 f(expr);
+            }
+            Windowing(expr) => {
+                for expr in expr.partition.iter_mut() {
+                    f(expr);
+                }
+                for expr in expr.order_by.iter_mut() {
+                    f(expr);
+                }
             }
         }
     }

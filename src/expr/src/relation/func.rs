@@ -588,7 +588,9 @@ where
     })
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
+#[derive(
+    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzEnumReflect,
+)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
