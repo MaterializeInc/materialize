@@ -167,10 +167,9 @@ def _enter_builder(arch: Arch) -> List[str]:
 
 
 def _bootstrap_darwin(arch: Arch) -> None:
-    BOOTSTRAP_VERSION = "3"
-    BOOTSTRAP_FILE = (
-        Path(os.environ["MZ_ROOT"]) / "target" / target(arch) / ".xcompile-bootstrap"
-    )
+    ROOT = Path(os.environ["MZ_ROOT"])
+    BOOTSTRAP_VERSION = "4"
+    BOOTSTRAP_FILE = ROOT / "target" / target(arch) / ".xcompile-bootstrap"
     try:
         contents = BOOTSTRAP_FILE.read_text()
     except FileNotFoundError:
@@ -178,34 +177,13 @@ def _bootstrap_darwin(arch: Arch) -> None:
     if contents == BOOTSTRAP_VERSION:
         return
 
-    if arch == Arch.AARCH64:
-        spawn.runv(
-            ["brew", "install", f"messense/macos-cross-toolchains/{target(arch)}"]
-        )
-    elif arch == Arch.X86_64:
-        # Get rid of one we used for all arches in boostrap v2 just in case a conflict makes things tricky
-        spawn.runv(
-            [
-                "brew",
-                "uninstall",
-                "-f",
-                f"messense/macos-cross-toolchains/{target(arch)}",
-            ]
-        )
-        try:
-            spawn.runv(["brew", "untap", "-f", f"messense/macos-cross-toolchains"])
-        except Exception:
-            print(
-                "Could not untap messense/macos-cross-toolchain.  Perhaps because it's not tapped"
-            )
-        spawn.runv(["brew", "install", f"SergioBenitez/osxct/{target(arch)}"])
-        spawn.runv(
-            ["cargo", "clean", "--target", f"{target(arch)}"],
-            cwd=Path(os.environ["MZ_ROOT"]),
-        )
-    else:
-        raise RuntimeError("python enums are worse than rust enums")
-
+    # TODO(benesch): no need to clean up these old taps once sufficient time has
+    # passed (say, March 2022).
+    for old_tap in ["SergioBenitez/osxct", "messense/macos-cross-toolchains"]:
+        spawn.runv(["brew", "uninstall", "-f", f"{old_tap}/{target(arch)}"])
+    spawn.runv(["brew", "install", f"materializeinc/crosstools/{target(arch)}"])
+    spawn.runv(["cargo", "clean", "--target", target(arch)], cwd=ROOT)
     spawn.runv(["rustup", "target", "add", target(arch)])
+
     BOOTSTRAP_FILE.parent.mkdir(parents=True, exist_ok=True)
     BOOTSTRAP_FILE.write_text(BOOTSTRAP_VERSION)
