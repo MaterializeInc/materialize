@@ -39,7 +39,7 @@ stacker = { version = "0.1.14", optional = true }
 structopt = { version = "0.3.25", optional = true }
 tokio = { version = "1.15.0", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
 tokio-openssl = { version = "0.6.3", optional = true }
-tracing-subscriber = { version = "0.3.3", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
+tracing-subscriber = { version = "0.3.4", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
 
 [dev-dependencies]
 crossbeam-utils = "0.8.5"
