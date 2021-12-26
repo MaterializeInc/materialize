@@ -14,25 +14,27 @@
 
 # Test that we invent field names for unnamed columns.
 
-> CREATE VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
-
-> CREATE SINK unnamed_cols_sink FROM unnamed_cols
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unnamed-cols-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-$ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
-{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}}
+# See #9723
+#> CREATE VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
+#
+#> CREATE SINK unnamed_cols_sink FROM unnamed_cols
+#  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unnamed-cols-sink'
+#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#
+#$ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
+#{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}}
 
 # Test that invented field names do not clash with named columns.
 
-> CREATE VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
-
-> CREATE SINK clashing_cols_sink FROM clashing_cols
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'clashing-cols-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-$ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
-{"before": null, "after": {"row": {"column1": 1, "column1_1": 2, "b": 3, "b2": 4, "b3": 5}}}
+# See #9723
+#> CREATE VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
+#
+#> CREATE SINK clashing_cols_sink FROM clashing_cols
+#  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'clashing-cols-sink'
+#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#
+#$ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
+#{"before": null, "after": {"row": {"column1": 1, "column1_1": 2, "b": 3, "b2": 4, "b3": 5}}}
 
 # Test date/time types.
 

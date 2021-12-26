@@ -1329,15 +1329,19 @@ pub fn plan_view(
     };
 
     desc = plan_utils::maybe_rename_columns(format!("view {}", name), desc, &columns)?;
+    let names: Vec<ColumnName> = desc
+        .iter_names()
+        .map(|c| c.cloned().unwrap_or_else(|| ColumnName::from("?column?")))
+        .collect();
 
-    if let Some(dup) = desc.iter_names().flatten().duplicates().next() {
+    if let Some(dup) = names.iter().duplicates().next() {
         bail!("column {} specified more than once", dup.as_str().quoted());
     }
 
     let view = View {
         create_sql,
         expr: relation_expr,
-        column_names: desc.iter_names().map(|n| n.cloned()).collect(),
+        column_names: names,
         temporary,
         depends_on,
     };

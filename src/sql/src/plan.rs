@@ -383,7 +383,7 @@ pub struct Sink {
 pub struct View {
     pub create_sql: String,
     pub expr: ::expr::MirRelationExpr,
-    pub column_names: Vec<Option<ColumnName>>,
+    pub column_names: Vec<ColumnName>,
     pub temporary: bool,
     pub depends_on: Vec<GlobalId>,
 }
