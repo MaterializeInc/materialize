@@ -125,13 +125,6 @@ changes that have not yet been documented.
 - Add `pg_backend_pid` as a dummy function for compatibility with pgcli and
   Apache Superset.
 
-{{< comment >}}
-Only add new release notes above this line.
-
-The presence of this comment ensures that PRs that are alive across a release
-boundary don't silently merge their release notes into the wrong place.
-{{</ comment >}}
-
 - Fix a bug that could cause wrong results in queries that used the `ROWS FROM`
   clause. The bug occurred if functions beyond the second function in the clause
   produced more rows than the first function in the clause.
@@ -168,6 +161,13 @@ boundary don't silently merge their release notes into the wrong place.
   with 1.
 
 - **Breaking change.** Disallow views with multiple unnamed columns.
+
+{{< comment >}}
+Only add new release notes above this line.
+
+The presence of this comment ensures that PRs that are alive across a release
+boundary don't silently merge their release notes into the wrong place.
+{{</ comment >}}
 
 {{% version-header v0.13.0 %}}
 
