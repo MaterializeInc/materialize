@@ -10,7 +10,7 @@ name = "protoc"
 path = "bin/protoc.rs"
 
 [dependencies]
-anyhow = "1.0.51"
+anyhow = "1.0.52"
 ore = { path = "../ore" }
 protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 protobuf-codegen = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }

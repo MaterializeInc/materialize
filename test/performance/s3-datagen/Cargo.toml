@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.51"
+anyhow = "1.0.52"
 aws-sdk-s3 = { version = "0.3.0", default-features = false }
 bytefmt = "0.1.7"
 futures = "0.3.19"
