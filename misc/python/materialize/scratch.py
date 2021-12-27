@@ -15,7 +15,6 @@ import datetime
 import os
 import shlex
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CalledProcessError
 from typing import IO, Dict, List, NamedTuple, Optional, Union
@@ -28,6 +27,7 @@ from mypy_boto3_ec2.type_defs import (
     RunInstancesRequestRequestTypeDef,
 )
 from prettytable import PrettyTable
+from pydantic import BaseModel
 
 from materialize import git, spawn, ui, util
 
@@ -236,13 +236,12 @@ def mkrepo(i: Instance, rev: str) -> None:
     )
 
 
-@dataclass
-class MachineDesc:
+class MachineDesc(BaseModel):
     name: str
     launch_script: Optional[str]
     instance_type: str
     ami: str
-    tags: Dict[str, str]
+    tags: Dict[str, str] = {}
     size_gb: int
     checkout: bool = True
     ami_user: str = "ubuntu"
