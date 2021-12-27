@@ -15,6 +15,7 @@ import datetime
 import os
 import shlex
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CalledProcessError
 from typing import IO, Dict, List, NamedTuple, Optional, Union
@@ -55,6 +56,10 @@ def name(tags: Dict[str, str]) -> Optional[str]:
 
 def launched_by(tags: Dict[str, str]) -> Optional[str]:
     return tags.get("LaunchedBy")
+
+
+def ami_user(tags: Dict[str, str]) -> Optional[str]:
+    return tags.get("ami-user", "ubuntu")
 
 
 def delete_after(tags: Dict[str, str]) -> Optional[datetime.datetime]:
@@ -105,6 +110,7 @@ def launch(
     key_name: Optional[str],
     instance_type: str,
     ami: str,
+    ami_user: str,
     tags: Dict[str, str],
     display_name: Optional[str] = None,
     subnet_id: Optional[str] = None,
@@ -121,6 +127,7 @@ def launch(
     tags["scratch-delete-after"] = str(delete_after.timestamp())
     tags["nonce"] = nonce
     tags["git_ref"] = git.describe()
+    tags["ami-user"] = ami_user
 
     network_interface: InstanceNetworkInterfaceSpecificationTypeDef = {
         "AssociatePublicIpAddress": True,
@@ -196,7 +203,7 @@ async def setup(
     async for remaining in ui.async_timeout_loop(180, 5):
         SPEAKER(f"Checking whether SSH works yet: {remaining}s remaining")
         try:
-            mssh(i.instance_id, "true")
+            mssh(i, "true")
             done = True
             break
         except CalledProcessError:
@@ -216,20 +223,21 @@ async def setup(
 
 
 def mkrepo(i: Instance, rev: str) -> None:
-    mssh(i.instance_id, "git init --bare materialize/.git")
+    mssh(i, "git init --bare materialize/.git")
     spawn.runv(
-        ["git", "push", f"ubuntu@{i.instance_id}:materialize/.git"],
+        ["git", "push", f"{ami_user(tags(i))}@{i.instance_id}:materialize/.git"],
         cwd=ROOT,
         env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
     )
     rev = git.rev_parse(rev)
     mssh(
-        i.instance_id,
+        i,
         f"cd materialize && git config core.bare false && git checkout {rev}",
     )
 
 
-class MachineDesc(NamedTuple):
+@dataclass
+class MachineDesc:
     name: str
     launch_script: Optional[str]
     instance_type: str
@@ -237,6 +245,7 @@ class MachineDesc(NamedTuple):
     tags: Dict[str, str]
     size_gb: int
     checkout: bool = True
+    ami_user: str = "ubuntu"
 
 
 def launch_cluster(
@@ -262,6 +271,7 @@ def launch_cluster(
             key_name=key_name,
             instance_type=d.instance_type,
             ami=d.ami,
+            ami_user=d.ami_user,
             tags={**d.tags, **extra_tags},
             display_name=f"{nonce}-{d.name}",
             size_gb=d.size_gb,
@@ -288,13 +298,13 @@ def launch_cluster(
         (f"{i.private_ip_address}\t{d.name}\n" for (i, d) in zip(instances, descs))
     )
     for i in instances:
-        mssh(i.instance_id, "sudo tee -a /etc/hosts", stdin=hosts_str.encode())
+        mssh(i, "sudo tee -a /etc/hosts", stdin=hosts_str.encode())
 
     env = " ".join(f"{k}={shlex.quote(v)}" for k, v in extra_env.items())
     for (i, d) in zip(instances, descs):
         if d.launch_script:
             mssh(
-                i.instance_id,
+                i,
                 f"cd materialize && {env} nohup bash -c {shlex.quote(d.launch_script)} &> mzscratch.log &",
             )
 
@@ -334,23 +344,27 @@ def get_old_instances() -> List[InstanceTypeDef]:
 
 
 def mssh(
-    instance: str, command: str, *, stdin: Union[None, int, IO[bytes], bytes] = None
+    instance: Instance,
+    command: str,
+    *,
+    stdin: Union[None, int, IO[bytes], bytes] = None,
 ) -> None:
     """Runs a command over SSH via EC2 Instance Connect."""
+    host = f"{ami_user(tags(instance))}@{instance.id}"
     # The actual invocation of SSH that `spawn.runv` wants to print is
     # unreadable quoted garbage, so we do our own printing here before the shell
     # quoting.
     if command:
-        print(f"ubuntu@{instance}$ {command}", file=sys.stderr)
+        print(f"{host}$ {command}", file=sys.stderr)
         # Eval and quote to work around:
         # https://github.com/aws/aws-ec2-instance-connect-cli/pull/26
         command = f"eval {shlex.quote(command)}"
     else:
-        print(f"$ mssh ubuntu@{instance}")
+        print(f"$ mssh {host}")
     spawn.runv(
         [
             *SSH_COMMAND,
-            f"ubuntu@{instance}",
+            f"{host}",
             command,
         ],
         stdin=stdin,

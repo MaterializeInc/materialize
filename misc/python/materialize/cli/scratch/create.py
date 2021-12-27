@@ -80,6 +80,7 @@ def run(args: argparse.Namespace) -> None:
             launch_script=obj.get("launch_script"),
             instance_type=obj["instance_type"],
             ami=obj["ami"],
+            ami_user=obj["ami_user"],
             tags=obj.get("tags", dict()),
             size_gb=obj["size_gb"],
             checkout=obj.get("checkout", True),
