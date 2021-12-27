@@ -13,7 +13,7 @@ prerequisites = [Redpanda(), Materialized()]
 
 services = [
     *prerequisites,
-    Testdrive(shell_eval=True, volumes_extra=["../testdrive:/workdir/testdrive"]),
+    Testdrive(shell_eval=True, volume_workdir="../testdrive:/workdir"),
 ]
 
 
@@ -31,5 +31,5 @@ def workflow_redpanda_testdrive(w: Workflow):
 
     w.run_service(
         service="testdrive-svc",
-        command="grep -L -E 'kafka_time_offset' testdrive/*.td",
+        command="grep -L -E 'kafka_time_offset' *.td",
     )

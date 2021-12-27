@@ -1118,6 +1118,7 @@ class Testdrive(PythonService):
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
         volumes_extra: Optional[List[str]] = None,
+        volume_workdir: str = ".:/workdir",
     ) -> None:
         if environment is None:
             environment = [
@@ -1133,7 +1134,10 @@ class Testdrive(PythonService):
             ]
 
         if volumes is None:
-            volumes = [*DEFAULT_MZ_VOLUMES, ".:/workdir"]
+            volumes = [*DEFAULT_MZ_VOLUMES]
+        if volumes_extra:
+            volumes.extend(volumes_extra)
+        volumes.append(volume_workdir)
 
         if entrypoint is None:
             entrypoint = [
@@ -1151,16 +1155,13 @@ class Testdrive(PythonService):
 
         entrypoint.append(f"--default-timeout {default_timeout}")
 
-        if volumes_extra:
-            volumes.extend(volumes_extra)
-
         if seed:
             entrypoint.append(f"--seed {seed}")
 
         if shell_eval:
             # Evaluate the arguments as a shell command
             # This allows bashisms to be used to prepare the list of tests to run
-            entrypoint.append("`${TD_TEST:-$$*}`")
+            entrypoint.append("${TD_TEST:-`$$*`}")
         else:
             entrypoint.append("${TD_TEST:-$$*}")
 
