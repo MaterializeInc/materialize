@@ -9,7 +9,7 @@
 
 use crate::query_model::{
     BoxId, BoxScalarExpr, BoxType, ColumnReference, DistinctOperation, Model, QuantifierId,
-    QuantifierSet, QuantifierType,
+    QuantifierSet, QuantifierType, Select,
 };
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -43,6 +43,7 @@ pub fn rewrite_model(model: &mut Model) {
         Box::new(ColumnRemoval::new()),
         Box::new(SelectMerge::new()),
         Box::new(ConstantLifting::new()),
+        Box::new(WindowingToSelect::new()),
     ];
 
     apply_rules_to_model(model, &mut rules);
@@ -824,5 +825,41 @@ impl Rule for Decorrelation {
         // those added when the decorrelation logic is applied to a `Get` operator.
         let mut rules: Vec<Box<dyn Rule>> = vec![Box::new(SelectMerge::new())];
         deep_apply_rules(&mut rules, model, box_id, &mut HashSet::new());
+    }
+}
+
+/// Any windowing box not projecting the result of any windowing function can be converted
+/// into a regular Select box.
+struct WindowingToSelect {}
+
+impl WindowingToSelect {
+    fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Rule for WindowingToSelect {
+    fn name(&self) -> &'static str {
+        "WindowingToSelect"
+    }
+
+    fn rule_type(&self) -> RuleType {
+        RuleType::PostOrder
+    }
+
+    fn condition(&mut self, model: &Model, box_id: BoxId) -> bool {
+        let b = model.get_box(box_id);
+        if let BoxType::Windowing = &b.box_type {
+            !b.columns
+                .iter()
+                .any(|c| matches!(c.expr, BoxScalarExpr::Windowing(..)))
+        } else {
+            false
+        }
+    }
+
+    fn action(&mut self, model: &mut Model, box_id: BoxId) {
+        let mut b = model.get_mut_box(box_id);
+        b.box_type = BoxType::Select(Select::new());
     }
 }

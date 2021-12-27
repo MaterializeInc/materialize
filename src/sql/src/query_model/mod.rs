@@ -778,3 +778,14 @@ impl fmt::Display for QuantifierType {
         }
     }
 }
+
+impl Select {
+    fn new() -> Self {
+        Self {
+            predicates: Vec::new(),
+            order_key: None,
+            limit: None,
+            offset: None,
+        }
+    }
+}
