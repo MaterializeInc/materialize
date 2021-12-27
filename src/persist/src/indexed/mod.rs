@@ -33,7 +33,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::error::Error;
 use crate::indexed::arrangement::{Arrangement, ArrangementSnapshot};
-use crate::indexed::background::Maintainer;
+use crate::indexed::background::{CompactTraceReq, CompactTraceRes, Maintainer};
 use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
@@ -42,9 +42,56 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::metrics::Metrics;
 use crate::mem::MemBlob;
-use crate::pfuture::PFutureHandle;
+use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 use crate::unreliable::UnreliableBlob;
+
+/// A request for some work e.g. trace compaction, that can be performed outside
+/// of the main [Indexed] loop.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MaintenanceReq {
+    /// A request to compact a trace by merging together some immutable batches.
+    CompactTrace((Id, CompactTraceReq)),
+}
+
+/// A future for some work that can be completed outside of the main [Indexed]
+/// loop.
+#[derive(Debug)]
+pub enum MaintenanceFuture {
+    /// A future to perform some trace compaction.
+    CompactTrace((Id, PFuture<CompactTraceRes>)),
+}
+
+/// A response for some work that was completed outside of the main [Indexed] loop.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MaintenanceRes {
+    /// The results of performing some trace compaction by merging together some
+    /// immutable trace batches.
+    CompactTrace((Id, Result<CompactTraceRes, Error>)),
+}
+
+impl MaintenanceReq {
+    /// Convert this maintenace request into a future that can be performed asynchronously.
+    pub fn to_future<B: Blob>(self, maintainer: &Maintainer<B>) -> MaintenanceFuture {
+        match self {
+            MaintenanceReq::CompactTrace((id, req)) => {
+                let fut = maintainer.compact_trace(req.clone());
+                MaintenanceFuture::CompactTrace((id, fut))
+            }
+        }
+    }
+}
+
+impl MaintenanceFuture {
+    /// Perform a maintenace request asynchronously.
+    pub async fn run_async(self) -> MaintenanceRes {
+        match self {
+            MaintenanceFuture::CompactTrace((id, fut)) => {
+                MaintenanceRes::CompactTrace((id, fut.await))
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 enum PendingResponse {
@@ -726,11 +773,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// In production, step should just be called in a loop (probably with some
     /// smarts about waiting to call it only after there have been some writes),
     /// but it's exposed this way so we can write deterministic tests.
-    pub fn step(&mut self) -> Result<(), Error> {
+    pub fn step(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
         self.drain_pending()?;
         self.apply_unbatched_cmd(|state, blob, _| state.drain_unsealed(blob))?;
         self.compact()?;
-        Ok(())
+        Ok(vec![])
     }
 }
 

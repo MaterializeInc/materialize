@@ -37,7 +37,7 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Indexed, ListenFn, Snapshot};
+use crate::indexed::{Indexed, ListenFn, MaintenanceRes, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 use futures_executor::block_on;
@@ -56,6 +56,7 @@ enum Cmd {
         ListenFn<Vec<u8>, Vec<u8>>,
         PFutureHandle<ArrangementSnapshot>,
     ),
+    Maintenance(MaintenanceRes),
     Stop(PFutureHandle<()>),
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
@@ -105,9 +106,18 @@ where
 
     // Start up the runtime.
     let blob = BlobCache::new(build, metrics.clone(), blob);
-    let maintainer = Maintainer::new(blob.clone(), pool.clone());
-    let indexed = Indexed::new(log, blob, maintainer, metrics.clone())?;
-    let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
+    let indexed_maintainer = Maintainer::new(blob.clone(), pool.clone());
+    // This maintainer is unused.
+    let runtime_maintainer = Maintainer::new(blob.clone(), pool.clone());
+    let indexed = Indexed::new(log, blob, indexed_maintainer, metrics.clone())?;
+    let mut runtime = RuntimeImpl::new(
+        config.clone(),
+        indexed,
+        runtime_maintainer,
+        rx,
+        tx.clone(),
+        metrics.clone(),
+    );
     let id = RuntimeId::new();
     let runtime_pool = pool.clone();
     let impl_handle = thread::Builder::new()
@@ -207,6 +217,7 @@ impl RuntimeCore {
                 Cmd::AllowCompaction(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
+                Cmd::Maintenance(_) => {}
                 Cmd::Tick => {}
             }
         }
@@ -814,7 +825,10 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
 
 struct RuntimeImpl<L: Log, B: Blob> {
     indexed: Indexed<L, B>,
+    maintainer: Maintainer<B>,
     rx: crossbeam_channel::Receiver<Cmd>,
+    // Used to send maintenance responses back to the [RuntimeImpl].
+    tx: crossbeam_channel::Sender<Cmd>,
     metrics: Metrics,
     prev_step: Instant,
     min_step_interval: Duration,
@@ -856,12 +870,16 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
     fn new(
         config: RuntimeConfig,
         indexed: Indexed<L, B>,
+        maintainer: Maintainer<B>,
         rx: crossbeam_channel::Receiver<Cmd>,
+        tx: crossbeam_channel::Sender<Cmd>,
         metrics: Metrics,
     ) -> Self {
         RuntimeImpl {
             indexed,
+            maintainer,
             rx,
+            tx,
             metrics,
             // Initialize this so it's ready to trigger immediately.
             prev_step: Instant::now() - config.min_step_interval,
@@ -907,9 +925,14 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
             match cmd {
                 Cmd::Stop(res) => {
                     // Finish up any pending work that we can before closing.
-                    if let Err(e) = self.indexed.step() {
-                        self.metrics.cmd_step_error_count.inc();
-                        log::warn!("error running step: {:?}", e);
+                    match self.indexed.step() {
+                        // Don't bother kicking off any compaction when we are about
+                        // to shut down.
+                        Ok(_) => {}
+                        Err(e) => {
+                            self.metrics.cmd_step_error_count.inc();
+                            log::warn!("error running step: {:?}", e);
+                        }
                     }
                     res.fill(self.indexed.close());
                     return false;
@@ -940,6 +963,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 Cmd::Listen(id, listen_fn, res) => {
                     self.indexed.listen(id, listen_fn, res);
                 }
+                Cmd::Maintenance(_) => unimplemented!(),
                 Cmd::Tick => {
                     // This is a no-op. It's only here to give us the
                     // opportunity to hit the step logic below on some minimum
@@ -999,12 +1023,29 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 
         if need_step {
             self.prev_step = step_start;
-            if let Err(e) = self.indexed.step() {
-                self.metrics.cmd_step_error_count.inc();
-                // TODO: revisit whether we need to move this to a different log level
-                // depending on how spammy it ends up being. Alternatively, we
-                // may want to rate-limit our logging here.
-                log::warn!("error running step: {:?}", e);
+            let maintenance_reqs = match self.indexed.step() {
+                Ok(maintenance_reqs) => maintenance_reqs,
+                Err(e) => {
+                    self.metrics.cmd_step_error_count.inc();
+                    // TODO: revisit whether we need to move this to a different log level
+                    // depending on how spammy it ends up being. Alternatively, we
+                    // may want to rate-limit our logging here.
+                    log::warn!("error running step: {:?}", e);
+                    vec![]
+                }
+            };
+
+            for maintenance_req in maintenance_reqs {
+                let sender = self.tx.clone();
+                let maintenance_future = maintenance_req.to_future(&self.maintainer);
+                tokio::spawn(async move {
+                    let resp = maintenance_future.run_async().await;
+                    // The sender can only fail if the runtime is closed, in
+                    // which case we don't need to do anything.
+                    if let Err(crossbeam_channel::SendError(_)) =
+                        sender.send(Cmd::Maintenance(resp))
+                    {}
+                });
             }
 
             self.metrics
