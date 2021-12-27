@@ -197,8 +197,68 @@ I propose the following corollary to Murphy's law:
   > Anything that can go wrong will only go wrong in CI.
 
 It follows that one will frequently need to SSH into build agents to diagnose
-bugs that only occur in CI. You can even attach GDB to a running Rust test
-binary, with a bit of elbow grease.
+bugs that only occur in CI. Unfortunately, per our security policies, only
+infrastructure administrators have access to our running CI agents.
+
+What you can do instead is spin up a scratch EC2 instance based on the same AMI
+as CI. Run this command from your PR that is failing on CI:
+
+```
+$ bin/scratch create <<EOF
+{
+    "name": "ci-agent-alike",
+    "instance_type": "c5.2xlarge",
+    "ami": "ami-00abe272e96e4c11e",
+    "ami_user": "ec2-user",
+    "size_gb": 200
+}
+EOF
+Launched instances:
++-------------------------+---------------------+-------------------+--------------------+-------------------------+---------------------+---------+
+|           Name          |     Instance ID     | Public IP Address | Private IP Address |       Launched By       |     Delete After    |  State  |
++-------------------------+---------------------+-------------------+--------------------+-------------------------+---------------------+---------+
+| dd5ef155-ci-agent-alike | i-0b03bb914c74f9e69 |     3.17.4.234    |     10.1.27.14     | benesch@materialize.com | 2022-01-03 19:30:23 | running |
++-------------------------+---------------------+-------------------+--------------------+-------------------------+---------------------+---------+
+```
+
+<small>* You may need to update the instance type and AMI above as we upgrade our Buildkite agents. The latest Buildkite AMI is available [here][elastic-yml] under
+the `AWSRegion2AMI` heading. Use the AMI for `us-east-2` and `linuxamd64`.</small>
+
+This will create an EC2 instance that looks like a CI agent and push your local
+copy of the repository to it. You can SSH in to the agent using the instance ID
+printed by the previous command and run the CI job that is failing.
+
+Every CI job is a combination of an mzcompose "composition" and a "workflow". A
+composition is the name of a directory containing an mzcompose.yml or
+mzworkflows.py file. A workflow is the name of a service or Python function to
+run within the composition. You can see the definition of each CI job in
+[ci/test/pipeline.template.yml](./test/pipeline.template.yml). To invoke a
+workflow manually, you run `bin/mzcompose --mz-find COMPOSITION run WORKFLOW`.
+
+For example, here's how you'd run the testdrive job on the EC2 instance:
+
+```
+bin/scratch ssh INSTANCE-ID
+cd materialize
+bin/mzcompose --mz-find testdrive run testdrive-ci
+```
+
+If the test fails like it did in CI, you're set! You now have a reliable way to
+reproduce the problem. When you're done debugging, be sure to spin down the
+instance:
+
+```
+bin/scratch destroy INSTANCE-ID
+```
+
+### Serious heisenbugs
+
+If you're unable to reproduce the bug on a CI-alike agent, you'll need to enlist
+the help of someone on the infrastructure team who can SSH into an actual
+running CI agent.
+
+You can even attach GDB to a running Rust test binary, with a bit of elbow
+grease.
 
 You'll need the ID of the container in which the faulty process is running and
 the exact version of the image it's running. The goal is to launch a new
@@ -236,3 +296,4 @@ $ gdb -p <FAULTY-PROCESS-PID>
 [MaterializeInc/homebrew-crosstools]: https://github.com/MaterializeInc/homebrew-crosstools
 [materializer GitHub user]: https://github.com/materializer
 [actions/runner#805]: https://github.com/actions/runner/issues/805
+[elastic-yml]: https://s3.amazonaws.com/buildkite-aws-stack/latest/aws-stack.yml
