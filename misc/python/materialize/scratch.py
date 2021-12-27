@@ -70,6 +70,10 @@ def delete_after(tags: Dict[str, str]) -> Optional[datetime.datetime]:
     return datetime.datetime.fromtimestamp(unix)
 
 
+def instance_host(instance: Instance) -> str:
+    return f"{ami_user(tags(instance))}@{instance.id}"
+
+
 def print_instances(ists: List[Instance], format: str) -> None:
     field_names = [
         "Name",
@@ -225,7 +229,14 @@ async def setup(
 def mkrepo(i: Instance, rev: str) -> None:
     mssh(i, "git init --bare materialize/.git")
     spawn.runv(
-        ["git", "push", f"{ami_user(tags(i))}@{i.instance_id}:materialize/.git"],
+        [
+            "git",
+            "push",
+            f"{instance_host(i)}:materialize/.git",
+            # Explicit refspec is required if the host repository is in detached
+            # HEAD mode.
+            "HEAD:refs/heads/scratch",
+        ],
         cwd=ROOT,
         env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
     )
@@ -349,7 +360,7 @@ def mssh(
     stdin: Union[None, int, IO[bytes], bytes] = None,
 ) -> None:
     """Runs a command over SSH via EC2 Instance Connect."""
-    host = f"{ami_user(tags(instance))}@{instance.id}"
+    host = instance_host(instance)
     # The actual invocation of SSH that `spawn.runv` wants to print is
     # unreadable quoted garbage, so we do our own printing here before the shell
     # quoting.
