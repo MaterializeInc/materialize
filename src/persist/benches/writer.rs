@@ -10,7 +10,6 @@
 //! Benchmarks for different persistent Write implementations.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use criterion::measurement::WallTime;
@@ -21,11 +20,9 @@ use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use rand::prelude::{SliceRandom, SmallRng};
 use rand::{Rng, SeedableRng};
-use tokio::runtime::Runtime;
 
 use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
-use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
 use persist::indexed::encoding::{BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
@@ -260,9 +257,8 @@ pub fn bench_writes_indexed(c: &mut Criterion) {
 
     let metrics = Metrics::register_with(&MetricsRegistry::new());
     let blob_cache = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics.clone(), file_blob);
-    let compacter = Maintainer::new(blob_cache.clone(), Arc::new(Runtime::new().unwrap()));
-    let file_indexed = Indexed::new(file_log, blob_cache, compacter, metrics)
-        .expect("failed to create file indexed");
+    let file_indexed =
+        Indexed::new(file_log, blob_cache, metrics).expect("failed to create file indexed");
     bench_writes_indexed_inner(file_indexed, "file", &mut group).expect("running benchmark failed");
 }
 

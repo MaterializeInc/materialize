@@ -16,10 +16,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
-use tokio::runtime::Runtime;
 
 use crate::error::Error;
-use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
 use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
@@ -438,8 +436,7 @@ impl MemRegistry {
             metrics.clone(),
             self.blob_no_reentrance()?,
         );
-        let compacter = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
-        Indexed::new(log, blob, compacter, metrics)
+        Indexed::new(log, blob, metrics)
     }
 
     /// Returns a [RuntimeClient] with unreliable storage backed by the given
@@ -454,8 +451,7 @@ impl MemRegistry {
         let blob = self.blob_no_reentrance()?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
         let blob = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics.clone(), blob);
-        let compacter = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
-        Indexed::new(log, blob, compacter, metrics)
+        Indexed::new(log, blob, metrics)
     }
 
     /// Starts a [RuntimeClient] using the [MemLog] and [MemBlob] contained by

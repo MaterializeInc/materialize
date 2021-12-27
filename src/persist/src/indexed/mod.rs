@@ -75,7 +75,7 @@ impl MaintenanceReq {
     pub fn to_future<B: Blob>(self, maintainer: &Maintainer<B>) -> MaintenanceFuture {
         match self {
             MaintenanceReq::CompactTrace((id, req)) => {
-                let fut = maintainer.compact_trace(req.clone());
+                let fut = maintainer.compact_trace(req);
                 MaintenanceFuture::CompactTrace((id, fut))
             }
         }
@@ -125,6 +125,7 @@ struct Pending {
     writes: HashMap<Id, Vec<ColumnarRecords>>,
     responses: Vec<PendingResponse>,
     seals: HashMap<Id, u64>,
+    deleted_trace_batches: Vec<Vec<TraceBatchMeta>>,
     durable_meta: BlobMeta,
 }
 
@@ -134,6 +135,7 @@ impl Pending {
             writes: HashMap::new(),
             responses: Vec::new(),
             seals: HashMap::new(),
+            deleted_trace_batches: Vec::new(),
             durable_meta,
         }
     }
@@ -155,6 +157,10 @@ impl Pending {
         for id in ids {
             self.seals.insert(id, seal);
         }
+    }
+
+    fn add_deleted_trace_batches(&mut self, batches: Vec<TraceBatchMeta>) {
+        self.deleted_trace_batches.push(batches);
     }
 }
 
@@ -189,7 +195,6 @@ pub struct Indexed<L: Log, B: Blob> {
     // Indexed or somewhere else.
     log: L,
     blob: BlobCache<B>,
-    maintainer: Maintainer<B>,
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
     metrics: Metrics,
     state: AppliedState,
@@ -215,12 +220,7 @@ struct AppliedState {
 impl<L: Log, B: Blob> Indexed<L, B> {
     /// Returns a new Indexed, initializing each Unsealed and Trace with the
     /// existing data for them in the blob storage, if any.
-    pub fn new(
-        mut log: L,
-        mut blob: BlobCache<B>,
-        maintainer: Maintainer<B>,
-        metrics: Metrics,
-    ) -> Result<Self, Error> {
+    pub fn new(mut log: L, mut blob: BlobCache<B>, metrics: Metrics) -> Result<Self, Error> {
         let meta = blob
             .get_meta()
             .map_err(|err| {
@@ -243,7 +243,6 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         let indexed = Indexed {
             log,
             blob,
-            maintainer,
             listeners: HashMap::new(),
             metrics,
             state,
@@ -355,7 +354,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// Precondition: pending has been emptied
     fn apply_unbatched_cmd<
         T,
-        WorkFn: FnOnce(&mut AppliedState, &mut BlobCache<B>, &mut Maintainer<B>) -> Result<T, Error>,
+        WorkFn: FnOnce(&mut AppliedState, &mut BlobCache<B>) -> Result<T, Error>,
     >(
         &mut self,
         work_fn: WorkFn,
@@ -367,7 +366,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         self.validate_pending_empty()?;
 
         let meta_before = self.state.serialize_meta();
-        let work_ret = match work_fn(&mut self.state, &mut self.blob, &mut self.maintainer) {
+        let work_ret = match work_fn(&mut self.state, &mut self.blob) {
             Ok(work_ret) => work_ret,
             Err(err) => {
                 self.state = AppliedState::new(meta_before);
@@ -428,7 +427,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ) {
         res.fill((|| {
             self.drain_pending()?;
-            self.apply_unbatched_cmd(|state, _, _| {
+            self.apply_unbatched_cmd(|state, _| {
                 state.do_register(id_str, key_codec_name, val_codec_name)
             })
         })());
@@ -498,7 +497,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     pub fn destroy(&mut self, id_str: &str, res: PFutureHandle<bool>) {
         res.fill((|| {
             self.drain_pending()?;
-            self.apply_unbatched_cmd(|state, _, _| state.do_destroy(id_str))
+            self.apply_unbatched_cmd(|state, _| state.do_destroy(id_str))
         })());
     }
 }
@@ -665,6 +664,17 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 let mut responses = pending.responses;
                 responses.drain(..).for_each(|r| r.fill());
                 self.update_listeners(updates_for_listeners, seals_for_listeners);
+
+                // We can physically delete these trace batches because we successfully
+                // committed the logical deletes to meta.
+                let deleted_trace_batches = pending.deleted_trace_batches;
+                for batches in deleted_trace_batches {
+                    self.metrics.compaction_count.inc();
+                    for batch in batches {
+                        self.blob.delete_trace_batch(&batch)?;
+                    }
+                }
+
                 Ok(())
             }
             Err(e) => {
@@ -685,36 +695,17 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 }
 
 impl AppliedState {
-    fn compact_inner<B: Blob>(
-        &mut self,
-        maintainer: &Maintainer<B>,
-    ) -> Result<(u64, Vec<UnsealedBatchMeta>, Vec<TraceBatchMeta>), Error> {
-        let mut total_written_bytes = 0;
+    fn compact_unsealed(&mut self) -> Result<Vec<UnsealedBatchMeta>, Error> {
         let mut deleted_unsealed_batches = vec![];
-        let mut deleted_trace_batches = vec![];
         for arrangement in self.arrangements.values_mut() {
             deleted_unsealed_batches.extend(arrangement.unsealed_evict());
-            let req = arrangement.trace_next_compact_req()?;
-            let (written_bytes, deleted_batches) = if let Some(req) = req {
-                let fut = maintainer.compact_trace(req);
-                let res = fut.recv()?;
-                arrangement.trace_handle_compact_response(res)
-            } else {
-                (0, vec![])
-            };
-            total_written_bytes += written_bytes;
-            deleted_trace_batches.extend(deleted_batches);
         }
-        Ok((
-            total_written_bytes,
-            deleted_unsealed_batches,
-            deleted_trace_batches,
-        ))
+        Ok(deleted_unsealed_batches)
     }
 }
 
 impl<L: Log, B: Blob> Indexed<L, B> {
-    /// Compact all traces and truncate all unsealeds, if possible.
+    /// Truncate all unsealeds, as much as possible.
     ///
     /// Precondition: pending has been emptied
     ///
@@ -724,27 +715,24 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// assuming data mostly arrives in order, or not very far in advance of the
     /// currently sealed time. We will need to revisit the unsealed compaction if
     /// that assumption stops being true.
-    fn compact(&mut self) -> Result<(), Error> {
+    fn compact_unsealed(&mut self) -> Result<(), Error> {
         // NB: This validate_pending_empty is intentionally a returned error
         // instead of an assert because it's a precondition (and so a violation
         // means a usage error by the caller of this).
         self.validate_pending_empty()?;
 
         let compaction_start = Instant::now();
-        let ret = self.apply_unbatched_cmd(|state, _, maintainer| state.compact_inner(maintainer));
+        let ret = self.apply_unbatched_cmd(|state, _| state.compact_unsealed());
 
         // Track compaction_seconds even if compaction failed.
         self.metrics
             .compaction_seconds
             .inc_by(compaction_start.elapsed().as_secs_f64());
 
-        let (total_written_bytes, deleted_unsealed_batches, deleted_trace_batches) = ret?;
-        if !deleted_unsealed_batches.is_empty() || !deleted_trace_batches.is_empty() {
+        let deleted_unsealed_batches = ret?;
+        if !deleted_unsealed_batches.is_empty() {
             self.metrics.compaction_count.inc();
         }
-        self.metrics
-            .compaction_write_bytes
-            .inc_by(total_written_bytes);
 
         // After we've committed our logical deletions to durable storage, we can
         // physically delete the data.
@@ -760,11 +748,64 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             self.blob.delete_unsealed_batch(&batch)?;
         }
 
-        for batch in deleted_trace_batches {
-            self.blob.delete_trace_batch(&batch)?;
+        Ok(())
+    }
+
+    fn compact_trace_maintenance_reqs(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
+        let mut reqs = vec![];
+        for (id, arrangement) in self.state.arrangements.iter() {
+            if let Some(req) = arrangement.trace_next_compact_req()? {
+                reqs.push(MaintenanceReq::CompactTrace((*id, req.clone())));
+            }
+        }
+        Ok(reqs)
+    }
+
+    /// Handle the results of a prior request to compact a trace.
+    fn handle_compact_trace_res(&mut self, id: Id, res: Result<CompactTraceRes, Error>) {
+        // We received a request to compact a trace that was subsequently deleted, and can
+        // safely ignore the results of that compaction.
+        // TODO: delete the newly created trace batch.
+        if !self.state.arrangements.contains_key(&id) {
+            log::trace!(
+                "received trace compaction response for deleted stream id: {:?}. Ignoring.",
+                id
+            );
+            return;
         }
 
-        Ok(())
+        let res = match res {
+            Ok(res) => res,
+            Err(_) => {
+                // TODO: we should ignore this error if it doesn't correspond
+                // to the currently in-flight request, to avoid sending the
+                // Maintainer duplicate requests if it sends us duplicated/stale
+                // errors.
+                self.metrics.trace_compaction_error_response_count.inc();
+                return;
+            }
+        };
+
+        let written_bytes = res.merged.size_bytes;
+        self.metrics.compaction_write_bytes.inc_by(written_bytes);
+
+        self.apply_batched_cmd(|state, pending| {
+            let arrangement = state
+                .arrangements
+                .get_mut(&id)
+                .expect("arrangement known to exist");
+            let (_, deleted_trace_batches) = arrangement.trace_handle_compact_response(res);
+            if !deleted_trace_batches.is_empty() {
+                pending.add_deleted_trace_batches(deleted_trace_batches);
+            }
+        });
+    }
+
+    /// Handle the results of a previously sent maintenance request.
+    fn handle_maintenance_res(&mut self, res: MaintenanceRes) {
+        match res {
+            MaintenanceRes::CompactTrace((id, res)) => self.handle_compact_trace_res(id, res),
+        };
     }
 
     /// Drains writes from the log into the unsealed and does any necessary
@@ -775,9 +816,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// but it's exposed this way so we can write deterministic tests.
     pub fn step(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
         self.drain_pending()?;
-        self.apply_unbatched_cmd(|state, blob, _| state.drain_unsealed(blob))?;
-        self.compact()?;
-        Ok(vec![])
+        self.apply_unbatched_cmd(|state, blob| state.drain_unsealed(blob))?;
+        self.compact_unsealed()?;
+        self.compact_trace_maintenance_reqs()
     }
 }
 
@@ -1021,7 +1062,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn get_description(&mut self, id_str: &str, res: PFutureHandle<Description<u64>>) {
         res.fill((|| {
             self.drain_pending()?;
-            self.apply_unbatched_cmd(|state, _, _| {
+            self.apply_unbatched_cmd(|state, _| {
                 let registration = state.id_mapping.iter().find(|s| s.name == id_str);
                 match registration {
                     Some(registration) => {
@@ -1236,13 +1277,15 @@ impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
+    use std::sync::{mpsc, Arc};
+
+    use tokio::runtime::Runtime;
 
     use crate::error::Error;
     use crate::indexed::SnapshotExt;
-    use crate::mem::MemRegistry;
+    use crate::mem::{MemBlob, MemLog, MemRegistry};
     use crate::pfuture::PFuture;
-    use crate::unreliable::UnreliableHandle;
+    use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
     use super::*;
 
@@ -1260,6 +1303,36 @@ mod tests {
         let (tx, rx) = PFuture::new();
         f(tx);
         rx.recv()
+    }
+
+    fn indexed_and_maintainer(
+        unreliable: UnreliableHandle,
+    ) -> Result<
+        (
+            Indexed<UnreliableLog<MemLog>, UnreliableBlob<MemBlob>>,
+            Maintainer<UnreliableBlob<MemBlob>>,
+        ),
+        Error,
+    > {
+        let registry = MemRegistry::new();
+        let log = registry.log_no_reentrance()?;
+        let log = UnreliableLog::from_handle(log, unreliable.clone());
+        let metrics = Metrics::default();
+        let blob = registry.blob_no_reentrance()?;
+        let blob = UnreliableBlob::from_handle(blob, unreliable);
+        let blob = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics.clone(), blob);
+        let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        let i = Indexed::new(log, blob, metrics)?;
+
+        Ok((i, maintainer))
+    }
+
+    fn get_maintenance_response<B: Blob>(
+        maintainer: &Maintainer<B>,
+        req: MaintenanceReq,
+    ) -> MaintenanceRes {
+        let fut = req.to_future(&maintainer);
+        futures_executor::block_on(fut.run_async())
     }
 
     #[test]
@@ -1358,6 +1431,133 @@ mod tests {
         block_on_drain(&mut i, |i, handle| {
             i.allow_compaction(vec![(id, Antichain::from_elem(2))], handle)
         })?;
+
+        Ok(())
+    }
+
+    fn trace_compaction_setup(
+        unreliable: UnreliableHandle,
+    ) -> Result<
+        (
+            Indexed<UnreliableLog<MemLog>, UnreliableBlob<MemBlob>>,
+            Maintainer<UnreliableBlob<MemBlob>>,
+            Id,
+        ),
+        Error,
+    > {
+        let (mut i, maintainer) = indexed_and_maintainer(unreliable)?;
+
+        let updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)> = vec![
+            (("1".into(), "".into()), 1, 1),
+            (("2".into(), "".into()), 2, 1),
+            (("3".into(), "".into()), 3, 1),
+            (("4".into(), "".into()), 4, 1),
+            (("5".into(), "".into()), 5, 1),
+        ];
+
+        let reqs = i.step()?;
+        // No trace compaction requests when no streams are registered.
+        assert_eq!(reqs, vec![]);
+
+        let id = block_on(|res| i.register("0", "()", "()", res))?;
+
+        let reqs = i.step()?;
+        // No maintenace requests when the registered stream has no data
+        // in the trace.
+        assert_eq!(reqs, vec![]);
+
+        // Move data into unsealed.
+        block_on_drain(&mut i, |i, handle| {
+            i.write(
+                vec![(id, updates.iter().collect::<ColumnarRecords>())],
+                handle,
+            )
+        })?;
+
+        // Move data into trace, one timestamp at a time.
+        for t in 2..7 {
+            block_on_drain(&mut i, |i, handle| i.seal(vec![id], t, handle))?;
+            let reqs = i.step()?;
+            // There will not be any compaction requests because the compaction
+            // frontier has not advanced.
+            assert_eq!(reqs, vec![]);
+        }
+
+        // Advance the compaction frontier to a time that has been sealed.
+        block_on_drain(&mut i, |i, handle| {
+            i.allow_compaction(vec![(id, Antichain::from_elem(5))], handle)
+        })?;
+
+        Ok((i, maintainer, id))
+    }
+
+    /// Test the communication protocol between [Indexed] and [Maintainer]
+    /// specifically for trace compaction requests.
+    #[test]
+    fn trace_compaction() -> Result<(), Error> {
+        let mut unreliable = UnreliableHandle::default();
+        let (mut i, maintainer, id) = trace_compaction_setup(unreliable.clone())?;
+
+        let reqs = i.step()?;
+        assert_eq!(reqs.len(), 1);
+        let request = reqs[0].clone();
+
+        // Handle receiving an error MaintenanceRes.
+        let error_response =
+            MaintenanceRes::CompactTrace((id, Err(Error::from("test compaction error"))));
+        i.handle_maintenance_res(error_response.clone());
+        assert_eq!(i.drain_pending(), Ok(()));
+
+        // After receiving an error, retry the original request.
+        let reqs = i.step()?;
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0], request);
+
+        // Handle receiving a valid MaintenanceRes.
+        let response = get_maintenance_response(&maintainer, request.clone());
+
+        i.handle_maintenance_res(response);
+        assert_eq!(i.drain_pending(), Ok(()));
+
+        // After receiving a valid response, issue a new compaction request.
+        let reqs = i.step()?;
+        assert_eq!(reqs.len(), 1);
+        let request2 = reqs[0].clone();
+        assert!(request2 != request);
+
+        // Construct a new valid, response.
+        let response2 = get_maintenance_response(&maintainer, request2.clone());
+
+        // Send back an error response. After this there are no requests in flight.
+        i.handle_maintenance_res(error_response);
+        assert_eq!(i.drain_pending(), Ok(()));
+
+        // Retry request after error response.
+        let reqs = i.step()?;
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0], request2);
+
+        // Handle failed write to metadata after receiving a response.
+        i.handle_maintenance_res(response2.clone());
+        unreliable.make_unavailable();
+        assert_eq!(i.drain_pending(), Err(Error::from("unavailable: blob set")));
+        unreliable.make_available();
+
+        // Retry request after failed meta write.
+        let reqs = i.step()?;
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0], request2);
+
+        // Handle receiving a response after the trace is deleted.
+        block_on(|res| i.destroy("0", res))?;
+
+        // Handle receiving an valid MaintenanceRes for a stream that has been deleted.
+        i.handle_maintenance_res(response2);
+        assert_eq!(i.drain_pending(), Ok(()));
+
+        // Don't produce any more requests because the stream is deleted.
+        let reqs = i.step()?;
+        assert_eq!(reqs, vec![]);
 
         Ok(())
     }

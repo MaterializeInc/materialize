@@ -106,14 +106,12 @@ where
 
     // Start up the runtime.
     let blob = BlobCache::new(build, metrics.clone(), blob);
-    let indexed_maintainer = Maintainer::new(blob.clone(), pool.clone());
-    // This maintainer is unused.
-    let runtime_maintainer = Maintainer::new(blob.clone(), pool.clone());
-    let indexed = Indexed::new(log, blob, indexed_maintainer, metrics.clone())?;
+    let maintainer = Maintainer::new(blob.clone(), pool.clone());
+    let indexed = Indexed::new(log, blob, metrics.clone())?;
     let mut runtime = RuntimeImpl::new(
         config.clone(),
         indexed,
-        runtime_maintainer,
+        maintainer,
         rx,
         tx.clone(),
         metrics.clone(),
@@ -963,7 +961,9 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 Cmd::Listen(id, listen_fn, res) => {
                     self.indexed.listen(id, listen_fn, res);
                 }
-                Cmd::Maintenance(_) => unimplemented!(),
+                Cmd::Maintenance(res) => {
+                    self.indexed.handle_maintenance_res(res);
+                }
                 Cmd::Tick => {
                     // This is a no-op. It's only here to give us the
                     // opportunity to hit the step logic below on some minimum
