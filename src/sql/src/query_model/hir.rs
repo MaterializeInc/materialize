@@ -180,7 +180,7 @@ impl FromHir {
                     });
                     // Add it to the grouping key and to the projection of the
                     // Grouping box
-                    key.push(Box::new(select_box_col_ref.clone()));
+                    key.push(select_box_col_ref.clone());
                     self.model.get_mut_box(group_box_id).columns.push(Column {
                         expr: select_box_col_ref,
                         alias: None,
@@ -415,8 +415,8 @@ impl FromHir {
     fn add_predicate(&mut self, box_id: BoxId, predicate: BoxScalarExpr) {
         let mut the_box = self.model.get_mut_box(box_id);
         match &mut the_box.box_type {
-            BoxType::Select(select) => select.predicates.push(Box::new(predicate)),
-            BoxType::OuterJoin(outer_join) => outer_join.predicates.push(Box::new(predicate)),
+            BoxType::Select(select) => select.predicates.push(predicate),
+            BoxType::OuterJoin(outer_join) => outer_join.predicates.push(predicate),
             _ => unreachable!(),
         }
     }

@@ -187,23 +187,23 @@ pub struct Get {
 /// The content of a Grouping box.
 #[derive(Debug, Default)]
 pub struct Grouping {
-    pub key: Vec<Box<BoxScalarExpr>>,
+    pub key: Vec<BoxScalarExpr>,
 }
 
 /// The content of a OuterJoin box.
 #[derive(Debug, Default)]
 pub struct OuterJoin {
     /// The predices in the ON clause of the outer join.
-    pub predicates: Vec<Box<BoxScalarExpr>>,
+    pub predicates: Vec<BoxScalarExpr>,
 }
 
 /// The content of a Select box.
 #[derive(Debug, Default)]
 pub struct Select {
     /// The list of predicates applied by the box.
-    pub predicates: Vec<Box<BoxScalarExpr>>,
+    pub predicates: Vec<BoxScalarExpr>,
     /// An optional ORDER BY key
-    pub order_key: Option<Vec<Box<BoxScalarExpr>>>,
+    pub order_key: Option<Vec<BoxScalarExpr>>,
     /// An optional LIMIT clause
     pub limit: Option<BoxScalarExpr>,
     /// An optional OFFSET clause
@@ -212,13 +212,13 @@ pub struct Select {
 
 #[derive(Debug, Default)]
 pub struct TableFunction {
-    pub parameters: Vec<Box<BoxScalarExpr>>,
+    pub parameters: Vec<BoxScalarExpr>,
     // @todo function metadata from the catalog
 }
 
 #[derive(Debug, Default)]
 pub struct Values {
-    pub rows: Vec<Vec<Box<BoxScalarExpr>>>,
+    pub rows: Vec<Vec<BoxScalarExpr>>,
 }
 
 impl Model {
