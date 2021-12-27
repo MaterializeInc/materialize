@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.51"
+anyhow = "1.0.52"
 async-trait = "0.1.52"
 aws-config = { version = "0.3.0", default-features = false, features = ["default-provider", "native-tls"] }
 aws-types = { version = "0.3.0", features = ["hardcoded-credentials"] }

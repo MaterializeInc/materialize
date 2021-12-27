@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0.51"
+anyhow = "1.0.52"
 aws-config = { version = "0.3.0", default-features = false, features = ["default-provider", "native-tls"] }
 aws-smithy-client = { version = "0.33.1", default-features = false }
 aws-smithy-http = "0.33.1"
