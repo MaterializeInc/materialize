@@ -204,7 +204,7 @@ def main() -> None:
                 if n == ns.records:
                     break
             except (
-                psycopg2.errors.SqlStatementNotYetComplete,  # type: ignore
+                psycopg2.errors.SqlStatementNotYetComplete,
                 psycopg2.errors.InternalError,
             ):
                 pass

@@ -50,7 +50,7 @@ def view_contents(cursor: psycopg2.extensions.cursor, view: str, timestamp: int)
     query = f"COPY (SELECT * FROM {view} WHERE mz_logical_timestamp() > {timestamp}) TO STDOUT"
     try:
         cursor.copy_expert(query, stream)  # type: ignore
-    except psycopg2.errors.InternalError_:  # type: ignore
+    except psycopg2.errors.InternalError_:
         # The view is not yet ready to be queried
         raise ViewNotReady()
     return stream.getvalue().strip()
@@ -82,7 +82,7 @@ def source_at_offset(
             return None
 
         return int(cursor.fetchone()[0])
-    except psycopg2.errors.InternalError_:  # type: ignore
+    except psycopg2.errors.InternalError_:
         # The view is not yet ready to be queried
         return None
 
