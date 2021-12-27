@@ -10,6 +10,7 @@
 //! A runtime for background asynchronous maintenance of stored data.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -24,6 +25,7 @@ use crate::indexed::arrangement::Arrangement;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::ColumnarRecordsVec;
 use crate::indexed::encoding::{BlobTraceBatch, TraceBatchMeta};
+use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFuture;
 use crate::storage::{Blob, BlobRead};
 
@@ -60,14 +62,20 @@ pub struct Maintainer<B> {
     // thread. Perhaps we should split the Meta parts out of BlobCache.
     blob: Arc<BlobCache<B>>,
     async_runtime: Arc<AsyncRuntime>,
+    metrics: Arc<Metrics>,
 }
 
 impl<B: BlobRead> Maintainer<B> {
     /// Returns a new [Maintainer].
-    pub fn new(blob: BlobCache<B>, async_runtime: Arc<AsyncRuntime>) -> Self {
+    pub fn new(
+        blob: BlobCache<B>,
+        async_runtime: Arc<AsyncRuntime>,
+        metrics: Arc<Metrics>,
+    ) -> Self {
         Maintainer {
             blob: Arc::new(blob),
             async_runtime,
+            metrics,
         }
     }
 }
@@ -78,23 +86,27 @@ impl<B: Blob> Maintainer<B> {
     pub fn compact_trace(&self, req: CompactTraceReq) -> PFuture<CompactTraceRes> {
         let (tx, rx) = PFuture::new();
         let blob = Arc::clone(&self.blob);
+        let metrics = Arc::clone(&self.metrics);
         // Ignore the spawn_blocking response since we communicate
         // success/failure through the returned future.
         //
         // TODO: Push the spawn_blocking down into the cpu-intensive bits and
         // use spawn here once the storage traits are made async.
+        //
         // TODO(guswynn): consider adding more info to the task name here
         let _ = self.async_runtime.spawn_blocking_named(
             || "persist_trace_compaction",
-            move || tx.fill(Self::compact_trace_blocking(blob, req)),
+            move || tx.fill(Self::compact_trace_blocking(blob, metrics, req)),
         );
         rx
     }
 
     fn compact_trace_blocking(
         blob: Arc<BlobCache<B>>,
+        metrics: Arc<Metrics>,
         req: CompactTraceReq,
     ) -> Result<CompactTraceRes, Error> {
+        let start = Instant::now();
         let (first, second) = (&req.b0, &req.b1);
         if first.desc.upper() != second.desc.lower() {
             return Err(Error::from(format!(
@@ -168,6 +180,10 @@ impl<B: Blob> Maintainer<B> {
             level: merged_level,
             size_bytes,
         };
+
+        metrics
+            .compaction_seconds
+            .inc_by(start.elapsed().as_secs_f64());
         Ok(CompactTraceRes { req, merged })
     }
 }
@@ -195,13 +211,14 @@ mod tests {
     #[test]
     fn compact_trace() -> Result<(), Error> {
         let async_runtime = Arc::new(AsyncRuntime::new()?);
+        let metrics = Arc::new(Metrics::default());
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
         );
-        let maintainer = Maintainer::new(blob.clone(), async_runtime);
+        let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
 
         let b0 = BlobTraceBatch {
             desc: desc_from(0, 1, 0),
@@ -278,13 +295,14 @@ mod tests {
     #[test]
     fn compact_trace_errors() -> Result<(), Error> {
         let async_runtime = Arc::new(AsyncRuntime::new()?);
+        let metrics = Arc::new(Metrics::default());
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
         );
-        let maintainer = Maintainer::new(blob, async_runtime);
+        let maintainer = Maintainer::new(blob, async_runtime, metrics);
 
         // Non-contiguous batch descs
         let req = CompactTraceReq {

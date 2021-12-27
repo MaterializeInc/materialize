@@ -29,7 +29,6 @@ use tokio::runtime::Runtime as AsyncRuntime;
 use persist::client::WriteReqBuilder;
 use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
-use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
 use persist::indexed::encoding::{BlobTraceBatch, BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
@@ -269,12 +268,11 @@ pub fn bench_indexed_drain(data: &DataGenerator, g: &mut BenchmarkGroup<'_, Wall
     let blob_cache = BlobCache::new(
         build_info::DUMMY_BUILD_INFO,
         Arc::clone(&metrics),
-        Arc::clone(&async_runtime),
+        async_runtime,
         file_blob,
     );
-    let compacter = Maintainer::new(blob_cache.clone(), async_runtime);
-    let file_indexed = Indexed::new(file_log, blob_cache, compacter, metrics)
-        .expect("failed to create file indexed");
+    let file_indexed =
+        Indexed::new(file_log, blob_cache, metrics).expect("failed to create file indexed");
     bench_writes_indexed_inner(data, g, "file", file_indexed).expect("running benchmark failed");
 }
 

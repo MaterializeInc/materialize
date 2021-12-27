@@ -22,7 +22,7 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::Error;
-use crate::indexed::background::{CompactTraceReq, Maintainer};
+use crate::indexed::background::{CompactTraceReq, CompactTraceRes};
 use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::ColumnarRecordsVec;
 use crate::indexed::encoding::{
@@ -583,16 +583,8 @@ impl Arrangement {
         }
     }
 
-    /// Take one step towards compacting the trace.
-    ///
-    /// Returns a list of trace batches that can now be physically deleted after
-    /// the compaction step is committed to durable storage.
-    pub fn trace_step<B: Blob>(
-        &mut self,
-        maintainer: &Maintainer<B>,
-    ) -> Result<(u64, Vec<TraceBatchMeta>), Error> {
-        let mut written_bytes = 0;
-        let mut deleted = vec![];
+    /// Get the next available compaction work from the trace, if some exists.
+    pub fn trace_next_compact_req(&self) -> Result<Option<CompactTraceReq>, Error> {
         // TODO: should we remember our position in this list?
         for i in 1..self.trace_batches.len() {
             if (self.trace_batches[i - 1].level == self.trace_batches[i].level)
@@ -606,25 +598,38 @@ impl Arrangement {
                     b1,
                     since: self.since.clone(),
                 };
-                let res = maintainer.compact_trace(req).recv()?;
-                let mut new_batch = res.merged;
-                written_bytes += new_batch.size_bytes;
 
-                // TODO: more performant way to do this?
+                return Ok(Some(req));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Handle an externally completed trace compaction request.
+    ///
+    /// Returns a list of trace batches that can now be physically deleted after
+    /// the compaction step is committed to durable storage.
+    pub fn trace_handle_compact_response(&mut self, res: CompactTraceRes) -> Vec<TraceBatchMeta> {
+        let mut deleted = vec![];
+        for i in 1..self.trace_batches.len() {
+            let b0 = &self.trace_batches[i - 1];
+            let b1 = &self.trace_batches[i];
+
+            if &res.req.b0 == b0 && &res.req.b1 == b1 {
+                let mut new_batch = res.merged;
                 deleted.push(self.trace_batches.remove(i));
                 mem::swap(&mut self.trace_batches[i - 1], &mut new_batch);
                 deleted.push(new_batch);
 
                 // Sanity check that the modified list of batches satisfies
                 // all invariants.
-                if cfg!(any(debug_assertions, test)) {
-                    self.meta().validate()?;
-                }
+                debug_assert_eq!(self.meta().validate(), Ok(()));
 
                 break;
             }
         }
-        Ok((written_bytes, deleted))
+
+        return deleted;
     }
 }
 
@@ -909,10 +914,34 @@ mod tests {
     use crate::indexed::columnar::ColumnarRecords;
     use crate::indexed::encoding::Id;
     use crate::indexed::metrics::Metrics;
+    use crate::indexed::Maintainer;
     use crate::indexed::SnapshotExt;
     use crate::mem::{MemBlob, MemRegistry};
 
     use super::*;
+
+    /// Take one step towards compacting the trace.
+    ///
+    /// Returns a list of trace batches that can now be physically deleted after
+    /// the compaction step is committed to durable storage.
+    fn trace_step<B: Blob>(
+        arrangement: &mut Arrangement,
+        maintainer: &Maintainer<B>,
+    ) -> Result<(u64, Vec<TraceBatchMeta>), Error> {
+        let req = arrangement.trace_next_compact_req()?;
+
+        if let Some(req) = req {
+            let fut = maintainer.compact_trace(req);
+            let res = fut.recv()?;
+            let written_bytes = res.merged.size_bytes;
+            Ok((
+                written_bytes,
+                arrangement.trace_handle_compact_response(res),
+            ))
+        } else {
+            Ok((0, vec![]))
+        }
+    }
 
     fn desc_from(lower: u64, upper: u64, since: u64) -> Description<u64> {
         Description::new(
@@ -1335,13 +1364,14 @@ mod tests {
     #[test]
     fn trace_compact() -> Result<(), Error> {
         let async_runtime = Arc::new(AsyncRuntime::new()?);
+        let metrics = Arc::new(Metrics::default());
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
         );
-        let maintainer = Maintainer::new(blob.clone(), async_runtime);
+        let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
         t.update_seal(10);
 
@@ -1371,7 +1401,7 @@ mod tests {
 
         t.validate_allow_compaction(&Antichain::from_elem(3))?;
         t.allow_compaction(Antichain::from_elem(3));
-        let (written_bytes, deleted_batches) = t.trace_step(&maintainer)?;
+        let (written_bytes, deleted_batches) = trace_step(&mut t, &maintainer)?;
         // NB: This intentionally doesn't assert any particular size so this
         // test doesn't need to be updated if encoded batch size changes.
         assert!(written_bytes > 0);
@@ -1384,7 +1414,7 @@ mod tests {
         );
 
         // Check that step doesn't do anything when there's nothing to compact.
-        let (written_bytes, deleted_batches) = t.trace_step(&maintainer)?;
+        let (written_bytes, deleted_batches) = trace_step(&mut t, &maintainer)?;
         assert_eq!(written_bytes, 0);
         assert_eq!(deleted_batches, vec![]);
 
@@ -1433,7 +1463,7 @@ mod tests {
         assert_eq!(t.trace_append(batch, &mut blob), Ok(()));
         t.validate_allow_compaction(&Antichain::from_elem(10))?;
         t.allow_compaction(Antichain::from_elem(10));
-        let (written_bytes, deleted_batches) = t.trace_step(&maintainer)?;
+        let (written_bytes, deleted_batches) = trace_step(&mut t, &maintainer)?;
         // NB: This intentionally doesn't assert any particular size so this
         // test doesn't need to be updated if encoded batch size changes.
         assert!(written_bytes > 0);
@@ -1489,13 +1519,14 @@ mod tests {
     #[test]
     fn compaction_beyond_upper() -> Result<(), Error> {
         let async_runtime = Arc::new(AsyncRuntime::new()?);
+        let metrics = Arc::new(Metrics::default());
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
             Arc::clone(&async_runtime),
             MemRegistry::new().blob_no_reentrance()?,
         );
-        let maintainer = Maintainer::new(blob.clone(), async_runtime);
+        let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
 
         t.update_seal(10);
@@ -1545,7 +1576,7 @@ mod tests {
 
         // The yielded updates must be the same after compaction.
 
-        t.trace_step(&maintainer)?;
+        trace_step(&mut t, &maintainer)?;
 
         let snapshot = t.snapshot(SeqNo(42) /* this is unused */, &blob)?;
         assert_eq!(snapshot.since(), Antichain::from_elem(30));
