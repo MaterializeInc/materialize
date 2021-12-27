@@ -647,7 +647,14 @@ impl AppliedState {
         let mut deleted_trace_batches = vec![];
         for arrangement in self.arrangements.values_mut() {
             deleted_unsealed_batches.extend(arrangement.unsealed_evict());
-            let (written_bytes, deleted_batches) = arrangement.trace_step(maintainer)?;
+            let req = arrangement.trace_next_compact_req()?;
+            let (written_bytes, deleted_batches) = if let Some(req) = req {
+                let fut = maintainer.compact_trace(req);
+                let res = fut.recv()?;
+                arrangement.trace_handle_compact_response(res)
+            } else {
+                (0, vec![])
+            };
             total_written_bytes += written_bytes;
             deleted_trace_batches.extend(deleted_batches);
         }
