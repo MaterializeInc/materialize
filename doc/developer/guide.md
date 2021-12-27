@@ -91,7 +91,7 @@ documentation. Then please update this guide with the new instructions!
 You will need JDK 8 or 11. The easiest way to install this is via Homebrew:
 
 ```shell
-brew install --cask homebrew/cask-versions/adoptopenjdk8
+brew install --cask homebrew/cask-versions/temurin8
 ```
 
 Then, download and extract the Confluent Platform tarball:
@@ -99,7 +99,7 @@ Then, download and extract the Confluent Platform tarball:
 ```shell
 INSTALL_DIR=$HOME/confluent  # You can choose somewhere else if you like.
 mkdir $INSTALL_DIR
-curl http://packages.confluent.io/archive/6.0/confluent-6.0.1.tar.gz | tar -xC $INSTALL_DIR --strip-components=1
+curl http://packages.confluent.io/archive/7.0/confluent-7.0.1.tar.gz | tar -xC $INSTALL_DIR --strip-components=1
 echo export CONFLUENT_HOME=(cd $INSTALL_DIR && pwd) >> ~/.bashrc
 source ~/.bashrc
 confluent local services start
