@@ -17,6 +17,7 @@ documentation][user-docs].
 
 import functools
 import importlib
+import importlib.abc
 import importlib.util
 import ipaddress
 import json
