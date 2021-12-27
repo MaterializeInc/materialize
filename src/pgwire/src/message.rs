@@ -1034,7 +1034,7 @@ pub fn encode_row_description(
         .map(|((name, typ), format)| {
             let pg_type = pgrepr::Type::from(&typ.scalar_type);
             FieldDescription {
-                name: name.cloned().unwrap_or_else(|| "?column?".into()),
+                name: name.clone(),
                 table_id: 0,
                 column_id: 0,
                 type_oid: pg_type.oid(),

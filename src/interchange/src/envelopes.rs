@@ -125,7 +125,7 @@ pub fn dbz_desc(desc: RelationDesc) -> RelationDesc {
         },
     };
     let typ = RelationType::new(vec![row.clone(), row]);
-    RelationDesc::new(typ, vec![Some("before"), Some("after")])
+    RelationDesc::new(typ, ["before", "after"])
 }
 
 pub fn dbz_format(rp: &mut Row, dp: DiffPair<Row>) -> Row {

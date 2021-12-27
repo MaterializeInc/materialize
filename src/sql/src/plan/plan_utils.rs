@@ -49,7 +49,7 @@ pub fn maybe_rename_columns(
 
     let new_names = column_names
         .iter()
-        .map(|n| Some(normalize::column_name(n.clone())));
+        .map(|n| normalize::column_name(n.clone()));
 
     Ok(desc.with_names(new_names))
 }

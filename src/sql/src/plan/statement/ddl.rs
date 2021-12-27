@@ -247,7 +247,7 @@ pub fn plan_create_table(
     } else {
         scx.allocate_name(normalize::unresolved_object_name(name.to_owned())?)
     };
-    let desc = RelationDesc::new(typ, names.into_iter().map(Some));
+    let desc = RelationDesc::new(typ, names);
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
     let table = Table {
@@ -316,7 +316,7 @@ fn plan_dbz_flatten_one(
 fn plan_dbz_flatten(
     bare_desc: &RelationDesc,
     input: HirRelationExpr,
-) -> Result<(HirRelationExpr, Vec<Option<ColumnName>>), anyhow::Error> {
+) -> Result<(HirRelationExpr, Vec<ColumnName>), anyhow::Error> {
     // This looks horrible, but it is basically pretty simple:
     // It aims to flatten rows of the shape
     // (before, after)
@@ -326,17 +326,11 @@ fn plan_dbz_flatten(
     // They will then be joined with `repeat(diff)` to get the correct stream out.
     let before_idx = bare_desc
         .iter_names()
-        .position(|maybe_name| match maybe_name {
-            Some(name) => name.as_str() == "before",
-            None => false,
-        })
+        .position(|name| name.as_str() == "before")
         .ok_or_else(|| anyhow!("Debezium-formatted data must contain a `before` field."))?;
     let after_idx = bare_desc
         .iter_names()
-        .position(|maybe_name| match maybe_name {
-            Some(name) => name.as_str() == "after",
-            None => false,
-        })
+        .position(|name| name.as_str() == "after")
         .ok_or_else(|| anyhow!("Debezium-formatted data must contain an `after` field."))?;
     let before_flattened_cols = match &bare_desc.typ().column_types[before_idx].scalar_type {
         ScalarType::Record { fields, .. } => fields.clone(),
@@ -361,9 +355,9 @@ fn plan_dbz_flatten(
     };
     let mut col_names = before_flattened_cols
         .into_iter()
-        .map(|(name, _)| Some(name))
+        .map(|(name, _)| name)
         .collect::<Vec<_>>();
-    col_names.push(Some("diff".into()));
+    col_names.push("diff".into());
     Ok((united_expr, col_names))
 }
 
@@ -371,7 +365,7 @@ fn plan_source_envelope(
     bare_desc: &RelationDesc,
     envelope: &SourceEnvelope,
     post_transform_key: Option<Vec<usize>>,
-) -> Result<(MirRelationExpr, Vec<Option<ColumnName>>), anyhow::Error> {
+) -> Result<(MirRelationExpr, Vec<ColumnName>), anyhow::Error> {
     let get_expr = HirRelationExpr::Get {
         id: expr::Id::LocalBareSource,
         typ: bare_desc.typ().clone(),
@@ -412,10 +406,7 @@ fn plan_source_envelope(
         column_names.pop();
         (expr, column_names)
     } else {
-        (
-            get_expr,
-            bare_desc.iter_names().map(|name| name.cloned()).collect(),
-        )
+        (get_expr, bare_desc.iter_names().cloned().collect())
     };
 
     let mir_expr = hir_expr.lower();
@@ -905,9 +896,7 @@ pub fn plan_create_source(
             match key_desc {
                 Some(key_desc) => match &bare_desc.typ().column_types[0].scalar_type {
                     ScalarType::Record { fields, .. } => {
-                        let row_desc = RelationDesc::from_names_and_types(
-                            fields.clone().into_iter().map(|(n, t)| (Some(n), t)),
-                        );
+                        let row_desc = RelationDesc::from_names_and_types(fields.clone());
                         let key_schema_indices =
                             match dataflow_types::match_key_indices(&key_desc, &row_desc) {
                                 Err(e) => bail!("Cannot use key due to error: {}", e),
@@ -1329,10 +1318,7 @@ pub fn plan_view(
     };
 
     desc = plan_utils::maybe_rename_columns(format!("view {}", name), desc, &columns)?;
-    let names: Vec<ColumnName> = desc
-        .iter_names()
-        .map(|c| c.cloned().unwrap_or_else(|| ColumnName::from("?column?")))
-        .collect();
+    let names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
         bail!("column {} specified more than once", dup.as_str().quoted());
@@ -1908,7 +1894,7 @@ fn invalid_upsert_key_err(desc: &RelationDesc, requested_user_key: &[ColumnName]
             .map(|key_columns| {
                 let columns_string = key_columns
                     .iter()
-                    .map(|col| desc.get_name(*col).expect("known to exist").as_str())
+                    .map(|col| desc.get_name(*col).as_str())
                     .join(", ");
                 format!("({})", columns_string)
             })
@@ -1928,7 +1914,7 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> anyhow::
         .map(|key_columns| {
             key_columns
                 .iter()
-                .map(|col| desc.get_name(*col).expect("known to exist").as_str())
+                .map(|col| desc.get_name(*col).as_str())
                 .join(", ")
         })
         .join(", ");

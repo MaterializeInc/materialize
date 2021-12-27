@@ -275,7 +275,7 @@ pub enum TestCatalogCommand {
         source_name: String,
         typ: RelationType,
         #[serde(default)]
-        column_names: Vec<Option<String>>,
+        column_names: Vec<String>,
     },
 }
 

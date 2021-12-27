@@ -278,7 +278,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCase {
             query: "select 1; select 2",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":[null]},{"rows":[[2]],"col_names":[null]}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"rows":[[2]],"col_names":["?column?"]}]}"#,
         },
         // CREATEs should not work.
         TestCase {

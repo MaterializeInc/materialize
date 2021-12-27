@@ -2333,7 +2333,7 @@ where
         let view_oid = self.catalog.allocate_oid()?;
         // Optimize the expression so that we can form an accurately typed description.
         let optimized_expr = self.prep_relation_expr(view.expr, ExprPrepStyle::Static)?;
-        let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.iter().map(Some));
+        let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
             optimized_expr,

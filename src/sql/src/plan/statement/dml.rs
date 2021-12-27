@@ -170,30 +170,28 @@ pub fn describe_explain(
         stage, explainee, ..
     }: ExplainStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    Ok(
-        StatementDesc::new(Some(RelationDesc::empty().with_named_column(
-            match stage {
-                ExplainStage::RawPlan => "Raw Plan",
-                ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
-                ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
-                ExplainStage::PhysicalPlan => "Physical Plan",
-            },
-            ScalarType::String.nullable(false),
-        )))
-        .with_pgrepr_params(match explainee {
-            Explainee::Query(q) => {
-                describe_select(
-                    scx,
-                    SelectStatement {
-                        query: q,
-                        as_of: None,
-                    },
-                )?
-                .param_types
-            }
-            _ => vec![],
-        }),
-    )
+    Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
+        match stage {
+            ExplainStage::RawPlan => "Raw Plan",
+            ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
+            ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
+            ExplainStage::PhysicalPlan => "Physical Plan",
+        },
+        ScalarType::String.nullable(false),
+    )))
+    .with_pgrepr_params(match explainee {
+        Explainee::Query(q) => {
+            describe_select(
+                scx,
+                SelectStatement {
+                    query: q,
+                    as_of: None,
+                },
+            )?
+            .param_types
+        }
+        _ => vec![],
+    }))
 }
 
 pub fn plan_explain(
@@ -288,14 +286,14 @@ pub fn describe_tail(
     let sql_object = scx.resolve_item(name)?;
     let options = TailOptions::try_from(options)?;
     let progress = options.progress.unwrap_or(false);
-    let mut desc = RelationDesc::empty().with_named_column(
+    let mut desc = RelationDesc::empty().with_column(
         "mz_timestamp",
         ScalarType::Numeric { scale: Some(0) }.nullable(false),
     );
     if progress {
-        desc = desc.with_named_column("mz_progressed", ScalarType::Bool.nullable(false));
+        desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));
     }
-    desc = desc.with_named_column("mz_diff", ScalarType::Int64.nullable(true));
+    desc = desc.with_column("mz_diff", ScalarType::Int64.nullable(true));
     for (name, ty) in sql_object.desc()?.iter() {
         let mut ty = ty.clone();
         if progress {

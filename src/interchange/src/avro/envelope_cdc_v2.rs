@@ -270,8 +270,8 @@ mod tests {
     #[test]
     fn test_roundtrip() {
         let desc = RelationDesc::empty()
-            .with_named_column("id", ScalarType::Int64.nullable(false))
-            .with_named_column("price", ScalarType::Float64.nullable(true));
+            .with_column("id", ScalarType::Int64.nullable(false))
+            .with_column("price", ScalarType::Float64.nullable(true));
 
         let encoder = Encoder::new(desc.clone());
         let row_schema =

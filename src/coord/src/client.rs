@@ -467,10 +467,7 @@ impl SessionClient {
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
             let col_names = match desc.relation_desc {
-                Some(desc) => desc
-                    .iter_names()
-                    .map(|name| name.map(|name| name.to_string()))
-                    .collect(),
+                Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
                 None => vec![],
             };
             let mut datum_vec = repr::DatumVec::new();

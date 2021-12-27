@@ -70,10 +70,7 @@ impl PlanError {
     pub(crate) fn ungrouped_column(item: &ScopeItem) -> PlanError {
         PlanError::UngroupedColumn {
             table: item.table_name.clone(),
-            column: item
-                .column_name
-                .clone()
-                .unwrap_or_else(|| ColumnName::from("?column?")),
+            column: item.column_name.clone(),
         }
     }
 }
