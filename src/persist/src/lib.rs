@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Persistence for Materialize dataflows.
+//! Persistence for differential dataflow collections
 
+#![doc = include_str!("../README.md")]
 #![warn(missing_docs, missing_debug_implementations)]
 #![warn(
     clippy::cast_possible_truncation,
