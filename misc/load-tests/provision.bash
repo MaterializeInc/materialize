@@ -9,27 +9,36 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Install necessary prerequisites for a remote EC2 host to run Materialize demos, load tests, etc.
+# Install necessary prerequisites for a remote EC2 host to run Materialize
+# demos, load tests, etc.
 
-# From https://docs.docker.com/engine/install/ubuntu/
-apt update && apt install -y apt-transport-https ca-certificates curl gnupg lsb-release python3-venv python3-pip jq
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-echo \
-  "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-apt update && apt install -y docker-ce docker-ce-cli containerd.io docker-compose
+set -euo pipefail
 
-# Allow using docker as non-root.
-usermod -aG docker ubuntu
+# Progress notes are reported to this directory.
+mkdir /opt/provision
 
-# Install prerequisites for building Materialize
+# Step 1. Update APT repositories.
+apt-get update
+
+# Step 2. Install Docker and grant the `ubuntu` user permission to access the
+# Docker daemon.
+apt-get install -y docker.io docker-compose python3-venv
+adduser ubuntu docker
+touch /opt/provision/docker-installed
+
+# Step 3. Install Materialize build prerequisites. These are just a convenience
+# for manual debugging/development.
+apt-get install -y cmake
 sudo -u ubuntu sh -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y"
-apt install -y cmake
+touch /opt/provision/materialize-build-deps-installed
 
-# Install aws cli
-apt install -y unzip curl
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+# Step 4. Install the AWS CLI. Again, this is just a convenience for manual
+# debugging/development.
+apt-get install unzip
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" > awscliv2.zip
 unzip awscliv2.zip
-sudo ./aws/install
+aws/install
+rm -r aws awscliv2.zip
+touch /opt/provision/awscli-installed
 
-touch /DONE
+touch /opt/provision/done
