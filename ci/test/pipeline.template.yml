@@ -381,23 +381,10 @@ steps:
           composition: python
           run: python
 
+  - wait: ~
+
   - id: deploy
     label: ":rocket: Deploy"
-    depends_on:
-      - build-aarch64
-      - lint-fast
-      - lint-slow
-      - cargo-test
-      - miri-test
-      - testdrive
-      - kafka-ssl
-      - kafka-krb5
-      - sqllogictest-fast
-      - streaming-demo
-      - chbench-demo
-      - catalog-compat
-      - lang-js
-      - metabase-demo
     trigger: deploy
     async: true
     branches: "main v*.*"
