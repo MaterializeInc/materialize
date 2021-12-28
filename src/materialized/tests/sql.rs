@@ -865,16 +865,13 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
         let second_rows_verified = verify_rw_pair(&second_rows, "second");
 
         if first_rows_verified && second_rows_verified {
-            // Closing open write timestamp only advances time 1 unit
             let first_write_ts = first_rows[0].get::<_, MzTimestamp>("mz_timestamp");
             let first_closed_ts = first_rows[1].get::<_, MzTimestamp>("mz_timestamp");
-            assert_eq!(first_closed_ts.0 - first_write_ts.0, 1);
+            assert!(first_write_ts < first_closed_ts);
 
-            // We cannot make as strong of claims about the second set of timestamps
-            // because we let more time lapse by having an interceding `FETCH`.
             let second_write_ts = second_rows[0].get::<_, MzTimestamp>("mz_timestamp");
             let second_closed_ts = second_rows[1].get::<_, MzTimestamp>("mz_timestamp");
-            assert!(first_write_ts < second_write_ts);
+            assert!(first_closed_ts <= second_write_ts);
             assert!(second_write_ts < second_closed_ts);
             break;
         }
