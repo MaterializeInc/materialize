@@ -453,9 +453,12 @@ WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT * FROM t
 WHERE row_number() over () > 1;
 
-# When query.rs is allowed to plan window functions in DISTINCT ON, we
-# currently return incorrect output. Disable DISTINCT ON until fixed.
-query error window functions are not allowed in DISTINCT ON
+query T
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT DISTINCT ON (row_number() OVER ()) *
 FROM t
+ORDER BY row_number() OVER ()
+----
+a
+b
+c
