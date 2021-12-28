@@ -143,7 +143,7 @@ pub struct Indexed<L: Log, B: Blob> {
     log: L,
     blob: BlobCache<B>,
     maintainer: Maintainer<B>,
-    listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
+    listeners: HashMap<Id, Vec<ListenFn>>,
     metrics: Metrics,
     state: AppliedState,
     pending: Option<Pending>,
@@ -1094,23 +1094,14 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     //
     // TODO: Finish the naming bikeshed for this. Other options so far include
     // tail, subscribe, tee, inspect, and capture.
-    pub fn listen(
-        &mut self,
-        id: Id,
-        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-        res: PFutureHandle<ArrangementSnapshot>,
-    ) {
+    pub fn listen(&mut self, id: Id, listen_fn: ListenFn, res: PFutureHandle<ArrangementSnapshot>) {
         res.fill((|| {
             self.drain_pending()?;
             self.do_listen(id, listen_fn)
         })());
     }
 
-    fn do_listen(
-        &mut self,
-        id: Id,
-        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-    ) -> Result<ArrangementSnapshot, Error> {
+    fn do_listen(&mut self, id: Id, listen_fn: ListenFn) -> Result<ArrangementSnapshot, Error> {
         // Verify that id has been registered.
         let _ = self.state.sealed_frontier(id)?;
         let snapshot = self.state.do_snapshot(id, &self.blob)?;
@@ -1127,17 +1118,17 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 // TODO: This is similar to timely's capture Event but just different enough
 // that I couldn't see how to use it directly. Revisit.
 #[derive(Clone, Debug)]
-pub enum ListenEvent<K, V> {
+pub enum ListenEvent {
     /// Records in the data stream.
-    Records(Vec<((K, V), u64, isize)>),
+    Records(Vec<((Vec<u8>, Vec<u8>), u64, isize)>),
     /// Progress of the data stream.
     Sealed(u64),
 }
 
 /// The callback used by [Indexed::listen].
-pub struct ListenFn<K, V>(pub Box<dyn Fn(ListenEvent<K, V>) + Send>);
+pub struct ListenFn(pub Box<dyn Fn(ListenEvent) + Send>);
 
-impl<K, V> fmt::Debug for ListenFn<K, V> {
+impl fmt::Debug for ListenFn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ListenFn").finish_non_exhaustive()
     }
@@ -1228,7 +1219,7 @@ mod tests {
 
         // Register a listener for writes.
         let (listen_tx, listen_rx) = mpsc::channel();
-        let listen_fn: ListenFn<Vec<u8>, Vec<u8>> = ListenFn(Box::new(move |e| match e {
+        let listen_fn = ListenFn(Box::new(move |e| match e {
             ListenEvent::Records(records) => {
                 for ((k, v), ts, diff) in records.iter() {
                     listen_tx

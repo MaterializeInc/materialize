@@ -76,7 +76,7 @@ fn listen_source<G, K, V>(
     // initial frontier because an empty frontier would signal that we are at "the end of time",
     // meaning that there will be no more events in the future.
     initial_frontier: Option<Antichain<u64>>,
-    listen_rx: Receiver<ListenEvent<Vec<u8>, Vec<u8>>>,
+    listen_rx: Receiver<ListenEvent>,
 ) -> Stream<G, (Result<(K, V), String>, u64, isize)>
 where
     G: Scope<Timestamp = u64>,
