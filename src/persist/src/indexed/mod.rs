@@ -28,6 +28,7 @@ use std::time::Instant;
 
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
+use ore::soft_assert_or_log;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 
@@ -198,6 +199,7 @@ pub struct Indexed<L: Log, B: Blob> {
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
     metrics: Metrics,
     state: AppliedState,
+    in_flight_trace_compactions: HashMap<Id, CompactTraceReq>,
     pending: Option<Pending>,
 }
 
@@ -246,6 +248,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             listeners: HashMap::new(),
             metrics,
             state,
+            in_flight_trace_compactions: HashMap::new(),
             pending: None,
         };
 
@@ -754,8 +757,19 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn compact_trace_maintenance_reqs(&mut self) -> Result<Vec<MaintenanceReq>, Error> {
         let mut reqs = vec![];
         for (id, arrangement) in self.state.arrangements.iter() {
+            // Skip over the arrangement if it already has a compaction request in flight.
+            //
+            // TODO: note that this works because right now the connection between Indexed
+            // and Maintainer is infallible, and the two cannot fail independently of each
+            // other. If that changes, we will have to revisit the policy around waiting
+            // arbitrarily long for maintenance responses and most likely institute
+            // a timeout.
+            if self.in_flight_trace_compactions.contains_key(&id) {
+                continue;
+            }
             if let Some(req) = arrangement.trace_next_compact_req()? {
                 reqs.push(MaintenanceReq::CompactTrace((*id, req.clone())));
+                self.in_flight_trace_compactions.insert(*id, req);
             }
         }
         Ok(reqs)
@@ -765,6 +779,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn handle_compact_trace_res(&mut self, id: Id, res: Result<CompactTraceRes, Error>) {
         // We received a request to compact a trace that was subsequently deleted, and can
         // safely ignore the results of that compaction.
+        //
         // TODO: delete the newly created trace batch.
         if !self.state.arrangements.contains_key(&id) {
             log::trace!(
@@ -773,6 +788,27 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             );
             return;
         }
+
+        // Check that the request belongs to a stream with currently in-flight
+        // compaction requests. We expect this condition to always be true while
+        // the connection between Indexed and Maintainer is infallible.
+        //
+        // TODO: can we get rid of this check and simply attempt to handle the response
+        // we've received?
+        soft_assert_or_log!(self.in_flight_trace_compactions.contains_key(&id),
+            "received trace compaction response for a stream that did not have a in flight request: {:?}. Ignoring",
+            id);
+
+        // This collection no longer has in flight trace compactions, and can
+        // send another one out, even though this one has not been durably committed
+        // yet. If this one fails to durably commit, we will retry the compaction.
+        let sent_compact_trace_req = match self.in_flight_trace_compactions.remove(&id) {
+            Some(sent_compact_trace_req) => sent_compact_trace_req,
+            None => {
+                // Early exit if we don't have an in-flight request.
+                return;
+            }
+        };
 
         let res = match res {
             Ok(res) => res,
@@ -785,6 +821,35 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 return;
             }
         };
+
+        // Check that the returned response is indeed for the matching in-flight request.
+        // We expect this condition to always be true while the connection between Indexed
+        // and Maintainer is infallible.
+        soft_assert_or_log!(sent_compact_trace_req == res.req,
+                "received invalid trace compaction response for stream {:?} currently in flight req {:?}: {:?}. Ignoring",
+                id, sent_compact_trace_req, res
+            );
+
+        // Reinstate the in-flight request if the response doesn't match, and ignore the response.
+        //
+        // TODO: can we simply handle the response? This is complicated for two reasons.
+        //
+        // 1. Using the results of a request that is not the same request we sent risks
+        //    breaking the invariant that trace batch compaction levels are nonincreasing.
+        // 2. We only want to change the "has a request in flight" status of the persisted
+        //    stream if the non-matching response is actually useful, (as otherwise we'd
+        //    rather wait for the matching response before changing the status). We don't
+        //    know if the response is useful in advance, but we don't have access to the
+        //    `in_flight_trace_compactions` within `apply_batched_cmd`. The second bullet
+        //    is more manageable than the first e.g. by returning a boolean from the
+        //    closure passed to `apply_batched_cmd`.
+
+        if sent_compact_trace_req != res.req {
+            // Restore our bookkeeping of which request is in flight.
+            self.in_flight_trace_compactions
+                .insert(id, sent_compact_trace_req);
+            return;
+        }
 
         let written_bytes = res.merged.size_bytes;
         self.metrics.compaction_write_bytes.inc_by(written_bytes);
@@ -799,6 +864,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 pending.add_deleted_trace_batches(deleted_trace_batches);
             }
         });
+
+        self.in_flight_trace_compactions.remove(&id);
     }
 
     /// Handle the results of a previously sent maintenance request.
@@ -1277,6 +1344,7 @@ impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
     use std::sync::{mpsc, Arc};
 
     use tokio::runtime::Runtime;
@@ -1502,6 +1570,10 @@ mod tests {
         assert_eq!(reqs.len(), 1);
         let request = reqs[0].clone();
 
+        // Once a request is in flight, don't send requests for the same stream.
+        let reqs = i.step()?;
+        assert_eq!(reqs, vec![]);
+
         // Handle receiving an error MaintenanceRes.
         let error_response =
             MaintenanceRes::CompactTrace((id, Err(Error::from("test compaction error"))));
@@ -1558,6 +1630,122 @@ mod tests {
         // Don't produce any more requests because the stream is deleted.
         let reqs = i.step()?;
         assert_eq!(reqs, vec![]);
+
+        Ok(())
+    }
+
+    /// This test checks that Indexed correctly handles receiving an invalid MainenanceRes
+    /// (one whose request does not match the currently in-flight request). This test is
+    /// expected to panic when run.
+    fn trace_compaction_invalid_response() -> Result<(), Error> {
+        let unreliable = UnreliableHandle::default();
+        let (mut i, maintainer, _) = trace_compaction_setup(unreliable)?;
+
+        let reqs = i.step()?;
+        assert_eq!(reqs.len(), 1);
+        let request = reqs[0].clone();
+
+        // Handle receiving an invalid (corrupt) MaintenanceRes.
+        let mut response = get_maintenance_response(&maintainer, request);
+        if let MaintenanceRes::CompactTrace((_, Ok(response))) = &mut response {
+            response.req.b0.key = "invalid".into();
+        }
+        i.handle_maintenance_res(response);
+        assert_eq!(i.drain_pending(), Ok(()));
+
+        Ok(())
+    }
+
+    /// This test checks that Indexed correctly handles receiving a MaintenanceRes when
+    /// no request is in flight for the given stream. This test is expected to panic when
+    /// run.
+    fn trace_compaction_unexpected_response() -> Result<(), Error> {
+        let unreliable = UnreliableHandle::default();
+        let (mut i, maintainer, id) = trace_compaction_setup(unreliable)?;
+
+        let reqs = i.step()?;
+        assert_eq!(reqs.len(), 1);
+        let request = reqs[0].clone();
+
+        // Send an error response. Now there are no more requests in flight.
+        let error_response =
+            MaintenanceRes::CompactTrace((id, Err(Error::from("test compaction error"))));
+        i.handle_maintenance_res(error_response);
+        assert_eq!(i.drain_pending(), Ok(()));
+
+        // Handle receiving an unexpected (valid) MaintenanceRes when none is in flight.
+        let response = get_maintenance_response(&maintainer, request);
+        i.handle_maintenance_res(response);
+        assert_eq!(i.drain_pending(), Ok(()));
+
+        Ok(())
+    }
+
+    /// This test checks that Indexed correctly handles receiving an error MaintenanceRes
+    /// even when no requests are in flight for that stream. This test is expected to
+    /// panic when run.
+    fn trace_compaction_unexpected_error_response() -> Result<(), Error> {
+        let unreliable = UnreliableHandle::default();
+        let (mut i, _, id) = trace_compaction_setup(unreliable)?;
+
+        let reqs = i.step()?;
+        assert_eq!(reqs.len(), 1);
+
+        // Send an error response. Now there are no more requests in flight.
+        let error_response =
+            MaintenanceRes::CompactTrace((id, Err(Error::from("test compaction error"))));
+        i.handle_maintenance_res(error_response.clone());
+        assert_eq!(i.drain_pending(), Ok(()));
+
+        // Handle receiving an unexpected error MaintenanceRes when no request is in flight.
+        i.handle_maintenance_res(error_response);
+        assert_eq!(i.drain_pending(), Ok(()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn trace_compaction_expected_errors() -> Result<(), Error> {
+        fn check_error(
+            e: Option<Box<dyn Any + Send + 'static>>,
+            expected: &str,
+        ) -> Result<(), Error> {
+            let e = match e {
+                Some(e) => e,
+                None => return Err(Error::from("unexpected success while checking error")),
+            };
+
+            let error = match e.downcast_ref::<String>() {
+                Some(error) => error.clone(),
+                None => return Err(Error::from("unable to check error")),
+            };
+
+            assert!(
+                error.contains(expected),
+                "{} not found in {}",
+                expected,
+                error
+            );
+            Ok(())
+        }
+        let result = std::panic::catch_unwind(|| {
+            let _ = trace_compaction_unexpected_response();
+        });
+
+        check_error(result.err(), "received trace compaction response for a stream that did not have a in flight request: Id(0). Ignoring")?;
+        let result = std::panic::catch_unwind(|| {
+            let _ = trace_compaction_unexpected_error_response();
+        });
+
+        check_error(result.err(), "received trace compaction response for a stream that did not have a in flight request: Id(0). Ignoring")?;
+        let result = std::panic::catch_unwind(|| {
+            let _ = trace_compaction_invalid_response();
+        });
+
+        check_error(
+            result.err(),
+            "received invalid trace compaction response for stream Id(0)",
+        )?;
 
         Ok(())
     }
