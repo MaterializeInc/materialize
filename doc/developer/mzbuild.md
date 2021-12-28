@@ -192,7 +192,7 @@ If you're unfamiliar with Compose, you may want to take a look at the
 Now bring the configuration up with `bin/mzcompose`:
 
 ```shell
-$ bin/mzcompose --mz-find fancy up
+$ bin/mzcompose --find fancy up
 ==> Collecting mzbuild dependencies
 materialize/billing-demo:FM4STU42G7W44OLAPKZNEZWGEPTMIVE6
 materialize/fancy-loadgen:Z2GPU4TQMCV2PGFTNUPYLQO2PQAYD6OY
@@ -203,7 +203,7 @@ fancy_1  | 🎩 load
 fancy_fancy_1 exited with code 0
 ```
 
-The argument you pass to `--mz-find` is the name of the directory containing the
+The argument you pass to `--find` is the name of the directory containing the
 `mzcompose.yml`. Don't worry: if this directory name is not unique across the
 entire repository, `mzcompose` will complain.
 
@@ -328,12 +328,12 @@ To run the workflow, run `./mzcompose run load-test`, just like you would if
 
 Via `mzbuild`, `mzcompose` supports building binaries in either release or
 development mode. By default, binaries are built using release mode. You can
-specify the desired flavor by passing the `--mz-build-mode` flag to
+specify the desired flavor by passing the `--build-mode` flag to
 `mzcompose`:
 
 ```shell
-$ bin/mzcompose --mz-build-mode=dev --mz-find fancy up
-$ bin/mzcompose --mz-build-mode=release --mz-find fancy up
+$ bin/mzcompose --build-mode=dev --find fancy up
+$ bin/mzcompose --build-mode=release --find fancy up
 ```
 
 ## Input addressability
@@ -428,7 +428,7 @@ publish: true
      inputs to the build, plus the top-level `Cargo.toml`, `Cargo.lock`, and
      `.cargo/config` files.
 
-     Cargo is invoked with the `--release` flag if the `--mz-build-mode` flag
+     Cargo is invoked with the `--release` flag if the `--build-mode` flag
      variable is `release` (the default; set to `dev` for a non-release
      binary). The binary will be stripped of debug information unless `strip:
      false` is requested.
