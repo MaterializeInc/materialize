@@ -442,3 +442,20 @@ EXPLAIN DECORRELATED PLAN FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER(
 | Filter true
 
 EOF
+
+# Regression for #9749
+query error window functions are not allowed in ON
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT * FROM t AS v JOIN t ON row_number() over () > 1;
+
+query error window functions are not allowed in WHERE
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT * FROM t
+WHERE row_number() over () > 1;
+
+# When query.rs is allowed to plan window functions in DISTINCT ON, we
+# currently return incorrect output. Disable DISTINCT ON until fixed.
+query error window functions are not allowed in DISTINCT ON
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT DISTINCT ON (row_number() OVER ()) *
+FROM t

@@ -763,6 +763,7 @@ pub fn plan_hypothetical_cast(
         relation_type: &relation_type,
         allow_aggregates: false,
         allow_subqueries: true,
+        allow_windows: false,
     };
 
     let col_expr = HirScalarExpr::Column(ColumnRef {
