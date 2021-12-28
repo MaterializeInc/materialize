@@ -110,6 +110,8 @@ def trim_pipeline(pipeline: Any) -> None:
 
     steps = OrderedDict()
     for config in pipeline["steps"]:
+        if "wait" in config:
+            continue
         step = PipelineStep(config["id"])
         if "inputs" in config:
             for inp in config["inputs"]:
@@ -177,7 +179,9 @@ def trim_pipeline(pipeline: Any) -> None:
             )
 
     # Restrict the pipeline to the needed steps.
-    pipeline["steps"] = [step for step in pipeline["steps"] if step["id"] in needed]
+    pipeline["steps"] = [
+        step for step in pipeline["steps"] if step["id"] in needed or "wait" in step
+    ]
 
 
 def have_paths_changed(globs: Iterable[str]) -> bool:
