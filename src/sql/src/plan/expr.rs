@@ -48,6 +48,7 @@ pub enum HirRelationExpr {
     },
     /// CTE
     Let {
+        name: String,
         /// The identifier to be used in `Get` variants to retrieve `value`.
         id: expr::LocalId,
         /// The collection to be bound to `name`.

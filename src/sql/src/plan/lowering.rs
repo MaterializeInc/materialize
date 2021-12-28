@@ -254,7 +254,12 @@ impl HirRelationExpr {
                         get_outer.product(SR::Get { id, typ })
                     }
                 },
-                Let { id, value, body } => {
+                Let {
+                    name: _,
+                    id,
+                    value,
+                    body,
+                } => {
                     let value = value.applied_to(id_gen, get_outer.clone(), col_map, cte_map);
                     value.let_in(id_gen, |id_gen, get_value| {
                         let (new_id, typ) = if let expr::MirRelationExpr::Get {

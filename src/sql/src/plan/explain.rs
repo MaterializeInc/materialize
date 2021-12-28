@@ -46,9 +46,9 @@ pub struct Explanation<'a> {
     /// Records the chain ID that was assigned to each expression.
     expr_chains: HashMap<*const HirRelationExpr, u64>,
     /// Records the chain ID that was assigned to each let.
-    local_id_chains: HashMap<LocalId, u64>,
+    local_id_chains: HashMap<LocalId, (String, u64)>,
     /// Records the local ID that corresponds to a chain ID, if any.
-    chain_local_ids: HashMap<u64, LocalId>,
+    chain_local_ids: HashMap<u64, (String, LocalId)>,
     /// The ID of the current chain. Incremented while constructing the
     /// `Explanation`.
     chain: u64,
@@ -75,8 +75,8 @@ impl<'a> fmt::Display for Explanation<'a> {
                     writeln!(f)?;
                 }
                 write!(f, "%{} =", node.chain)?;
-                if let Some(local_id) = self.chain_local_ids.get(&node.chain) {
-                    write!(f, " Let {} =", local_id)?;
+                if let Some((name, local_id)) = self.chain_local_ids.get(&node.chain) {
+                    write!(f, " Let {} ({}) =", name, local_id)?;
                 }
                 writeln!(f)?;
             }
@@ -116,7 +116,7 @@ impl<'a> Explanation<'a> {
         expr: &'a HirRelationExpr,
         expr_humanizer: &'a dyn ExprHumanizer,
         id_gen: &mut IdGen,
-        local_id_chains: HashMap<LocalId, u64>,
+        local_id_chains: HashMap<LocalId, (String, u64)>,
     ) -> Explanation<'a> {
         use HirRelationExpr::*;
 
@@ -153,15 +153,24 @@ impl<'a> Explanation<'a> {
                 Union { base, inputs, .. } => {
                     walk_many(std::iter::once(&**base).chain(inputs), explanation, id_gen)
                 }
-                Let { id, body, value } => {
+                Let {
+                    name,
+                    id,
+                    body,
+                    value,
+                } => {
                     // Similarly the definition of a let goes in its own chain.
                     walk(value, explanation, id_gen);
                     explanation.chain = id_gen.allocate_id();
 
                     // Keep track of the chain ID <-> local ID correspondence.
                     let value_chain = explanation.expr_chain(value);
-                    explanation.local_id_chains.insert(*id, value_chain);
-                    explanation.chain_local_ids.insert(value_chain, *id);
+                    explanation
+                        .local_id_chains
+                        .insert(*id, (name.clone(), value_chain));
+                    explanation
+                        .chain_local_ids
+                        .insert(value_chain, (name.clone(), *id));
 
                     walk(body, explanation, id_gen);
                 }
@@ -236,7 +245,7 @@ impl<'a> Explanation<'a> {
                 {
                     explanation.expr_chains.insert(
                         expr as *const HirRelationExpr,
-                        explanation.local_id_chains[id],
+                        explanation.local_id_chains[id].1,
                     );
                 } else {
                     walk(expr, explanation, id_gen);
@@ -299,14 +308,19 @@ impl<'a> Explanation<'a> {
                 writeln!(f)?;
             }
             Get { id, .. } => match id {
-                Id::Local(local_id) => writeln!(
-                    f,
-                    "| Get %{} ({})",
-                    self.local_id_chains
-                        .get(local_id)
-                        .map_or_else(|| "?".to_owned(), |i| i.to_string()),
-                    local_id,
-                )?,
+                Id::Local(local_id) => {
+                    let get_info = self.local_id_chains.get(local_id);
+                    writeln!(
+                        f,
+                        "| Get {} ({}) (%{})",
+                        // The name of the CTE,
+                        get_info.map_or_else(|| "?".to_owned(), |i| i.0.clone()),
+                        // the local ID,
+                        local_id,
+                        // and the chain ID.
+                        get_info.map_or_else(|| "?".to_owned(), |i| i.1.to_string()),
+                    )?
+                }
                 Id::LocalBareSource => writeln!(f, "| Get Local Bare Source")?,
                 Id::Global(id) => writeln!(
                     f,

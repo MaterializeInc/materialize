@@ -29,7 +29,7 @@ EXPLAIN RAW PLAN FOR
 WITH t AS (SELECT * FROM y WHERE a < 3)
   SELECT * FROM t NATURAL JOIN t a;
 ----
-%0 = Let l0 =
+%0 = Let t (l0) =
 | Get materialize.public.y (u3)
 | Filter (#0 < 3)
 
@@ -45,7 +45,7 @@ EXPLAIN RAW PLAN FOR
 WITH t AS (SELECT * FROM y WHERE a < 3)
   SELECT * FROM y WHERE (select a from t) < a;
 ----
-%0 = Let l0 =
+%0 = Let t (l0) =
 | Get materialize.public.y (u3)
 | Filter (#0 < 3)
 
@@ -54,7 +54,7 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 | Filter (select(%2) < #0)
 | |
 | | %2 =
-| | | Get %0 (l0)
+| | | Get t (l0) (%0)
 | |
 
 EOF
@@ -721,5 +721,84 @@ FROM x,
 | | implementation = Unimplemented
 | Project (#0, #2, #3)
 | Filter true
+
+EOF
+
+# Check that CTEs are annotated with their names
+query T multiline
+EXPLAIN RAW PLAN FOR
+WITH a(a) AS (SELECT a FROM y),
+     b(b) AS (SELECT a FROM y),
+     x(x) AS (SELECT b FROM b)
+SELECT (WITH c(c) AS (SELECT a FROM y)
+        SELECT c FROM c where (WITH d(d) AS (SELECT c FROM c)
+                               SELECT max(d) FROM d) > 1)
+FROM (WITH e(e) AS (SELECT b FROM b)
+      SELECT e FROM e where (WITH f(f) AS (SELECT e FROM e)
+                             SELECT min(f) FROM f)
+                             < (SELECT max(x) FROM x))
+----
+%0 = Let a (l0) =
+| Get materialize.public.y (u3)
+
+%1 = Let b (l1) =
+| Get materialize.public.y (u3)
+
+%2 = Let x (l2) =
+| Get b (l1) (%1)
+
+%3 = Let e (l3) =
+| Get b (l1) (%1)
+
+%4 =
+| Get e (l3) (%3)
+| Filter (select(%6) < select(%7))
+| |
+| | %5 = Let f (l4) =
+| | | Get e (l3) (%3)
+| |
+| | %6 =
+| | | Get f (l4) (%5)
+| | | Reduce group=() min(#0)
+| |
+| |
+| | %7 =
+| | | Get x (l2) (%2)
+| | | Reduce group=() max(#0)
+| |
+| Map select(%9)
+| |
+| | %8 = Let c (l3) =
+| | | Get materialize.public.y (u3)
+| |
+| | %9 =
+| | | Get c (l3) (%8)
+| | | Filter (select(%11) > 1)
+| | | |
+| | | | %10 = Let d (l4) =
+| | | | | Get c (l3) (%8)
+| | | |
+| | | | %11 =
+| | | | | Get d (l4) (%10)
+| | | | | Reduce group=() max(#0)
+| | | |
+| |
+| Project (#1)
+
+EOF
+
+# CTEs with the same name in nested context
+query T multiline
+EXPLAIN RAW PLAN FOR
+WITH a(a) AS (SELECT a FROM y) SELECT * FROM (WITH a(a) AS (SELECT a FROM a) SELECT a FROM a);
+----
+%0 = Let a (l0) =
+| Get materialize.public.y (u3)
+
+%1 = Let a (l1) =
+| Get a (l0) (%0)
+
+%2 =
+| Get a (l1) (%1)
 
 EOF

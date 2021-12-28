@@ -1198,7 +1198,14 @@ fn plan_query_inner(
 
         match cte.id {
             Id::Local(id) => {
-                let old_val = qcx.ctes.insert(id, CteDesc { val, val_desc });
+                let old_val = qcx.ctes.insert(
+                    id,
+                    CteDesc {
+                        val,
+                        name: cte_name,
+                        val_desc,
+                    },
+                );
                 old_cte_values.push((id, old_val));
             }
             _ => unreachable!(),
@@ -1262,6 +1269,7 @@ fn plan_query_inner(
     for (id, old_val) in old_cte_values.into_iter().rev() {
         if let Some(cte) = qcx.ctes.remove(&id) {
             result = HirRelationExpr::Let {
+                name: cte.name,
                 id: id.clone(),
                 value: Box::new(cte.val),
                 body: Box::new(result),
@@ -4019,6 +4027,7 @@ pub enum QueryLifetime<'a> {
 pub struct CteDesc {
     /// The CTE's expression.
     val: HirRelationExpr,
+    name: String,
     val_desc: RelationDesc,
 }
 

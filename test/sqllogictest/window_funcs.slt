@@ -110,11 +110,11 @@ WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
 ORDER BY row_number, x
 ----
-%0 = Let l0 =
+%0 = Let t (l0) =
 | CallTable wrap2("a", 1, "b", 2, "c", 1)
 
 %1 =
-| Get %0 (l0)
+| Get t (l0) (%0)
 | Map row_number() over (#0) order by (#0)
 | Project (#2, #0)
 
