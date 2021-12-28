@@ -324,9 +324,18 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
         }
         completed.push(predicate_to_apply);
     }
-    // Remove any predicates that have been reduced to "true"
-    completed.retain(|p| !p.is_literal_true());
-    *predicates = completed;
+
+    if completed
+        .iter()
+        .any(|p| p.is_literal_false() || p.is_literal_null())
+    {
+        // all rows get filtered away if any predicate is null or false.
+        *predicates = vec![MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool)]
+    } else {
+        // Remove any predicates that have been reduced to "true"
+        completed.retain(|p| !p.is_literal_true());
+        *predicates = completed;
+    }
 
     // 4) Sort and dedup predicates.
     predicates.sort();

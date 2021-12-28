@@ -1,0 +1,56 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/9782.
+
+statement ok
+CREATE TABLE table_f1 (f1 INTEGER);
+
+statement ok
+CREATE TAble table_f4 (f4 INTEGER);
+
+query T multiline
+EXPLAIN SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+%0 =
+| Constant
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+%0 =
+| Constant
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+%0 =
+| Constant
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+%0 =
+| Constant
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+%0 =
+| Constant
+
+EOF

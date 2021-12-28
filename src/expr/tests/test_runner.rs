@@ -28,11 +28,30 @@ mod test {
     fn test_canonicalize_pred(s: &str) -> Result<Vec<MirScalarExpr>, String> {
         let mut input_stream = tokenize(&s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
-        let mut predicates: Vec<MirScalarExpr> =
+        let input_predicates: Vec<MirScalarExpr> =
             deserialize(&mut input_stream, "Vec<MirScalarExpr>", &RTI, &mut ctx)?;
         let typ: RelationType = deserialize(&mut input_stream, "RelationType", &RTI, &mut ctx)?;
-        canonicalize_predicates(&mut predicates, &typ);
-        Ok(predicates)
+        // predicate canonicalization is meant to produce the same output regardless of the
+        // order of the input predicates.
+        let mut predicates1 = input_predicates.clone();
+        canonicalize_predicates(&mut predicates1, &typ);
+        let mut predicates2 = input_predicates.clone();
+        predicates2.sort();
+        canonicalize_predicates(&mut predicates2, &typ);
+        let mut predicates3 = input_predicates;
+        predicates3.sort();
+        predicates3.reverse();
+        canonicalize_predicates(&mut predicates3, &typ);
+        if predicates1 != predicates2 || predicates1 != predicates3 {
+            Err(format!(
+                "predicate canonicalization resulted in unrealiable output: [{}] vs [{}] vs [{}]",
+                separated(", ", predicates1.iter().map(|p| p.to_string())),
+                separated(", ", predicates2.iter().map(|p| p.to_string())),
+                separated(", ", predicates3.iter().map(|p| p.to_string())),
+            ))
+        } else {
+            Ok(predicates1)
+        }
     }
 
     /// Builds a [MapFilterProject] of a certain arity, then modifies it.
