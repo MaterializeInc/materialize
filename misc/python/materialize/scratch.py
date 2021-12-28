@@ -70,8 +70,10 @@ def delete_after(tags: Dict[str, str]) -> Optional[datetime.datetime]:
     return datetime.datetime.fromtimestamp(unix)
 
 
-def instance_host(instance: Instance) -> str:
-    return f"{ami_user(tags(instance))}@{instance.id}"
+def instance_host(instance: Instance, user: Optional[str] = None) -> str:
+    if user is None:
+        user = ami_user(tags(instance))
+    return f"{user}@{instance.id}"
 
 
 def print_instances(ists: List[Instance], format: str) -> None:
@@ -202,25 +204,23 @@ async def setup(
         if is_ready(i):
             done = True
             break
+    if not done:
+        raise RuntimeError(
+            f"Instance {i} did not become ready in a reasonable amount of time"
+        )
 
     done = False
     async for remaining in ui.async_timeout_loop(180, 5):
-        SPEAKER(f"Checking whether SSH works yet: {remaining}s remaining")
+        SPEAKER(f"Checking whether setup has completed: {remaining}s remaining")
         try:
-            mssh(i, "true")
+            mssh(i, "[[ -f /opt/provision/docker-installed ]]")
             done = True
             break
         except CalledProcessError:
             continue
-
     if not done:
         raise RuntimeError(
             "Instance did not finish setup in a reasonable amount of time"
-        )
-
-    if not done:
-        raise RuntimeError(
-            f"Instance {i} did not become ready in a reasonable amount of time"
         )
 
     mkrepo(i, git_rev)
@@ -315,7 +315,7 @@ def launch_cluster(
         if d.launch_script:
             mssh(
                 i,
-                f"cd materialize && {env} nohup bash -c {shlex.quote(d.launch_script)} &> mzscratch.log &",
+                f"(cd materialize && {env} nohup bash -c {shlex.quote(d.launch_script)}) &> mzscratch.log &",
             )
 
     return instances
@@ -366,9 +366,9 @@ def mssh(
     # quoting.
     if command:
         print(f"{host}$ {command}", file=sys.stderr)
-        # Eval and quote to work around:
+        # Quote to work around:
         # https://github.com/aws/aws-ec2-instance-connect-cli/pull/26
-        command = f"eval {shlex.quote(command)}"
+        command = shlex.quote(command)
     else:
         print(f"$ mssh {host}")
     spawn.runv(
