@@ -15,7 +15,8 @@ from typing import Any, Dict, List
 
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import (
-    DEFAULT_SG_ID,
+    DEFAULT_INSTANCE_PROFILE_NAME,
+    DEFAULT_SECURITY_GROUP_ID,
     DEFAULT_SUBNET_ID,
     MachineDesc,
     launch_cluster,
@@ -52,9 +53,13 @@ def multi_json(s: str) -> List[Dict[Any, Any]]:
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--subnet-id", type=str, default=DEFAULT_SUBNET_ID)
     parser.add_argument("--key-name", type=str, required=False)
-    parser.add_argument("--security-group-id", type=str, default=DEFAULT_SG_ID)
+    parser.add_argument(
+        "--security-group-id", type=str, default=DEFAULT_SECURITY_GROUP_ID
+    )
     parser.add_argument("--extra-tags", type=str, required=False)
-    parser.add_argument("--instance-profile", type=str)
+    parser.add_argument(
+        "--instance-profile", type=str, default=DEFAULT_INSTANCE_PROFILE_NAME
+    )
     parser.add_argument("--output-format", choices=["table", "csv"], default="table")
     parser.add_argument("--git-rev", type=str, default="HEAD")
 

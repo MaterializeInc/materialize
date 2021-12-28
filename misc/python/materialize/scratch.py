@@ -33,7 +33,8 @@ from materialize import git, spawn, ui, util
 
 # Sane defaults for internal Materialize use in the scratch account
 DEFAULT_SUBNET_ID = "subnet-00bdfbd2d97eddb86"
-DEFAULT_SG_ID = "sg-06f780c8e23c0d944"
+DEFAULT_SECURITY_GROUP_ID = "sg-06f780c8e23c0d944"
+DEFAULT_INSTANCE_PROFILE_NAME = "admin-instance"
 
 SPEAKER = ui.speaker("scratch> ")
 ROOT = Path(os.environ["MZ_ROOT"])
@@ -264,8 +265,8 @@ def launch_cluster(
     nonce: Optional[str] = None,
     subnet_id: str = DEFAULT_SUBNET_ID,
     key_name: Optional[str] = None,
-    security_group_id: str = DEFAULT_SG_ID,
-    instance_profile: Optional[str] = None,
+    security_group_id: str = DEFAULT_SECURITY_GROUP_ID,
+    instance_profile: Optional[str] = DEFAULT_INSTANCE_PROFILE_NAME,
     extra_tags: Dict[str, str] = {},
     delete_after: datetime.datetime,
     git_rev: str = "HEAD",
