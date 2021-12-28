@@ -11,9 +11,9 @@ import os
 from typing import List
 from unittest.mock import patch
 
-from semver import Version, VersionInfo
+from semver import Version
 
-from materialize.git import get_version_tags
+from materialize import util
 from materialize.mzcompose import (
     Kafka,
     Materialized,
@@ -21,95 +21,100 @@ from materialize.mzcompose import (
     SchemaRegistry,
     Testdrive,
     Workflow,
+    WorkflowArgumentParser,
     Zookeeper,
 )
 
-#
-# Determine the list of versions to be tested
-#
+# All released Materialize versions, in order from most to least recent.
+all_versions = util.known_materialize_versions()
 
-min_tested_tag = VersionInfo.parse(os.getenv("MIN_TESTED_TAG", "0.8.0"))
+# The `materialized` options that are valid only at or above a certain version.
+mz_options = {Version.parse("0.9.2"): "--persistent-user-tables"}
 
-all_tags = [tag for tag in get_version_tags(fetch=False) if tag.prerelease is None]
-if not all_tags:
-    raise RuntimeError(
-        "No tags found in current repository. Please run git fetch --all to obtain tags."
-    )
-
-all_tested_tags = sorted([tag for tag in all_tags if tag >= min_tested_tag])
-
-# The Mz options that are valid only at or above a certain version
-mz_options = {VersionInfo.parse("0.9.2"): "--persistent-user-tables"}
-
-#
-# Construct Materialized service objects for all participating versions
-#
-
-mz_versioned = dict(
-    (
-        tag,
-        Materialized(
-            name=f"materialized_v{tag}",
-            image=f"materialize/materialized:v{tag}",
-            hostname="materialized",
-            options="".join(
-                option
-                for starting_version, option in mz_options.items()
-                if tag >= starting_version
-            ),
-        ),
-    )
-    for tag in all_tested_tags
-)
-
-mz_versioned["current_source"] = Materialized(
-    name="materialized_current_source",
-    hostname="materialized",
-    options="".join(mz_options.values()),
-)
-
-prerequisites = [Zookeeper(), Kafka(), SchemaRegistry(), Postgres()]
-
-TESTDRIVE_VALIDATE_CATALOG_SVC_NAME = "testdrive-svc"
-TESTDRIVE_NOVALIDATE_CATALOG_SVC_NAME = "testdrive-svc-novalidate"
+prerequisites = [
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
+    Postgres(),
+]
 
 services = [
     *prerequisites,
-    *(mz_versioned.values()),
-    Testdrive(name=TESTDRIVE_VALIDATE_CATALOG_SVC_NAME),
-    # N.B.: we need to use `validate_catalog=False` because testdrive uses HEAD version to read
-    # from disk to compare to the in-memory representation.  Doing this invokes SQL planning.
-    # However, the SQL planner cannot be guaranteed to handle all old syntaxes directly. For
-    # example, HEAD will panic when attempting to plan the <= v0.9.12 representation of protobufs
-    # because it expects them to be either be:
-    #   1) purified (input from the console)
-    #   2) upgraded (reading from old catalog)
+    *(
+        Materialized(
+            name=f"materialized_v{version}",
+            image=f"materialize/materialized:v{version}",
+            hostname="materialized",
+            options=" ".join(
+                option
+                for starting_version, option in mz_options.items()
+                if version >= starting_version
+            ),
+        )
+        for version in all_versions
+    ),
+    Materialized(
+        name="materialized_current_source",
+        hostname="materialized",
+        options=" ".join(mz_options.values()),
+    ),
+    # N.B.: we need to use `validate_catalog=False` because testdrive uses HEAD
+    # to load the catalog from disk but does *not* run migrations. There is no
+    # guarantee that HEAD can load an old catalog without running migrations.
     #
-    # Therefore, we use this version when running against instances of materailized that have not
-    # been upgraded.
+    # When testdrive is targeting a HEAD materialized, we re-enable catalog
+    # validation below by manually passing the `--validate-catalog` flag.
     #
-    # Disabling catalog validation is preferable to using a versioned testdrive because that would
-    # involve maintaining backwards compatibility for all testdrive commands.
-    Testdrive(name=TESTDRIVE_NOVALIDATE_CATALOG_SVC_NAME, validate_catalog=False),
+    # Disabling catalog validation is preferable to using a versioned testdrive
+    # because that would involve maintaining backwards compatibility for all
+    # testdrive commands.
+    Testdrive(validate_catalog=False),
 ]
 
 
-def workflow_upgrade(w: Workflow):
+def workflow_upgrade(w: Workflow, args: List[str]):
+    """Test upgrades from various versions."""
+
+    parser = WorkflowArgumentParser(w)
+    parser.add_argument(
+        "--min-version",
+        metavar="VERSION",
+        type=Version.parse,
+        default=Version.parse("0.8.0"),
+        help="the minimum version to test from",
+    )
+    parser.add_argument(
+        "--most-recent",
+        metavar="N",
+        type=int,
+        help="limit testing to the N most recent versions",
+    )
+    parser.add_argument(
+        "filter", nargs="?", default="*", help="limit to only the files matching filter"
+    )
+    args = parser.parse_args(args)
+
+    tested_versions = [v for v in all_versions if v >= args.min_version]
+    if args.most_recent is not None:
+        tested_versions = tested_versions[: args.most_recent]
+    tested_versions.reverse()
+
     w.start_and_wait_for_tcp(services=prerequisites)
 
-    for tag in all_tested_tags:
-        priors = [f"v{prior_tag}" for prior_tag in all_tags if prior_tag < tag]
-        test_upgrade_from_version(w, f"v{tag}", priors)
+    for version in tested_versions:
+        priors = [f"v{v}" for v in all_versions if v < version]
+        test_upgrade_from_version(w, f"v{version}", priors, filter=args.filter)
 
-    test_upgrade_from_version(w, "current_source", ["*"])
+    test_upgrade_from_version(w, "current_source", priors=["*"], filter=args.filter)
 
 
-def test_upgrade_from_version(w: Workflow, from_version: str, priors: List[str]):
+def test_upgrade_from_version(
+    w: Workflow, from_version: str, priors: List[str], filter: str
+):
     print(f"===>>> Testing upgrade from Materialize {from_version} to current_source.")
 
     version_glob = "|".join(["any_version", *priors, from_version])
     print(">>> Version glob pattern: " + version_glob)
-    td_glob = os.getenv("TD_GLOB", "*")
 
     mz_from = f"materialized_{from_version}"
     w.start_services(services=[mz_from])
@@ -118,12 +123,12 @@ def test_upgrade_from_version(w: Workflow, from_version: str, priors: List[str])
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
         w.run_service(
-            service=TESTDRIVE_NOVALIDATE_CATALOG_SVC_NAME,
-            command=f"--seed=1 --no-reset {temp_dir} create-in-@({version_glob})-{td_glob}.td",
+            service="testdrive-svc",
+            command=f"--seed=1 --no-reset {temp_dir} create-in-@({version_glob})-{filter}.td",
         )
 
     w.kill_services(services=[mz_from])
-    w.remove_services(services=[mz_from, TESTDRIVE_NOVALIDATE_CATALOG_SVC_NAME])
+    w.remove_services(services=[mz_from, "testdrive-svc"])
 
     mz_to = "materialized_current_source"
     w.start_services(services=[mz_to])
@@ -131,10 +136,10 @@ def test_upgrade_from_version(w: Workflow, from_version: str, priors: List[str])
 
     with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
         w.run_service(
-            service=TESTDRIVE_VALIDATE_CATALOG_SVC_NAME,
-            command=f"--seed=1 --no-reset {temp_dir} check-from-@({version_glob})-{td_glob}.td",
+            service="testdrive-svc",
+            command=f"--seed=1 --no-reset {temp_dir} --validate-catalog=/share/mzdata/catalog check-from-@({version_glob})-{filter}.td",
         )
 
     w.kill_services(services=[mz_to])
-    w.remove_services(services=[mz_to, TESTDRIVE_VALIDATE_CATALOG_SVC_NAME])
+    w.remove_services(services=[mz_to, "testdrive-svc"])
     w.remove_volumes(volumes=["mzdata", "tmp"])

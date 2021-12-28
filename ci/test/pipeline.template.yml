@@ -239,6 +239,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: upgrade
           run: upgrade
+          args: [--most-recent, "3"]
 
   - id: metabase-demo
     label: "metabase-demo"

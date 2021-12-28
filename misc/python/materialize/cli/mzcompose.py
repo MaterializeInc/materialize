@@ -298,6 +298,13 @@ class ListWorkflowsCommand(Command):
             table.add_row([name, "workflow", "mzworkflows.py", description])
 
         print(table.get_string(sortkey=lambda d: (d[1], d[0])))
+        print()
+        print(
+            """For help on a specific workflow, run:
+
+    $ ./mzcompose run WORKFLOW --help
+"""
+        )
 
 
 class WebCommand(Command):
@@ -428,24 +435,27 @@ class RunCommand(DockerComposeCommand):
             runs_containers=True,
             help_epilog="""As an mzcompose extension, run also supports running a workflow, as in:
 
-    $ ./mzcompose run WORKFLOW
+    $ ./mzcompose run WORKFLOW [workflow-options...]
 
 In this form, run does not accept any of the arguments listed above.
 
 To see the available workflows, run:
 
-    $ ./mzcompose list-workflows
+    $ ./mzcompose list
 """,
         )
 
-    def find_workflow_arg(self, args: argparse.Namespace) -> Any:
-        """Finds the first non-option argument in a `docker-compose run`
-        invocation."""
+    def configure(self, parser: argparse.ArgumentParser) -> None:
+        pass
 
+    def run(self, args: argparse.Namespace) -> Any:
         # This is a bit gross, but to determine the first position argument to
         # `run` we have no choice but to hardcode the list of `run` options that
         # take a value. E.g., in `run --entrypoint bash service`, we need to
-        # return `service`, not `bash`.
+        # return `service`, not `bash`. We also distinguish between `run --help
+        # workflow` and `run workflow --help`: the former asks for help on the
+        # `run` command while the latter asks for help on the named `workflow`.
+
         KNOWN_OPTIONS_WITH_ARGUMENT = [
             "-d",
             "--detach",
@@ -461,49 +471,60 @@ To see the available workflows, run:
             "-w",
             "--workdir",
         ]
-        args = iter(args.unknown_subargs)
-        for arg in args:
-            if arg in KNOWN_OPTIONS_WITH_ARGUMENT:
+
+        setattr(args, "workflow", None)
+        setattr(args, "help", False)
+        arg_iter = iter(args.unknown_subargs)
+        for arg in arg_iter:
+            if arg in ["-h", "--help"]:
+                setattr(args, "help", True)
+            elif arg in KNOWN_OPTIONS_WITH_ARGUMENT:
                 # This is an option that's known to take a value, so skip the
                 # next argument too.
-                next(args, None)
+                next(arg_iter, None)
             elif arg.startswith("-"):
                 # Flag option. Skip it.
                 pass
             else:
-                # Found a positional argument. Return it.
-                return arg
+                # Found a positional argument. Save it.
+                setattr(args, "workflow", arg)
+                break
+
+        super().run(args)
 
     def handle_composition(
         self, args: argparse.Namespace, composition: mzcompose.Composition
     ) -> None:
-        workflow_name = self.find_workflow_arg(args)
         try:
-            workflow = composition.get_workflow(workflow_name, dict(os.environ))
+            workflow = composition.get_workflow(args.workflow, dict(os.environ))
         except KeyError:
             # Restart any dependencies whose definitions have changed. This is
             # Docker Compose's default behavior for `up`, but not for `run`,
             # which is a constant irritation that we paper over here. The trick,
             # taken from Buildkite's Docker Compose plugin, is to run an `up`
             # command that requests zero instances of the requested service.
-            if workflow_name:
+            if args.workflow:
                 composition.run(
-                    ["up", "-d", "--scale", f"{workflow_name}=0", workflow_name]
+                    ["up", "-d", "--scale", f"{args.workflow}=0", args.workflow]
                 )
             super().handle_composition(args, composition)
         else:
             # The user has specified a workflow rather than a service. Run the
             # workflow instead of Docker Compose.
-            unknown_args = [*args.unknown_subargs, *args.unknown_args]
-            unknown_args.remove(workflow_name)
-            if unknown_args:
+            if args.unknown_args:
+                bad_arg = args.unknown_args[0]
+            elif args.unknown_subargs[0].startswith("-"):
+                bad_arg = args.unknown_subargs[0]
+            else:
+                bad_arg = None
+            if bad_arg:
                 raise UIError(
-                    f"unknown option {unknown_args[0]!r}",
-                    hint=f"if {unknown_args[0]!r} is a valid Docker Compose option, "
-                    f"it can't be used when running {workflow_name!r}, because {workflow_name!r} "
+                    f"unknown option {bad_arg!r}",
+                    hint=f"if {bad_arg!r} is a valid Docker Compose option, "
+                    f"it can't be used when running {args.workflow!r}, because {args.workflow!r} "
                     "is a custom mzcompose workflow, not a Docker Compose service",
                 )
-            workflow.run()
+            workflow.run(args.unknown_subargs[1:])
 
 
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")
