@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
+
 from materialize.mzcompose import (
     Kafka,
     Materialized,
@@ -26,7 +28,6 @@ mz_disable_user_indexes = Materialized(
     options="--persistent-user-tables --persistent-kafka-upsert-source --disable-persistent-system-tables-test --disable-user-indexes",
 )
 
-
 # This instance of Mz is used for failpoint testing. By using --disable-persistent-system-tables-test
 # we ensure that only testdrive-initiated actions cause I/O. The --workers 1 is used due to #8739
 
@@ -45,6 +46,8 @@ services = [
     Testdrive(no_reset=True, seed=1),
 ]
 
+td_test = os.environ.pop("TD_TEST", "*")
+
 
 def workflow_persistence(w: Workflow):
     workflow_kafka_sources(w)
@@ -61,7 +64,7 @@ def workflow_kafka_sources(w: Workflow):
 
     w.run_service(
         service="testdrive-svc",
-        command="kafka-sources/*-before.td",
+        command=f"kafka-sources/*{td_test}*-before.td",
     )
 
     w.kill_services(services=["materialized"], signal="SIGKILL")
@@ -75,7 +78,7 @@ def workflow_kafka_sources(w: Workflow):
 
     w.run_service(
         service="testdrive-svc",
-        command="kafka-sources/*-after.td",
+        command=f"kafka-sources/*{td_test}*-after.td",
     )
 
     # Do one more restart, just in case and just confirm that Mz is able to come up
@@ -94,7 +97,7 @@ def workflow_user_tables(w: Workflow):
 
     w.run_service(
         service="testdrive-svc",
-        command="user-tables/table-persistence-before-*.td",
+        command=f"user-tables/table-persistence-before-{td_test}.td",
     )
 
     w.kill_services(services=["materialized"], signal="SIGKILL")
@@ -102,7 +105,7 @@ def workflow_user_tables(w: Workflow):
 
     w.run_service(
         service="testdrive-svc",
-        command="user-tables/table-persistence-after-*.td",
+        command=f"user-tables/table-persistence-after-{td_test}.td",
     )
 
     w.kill_services(services=["materialized"], signal="SIGKILL")
@@ -114,7 +117,7 @@ def workflow_failpoints(w: Workflow):
     w.start_services(services=["mz_without_system_tables"])
     w.wait_for_mz(service="mz_without_system_tables")
 
-    w.run_service(service="testdrive-svc", command="failpoints/*.td")
+    w.run_service(service="testdrive-svc", command=f"failpoints/{td_test}.td")
 
     w.kill_services(services=["mz_without_system_tables"], signal="SIGKILL")
     w.remove_services(
