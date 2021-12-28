@@ -20,6 +20,7 @@ from typing import NamedTuple
 
 import psutil
 import psycopg2
+import psycopg2.errors
 import requests
 
 from materialize import mzbuild, spawn

@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-py_folders=(ci misc/kafka-util/scripts misc/mzutil/scripts misc/python)
+py_folders=(ci misc/python)
 
 try bin/pyactivate --dev -m mypy "${py_folders[@]}"
 try bin/pyactivate --dev -m flake8 --select F --ignore F541 --extend-exclude venv "${py_folders[@]}"
