@@ -445,7 +445,6 @@ pub fn plan_insert_query(
     } else {
         let column_by_name: HashMap<&ColumnName, (usize, &ColumnType)> = desc
             .iter()
-            .filter_map(|(name, typ)| name.map(|n| (n, typ)))
             .enumerate()
             .map(|(idx, (name, typ))| (name, (idx, typ)))
             .collect();
@@ -524,10 +523,7 @@ pub fn plan_insert_query(
     let expr = cast_relation(&qcx, CastContext::Assignment, expr, source_types).map_err(|e| {
         PlanError::Unstructured(format!(
             "column {} is of type {} but expression is of type {}",
-            desc.get_name(e.column)
-                .unwrap_or(&ColumnName::from("?column?"))
-                .as_str()
-                .quoted(),
+            desc.get_name(e.column).as_str().quoted(),
             pgrepr::Type::from(&e.target_type).name(),
             pgrepr::Type::from(&e.source_type).name(),
         ))
@@ -586,7 +582,6 @@ pub fn plan_copy_from(
         let columns: Vec<_> = columns.into_iter().map(normalize::column_name).collect();
         let column_by_name: HashMap<&ColumnName, (usize, &ColumnType)> = desc
             .iter()
-            .filter_map(|(name, typ)| name.map(|n| (n, typ)))
             .enumerate()
             .map(|(idx, (name, typ))| (name, (idx, typ)))
             .collect();
@@ -598,7 +593,7 @@ pub fn plan_copy_from(
             if let Some((idx, typ)) = column_by_name.get(c) {
                 ordering.push(*idx);
                 source_types.push((*typ).clone());
-                names.push(Some(c.clone()));
+                names.push(c.clone());
             } else {
                 sql_bail!(
                     "column {} of relation {} does not exist",
@@ -986,7 +981,7 @@ pub fn eval_as_of<'a>(
     scx: &'a StatementContext,
     mut expr: Expr<Raw>,
 ) -> Result<Timestamp, PlanError> {
-    let scope = Scope::from_source(None, iter::empty::<Option<ColumnName>>());
+    let scope = Scope::empty();
     let desc = RelationDesc::empty();
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
@@ -1449,7 +1444,7 @@ fn plan_values(
     let mut scope = Scope::empty();
     for i in 0..ncols {
         let name = format!("column{}", i + 1);
-        scope.items.push(ScopeItem::from_column_name(name.into()));
+        scope.items.push(ScopeItem::from_column_name(name));
     }
 
     Ok((out, scope))
@@ -1458,7 +1453,7 @@ fn plan_values(
 fn plan_join_identity() -> (HirRelationExpr, Scope) {
     let typ = RelationType::new(vec![]);
     let expr = HirRelationExpr::constant(vec![vec![]], typ);
-    let scope = Scope::from_source(None, iter::empty::<Option<ColumnName>>());
+    let scope = Scope::empty();
     (expr, scope)
 }
 
@@ -1724,7 +1719,7 @@ fn plan_view_select(
             };
             if let HirScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
                 // Simple column reference; no need to map on a new expression.
-                output_columns.push((column, column_name.as_ref()));
+                output_columns.push((column, column_name));
             } else {
                 // Complicated expression that requires a map expression. We
                 // update `group_scope` as we go so that future expressions that
@@ -1735,7 +1730,7 @@ fn plan_view_select(
                 let typ = ecx.column_type(&expr);
                 new_type.column_types.push(typ);
                 new_exprs.push(expr);
-                output_columns.push((group_scope.len(), column_name.as_ref()));
+                output_columns.push((group_scope.len(), column_name));
                 group_scope
                     .items
                     .push(ScopeItem::from_expr(select_item.as_expr().cloned()));
@@ -1883,7 +1878,7 @@ fn plan_view_select(
 fn plan_group_by_expr<'a>(
     ecx: &ExprContext,
     group_expr: &'a Expr<Aug>,
-    projection: &'a [(ExpandedSelectItem, Option<ColumnName>)],
+    projection: &'a [(ExpandedSelectItem, ColumnName)],
 ) -> Result<(Option<&'a Expr<Aug>>, HirScalarExpr), PlanError> {
     let plan_projection = |column: usize| match &projection[column].0 {
         ExpandedSelectItem::InputOrdinal(column) => Ok((None, HirScalarExpr::column(*column))),
@@ -1911,8 +1906,8 @@ fn plan_group_by_expr<'a>(
                 // The expression was a simple identifier that did not match an
                 // input column. See if it matches an output column.
                 let mut iter = projection.iter().map(|(_expr, name)| name);
-                if let Some(i) = iter.position(|n| n.as_ref() == Some(&column)) {
-                    if iter.any(|n| n.as_ref() == Some(&column)) {
+                if let Some(i) = iter.position(|n| *n == column) {
+                    if iter.any(|n| *n == column) {
                         Err(PlanError::AmbiguousColumn(column))
                     } else {
                         plan_projection(i)
@@ -1945,7 +1940,7 @@ fn plan_group_by_expr<'a>(
 fn plan_order_by_exprs(
     ecx: &ExprContext,
     order_by_exprs: &[OrderByExpr<Aug>],
-    output_columns: &[(usize, Option<&ColumnName>)],
+    output_columns: &[(usize, &ColumnName)],
 ) -> Result<(Vec<ColumnOrder>, Vec<HirScalarExpr>), PlanError> {
     let mut order_by = vec![];
     let mut map_exprs = vec![];
@@ -1988,7 +1983,7 @@ fn plan_order_by_exprs(
 fn plan_order_by_or_distinct_expr(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
-    output_columns: &[(usize, Option<&ColumnName>)],
+    output_columns: &[(usize, &ColumnName)],
 ) -> Result<HirScalarExpr, PlanError> {
     if let Some(i) = check_col_index(&ecx.name, expr, output_columns.len())? {
         return Ok(HirScalarExpr::column(output_columns[i].0));
@@ -1997,7 +1992,7 @@ fn plan_order_by_or_distinct_expr(
     if let Expr::Identifier(names) = expr {
         if let [name] = &names[..] {
             let name = normalize::column_name(name.clone());
-            let mut iter = output_columns.iter().filter(|(_, n)| *n == Some(&name));
+            let mut iter = output_columns.iter().filter(|(_, n)| **n == name);
             if let Some((i, _)) = iter.next() {
                 match iter.next() {
                     // Per SQL92, names are not considered ambiguous if they
@@ -2222,7 +2217,7 @@ fn plan_solitary_table_function(
         if let Some(alias) = alias {
             if let ScopeItem {
                 table_name: Some(table_name),
-                column_name: Some(column_name),
+                column_name,
                 ..
             } = item
             {
@@ -2306,7 +2301,7 @@ fn plan_table_function_internal(
         })]);
         scope
             .items
-            .push(ScopeItem::from_name(scope_name, Some("ordinality".into())));
+            .push(ScopeItem::from_name(scope_name, "ordinality"));
     }
 
     Ok((expr, scope))
@@ -2333,7 +2328,7 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
             let column_name = columns
                 .get(i)
                 .map(|a| normalize::column_name(a.clone()))
-                .or_else(|| item.column_name.clone());
+                .unwrap_or_else(|| item.column_name.clone());
             item.table_name = Some(PartialName {
                 database: None,
                 schema: None,
@@ -2368,10 +2363,7 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ColumnName>
             // name, since we throw away the planned expression, but fixing this
             // requires a separate semantic analysis phase.
             let (_expr, scope) = plan_nested_query(&mut ecx.derived_query_context(), query).ok()?;
-            scope
-                .items
-                .first()
-                .and_then(|name| name.column_name.clone())
+            scope.items.first().map(|name| name.column_name.clone())
         }
         _ => None,
     }
@@ -2395,7 +2387,7 @@ impl ExpandedSelectItem<'_> {
 fn expand_select_item<'a>(
     ecx: &ExprContext,
     s: &'a SelectItem<Aug>,
-) -> Result<Vec<(ExpandedSelectItem<'a>, Option<ColumnName>)>, PlanError> {
+) -> Result<Vec<(ExpandedSelectItem<'a>, ColumnName)>, PlanError> {
     match s {
         SelectItem::Expr {
             expr: Expr::QualifiedWildcard(table_name),
@@ -2440,7 +2432,7 @@ fn expand_select_item<'a>(
                         expr: sql_expr.clone(),
                         field: Ident::new(name.as_str()),
                     }));
-                    (item, Some(name.clone()))
+                    (item, name.clone())
                 })
                 .collect();
             Ok(items)
@@ -2464,7 +2456,8 @@ fn expand_select_item<'a>(
             let name = alias
                 .clone()
                 .map(normalize::column_name)
-                .or_else(|| invent_column_name(ecx, &expr));
+                .or_else(|| invent_column_name(ecx, &expr))
+                .unwrap_or_else(|| "?column?".into());
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
     }
@@ -2534,7 +2527,7 @@ fn plan_join(
             let column_names: Vec<_> = left_column_names
                 .intersection(&right_column_names)
                 .into_iter()
-                .filter_map(|n| n.cloned())
+                .map(|n| (*n).clone())
                 .collect();
             plan_using_constraint(
                 &column_names,
@@ -2643,7 +2636,7 @@ fn plan_using_constraint(
                     func: VariadicFunc::Coalesce,
                     exprs: vec![expr1.clone(), expr2.clone()],
                 });
-                new_items.push(ScopeItem::from_column_name(column_name.into()));
+                new_items.push(ScopeItem::from_column_name(column_name));
             }
         }
 
@@ -3449,10 +3442,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
                 .into_iter()
                 .map(|(column, item)| {
                     let expr = HirScalarExpr::Column(column);
-                    let name = item
-                        .column_name
-                        .clone()
-                        .unwrap_or_else(|| ColumnName::from(format!("f{}", column.column + 1)));
+                    let name = item.column_name.clone();
                     (expr, name)
                 })
                 .unzip();
@@ -4095,8 +4085,7 @@ impl<'a> QueryContext<'a> {
                     }
                 });
 
-                let scope =
-                    Scope::from_source(Some(name), cte.val_desc.iter_names().map(|n| n.cloned()));
+                let scope = Scope::from_source(Some(name), cte.val_desc.iter_names());
 
                 // Inline `val` where its name was referenced. In an ideal
                 // world, multiple instances of this expression would be
@@ -4111,10 +4100,7 @@ impl<'a> QueryContext<'a> {
                     typ: desc.typ().clone(),
                 };
 
-                let scope = Scope::from_source(
-                    Some(object.raw_name),
-                    desc.iter_names().map(|n| n.cloned()),
-                );
+                let scope = Scope::from_source(Some(object.raw_name), desc.iter_names().cloned());
 
                 Ok((expr, scope))
             }

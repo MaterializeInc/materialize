@@ -60,10 +60,8 @@ use crate::plan::query::Aug;
 pub struct ScopeItem {
     /// The name of the table that produced this scope item, if any.
     pub table_name: Option<PartialName>,
-    /// The name of the column, if any.
-    ///
-    /// If omitted, the scope item will not be resolvable.
-    pub column_name: Option<ColumnName>,
+    /// The name of the column.
+    pub column_name: ColumnName,
     /// The expression from which this scope item is derived. Used by `GROUP
     /// BY`.
     pub expr: Option<Expr<Aug>>,
@@ -124,7 +122,7 @@ impl ScopeItem {
     fn empty() -> ScopeItem {
         ScopeItem {
             table_name: None,
-            column_name: None,
+            column_name: "?column?".into(),
             expr: None,
             from_single_column_function: false,
             allow_unqualified_references: true,
@@ -133,19 +131,22 @@ impl ScopeItem {
         }
     }
 
-    /// Constructs a new scope item from a bare column name.
-    pub fn from_column_name(column_name: ColumnName) -> ScopeItem {
-        ScopeItem::from_name(None, Some(column_name))
+    /// Constructs a new scope item from an unqualified column name.
+    pub fn from_column_name<N>(column_name: N) -> ScopeItem
+    where
+        N: Into<ColumnName>,
+    {
+        ScopeItem::from_name(None, column_name.into())
     }
 
     /// Constructs a new scope item from a name.
-    pub fn from_name(
-        table_name: Option<PartialName>,
-        column_name: Option<ColumnName>,
-    ) -> ScopeItem {
+    pub fn from_name<N>(table_name: Option<PartialName>, column_name: N) -> ScopeItem
+    where
+        N: Into<ColumnName>,
+    {
         let mut item = ScopeItem::empty();
         item.table_name = table_name;
-        item.column_name = column_name;
+        item.column_name = column_name.into();
         item
     }
 
@@ -174,22 +175,20 @@ impl Scope {
 
     pub fn from_source<I, N>(table_name: Option<PartialName>, column_names: I) -> Self
     where
-        I: IntoIterator<Item = Option<N>>,
+        I: IntoIterator<Item = N>,
         N: Into<ColumnName>,
     {
         let mut scope = Scope::empty();
         scope.items = column_names
             .into_iter()
-            .map(|column_name| {
-                ScopeItem::from_name(table_name.clone(), column_name.map(|n| n.into()))
-            })
+            .map(|column_name| ScopeItem::from_name(table_name.clone(), column_name.into()))
             .collect();
         scope
     }
 
     /// Constructs an iterator over the canonical name for each column.
-    pub fn column_names(&self) -> impl Iterator<Item = Option<&ColumnName>> {
-        self.items.iter().map(|item| item.column_name.as_ref())
+    pub fn column_names(&self) -> impl Iterator<Item = &ColumnName> {
+        self.items.iter().map(|item| &item.column_name)
     }
 
     pub fn len(&self) -> usize {
@@ -316,7 +315,7 @@ impl Scope {
         self.resolve_internal(
             outer_scopes,
             |_column, _lat_level, item| {
-                item.allow_unqualified_references && item.column_name.as_ref() == Some(column_name)
+                item.allow_unqualified_references && item.column_name == *column_name
             },
             table_name,
             column_name,
@@ -362,7 +361,7 @@ impl Scope {
                 }
                 if item.table_name.as_ref().map(|n| n.matches(table_name)) == Some(true) {
                     seen_at_level = Some(lat_level);
-                    item.column_name.as_ref() == Some(column_name)
+                    item.column_name == *column_name
                 } else {
                     false
                 }

@@ -238,8 +238,8 @@ impl From<&ColumnName> for ColumnName {
 /// use repr::{ColumnType, RelationDesc, ScalarType};
 ///
 /// let desc = RelationDesc::empty()
-///     .with_named_column("id", ScalarType::Int64.nullable(false))
-///     .with_named_column("price", ScalarType::Float64.nullable(true));
+///     .with_column("id", ScalarType::Int64.nullable(false))
+///     .with_column("price", ScalarType::Float64.nullable(true));
 /// ```
 ///
 /// In more complicated cases, like when constructing a `RelationDesc` in
@@ -252,17 +252,16 @@ impl From<&ColumnName> for ColumnName {
 /// # fn plan_query(_: &str) -> repr::RelationType { repr::RelationType::new(vec![]) }
 /// let relation_type = plan_query("SELECT * FROM table");
 /// let names = (0..relation_type.arity()).map(|i| match i {
-///     0 => Some("first"),
-///     1 => Some("second"),
-///     // Leave the rest of the columns unnamed.
-///     _ => None,
+///     0 => "first",
+///     1 => "second",
+///     _ => "unknown",
 /// });
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct RelationDesc {
     typ: RelationType,
-    names: Vec<Option<ColumnName>>,
+    names: Vec<ColumnName>,
 }
 
 impl RelationDesc {
@@ -284,17 +283,17 @@ impl RelationDesc {
     /// items in `names`.
     pub fn new<I, N>(typ: RelationType, names: I) -> Self
     where
-        I: IntoIterator<Item = Option<N>>,
+        I: IntoIterator<Item = N>,
         N: Into<ColumnName>,
     {
-        let names: Vec<_> = names.into_iter().map(|n| n.map(Into::into)).collect();
+        let names: Vec<_> = names.into_iter().map(|name| name.into()).collect();
         assert_eq!(typ.column_types.len(), names.len());
         RelationDesc { typ, names }
     }
 
     pub fn from_names_and_types<I, T, N>(iter: I) -> Self
     where
-        I: IntoIterator<Item = (Option<N>, T)>,
+        I: IntoIterator<Item = (N, T)>,
         T: Into<ColumnType>,
         N: Into<ColumnName>,
     {
@@ -315,22 +314,14 @@ impl RelationDesc {
         self
     }
 
-    /// Appends an optionally named column with the specified column type.
-    pub fn with_column<N>(mut self, name: Option<N>, column_type: ColumnType) -> Self
+    /// Appends a column with the specified name and type.
+    pub fn with_column<N>(mut self, name: N, column_type: ColumnType) -> Self
     where
         N: Into<ColumnName>,
     {
         self.typ.column_types.push(column_type);
-        self.names.push(name.map(|n| n.into()));
+        self.names.push(name.into());
         self
-    }
-
-    /// Appends a named column with the specified column type.
-    pub fn with_named_column<N>(self, name: N, column_type: ColumnType) -> Self
-    where
-        N: Into<ColumnName>,
-    {
-        self.with_column(Some(name), column_type)
     }
 
     /// Adds a new key for the relation.
@@ -354,7 +345,7 @@ impl RelationDesc {
     /// items in `names`.
     pub fn with_names<I, N>(self, names: I) -> Self
     where
-        I: IntoIterator<Item = Option<N>>,
+        I: IntoIterator<Item = N>,
         N: Into<ColumnName>,
     {
         Self::new(self.typ, names)
@@ -371,7 +362,7 @@ impl RelationDesc {
     }
 
     /// Returns an iterator over the columns in this relation.
-    pub fn iter(&self) -> impl Iterator<Item = (Option<&ColumnName>, &ColumnType)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&ColumnName, &ColumnType)> {
         self.iter_names().zip(self.iter_types())
     }
 
@@ -381,8 +372,8 @@ impl RelationDesc {
     }
 
     /// Returns an iterator over the names of the columns in this relation.
-    pub fn iter_names(&self) -> impl Iterator<Item = Option<&ColumnName>> {
-        self.names.iter().map(|n| n.as_ref())
+    pub fn iter_names(&self) -> impl Iterator<Item = &ColumnName> {
+        self.names.iter()
     }
 
     /// Finds a column by name.
@@ -392,7 +383,7 @@ impl RelationDesc {
     /// specified name, the leftmost column is returned.
     pub fn get_by_name(&self, name: &ColumnName) -> Option<(usize, &ColumnType)> {
         self.iter_names()
-            .position(|n| n == Some(name))
+            .position(|n| n == name)
             .map(|i| (i, &self.typ.column_types[i]))
     }
 
@@ -401,8 +392,8 @@ impl RelationDesc {
     /// # Panics
     ///
     /// Panics if `i` is not a valid column index.
-    pub fn get_name(&self, i: usize) -> Option<&ColumnName> {
-        self.names[i].as_ref()
+    pub fn get_name(&self, i: usize) -> &ColumnName {
+        &self.names[i]
     }
 
     /// Gets the name of the `i`th column if that column name is unambiguous.
@@ -414,9 +405,9 @@ impl RelationDesc {
     ///
     /// Panics if `i` is not a valid column index.
     pub fn get_unambiguous_name(&self, i: usize) -> Option<&ColumnName> {
-        let name = self.names[i].as_ref();
-        if self.iter_names().filter(|n| n == &name).count() == 1 {
-            name
+        let name = &self.names[i];
+        if self.iter_names().filter(|n| *n == name).count() == 1 {
+            Some(name)
         } else {
             None
         }
@@ -427,9 +418,10 @@ impl RelationDesc {
     /// n.b. The only constraint MZ currently supports in NOT NULL, but this
     /// structure will  be simple to extend.
     pub fn constraints_met(&self, i: usize, d: &Datum) -> Result<(), NotNullViolation> {
-        let (name, typ) = (self.names[i].as_ref(), &self.typ.column_types[i]);
+        let name = &self.names[i];
+        let typ = &self.typ.column_types[i];
         if d == &Datum::Null && !typ.nullable {
-            Err(NotNullViolation(name.cloned()))
+            Err(NotNullViolation(name.clone()))
         } else {
             Ok(())
         }
@@ -437,8 +429,8 @@ impl RelationDesc {
 }
 
 impl IntoIterator for RelationDesc {
-    type Item = (Option<ColumnName>, ColumnType);
-    type IntoIter = iter::Zip<vec::IntoIter<Option<ColumnName>>, vec::IntoIter<ColumnType>>;
+    type Item = (ColumnName, ColumnType);
+    type IntoIter = iter::Zip<vec::IntoIter<ColumnName>, vec::IntoIter<ColumnType>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.names.into_iter().zip(self.typ.column_types)
@@ -447,18 +439,14 @@ impl IntoIterator for RelationDesc {
 
 /// Expression violated not-null constraint on named column
 #[derive(Debug, PartialEq, Eq)]
-pub struct NotNullViolation(pub Option<ColumnName>);
+pub struct NotNullViolation(pub ColumnName);
 
 impl fmt::Display for NotNullViolation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
             "null value in column {} violates not-null constraint",
-            self.0
-                .as_ref()
-                .unwrap_or(&ColumnName::from("unnamed column"))
-                .as_str()
-                .quoted()
+            self.0.as_str().quoted()
         )
     }
 }

@@ -354,7 +354,7 @@ impl SourceDataEncoding {
 pub fn included_column_desc(included_columns: Vec<(&str, ColumnType)>) -> RelationDesc {
     let mut desc = RelationDesc::empty();
     for (name, ty) in included_columns {
-        desc = desc.with_named_column(name, ty);
+        desc = desc.with_column(name, ty);
     }
     desc
 }
@@ -368,7 +368,7 @@ impl DataEncoding {
         // Add columns for the data, based on the encoding format.
         Ok(match self {
             DataEncoding::Bytes => {
-                RelationDesc::empty().with_named_column("data", ScalarType::Bytes.nullable(false))
+                RelationDesc::empty().with_column("data", ScalarType::Bytes.nullable(false))
             }
             DataEncoding::AvroOcf(AvroOcfEncoding {
                 reader_schema: schema,
@@ -386,7 +386,7 @@ impl DataEncoding {
                 .columns()
                 .iter()
                 .fold(RelationDesc::empty(), |desc, (name, ty)| {
-                    desc.with_named_column(name, ty.clone())
+                    desc.with_column(name, ty.clone())
                 }),
             DataEncoding::Regex(RegexEncoding { regex }) => regex
                 .capture_names()
@@ -402,30 +402,27 @@ impl DataEncoding {
                         Some(name) => name.to_owned(),
                     };
                     let ty = ScalarType::String.nullable(true);
-                    desc.with_named_column(name, ty)
+                    desc.with_column(name, ty)
                 }),
             DataEncoding::Csv(CsvEncoding { columns, .. }) => match columns {
                 ColumnSpec::Count(n) => {
                     (1..=*n).into_iter().fold(RelationDesc::empty(), |desc, i| {
-                        desc.with_named_column(
-                            format!("column{}", i),
-                            ScalarType::String.nullable(false),
-                        )
+                        desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
                     })
                 }
                 ColumnSpec::Header { names } => names
                     .iter()
                     .map(|s| &**s)
                     .fold(RelationDesc::empty(), |desc, name| {
-                        desc.with_named_column(name, ScalarType::String.nullable(false))
+                        desc.with_column(name, ScalarType::String.nullable(false))
                     }),
             },
             DataEncoding::Text => {
-                RelationDesc::empty().with_named_column("text", ScalarType::String.nullable(false))
+                RelationDesc::empty().with_column("text", ScalarType::String.nullable(false))
             }
             DataEncoding::Postgres => RelationDesc::empty()
-                .with_named_column("oid", ScalarType::Int32.nullable(false))
-                .with_named_column(
+                .with_column("oid", ScalarType::Int32.nullable(false))
+                .with_column(
                     "row_data",
                     ScalarType::List {
                         element_type: Box::new(ScalarType::String),
@@ -569,7 +566,6 @@ pub fn match_key_indices(
 ) -> anyhow::Result<Vec<usize>> {
     let mut indices = Vec::new();
     for (name, key_type) in key_desc.iter() {
-        let name = name.ok_or_else(|| anyhow!("Key description missing column name"))?;
         let (index, value_type) = value_desc
             .get_by_name(name)
             .ok_or_else(|| anyhow!("Value schema missing primary key column: {}", name))?;
@@ -622,7 +618,7 @@ impl SourceEnvelope {
                     KeyEnvelope::LegacyUpsert => {
                         let key_indices = (0..key_desc.arity()).collect();
                         let key_desc = key_desc.with_key(key_indices);
-                        let names = (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
+                        let names = (0..key_desc.arity()).map(|i| format!("key{}", i));
                         // Rename key columns to "keyN"
                         key_desc.with_names(names).concat(value_desc)
                     }
@@ -636,22 +632,17 @@ impl SourceEnvelope {
                                     scalar_type: ScalarType::Record {
                                         fields: key_desc
                                             .iter_names()
-                                            .enumerate()
-                                            .map(|(i, name)| {
-                                                name.map(Clone::clone)
-                                                    .unwrap_or_else(|| format!("key{}", i).into())
-                                            })
                                             .zip(key_type.column_types.iter())
-                                            .map(|(name, typ)| (name, typ.clone()))
+                                            .map(|(name, ty)| (name.clone(), ty.clone()))
                                             .collect(),
                                         custom_oid: None,
                                         custom_name: None,
                                     },
                                 }]);
 
-                                RelationDesc::new(key_as_record, vec![Some(key_name.to_string())])
+                                RelationDesc::new(key_as_record, [key_name.to_string()])
                             } else {
-                                key_desc.with_names(vec![Some(key_name.to_string())])
+                                key_desc.with_names([key_name.to_string()])
                             }
                         };
                         // In all cases the first column is the key
@@ -670,11 +661,9 @@ impl SourceEnvelope {
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("Spec does not contain key"))?;
                 match &mut key.1.scalar_type {
-                    ScalarType::Record { fields, .. } => fields.extend(
-                        metadata_desc
-                            .iter()
-                            .map(|(k, v)| (k.unwrap().clone(), v.clone())),
-                    ),
+                    ScalarType::Record { fields, .. } => {
+                        fields.extend(metadata_desc.iter().map(|(k, v)| (k.clone(), v.clone())))
+                    }
                     ty => bail!(
                         "Incorrect type for Debezium value, expected Record, got {:?}",
                         ty
@@ -684,9 +673,7 @@ impl SourceEnvelope {
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("Spec does not contain value"))?;
                 match &mut value.1.scalar_type {
-                    ScalarType::Record { fields, .. } => {
-                        fields.extend(metadata_desc.into_iter().map(|(k, v)| (k.unwrap(), v)))
-                    }
+                    ScalarType::Record { fields, .. } => fields.extend(metadata_desc),
                     ty => bail!(
                         "Incorrect type for Debezium value, expected Record, got {:?}",
                         ty
@@ -705,9 +692,7 @@ impl SourceEnvelope {
                             // TODO maybe check this by name
                             match &fields[0].1.scalar_type {
                                 ScalarType::Record { fields, .. } => {
-                                    RelationDesc::from_names_and_types(
-                                        fields.clone().into_iter().map(|(n, t)| (Some(n), t)),
-                                    )
+                                    RelationDesc::from_names_and_types(fields.clone())
                                 }
                                 ty => bail!("Unepxected type for MATERIALIZE envelope: {:?}", ty),
                             }

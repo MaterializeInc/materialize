@@ -367,7 +367,8 @@ pub struct Source {
     pub connector: SourceConnector,
     pub bare_desc: RelationDesc,
     pub expr: ::expr::MirRelationExpr,
-    pub column_names: Vec<Option<ColumnName>>, // Column names for the transformed source; i.e. the expr
+    /// Column names for the transformed source; i.e. the expr
+    pub column_names: Vec<ColumnName>,
 }
 
 #[derive(Clone, Debug)]

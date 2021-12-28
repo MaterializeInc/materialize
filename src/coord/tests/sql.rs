@@ -24,7 +24,7 @@ use coord::catalog::{Catalog, CatalogItem, Table};
 use coord::session::Session;
 use expr::GlobalId;
 use ore::now::NOW_ZERO;
-use repr::{RelationDesc, RelationType};
+use repr::RelationDesc;
 use sql::ast::{Expr, Statement};
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{resolve_names, PlanContext, QueryContext, QueryLifetime, StatementContext};
@@ -53,10 +53,7 @@ async fn datadriven() {
                         },
                         CatalogItem::Table(Table {
                             create_sql: "TODO".to_string(),
-                            desc: RelationDesc::new(
-                                RelationType::new(Vec::new()),
-                                Vec::<Option<String>>::new(),
-                            ),
+                            desc: RelationDesc::empty(),
                             defaults: vec![Expr::null(); 0],
                             conn_id: None,
                             depends_on: vec![],

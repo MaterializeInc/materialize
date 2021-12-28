@@ -39,7 +39,7 @@ pub fn schema_to_relationdesc(schema: Schema) -> Result<RelationDesc, anyhow::Er
     )?))
 }
 
-fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(Option<ColumnName>, ColumnType)>> {
+fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
     let mut columns = vec![];
     let mut seen_avro_nodes = Default::default();
     match schema.inner {
@@ -63,7 +63,7 @@ fn get_named_columns<'a>(
     seen_avro_nodes: &mut HashSet<usize>,
     schema: SchemaNode<'a>,
     base_name: Option<&str>,
-) -> anyhow::Result<Vec<(Option<ColumnName>, ColumnType)>> {
+) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
     if let SchemaPiece::Union(us) = schema.inner {
         let mut columns = vec![];
         let vs = us.variants();
@@ -91,27 +91,33 @@ fn get_named_columns<'a>(
                 let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
                     // There is only one non-null variant in the
                     // union, so we can use the field name directly.
-                    base_name.map(|n| n.to_owned()).or_else(|| {
-                        v.get_piece_and_name(schema.root)
-                            .1
-                            .map(|full_name| full_name.base_name().to_owned())
-                    })
+                    base_name
+                        .map(|n| n.to_owned())
+                        .or_else(|| {
+                            v.get_piece_and_name(schema.root)
+                                .1
+                                .map(|full_name| full_name.base_name().to_owned())
+                        })
+                        .unwrap_or_else(|| "?column?".into())
                 } else {
                     // There are multiple non-null variants in the
                     // union, so we need to invent field names for
                     // each variant.
-                    base_name.map(|n| format!("{}{}", n, i + 1)).or_else(|| {
-                        v.get_piece_and_name(schema.root)
-                            .1
-                            .map(|full_name| full_name.base_name().to_owned())
-                    })
+                    base_name
+                        .map(|n| format!("{}{}", n, i + 1))
+                        .or_else(|| {
+                            v.get_piece_and_name(schema.root)
+                                .1
+                                .map(|full_name| full_name.base_name().to_owned())
+                        })
+                        .unwrap_or_else(|| "?column?".into())
                 };
 
                 // If there is more than one variant in the union,
                 // the column's output type is nullable, as this
                 // column will be null whenever it is uninhabited.
                 let ty = validate_schema_2(seen_avro_nodes, node)?;
-                columns.push((name.map(|n| n.into()), ty.nullable(vs.len() > 1)));
+                columns.push((name.into(), ty.nullable(vs.len() > 1)));
                 if let Some(named_idx) = named_idx {
                     seen_avro_nodes.remove(&named_idx);
                 }
@@ -121,7 +127,9 @@ fn get_named_columns<'a>(
     } else {
         let scalar_type = validate_schema_2(seen_avro_nodes, schema)?;
         Ok(vec![(
-            base_name.map(|n| n.into()),
+            // TODO(benesch): we should do better than this when there's no base
+            // name, e.g., invent a name based on the type.
+            base_name.unwrap_or("?column?").into(),
             scalar_type.nullable(false),
         )])
     }
@@ -183,10 +191,7 @@ fn validate_schema_2(
                 }
             }
             ScalarType::Record {
-                fields: columns
-                    .into_iter()
-                    .map(|(name, typ)| (name.unwrap(), typ))
-                    .collect(),
+                fields: columns,
                 custom_oid: None,
                 custom_name: None,
             }

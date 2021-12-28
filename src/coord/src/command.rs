@@ -284,7 +284,7 @@ pub struct SimpleExecuteResponse {
 #[derive(Debug, Serialize)]
 pub struct SimpleResult {
     pub rows: Vec<Vec<serde_json::Value>>,
-    pub col_names: Vec<Option<String>>,
+    pub col_names: Vec<String>,
 }
 
 /// The state of a cancellation request.

@@ -131,11 +131,7 @@ impl CatalogState {
                     id: MZ_COLUMNS.id,
                     row: Row::pack_slice(&[
                         Datum::String(&id.to_string()),
-                        Datum::String(
-                            &column_name
-                                .map(|n| n.to_string())
-                                .unwrap_or_else(|| "?column?".to_owned()),
-                        ),
+                        Datum::String(column_name.as_str()),
                         Datum::Int64(i as i64 + 1),
                         Datum::from(column_type.nullable),
                         Datum::String(pgtype.name()),

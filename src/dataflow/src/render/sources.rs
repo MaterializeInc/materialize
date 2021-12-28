@@ -449,9 +449,7 @@ where
                                             ScalarType::Record { fields, .. } => fields.clone(),
                                             _ => unreachable!(),
                                         };
-                                        let row_desc = RelationDesc::from_names_and_types(
-                                            fields.into_iter().map(|(n, t)| (Some(n), t)),
-                                        );
+                                        let row_desc = RelationDesc::from_names_and_types(fields);
                                         // these must be available because the DDL parsing logic already
                                         // checks this and bails in case the key is not correct
                                         Some(dataflow_types::match_key_indices(&key_desc, &row_desc).expect("Invalid key schema, this indicates a bug in Materialize"))

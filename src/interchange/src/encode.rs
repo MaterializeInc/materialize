@@ -36,14 +36,7 @@ impl<'a> TypedDatum<'a> {
 /// Extracts deduplicated column names and types from a relation description.
 pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType)> {
     // Invent names for columns that don't have a name.
-    let mut columns: Vec<_> = desc
-        .into_iter()
-        .enumerate()
-        .map(|(i, (name, ty))| match name {
-            None => (ColumnName::from(format!("column{}", i + 1)), ty),
-            Some(name) => (name, ty),
-        })
-        .collect();
+    let mut columns: Vec<_> = desc.into_iter().collect();
 
     // Deduplicate names.
     let mut seen = HashSet::new();

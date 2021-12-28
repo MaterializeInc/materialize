@@ -374,7 +374,7 @@ fn sql_impl_table_func(sql: &'static str) -> Operation<TableFuncPlan> {
         expr.splice_parameters(&args, 0);
         Ok(TableFuncPlan {
             expr,
-            column_names: scope.column_names().map(|n| n.cloned()).collect(),
+            column_names: scope.column_names().cloned().collect(),
         })
     })
 }
@@ -1269,7 +1269,7 @@ macro_rules! builtins {
 #[derive(Debug)]
 pub struct TableFuncPlan {
     pub expr: HirRelationExpr,
-    pub column_names: Vec<Option<ColumnName>>,
+    pub column_names: Vec<ColumnName>,
 }
 
 #[derive(Debug)]
@@ -1980,7 +1980,7 @@ lazy_static! {
                             func: TableFunc::GenerateSeriesInt32,
                             exprs,
                         },
-                        column_names: vec![Some("generate_series".into())],
+                        column_names: vec!["generate_series".into()],
                     })
                 }), 1066;
                 params!(Int32, Int32) => Operation::binary(move |_ecx, start, stop| {
@@ -1989,7 +1989,7 @@ lazy_static! {
                             func: TableFunc::GenerateSeriesInt32,
                             exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32)],
                         },
-                        column_names: vec![Some("generate_series".into())],
+                        column_names: vec!["generate_series".into()],
                     })
                 }), 1067;
                 params!(Int64, Int64, Int64) => Operation::variadic(move |_ecx, exprs| {
@@ -1998,7 +1998,7 @@ lazy_static! {
                             func: TableFunc::GenerateSeriesInt64,
                             exprs,
                         },
-                        column_names: vec![Some("generate_series".into())],
+                        column_names: vec!["generate_series".into()],
                     })
                 }), 1068;
                 params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
@@ -2009,7 +2009,7 @@ lazy_static! {
                             func: TableFunc::GenerateSeriesInt64,
                             exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
                         },
-                        column_names: vec![Some("generate_series".into())],
+                        column_names: vec!["generate_series".into()],
                     })
                 }), 1069;
                 params!(Timestamp, Timestamp, Interval) => Operation::variadic(move |_ecx, exprs| {
@@ -2018,7 +2018,7 @@ lazy_static! {
                             func: TableFunc::GenerateSeriesTimestamp,
                             exprs,
                         },
-                        column_names: vec![Some("generate_series".into())],
+                        column_names: vec!["generate_series".into()],
                     })
                 }), 938;
                 params!(TimestampTz, TimestampTz, Interval) => Operation::variadic(move |_ecx, exprs| {
@@ -2027,7 +2027,7 @@ lazy_static! {
                             func: TableFunc::GenerateSeriesTimestampTz,
                             exprs,
                         },
-                        column_names: vec![Some("generate_series".into())],
+                        column_names: vec!["generate_series".into()],
                     })
                 }), 939;
             },
@@ -2039,7 +2039,7 @@ lazy_static! {
                             func: TableFunc::GenerateSubscriptsArray,
                             exprs,
                         },
-                        column_names: vec![Some("generate_subscripts".into())],
+                        column_names: vec!["generate_subscripts".into()],
                     })
                 }), 1192;
             },
@@ -2051,7 +2051,7 @@ lazy_static! {
                             func: TableFunc::JsonbArrayElements { stringify: false },
                             exprs: vec![jsonb],
                         },
-                        column_names: vec![Some("value".into())],
+                        column_names: vec!["value".into()],
                     })
                 }), 3219;
             },
@@ -2062,7 +2062,7 @@ lazy_static! {
                             func: TableFunc::JsonbArrayElements { stringify: true },
                             exprs: vec![jsonb],
                         },
-                        column_names: vec![Some("value".into())],
+                        column_names: vec!["value".into()],
                     })
                 }), 3465;
             },
@@ -2073,7 +2073,7 @@ lazy_static! {
                             func: TableFunc::JsonbEach { stringify: false },
                             exprs: vec![jsonb],
                         },
-                        column_names: vec![Some("key".into()), Some("value".into())],
+                        column_names: vec!["key".into(), "value".into()],
                     })
                 }), 3208;
             },
@@ -2084,7 +2084,7 @@ lazy_static! {
                             func: TableFunc::JsonbEach { stringify: true },
                             exprs: vec![jsonb],
                         },
-                        column_names: vec![Some("key".into()), Some("value".into())],
+                        column_names: vec!["key".into(), "value".into()],
                     })
                 }), 3932;
             },
@@ -2095,7 +2095,7 @@ lazy_static! {
                             func: TableFunc::JsonbObjectKeys,
                             exprs: vec![jsonb],
                         },
-                        column_names: vec![Some("jsonb_object_keys".into())],
+                        column_names: vec!["jsonb_object_keys".into()],
                     })
                 }), 3931;
             },
@@ -2144,7 +2144,7 @@ lazy_static! {
                             func: TableFunc::CsvExtract(ncols),
                             exprs: vec![input],
                         },
-                        column_names: (1..=ncols).map(|i| Some(format!("column{}", i).into())).collect(),
+                        column_names: (1..=ncols).map(|i| format!("column{}", i).into()).collect(),
                     })
                 }), oid::FUNC_CSV_EXTRACT_OID;
             },
@@ -2218,8 +2218,7 @@ lazy_static! {
                     let column_names = regex
                         .capture_groups_iter()
                         .map(|cg| {
-                            let name = cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index));
-                            Some(name.into())
+                            cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index)).into()
                         })
                         .collect();
                     Ok(TableFuncPlan {
@@ -2251,7 +2250,7 @@ lazy_static! {
                             func: TableFunc::UnnestArray { el_typ },
                             exprs: vec![e],
                         },
-                        column_names: vec![Some("unnest".into())],
+                        column_names: vec!["unnest".into()],
                     })
                 }), 2331;
                 vec![ListAny] => Operation::unary(move |ecx, e| {
@@ -2261,7 +2260,7 @@ lazy_static! {
                             func: TableFunc::UnnestList { el_typ },
                             exprs: vec![e],
                         },
-                        column_names: vec![Some("unnest".into())],
+                        column_names: vec!["unnest".into()],
                     })
                 }), oid::FUNC_UNNEST_LIST_OID;
             }
