@@ -164,6 +164,9 @@ changes that have not yet been documented.
 
 - Fix a problem when connecting with Npgsql 6.
 
+- **Breaking change.** Disallow window functions outside of `SELECT`
+  lists and `ORDER BY`.
+
 {{< comment >}}
 Only add new release notes above this line.
 

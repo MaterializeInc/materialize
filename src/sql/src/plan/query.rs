@@ -770,6 +770,7 @@ pub fn plan_mutation_query_inner(
                 relation_type: &relation_type,
                 allow_aggregates: false,
                 allow_subqueries: true,
+                allow_windows: false,
             };
             let expr = plan_expr(&ecx, &expr)?.type_as(&ecx, &ScalarType::Bool)?;
             get = get.filter(vec![expr]);
@@ -791,6 +792,7 @@ pub fn plan_mutation_query_inner(
                     relation_type: &relation_type,
                     allow_aggregates: false,
                     allow_subqueries: false,
+                    allow_windows: false,
                 };
                 let expr = plan_expr(&ecx, &value)?.cast_to(
                     "SET clause",
@@ -880,6 +882,7 @@ fn handle_mutation_using_clause(
             relation_type: &joined_relation_type,
             allow_aggregates: false,
             allow_subqueries: true,
+            allow_windows: false,
         };
 
         // Plan the filter expression on `FROM, USING...`.
@@ -945,6 +948,7 @@ where
         relation_type: &qcx.relation_type(&expr),
         allow_aggregates: false,
         allow_subqueries: true,
+        allow_windows: false,
     };
     let mut map_exprs = vec![];
     let mut project_key = vec![];
@@ -996,6 +1000,7 @@ pub fn eval_as_of<'a>(
         relation_type: &desc.typ(),
         allow_aggregates: false,
         allow_subqueries: false,
+        allow_windows: false,
     };
 
     let ex = plan_expr(ecx, &expr)?
@@ -1035,6 +1040,7 @@ pub fn plan_default_expr(
         relation_type: &RelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: false,
+        allow_windows: false,
     };
     let hir = plan_expr(ecx, &expr)?.cast_to(ecx.name, ecx, CastContext::Assignment, target_ty)?;
     Ok((hir, qcx.ids.into_iter().collect()))
@@ -1071,6 +1077,7 @@ pub fn plan_params<'a>(
             relation_type: &rel_type,
             allow_aggregates: false,
             allow_subqueries: false,
+            allow_windows: false,
         };
         let ex = plan_expr(ecx, &expr)?.type_as_any(ecx)?;
         let st = ecx.scalar_type(&ex);
@@ -1112,6 +1119,7 @@ pub fn plan_index_exprs<'a>(
         relation_type: on_desc.typ(),
         allow_aggregates: false,
         allow_subqueries: false,
+        allow_windows: false,
     };
     let mut out = vec![];
     for expr in resolved_exprs {
@@ -1244,6 +1252,7 @@ fn plan_query_inner(
                 relation_type: &qcx.relation_type(&expr),
                 allow_aggregates: true,
                 allow_subqueries: true,
+                allow_windows: true,
             };
             let output_columns: Vec<_> = scope.column_names().enumerate().collect();
             let (order_by, map_exprs) = plan_order_by_exprs(ecx, &q.order_by, &output_columns)?;
@@ -1388,6 +1397,7 @@ fn plan_values(
         relation_type: &RelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: true,
+        allow_windows: false,
     };
 
     let ncols = values[0].len();
@@ -1557,6 +1567,7 @@ fn plan_view_select(
             relation_type: &qcx.relation_type(&relation_expr),
             allow_aggregates: false,
             allow_subqueries: true,
+            allow_windows: false,
         };
         let expr = plan_expr(ecx, &selection)
             .map_err(|e| PlanError::Unstructured(format!("WHERE clause error: {}", e)))?
@@ -1583,6 +1594,7 @@ fn plan_view_select(
             relation_type: &qcx.relation_type(&relation_expr),
             allow_aggregates: true,
             allow_subqueries: true,
+            allow_windows: true,
         };
         let mut out = vec![];
         for si in projection {
@@ -1604,6 +1616,7 @@ fn plan_view_select(
             relation_type: &qcx.relation_type(&relation_expr),
             allow_aggregates: false,
             allow_subqueries: true,
+            allow_windows: false,
         };
         let mut group_key = vec![];
         let mut group_exprs = vec![];
@@ -1651,6 +1664,7 @@ fn plan_view_select(
             relation_type: &qcx.relation_type(&relation_expr.clone().map(group_exprs.clone())),
             allow_aggregates: false,
             allow_subqueries: true,
+            allow_windows: false,
         };
         let mut agg_exprs = vec![];
         for sql_function in aggregates {
@@ -1684,6 +1698,7 @@ fn plan_view_select(
             relation_type: &qcx.relation_type(&relation_expr),
             allow_aggregates: true,
             allow_subqueries: true,
+            allow_windows: false,
         };
         let expr = plan_expr(ecx, having)
             .map_err(check_ungrouped_col)?
@@ -1704,6 +1719,7 @@ fn plan_view_select(
                 relation_type: &new_type,
                 allow_aggregates: true,
                 allow_subqueries: true,
+                allow_windows: true,
             };
             let expr = match select_item {
                 ExpandedSelectItem::InputOrdinal(i) => {
@@ -1752,6 +1768,7 @@ fn plan_view_select(
                 relation_type: &relation_type,
                 allow_aggregates: true,
                 allow_subqueries: true,
+                allow_windows: true,
             },
             order_by_exprs,
             &output_columns,
@@ -1787,6 +1804,7 @@ fn plan_view_select(
                     relation_type: &qcx.relation_type(&relation_expr),
                     allow_aggregates: true,
                     allow_subqueries: true,
+                    allow_windows: false,
                 };
 
                 let mut distinct_exprs = vec![];
@@ -2254,6 +2272,7 @@ fn plan_table_function_internal(
         relation_type: &RelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: true,
+        allow_windows: false,
     };
 
     let scalar_args = match args {
@@ -2503,6 +2522,7 @@ fn plan_join(
                 ),
                 allow_aggregates: false,
                 allow_subqueries: true,
+                allow_windows: false,
             };
             let on = plan_expr(ecx, expr)?.type_as(ecx, &ScalarType::Bool)?;
             let joined = left.join(right, on, kind);
@@ -2587,6 +2607,7 @@ fn plan_using_constraint(
         ),
         allow_aggregates: false,
         allow_subqueries: false,
+        allow_windows: false,
     };
 
     let mut join_exprs = vec![];
@@ -3496,6 +3517,10 @@ fn plan_function<'a>(
         }
         Func::Scalar(impls) => impls,
         Func::ScalarWindow(impls) => {
+            if !ecx.allow_windows {
+                sql_bail!("window functions are not allowed in {}", ecx.name);
+            }
+
             // Various things are duplicated here and below, but done this way to improve
             // error messages.
 
@@ -4132,6 +4157,8 @@ pub struct ExprContext<'a> {
     pub allow_aggregates: bool,
     /// Are subqueries allowed in this context
     pub allow_subqueries: bool,
+    /// Are window functions allowed in this context
+    pub allow_windows: bool,
 }
 
 impl CheckedRecursion for ExprContext<'_> {
