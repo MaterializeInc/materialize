@@ -74,19 +74,7 @@ def run(args: argparse.Namespace) -> None:
 
     extra_tags["LaunchedBy"] = whoami()
 
-    descs = [
-        MachineDesc(
-            name=obj["name"],
-            launch_script=obj.get("launch_script"),
-            instance_type=obj["instance_type"],
-            ami=obj["ami"],
-            ami_user=obj["ami_user"],
-            tags=obj.get("tags", dict()),
-            size_gb=obj["size_gb"],
-            checkout=obj.get("checkout", True),
-        )
-        for obj in multi_json(sys.stdin.read())
-    ]
+    descs = [MachineDesc.parse_obj(obj) for obj in multi_json(sys.stdin.read())]
 
     instances = launch_cluster(
         descs,
