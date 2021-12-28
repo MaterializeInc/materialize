@@ -18,8 +18,10 @@ from materialize.scratch import (
     DEFAULT_INSTANCE_PROFILE_NAME,
     DEFAULT_SECURITY_GROUP_ID,
     DEFAULT_SUBNET_ID,
+    ROOT,
     MachineDesc,
     launch_cluster,
+    mssh,
     print_instances,
     whoami,
 )
@@ -62,6 +64,23 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--output-format", choices=["table", "csv"], default="table")
     parser.add_argument("--git-rev", type=str, default="HEAD")
+    parser.add_argument(
+        "--ssh",
+        action="store_true",
+        help=(
+            "ssh into the machine after the launch script is run. "
+            "Only works if a single instance was started"
+        ),
+    )
+    parser.add_argument(
+        "machine",
+        nargs="?",
+        const=None,
+        help=(
+            "Use a config from {machine}.json in `misc/machines`. "
+            "Hint: `dev-box` is a good starter!"
+        ),
+    )
 
 
 def run(args: argparse.Namespace) -> None:
@@ -79,7 +98,17 @@ def run(args: argparse.Namespace) -> None:
 
     extra_tags["LaunchedBy"] = whoami()
 
-    descs = [MachineDesc.parse_obj(obj) for obj in multi_json(sys.stdin.read())]
+    if args.machine:
+        with open(ROOT / "misc" / "machines" / "{}.json".format(args.machine)) as f:
+
+            print("Reading machine configs from {}".format(f.name))
+            descs = [MachineDesc.parse_obj(obj) for obj in multi_json(f.read())]
+    else:
+        print("Reading machine configs from stdin...")
+        descs = [MachineDesc.parse_obj(obj) for obj in multi_json(sys.stdin.read())]
+
+    if args.ssh and len(descs) != 1:
+        raise RuntimeError("Cannot use `--ssh` with {} instances".format(len(descs)))
 
     instances = launch_cluster(
         descs,
@@ -95,3 +124,7 @@ def run(args: argparse.Namespace) -> None:
 
     print("Launched instances:")
     print_instances(instances, args.output_format)
+
+    if args.ssh:
+        print("ssh-ing into: {}".format(instances[0].instance_id))
+        mssh(instances[0], "")

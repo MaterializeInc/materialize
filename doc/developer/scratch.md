@@ -47,6 +47,15 @@ This subcommand expects a series of JSON objects on standard input, each of whic
 }
 ```
 
+`bin/scratch create` takes in configs from stdin, or by passing a name as a positional arg, like:
+
+```
+$ bin/scratch create dev-box
+```
+It looks for the name as a json file in `misc/machines`, a good starter to just do some plain, personal testing is `dev-box`.
+
+---
+
 All of the keys are required (though `tags` can be an empty dictionary). Their meanings should largely be self-explanatory.
 
 Any number of JSON objects may be specified, one after the other. The script creates a "cluster" of machines identified by a random
