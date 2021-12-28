@@ -1,8 +1,0 @@
-{
-    "com.acme.avro.testrecord::Key1Unused": [0, 100],
-    "com.acme.avro.testrecord::Key2Unused": [0, 250000],
-    "com.acme.avro.InnerRecord1::Point": [10000, 1000000000],
-    "com.acme.avro.InnerRecord2::Point": [10000, 1000000000],
-    "com.acme.avro.InnerRecord3::Point": [10000, 1000000000],
-    "com.acme.avro.InnerRecord4::Point": [10000, 10000000000]
-}

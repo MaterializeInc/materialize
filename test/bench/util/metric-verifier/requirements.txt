@@ -1,3 +1,0 @@
-confluent-kafka[avro]==1.5.0
-prometheus-api-client==0.4.2
-random_name==0.1.1
