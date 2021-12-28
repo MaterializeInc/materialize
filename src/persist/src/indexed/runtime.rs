@@ -51,11 +51,7 @@ enum Cmd {
     GetDescription(String, PFutureHandle<Description<u64>>),
     AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
     Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
-    Listen(
-        Id,
-        ListenFn<Vec<u8>, Vec<u8>>,
-        PFutureHandle<ArrangementSnapshot>,
-    ),
+    Listen(Id, ListenFn, PFutureHandle<ArrangementSnapshot>),
     Stop(PFutureHandle<()>),
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
@@ -358,12 +354,7 @@ impl RuntimeClient {
 
     /// Asynchronously registers a callback to be invoked on successful writes
     /// and seals.
-    fn listen(
-        &self,
-        id: Id,
-        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-        res: PFutureHandle<ArrangementSnapshot>,
-    ) {
+    fn listen(&self, id: Id, listen_fn: ListenFn, res: PFutureHandle<ArrangementSnapshot>) {
         self.core.send(Cmd::Listen(id, listen_fn, res))
     }
 
@@ -796,10 +787,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     /// logic on everything that was previously persisted before registering the
     /// listener, and all writes and seals that happen after registration without
     /// duplicating or dropping data.
-    pub fn listen(
-        &self,
-        listen_fn: ListenFn<Vec<u8>, Vec<u8>>,
-    ) -> Result<DecodedSnapshot<K, V>, Error> {
+    pub fn listen(&self, listen_fn: ListenFn) -> Result<DecodedSnapshot<K, V>, Error> {
         let id = match self.id {
             Ok(id) => id,
             Err(ref e) => return Err(e.clone()),
