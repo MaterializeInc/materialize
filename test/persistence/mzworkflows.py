@@ -57,7 +57,7 @@ def workflow_persistence(w: Workflow):
 
 
 def workflow_kafka_sources(w: Workflow):
-    w.start_and_wait_for_tcp(services=prerequisites)
+    w.start_and_wait_for_tcp(services=prerequisites, timeout_secs=240)
 
     w.start_services(services=["materialized"])
     w.wait_for_mz(service="materialized")
