@@ -1,0 +1,8 @@
+{
+    "name": "one-off testing",
+    "launch_script": "true",
+    "instance_type": "t2.large",
+    "ami": "ami-0b29b6e62f2343b46",
+    "size_gb": 50,
+    "tags": {}
+}
