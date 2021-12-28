@@ -180,7 +180,7 @@ def trim_pipeline(pipeline: Any) -> None:
 
     # Restrict the pipeline to the needed steps.
     pipeline["steps"] = [
-        step for step in pipeline["steps"] if step["id"] in needed or "wait" in step
+        step for step in pipeline["steps"] if "wait" in step or step["id"] in needed
     ]
 
 
