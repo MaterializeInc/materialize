@@ -32,5 +32,5 @@ true
 
 # We expect the counter to be at 1, that is no data was re-ingested
 # from the Kafka topic post-restart.
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-kafka-counters-1'->'partitions'->'0'->'msgs' AS INT)) = 1 FROM mz_kafka_source_statistics;
+> SELECT SUM(CAST(statistics->'topics'->'testdrive-kafka-counters-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) = 1 FROM mz_kafka_source_statistics;
 true
