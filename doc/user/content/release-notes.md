@@ -162,6 +162,8 @@ changes that have not yet been documented.
 
 - **Breaking change.** Disallow views with multiple unnamed columns.
 
+- Fix a problem when connecting with Npgsql 6.
+
 {{< comment >}}
 Only add new release notes above this line.
 

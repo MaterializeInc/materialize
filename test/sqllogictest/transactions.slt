@@ -269,16 +269,14 @@ COMPLETE 0
 COMPLETE 0
 COMPLETE 0
 
-# Verify that querying outside of a time domain is an error.
 simple
 SELECT 1;
 SELECT * FROM t;
 ----
-db error: ERROR: Transactions can only reference objects in the same timedomain. See https://materialize.com/docs/sql/begin/#same-timedomain-error
-DETAIL: The following relations in the query are outside the transaction's time domain:
-"materialize.public.t"
-"materialize.public.t_primary_idx"
-No relations are available.
+1
+COMPLETE 1
+1
+COMPLETE 1
 
 statement ok
 CREATE SCHEMA other
