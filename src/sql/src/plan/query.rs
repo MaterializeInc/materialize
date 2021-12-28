@@ -1804,7 +1804,7 @@ fn plan_view_select(
                     relation_type: &qcx.relation_type(&relation_expr),
                     allow_aggregates: true,
                     allow_subqueries: true,
-                    allow_windows: false,
+                    allow_windows: true,
                 };
 
                 let mut distinct_exprs = vec![];
