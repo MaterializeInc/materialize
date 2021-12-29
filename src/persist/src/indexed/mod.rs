@@ -21,7 +21,6 @@ pub mod runtime;
 
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::time::Instant;
@@ -143,7 +142,7 @@ pub struct Indexed<L: Log, B: Blob> {
     log: L,
     blob: BlobCache<B>,
     maintainer: Maintainer<B>,
-    listeners: HashMap<Id, Vec<ListenFn>>,
+    listeners: HashMap<Id, Vec<crossbeam_channel::Sender<ListenEvent>>>,
     metrics: Metrics,
     state: AppliedState,
     pending: Option<Pending>,
@@ -830,8 +829,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
 
         for (id, updates) in updates {
-            if let Some(listen_fns) = self.listeners.get(&id) {
-                if listen_fns.is_empty() {
+            if let Some(listeners) = self.listeners.get(&id) {
+                if listeners.is_empty() {
                     continue;
                 }
 
@@ -841,20 +840,24 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                     .map(|((k, v), ts, diff)| ((k.to_vec(), v.to_vec()), ts, diff))
                     .collect();
 
-                if listen_fns.len() == 1 {
-                    listen_fns[0].0(ListenEvent::Records(updates));
+                // TODO: remove the listener if it hangs up.
+                if listeners.len() == 1 {
+                    let events = ListenEvent::Records(updates);
+                    if let Err(crossbeam_channel::SendError(_)) = listeners[0].send(events) {}
                 } else {
-                    for listen_fn in listen_fns.iter() {
-                        listen_fn.0(ListenEvent::Records(updates.clone()));
+                    for listener in listeners.iter() {
+                        let events = ListenEvent::Records(updates.clone());
+                        if let Err(crossbeam_channel::SendError(_)) = listener.send(events) {}
                     }
                 }
             }
         }
 
         for (id, seal) in seals {
-            if let Some(listen_fns) = self.listeners.get(&id) {
-                for listen_fn in listen_fns.iter() {
-                    listen_fn.0(ListenEvent::Sealed(seal));
+            if let Some(listeners) = self.listeners.get(&id) {
+                for listener in listeners.iter() {
+                    let seal_event = ListenEvent::Sealed(seal);
+                    if let Err(crossbeam_channel::SendError(_)) = listener.send(seal_event) {}
                 }
             }
         }
@@ -1094,21 +1097,30 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     //
     // TODO: Finish the naming bikeshed for this. Other options so far include
     // tail, subscribe, tee, inspect, and capture.
-    pub fn listen(&mut self, id: Id, listen_fn: ListenFn, res: PFutureHandle<ArrangementSnapshot>) {
+    pub fn listen(
+        &mut self,
+        id: Id,
+        sender: crossbeam_channel::Sender<ListenEvent>,
+        res: PFutureHandle<ArrangementSnapshot>,
+    ) {
         res.fill((|| {
             self.drain_pending()?;
-            self.do_listen(id, listen_fn)
+            self.do_listen(id, sender)
         })());
     }
 
-    fn do_listen(&mut self, id: Id, listen_fn: ListenFn) -> Result<ArrangementSnapshot, Error> {
+    fn do_listen(
+        &mut self,
+        id: Id,
+        sender: crossbeam_channel::Sender<ListenEvent>,
+    ) -> Result<ArrangementSnapshot, Error> {
         // Verify that id has been registered.
         let _ = self.state.sealed_frontier(id)?;
         let snapshot = self.state.do_snapshot(id, &self.blob)?;
         // NB: Keep this line after anything with an early return (aka anything
         // fallible). Otherwise, we might register the listener internally, but
         // fail the request.
-        self.listeners.entry(id).or_default().push(listen_fn);
+        self.listeners.entry(id).or_default().push(sender);
         Ok(snapshot)
     }
 }
@@ -1117,21 +1129,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 //
 // TODO: This is similar to timely's capture Event but just different enough
 // that I couldn't see how to use it directly. Revisit.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ListenEvent {
     /// Records in the data stream.
     Records(Vec<((Vec<u8>, Vec<u8>), u64, isize)>),
     /// Progress of the data stream.
     Sealed(u64),
-}
-
-/// The callback used by [Indexed::listen].
-pub struct ListenFn(pub Box<dyn Fn(ListenEvent) + Send>);
-
-impl fmt::Debug for ListenFn {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ListenFn").finish_non_exhaustive()
-    }
 }
 
 /// An isolated, consistent read of previously written (Key, Value, Time, Diff)
@@ -1173,8 +1176,6 @@ impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-
     use crate::error::Error;
     use crate::indexed::SnapshotExt;
     use crate::mem::MemRegistry;
@@ -1218,18 +1219,8 @@ mod tests {
         assert_eq!(seal_frontier.elements(), &[0]);
 
         // Register a listener for writes.
-        let (listen_tx, listen_rx) = mpsc::channel();
-        let listen_fn = ListenFn(Box::new(move |e| match e {
-            ListenEvent::Records(records) => {
-                for ((k, v), ts, diff) in records.iter() {
-                    listen_tx
-                        .send(((k.clone(), v.clone()), *ts, *diff))
-                        .expect("rx hasn't been dropped");
-                }
-            }
-            ListenEvent::Sealed(_) => {}
-        }));
-        block_on(|res| i.listen(id, listen_fn, res))?;
+        let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
+        block_on(|res| i.listen(id, listen_tx, res))?;
 
         // After a write, all data is in the unsealed.
         block_on_drain(&mut i, |i, handle| {
@@ -1285,7 +1276,12 @@ mod tests {
         let listen_received = {
             let mut buf = Vec::new();
             while let Ok(x) = listen_rx.try_recv() {
-                buf.push(x);
+                match x {
+                    ListenEvent::Records(mut records) => {
+                        buf.append(&mut records);
+                    }
+                    _ => (),
+                }
             }
             buf
         };

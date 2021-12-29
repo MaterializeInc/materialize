@@ -37,7 +37,7 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::{Indexed, ListenFn, Snapshot};
+use crate::indexed::{Indexed, ListenEvent, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
 use crate::storage::{Blob, Log, SeqNo};
 use futures_executor::block_on;
@@ -51,7 +51,11 @@ enum Cmd {
     GetDescription(String, PFutureHandle<Description<u64>>),
     AllowCompaction(Vec<(Id, Antichain<u64>)>, PFutureHandle<SeqNo>),
     Snapshot(Id, PFutureHandle<ArrangementSnapshot>),
-    Listen(Id, ListenFn, PFutureHandle<ArrangementSnapshot>),
+    Listen(
+        Id,
+        crossbeam_channel::Sender<ListenEvent>,
+        PFutureHandle<ArrangementSnapshot>,
+    ),
     Stop(PFutureHandle<()>),
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
@@ -354,8 +358,13 @@ impl RuntimeClient {
 
     /// Asynchronously registers a callback to be invoked on successful writes
     /// and seals.
-    fn listen(&self, id: Id, listen_fn: ListenFn, res: PFutureHandle<ArrangementSnapshot>) {
-        self.core.send(Cmd::Listen(id, listen_fn, res))
+    fn listen(
+        &self,
+        id: Id,
+        sender: crossbeam_channel::Sender<ListenEvent>,
+        res: PFutureHandle<ArrangementSnapshot>,
+    ) {
+        self.core.send(Cmd::Listen(id, sender, res))
     }
 
     /// Synchronously closes the runtime, releasing exclusive-writer locks and
@@ -787,14 +796,17 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     /// logic on everything that was previously persisted before registering the
     /// listener, and all writes and seals that happen after registration without
     /// duplicating or dropping data.
-    pub fn listen(&self, listen_fn: ListenFn) -> Result<DecodedSnapshot<K, V>, Error> {
+    pub fn listen(
+        &self,
+        sender: crossbeam_channel::Sender<ListenEvent>,
+    ) -> Result<DecodedSnapshot<K, V>, Error> {
         let id = match self.id {
             Ok(id) => id,
             Err(ref e) => return Err(e.clone()),
         };
 
         let (tx, rx) = PFuture::new();
-        self.runtime.listen(id, listen_fn, tx);
+        self.runtime.listen(id, sender, tx);
         let snap = rx.recv()?;
         Ok(DecodedSnapshot::new(snap))
     }
@@ -925,8 +937,8 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 Cmd::Snapshot(id, res) => {
                     self.indexed.snapshot(id, res);
                 }
-                Cmd::Listen(id, listen_fn, res) => {
-                    self.indexed.listen(id, listen_fn, res);
+                Cmd::Listen(id, sender, res) => {
+                    self.indexed.listen(id, sender, res);
                 }
                 Cmd::Tick => {
                     // This is a no-op. It's only here to give us the
