@@ -1269,7 +1269,7 @@ where
     // detecting the moment of decorrelation in the optimizer right now is too
     // hard.
     let mut is_simple = true;
-    inner.visit(&mut |expr| match expr {
+    inner.visit(0, &mut |expr, _| match expr {
         HirRelationExpr::Constant { .. }
         | HirRelationExpr::Project { .. }
         | HirRelationExpr::Map { .. }
@@ -1304,7 +1304,7 @@ where
     });
     // Collect all the outer columns referenced by any CTE referenced by
     // the inner relation.
-    inner.visit(&mut |e| match e {
+    inner.visit(0, &mut |e, _| match e {
         HirRelationExpr::Get {
             id: expr::Id::Local(id),
             ..
