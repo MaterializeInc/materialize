@@ -107,34 +107,46 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- Fix a problem when connecting with Npgsql 6 {{% gh 9751 %}}.
+
+- **Breaking change.** Disallow window functions outside of `SELECT`
+  lists, `DISTINCT ON` clauses, and `ORDER BY` clauses.
+
+{{< comment >}}
+Only add new release notes above this line.
+
+The presence of this comment ensures that PRs that are alive across a release
+boundary don't silently merge their release notes into the wrong place.
+{{</ comment >}}
+
+{{% version-header v0.14.0 %}}
+
+- **Breaking change.** Disallow views with multiple unnamed columns
+  {{% gh 9413 %}}.
+
+  For example, this view is now rejected, as there are two columns without a
+  name:
+
+  ```sql
+  CREATE VIEW view AS SELECT 1, 2
+  ```
+
+  To make this view compatible with v0.14.0, adjust it view to have at most one
+  column without a name:
+
+  ```sql
+  CREATE VIEW view AS SELECT 1 AS named, 2;
+  ```
+
 - **Breaking change.** Change the internal representation of numbers in
-  [`jsonb`](/sql/types/jsonb). Previously, JSON numbers were stored as either
-  [`int8`](/sql/types/int8) or [`float8`](/sql/types/float8) values; now they
-  are always stored as [`numeric`](/sql/types/numeric) values.
+  [`jsonb`](/sql/types/jsonb) {{% gh 5919 9669 %}}. Previously, JSON numbers
+  were stored as either [`int8`](/sql/types/int8) or
+  [`float8`](/sql/types/float8) values; now they are always stored as
+  [`numeric`](/sql/types/numeric) values.
 
-- Support casts from [`timestamp`] and [`timestamp with time zone`] to
-  [`time`].
-
-- Add `pg_catalog.pg_roles` as a builtin view.
-
-- Support casts from [`smallint`] and [`bigint`] to [`oid`], as well as
-  casts from [`oid`] to [`bigint`].
-
-- Add `pronamespace` and `proargdefaults` columns to `pg_catalog.pg_proc`.
-
-- Add `pg_backend_pid` as a dummy function for compatibility with pgcli and
-  Apache Superset.
-
-- Fix a bug that could cause wrong results in queries that used the `ROWS FROM`
-  clause. The bug occurred if functions beyond the second function in the clause
-  produced more rows than the first function in the clause.
-
-- When using an arbitrary expression in an `ORDER BY` or `DISTINCT ON` clause,
-  only recognize references to input columns. Previously, Materialize would
-  recognize references to output columns as well.
-
-  See the [column references](/sql/select#column-references) section of the
-  `SELECT` documentation for details.
+  The upshot is that the `jsonb` type has a wider range for integers but a
+  smaller range for floats. We expect this to cause very little practical
+  breakage.
 
 - **Breaking change.** Don't consider join equivalences when determining whether
   a column is ungrouped. For example, Materialize now rejects this SQL query
@@ -155,24 +167,41 @@ changes that have not yet been documented.
   SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t1.a
   ```
 
-- Support the [`WITH ORDINALITY`] modifier for function calls in the `FROM`
+- **Breaking change.** When using an arbitrary expression in an `ORDER BY` or
+  `DISTINCT ON` clause, only recognize references to input columns. Previously,
+  Materialize would recognize references to output columns as well.
+
+  See the [column references](/sql/select#column-references) section of the
+  `SELECT` documentation for details.
+
+  This change affects only obscure edge cases. We expect it to cause very little
+  breakage in practice.
+
+- Fix a bug that could cause wrong results in queries that used the `ROWS FROM`
+  clause {{% gh 9686 %}}. The bug occurred if functions beyond the second
+  function in the clause produced more rows than the first function in the
+  clause.
+
+- Support the `WITH ORDINALITY` modifier for function calls in the `FROM`
   clause {{% gh 8445 %}}. When present, the function produces an additional
   `bigint` column named `ordinality` that numbers the returned rows, starting
   with 1.
 
-- **Breaking change.** Disallow views with multiple unnamed columns.
+- Support casts from [`timestamp`] and [`timestamp with time zone`] to
+  [`time`].
 
-- Fix a problem when connecting with Npgsql 6.
+- Support casts from [`smallint`] and [`bigint`] to [`oid`], as well as
+  casts from [`oid`] to [`bigint`].
 
-- **Breaking change.** Disallow window functions outside of `SELECT`
-  lists and `ORDER BY`.
+Improve PostgreSQL compatibility:
 
-{{< comment >}}
-Only add new release notes above this line.
+  - Add the `pg_catalog.pg_roles` view.
 
-The presence of this comment ensures that PRs that are alive across a release
-boundary don't silently merge their release notes into the wrong place.
-{{</ comment >}}
+  - Add `pronamespace` and `proargdefaults` columns to the `pg_catalog.pg_proc`
+    view.
+
+  - Add a stub implementation of the
+    [`pg_backend_pid`](/sql/functions/#postgresql-compatibility-func) function.
 
 {{% version-header v0.13.0 %}}
 
@@ -1738,6 +1767,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`interval`]: /sql/types/interval
 [`list`]: /sql/types/list/
 [`map`]: /sql/types/map/
+[`oid`]: /sql/types/oid/
 [`real`]: /sql/types/float4
 [`pgcrypto`]: https://www.postgresql.org/docs/current/pgcrypto.html
 [`smallint`]: /sql/types/integer#smallint-info
