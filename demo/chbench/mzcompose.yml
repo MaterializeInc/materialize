@@ -26,16 +26,6 @@ x-port-mappings:
 
 version: '3.7'
 services:
-  aws-cli:
-    image: amazon/aws-cli:2.1.18
-    environment:
-      - AWS_REGION=${AWS_REGION}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
-    volumes:
-      # this is the dir that contains all the individual snapshot directories
-      - ${MZ_CHBENCH_SNAPSHOT_DIR}:/snapshot
   materialized:
     mzbuild: materialized
     ports:
@@ -119,8 +109,6 @@ services:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
     - ZOOKEEPER_CLIENT_PORT=2181
-    volumes:
-      - ${MZ_CHBENCH_SNAPSHOT_ZK_DATA:-zk-data}:/var/lib/zookeeper
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.4
     ports:
@@ -142,8 +130,6 @@ services:
     # to avoid race condition with control-center
     - CONFLUENT_METRICS_REPORTER_TOPIC_CREATE=false
     - KAFKA_JMX_PORT=9991
-    volumes:
-      - ${MZ_CHBENCH_SNAPSHOT_KAFKA_DATA:-kafka-data}:/var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
     environment:
@@ -210,14 +196,6 @@ services:
     command: "true"
     volumes:
       - chbench-gen:/gen
-  mzutil:
-    mzbuild: mzutil
-    volumes:
-      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
-  kafka-util:
-    mzbuild: kafka-util
-    volumes:
-      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
 
   metabase:
     image: metabase/metabase:v0.41.4
@@ -277,7 +255,6 @@ services:
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
       - ./peeker-config:/etc/peeker
-      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
   test-correctness:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: test-correctness
@@ -296,11 +273,6 @@ volumes:
   grafana:
   prometheus:
   view-snapshots:
-
-  # shared volumes for load tests, but a mounted directories for benchmarks
-  mzsnap-data:
-  kafka-data:
-  zk-data:
 
 mzworkflows:
   ci:
@@ -357,114 +329,6 @@ mzworkflows:
       command: >-
         --only-initialize
         -q loadtest
-
-  # After the first timer expires, stop chbench and wait for the data to stabilize
-  # Record offsets ingested by Materialize and the answers to our count(*) views
-  # Stops the load generator and source database but leaves the rest of the cluster running
-  prepare-snapshot:
-    env:
-      # If MZ_CHBENCH_SNAPSHOT is defined, use a sub-directory within the snapshot directory
-      # Otherwise, use a named volume
-      # Docker compose doesn't know how to interpolate using ":+", so the interpolation must be
-      # done here, using mzcompose
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-kafka-data}${MZ_CHBENCH_SNAPSHOT:+/kafka-data}
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-zk-data}${MZ_CHBENCH_SNAPSHOT:+/zookeeper}
-    steps:
-    - step: run
-      service: peeker
-      command: --write-config /snapshot/config.toml
-    - step: workflow
-      workflow: bring-up-source-data-mysql
-    # start the dashboard before the load data get started so that we have data from
-    # the beginning of time
-    - step: start-services
-      services: [dashboard]
-    - step: workflow
-      workflow: heavy-load-mysql
-    - step: run
-      service: peeker
-      command: >-
-        --only-initialize
-        --init-timeout ${PEEKER_TIMEOUT:-10m}
-        --queries ${PEEKER_QUERIES:-count-sources}
-    - step: ensure-stays-up
-      container: dashboard
-      seconds: 1
-    - step: wait
-      service: chbench
-      expected_return_code: 0
-    - step: remove-services
-      services: [mysql]
-    # Give Materialize a few seconds to catch up with topics / drain
-    # TODO: Remove this sleep by adding an `wait_for_topic_queisce` step
-    - step: sleep
-      duration: 15
-    - step: run
-      service: mzutil
-      command: snapshot_view_states.py
-
-  # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
-  # already called prepare-snapshot and the cluster is still running
-  measure-ingest-performance:
-    env:
-      # If MZ_CHBENCH_SNAPSHOT is defined, use a sub-directory within the snapshot directory
-      # Otherwise, use a named volume
-      # Docker compose doesn't know how to interpolate using ":+", so the interpolation must be
-      # done here, using mzcompose
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-kafka-data}${MZ_CHBENCH_SNAPSHOT:+/kafka-data}
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-zk-data}${MZ_CHBENCH_SNAPSHOT:+/zookeeper}
-    steps:
-    - step: restart-services
-      services: [materialized]
-    - step: run
-      service: mzutil
-      command: wait_for_view_states.py
-
-  # Run a test that populates Kafka with data from topic snapshots
-  # Then run Materialize and measure time until it catches up to snapshotted view state
-  setup-replay-benchmark:
-    env:
-      # If MZ_CHBENCH_SNAPSHOT is defined, use a sub-directory within the snapshot directory
-      # Otherwise, use a named volume
-      # Docker compose doesn't know how to interpolate using ":+", so the interpolation must be
-      # done here, using mzcompose
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-kafka-data}${MZ_CHBENCH_SNAPSHOT:+/kafka-data}
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-zk-data}${MZ_CHBENCH_SNAPSHOT:+/zookeeper}
-    steps:
-    # start the dashboard before the load data get started so that we have data from
-    # the beginning of time
-    - step: start-services
-      services: [dashboard]
-    - step: start-services
-      services: [kafka, schema-registry]
-    - step: wait-for-tcp
-      host: kafka
-      port: 9092
-    - step: wait-for-tcp
-      host: schema-registry
-      port: 8081
-      dependencies:
-        # sometimes kafka comes up for awhile and then crashes, which will always cause
-        # schema-registry to fail because there is no kafka cluster
-        - host: kafka
-          port: 9092
-          hint: >-
-            If kafka logs that it has an invalid cluster id ensure that all volumes are
-            destroyed via 'mzcompose down -v'
-    - step: start-services
-      services: [materialized]
-    - step: run
-      service: peeker
-      command: --only-initialize --queries ${PEEKER_QUERIES:-count-sources}
-    - step: ensure-stays-up
-      container: dashboard
-      seconds: 1
-
-  download-snapshot:
-    steps:
-      - step: run
-        service: aws-cli
-        command: s3 cp ${MZ_CHBENCH_BUCKET:-s3://mzi-dev-benchmark-data/chbench}/${MZ_CHBENCH_SNAP_ID}.tgz /snapshot/
 
   load-test-mysql:
     steps:
