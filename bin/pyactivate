@@ -126,10 +126,13 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
     # wheels. So the first thing we do is upgrade these dependencies to known
     # versions. This won't help if they're so broken that they can't upgrade
     # themselves, but in that case there's nothing we can do.
+    #
+    # Note also that we don't ask for PEP 517 until we've installed a version of
+    # pip that we know supports the flag.
     acquire_deps(venv_dir, "core")
-    acquire_deps(venv_dir)
+    acquire_deps(venv_dir, use_pep517=True)
     if dev:
-        acquire_deps(venv_dir, "dev")
+        acquire_deps(venv_dir, "dev", use_pep517=True)
 
     # The virtualenv's `bin` dir takes precedence over all existing PATH
     # entries. This is normally handled by the `activate` shell script, but
@@ -139,8 +142,15 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
     return python
 
 
-def acquire_deps(venv_dir: Path, variant: Optional[str] = None) -> None:
-    """Install normal/development dependencies into the virtualenv."""
+def acquire_deps(venv_dir: Path, variant: Optional[str] = None, use_pep517: bool = False) -> None:
+    """Install normal/development dependencies into the virtualenv.
+
+    If the use_pep517 flag is set, the `--use-pep517` flag is pased to `pip
+    install` to force use of new PEP 517-based build systems rather than legacy
+    setuptools build systems. This prevents pip from printing a scary warning
+    about "using legacy 'setup.py install'".
+    See: https://github.com/pypa/pip/issues/8102
+    """
 
     stamp_path = venv_dir / (f"{variant}_dep_stamp" if variant else "dep_stamp")
 
@@ -168,6 +178,7 @@ def acquire_deps(venv_dir: Path, variant: Optional[str] = None) -> None:
         subprocess.check_call([
             venv_dir / "bin" / "pip", "install", "-r", requirements_path,
             "--disable-pip-version-check",
+            *(["--use-pep517"] if use_pep517 else [])
         ],
             stdout=sys.stderr
         )
