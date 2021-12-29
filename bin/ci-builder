@@ -84,6 +84,14 @@ build() {
         "$@" ci/builder
 }
 
+shasum=sha1sum
+if ! command_exists "$shasum"; then
+    shasum=shasum
+fi
+if ! command_exists "$shasum"; then
+    die "error: ci-builder: unable to find suitable SHA-1 tool; need either sha1sum or shasum"
+fi
+
 # The tag is the base32 encoded hash of the ci/builder directory. This logic is
 # similar to what mzbuild uses. Unfortunately we can't use mzbuild itself due to
 # a chicken-and-egg problem: mzbuild depends on the Python packages that are
