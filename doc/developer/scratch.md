@@ -52,7 +52,7 @@ This subcommand expects a series of JSON objects on standard input, each of whic
 ```
 $ bin/scratch create dev-box
 ```
-It looks for the name as a json file in `misc/machines`, a good starter to just do some plain, personal testing is `dev-box`.
+It looks for the name as a json file in `misc/scratch`, a good starter to just do some plain, personal testing is `dev-box`.
 
 ---
 
