@@ -59,6 +59,10 @@ def speaker(prefix: str) -> Callable[..., None]:
     return say
 
 
+header = speaker("==> ")
+say = speaker("")
+
+
 def confirm(question: str) -> bool:
     """Render a question, returning True if the user says y or yes"""
     response = input(f"{question} [y/N]")

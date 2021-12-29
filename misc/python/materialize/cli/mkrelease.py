@@ -42,9 +42,6 @@ OPT_AFFECT_REMOTE = click.option(
 )
 
 
-say = ui.speaker("")
-
-
 @click.group()
 def cli() -> None:
     """
@@ -281,7 +278,7 @@ def release(
         future = four_years_hence()
         change_line(LICENSE, "Change Date", f"Change Date:               {future}")
 
-    say("Updating Cargo.lock")
+    ui.say("Updating Cargo.lock")
     spawn.runv(["cargo", "check", "-p", "materialized"])
     spawn.runv(["cargo", "check", "-p", "materialized"])
     spawn.runv(["cargo", "check", "-p", "materialized", "--locked"])
@@ -307,14 +304,14 @@ def release(
             ):
                 spawn.runv(["git", "push", matching, the_tag])
         else:
-            say("")
-            say(
+            ui.say("")
+            ui.say(
                 f"Next step is to push {the_tag} to the MaterializeInc/materialize repo"
             )
     else:
         branch = git.rev_parse("HEAD", abbrev=True)
-        say("")
-        say(f"Create a PR with your branch: '{branch}'")
+        ui.say("")
+        ui.say(f"Create a PR with your branch: '{branch}'")
 
 
 def update_versions_list(released_version: Version) -> None:
@@ -361,7 +358,7 @@ def update_upgrade_tests(released_version: Optional[Version], force: bool) -> No
 
 def update_upgrade_tests_inner(released_version: Version, force: bool = False) -> None:
     if released_version.prerelease is not None:
-        say("Not updating upgrade tests for prerelease")
+        ui.say("Not updating upgrade tests for prerelease")
         return
 
     upgrade_dir = Path("./test/upgrade")
@@ -429,7 +426,7 @@ def confirm_version_is_next(this_tag: Version, affect_remote: bool) -> None:
             and this_tag.prerelease is None
             and latest_tag.prerelease is not None
         ):
-            say("Congratulations on the successful release!")
+            ui.say("Congratulations on the successful release!")
         elif (
             this_tag.minor == latest_tag.minor
             and this_tag.patch == latest_tag.patch + 1
@@ -438,7 +435,7 @@ def confirm_version_is_next(this_tag: Version, affect_remote: bool) -> None:
             # prepare next
             pass
         else:
-            say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
+            ui.say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
             sys.exit(1)
     elif this_tag.minor == latest_tag.minor + 1 and this_tag.patch == 0:
         click.confirm("Are you sure you want to bump the minor version?", abort=True)
@@ -497,7 +494,7 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
                     ancestor_ref = str(ref)
                     break
 
-            say(
+            ui.say(
                 f"Using recent_ref={recent_ref}  ancestor_ref={ancestor_ref}",
             )
 
@@ -532,13 +529,13 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
             prs.append(pr)
 
     if not found_ref:
-        say(
+        ui.say(
             "WARNING: you probably don't have pullreqs configured for your repo",
         )
-        say(
+        ui.say(
             "Add the following line to the MaterializeInc/materialize remote section in your .git/config",
         )
-        say("  fetch = +refs/pull/*/head:refs/pullreqs/*")
+        ui.say("  fetch = +refs/pull/*/head:refs/pullreqs/*")
 
     username = input("Enter your github username: ")
     creds_path = os.path.expanduser("~/.config/materialize/dev-tools-access-token")

@@ -37,8 +37,6 @@ import yaml
 from materialize import cargo, git, spawn, ui, xcompile
 from materialize.xcompile import Arch
 
-announce = ui.speaker("==> ")
-
 
 class Fingerprint(bytes):
     """A SHA-1 hash of the inputs to an `Image`.
@@ -661,13 +659,13 @@ class DependencySet:
             spec = d.spec()
             if spec not in known_images:
                 if force_build:
-                    announce(f"Force-building {spec}")
+                    ui.header(f"Force-building {spec}")
                     d.build()
                 else:
-                    announce(f"Acquiring {spec}")
+                    ui.header(f"Acquiring {spec}")
                     d.acquire()
             else:
-                announce(f"Already built {spec}")
+                ui.header(f"Already built {spec}")
 
     def push(self) -> None:
         """Push all publishable images in this dependency set to Docker Hub.

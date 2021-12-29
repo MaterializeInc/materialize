@@ -33,9 +33,6 @@ from typing import List, Optional, Sequence, Text, Tuple
 from materialize import mzbuild, mzcompose, spawn, ui
 from materialize.ui import UIError
 
-announce = ui.speaker("==> ")
-say = ui.speaker("")
-
 MIN_COMPOSE_VERSION = (1, 24, 0)
 
 
@@ -355,7 +352,9 @@ class DockerComposeCommand(Command):
             return
 
         # Make sure Docker Compose is new enough.
-        output = self.capture(["version", "--short"], stderr_too=True).strip().strip("v")
+        output = (
+            self.capture(["version", "--short"], stderr_too=True).strip().strip("v")
+        )
         version = tuple(int(i) for i in output.split("."))
         if version < MIN_COMPOSE_VERSION:
             raise UIError(
@@ -364,10 +363,10 @@ class DockerComposeCommand(Command):
             )
 
         composition = load_composition(args)
-        announce("Collecting mzbuild dependencies")
+        ui.header("Collecting mzbuild dependencies")
         deps = composition.repo.resolve_dependencies(composition.images)
         for d in deps:
-            say(d.spec())
+            ui.say(d.spec())
 
         if self.acquire_deps:
             if args.coverage:
@@ -382,7 +381,7 @@ class DockerComposeCommand(Command):
     def handle_composition(
         self, args: argparse.Namespace, composition: mzcompose.Composition
     ) -> None:
-        announce("Delegating to Docker Compose")
+        ui.header("Delegating to Docker Compose")
         composition.run(
             [*args.unknown_args, self.name, *args.unknown_subargs],
             check=False,
@@ -390,13 +389,17 @@ class DockerComposeCommand(Command):
 
     def capture(self, args: List[str], stderr_too: bool = False) -> str:
         try:
-            return spawn.capture(["docker-compose", *args], stderr_too=stderr_too, unicode=True)
+            return spawn.capture(
+                ["docker-compose", *args], stderr_too=stderr_too, unicode=True
+            )
         except subprocess.CalledProcessError as e:
             # Print any captured output, since it probably hints at the problem.
             print(e.output, file=sys.stderr, end="")
             raise UIError(f"running docker-compose failed (exit status {e.returncode})")
         except FileNotFoundError:
-            raise UIError("unable to launch `docker-compose`", hint="is Docker Compose installed?")
+            raise UIError(
+                "unable to launch `docker-compose`", hint="is Docker Compose installed?"
+            )
 
 
 class RunCommand(DockerComposeCommand):
