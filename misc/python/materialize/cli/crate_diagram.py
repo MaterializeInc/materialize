@@ -19,7 +19,6 @@ This script just prints the relationship of our internal crates to help see how 
 materialize ecosystem.
 """
 
-import os
 import subprocess
 import sys
 import webbrowser
@@ -31,12 +30,11 @@ from typing import IO, Any, DefaultDict, Dict, List, Optional, Set, Tuple
 import click
 import toml
 
+from materialize import ROOT
 from materialize.spawn import runv
 
 DepBuilder = DefaultDict[str, List[str]]
 DepMap = Dict[str, List[str]]
-
-ROOT = Path(os.environ["MZ_ROOT"])
 
 
 def split_list(items: str) -> List[str]:

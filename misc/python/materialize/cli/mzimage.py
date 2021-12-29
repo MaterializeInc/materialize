@@ -10,23 +10,16 @@
 # mzimage.py — builds Materialize-specific Docker images.
 
 import argparse
-import os
 import sys
-from pathlib import Path
 from typing import Any
 
-from materialize import mzbuild, ui
+from materialize import ROOT, mzbuild, ui
 
 
 def main() -> int:
     args = _parse_args()
     ui.Verbosity.init_from_env(explicit=None)
-    root = Path(os.environ["MZ_ROOT"])
-    repo = mzbuild.Repository(
-        root,
-        release_mode=(args.build_mode == "release"),
-        coverage=args.coverage,
-    )
+    repo = mzbuild.Repository.from_arguments(ROOT, args)
 
     if args.command == "list":
         for image in repo:
@@ -82,17 +75,7 @@ def _parse_args() -> argparse.Namespace:
 
     def add_subcommand(name: str, **kwargs: Any) -> argparse.ArgumentParser:
         subparser = subparsers.add_parser(name, **kwargs)
-        subparser.add_argument(
-            "--build-mode",
-            default="release",
-            choices=["dev", "release"],
-            help="whether to build in dev or release mode",
-        )
-        subparser.add_argument(
-            "--coverage",
-            help="whether to enable code coverage compilation flags",
-            action="store_true",
-        )
+        mzbuild.Repository.install_arguments(subparser)
         return subparser
 
     def add_image_subcommand(name: str, **kwargs: Any) -> argparse.ArgumentParser:

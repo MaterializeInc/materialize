@@ -15,6 +15,7 @@ documentation][user-docs].
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
 
+import argparse
 import base64
 import enum
 import hashlib
@@ -739,6 +740,47 @@ class Repository:
                     raise ValueError(
                         f"image {image.name} depends on non-existent image {d}"
                     )
+
+    @staticmethod
+    def install_arguments(parser: argparse.ArgumentParser) -> None:
+        """Install options to configure a repository into an argparse parser.
+
+        This function installs the following options:
+
+          * The mutually-exclusive `--dev`/`--release` options to control the
+            `release_mode` repository attribute.
+          * The `--coverage` booelan option to control the `coverage` repository
+            attribute.
+
+        Use `Repository.from_arguments` to construct a repository from the
+        parsed command-line arguments.
+        """
+        build_mode = parser.add_mutually_exclusive_group()
+        build_mode.add_argument(
+            "--dev",
+            dest="release",
+            action="store_false",
+            help="build Rust binaries with the dev profile",
+        )
+        build_mode.add_argument(
+            "--release",
+            action="store_true",
+            help="build Rust binaries with the release profile (default)",
+        )
+        parser.add_argument(
+            "--coverage",
+            help="whether to enable code coverage compilation flags",
+            action="store_true",
+        )
+
+    @classmethod
+    def from_arguments(cls, root: Path, args: argparse.Namespace) -> "Repository":
+        """Construct a repository from command-line arguments.
+
+        The provided namespace must contain the options installed by
+        `Repository.install_arguments`.
+        """
+        return cls(root, release_mode=args.release, coverage=args.coverage)
 
     @property
     def root(self) -> Path:

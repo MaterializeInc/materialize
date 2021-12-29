@@ -72,14 +72,14 @@ class SuccessOutputBench(Bench):
             self.teardown()
         self.run_benchmark: ArgList = [
             self.root,
-            "--mz-find",
+            "--find",
             self.composition,
             "run",
             self.run_workflow,
         ]
         setup_benchmark: ArgList = [
             self.root,
-            "--mz-find",
+            "--find",
             self.composition,
             "run",
             setup_workflow,
@@ -149,7 +149,7 @@ class SuccessOutputBench(Bench):
     def teardown(self) -> None:
         cleanup: ArgList = [
             self.root,
-            "--mz-find",
+            "--find",
             self.composition,
             "down",
             "-v",
@@ -243,7 +243,7 @@ def main(args: argparse.Namespace) -> None:
         try:
             web_command = [
                 mzcompose_location(mz_root),
-                "--mz-find",
+                "--find",
                 args.composition,
                 "web",
                 f"perf-dash-web",

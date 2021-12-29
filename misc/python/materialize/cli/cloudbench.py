@@ -22,7 +22,7 @@ from typing import List, NamedTuple, Optional, Union, cast
 
 import boto3
 
-from materialize import git, scratch, spawn, util
+from materialize import ROOT, git, scratch, spawn, util
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import print_instances
 
@@ -30,7 +30,7 @@ from materialize.scratch import print_instances
 # This is duplicated with the one in cli/scratch.
 # TODO - factor it out.
 def main() -> None:
-    os.chdir(os.environ["MZ_ROOT"])
+    os.chdir(ROOT)
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
     for cmd_name, configure, run in [
@@ -237,7 +237,7 @@ sudo shutdown -h now # save some money
             ),
         ]
     elif ns.profile == "confluent":
-        confluent_launch_script = f"""bin/mzcompose --mz-find load-tests up"""
+        confluent_launch_script = f"""bin/mzcompose --find load-tests up"""
         descs = [
             scratch.MachineDesc(
                 name="materialized",

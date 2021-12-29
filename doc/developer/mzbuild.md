@@ -324,16 +324,14 @@ mzworkflows:
 To run the workflow, run `./mzcompose run load-test`, just like you would if
 `load-test` were a normal service.
 
-#### Release vs Development Builds
+#### Release vs development builds
 
 Via `mzbuild`, `mzcompose` supports building binaries in either release or
 development mode. By default, binaries are built using release mode. You can
-specify the desired flavor by passing the `--build-mode` flag to
-`mzcompose`:
+choose dev mode instead by passing the `--dev` flag to `mzcompose`:
 
 ```shell
-$ bin/mzcompose --build-mode=dev --find fancy up
-$ bin/mzcompose --build-mode=release --find fancy up
+$ bin/mzcompose --dev --find fancy up
 ```
 
 ## Input addressability
@@ -428,10 +426,9 @@ publish: true
      inputs to the build, plus the top-level `Cargo.toml`, `Cargo.lock`, and
      `.cargo/config` files.
 
-     Cargo is invoked with the `--release` flag if the `--build-mode` flag
-     variable is `release` (the default; set to `dev` for a non-release
-     binary). The binary will be stripped of debug information unless `strip:
-     false` is requested.
+     Cargo is invoked with the `--release` flag unless the `--dev` flag is
+     specified. The binary will be stripped of debug information unless
+     `strip: false` is requested.
 
      In rare cases, it may be necessary to extract files from the build
      directory of a dependency. The `extract` key specifies a mapping from a

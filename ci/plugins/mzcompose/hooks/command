@@ -12,7 +12,7 @@
 set -euo pipefail
 
 mzcompose() {
-    bin/ci-builder run stable bin/mzcompose --mz-find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+    bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
 service=$BUILDKITE_PLUGIN_MZCOMPOSE_RUN
