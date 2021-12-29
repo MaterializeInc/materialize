@@ -245,31 +245,6 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     std::mem::swap(&mut todo, predicates);
 
     while let Some(predicate_to_apply) = todo.pop() {
-        // Remove redundant !isnull(x) predicates if there is another predicate
-        // that evaluates to NULL when `x` is NULL.
-        if let Some(operand) = is_not_null(&predicate_to_apply) {
-            if todo
-                .iter_mut()
-                .chain(completed.iter_mut())
-                .any(|p| is_null_rejecting_predicate(p, &operand))
-            {
-                // skip this predicate
-                continue;
-            }
-        } else if let MirScalarExpr::CallUnary {
-            func: UnaryFunc::IsNull(func::IsNull),
-            expr,
-        } = &predicate_to_apply
-        {
-            if todo
-                .iter_mut()
-                .chain(completed.iter_mut())
-                .any(|p| is_null_rejecting_predicate(p, expr))
-            {
-                completed.push(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
-                break;
-            }
-        }
         // Helper method: for each predicate `p`, see if all other predicates
         // (a.k.a. the union of todo & completed) contains `p` as a
         // subexpression, and replace the subexpression accordingly.
@@ -321,6 +296,38 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
                 &predicate_to_apply,
                 &MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool),
             );
+        }
+        completed.push(predicate_to_apply);
+    }
+
+    // Remove redundant !isnull/isnull predicates after performing the replacements
+    // in the loop above.
+    std::mem::swap(&mut todo, &mut completed);
+    while let Some(predicate_to_apply) = todo.pop() {
+        // Remove redundant !isnull(x) predicates if there is another predicate
+        // that evaluates to NULL when `x` is NULL.
+        if let Some(operand) = is_not_null(&predicate_to_apply) {
+            if todo
+                .iter_mut()
+                .chain(completed.iter_mut())
+                .any(|p| is_null_rejecting_predicate(p, &operand))
+            {
+                // skip this predicate
+                continue;
+            }
+        } else if let MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsNull(func::IsNull),
+            expr,
+        } = &predicate_to_apply
+        {
+            if todo
+                .iter_mut()
+                .chain(completed.iter_mut())
+                .any(|p| is_null_rejecting_predicate(p, expr))
+            {
+                completed.push(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
+                break;
+            }
         }
         completed.push(predicate_to_apply);
     }

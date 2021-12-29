@@ -746,3 +746,47 @@ canonicalize
 [int64]
 ----
 false
+
+canonicalize
+[
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #1))
+        (call_binary eq #0 #1))
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #2))
+        (call_binary eq #0 #2))
+    (call_unary not (call_unary is_null #0))
+    (call_unary not (call_unary is_null #1))
+    (call_unary not (call_unary is_null #0))
+    (call_unary not (call_unary is_null #2))
+]
+[int64 int64 int64]
+----
+(#0 = #1)
+(#0 = #2)
+
+canonicalize
+[
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #1))
+        (call_binary eq #0 #1))
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #2))
+        (call_binary eq #0 #2))
+    (call_unary not (call_unary is_null #0))
+    (call_unary not (call_unary is_null #1))
+    (call_unary not (call_unary is_null #1))
+    (call_unary not (call_unary is_null #2))
+]
+[int64 int64 int64]
+----
+(#0 = #1)
+(#0 = #2)
