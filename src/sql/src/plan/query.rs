@@ -1202,11 +1202,11 @@ fn plan_query_inner(
                     id,
                     CteDesc {
                         val,
+                        name: cte_name,
                         val_desc,
-                        level_offset: 0,
                     },
                 );
-                old_cte_values.push((cte_name, old_val));
+                old_cte_values.push((id, old_val));
             }
             _ => unreachable!(),
         }
@@ -1232,7 +1232,7 @@ fn plan_query_inner(
         _ => sql_bail!("OFFSET must be an integer constant"),
     };
 
-    let result = match &q.body {
+    let (mut result, scope, finishing) = match &q.body {
         SetExpr::Select(s) => {
             let plan = plan_view_select(qcx, s, &q.order_by)?;
             let finishing = RowSetFinishing {
@@ -1241,7 +1241,7 @@ fn plan_query_inner(
                 limit,
                 offset,
             };
-            Ok((plan.expr, plan.scope, finishing))
+            Ok::<_, PlanError>((plan.expr, plan.scope, finishing))
         }
         _ => {
             let (expr, scope) = plan_set_expr(qcx, &q.body)?;
@@ -1264,9 +1264,23 @@ fn plan_query_inner(
             };
             Ok((expr.map(map_exprs), scope, finishing))
         }
-    };
+    }?;
 
-    result
+    for (id, old_val) in old_cte_values.into_iter().rev() {
+        if let Some(cte) = qcx.ctes.remove(&id) {
+            result = HirRelationExpr::Let {
+                name: cte.name,
+                id: id.clone(),
+                value: Box::new(cte.val),
+                body: Box::new(result),
+            };
+        }
+        if let Some(old_val) = old_val {
+            qcx.ctes.insert(id, old_val);
+        }
+    }
+
+    Ok((result, scope, finishing))
 }
 
 pub fn plan_nested_query(
@@ -4013,12 +4027,8 @@ pub enum QueryLifetime<'a> {
 pub struct CteDesc {
     /// The CTE's expression.
     val: HirRelationExpr,
+    name: String,
     val_desc: RelationDesc,
-    /// We evaluate CTEs when they're defined and not when they're referred to
-    /// (i.e. it's like a pointer, not a macro). This means that we need to
-    /// adjust the level of correlated columns to retain their original
-    /// references.
-    level_offset: usize,
 }
 
 /// The state required when planning a `Query`.
@@ -4065,11 +4075,7 @@ impl<'a> QueryContext<'a> {
     /// Generate a new `QueryContext` appropriate to be used in subqueries of
     /// `self`.
     fn derived_context(&self, scope: Scope, relation_type: RelationType) -> QueryContext<'a> {
-        let mut ctes = self.ctes.clone();
-        for (_, cte) in ctes.iter_mut() {
-            cte.level_offset += 1;
-        }
-
+        let ctes = self.ctes.clone();
         let outer_scopes = iter::once(scope).chain(self.outer_scopes.clone()).collect();
         let outer_relation_types = iter::once(relation_type)
             .chain(self.outer_relation_types.clone())
@@ -4103,19 +4109,14 @@ impl<'a> QueryContext<'a> {
             Id::Local(id) => {
                 let name = object.raw_name;
                 let cte = self.ctes.get(&id).unwrap();
-                let mut val = cte.val.clone();
-                val.visit_columns_mut(0, &mut |depth, col| {
-                    if col.level > depth {
-                        col.level += cte.level_offset;
-                    }
-                });
+                let expr = HirRelationExpr::Get {
+                    id: Id::Local(id),
+                    typ: cte.val_desc.typ().clone(),
+                };
 
                 let scope = Scope::from_source(Some(name), cte.val_desc.iter_names());
 
-                // Inline `val` where its name was referenced. In an ideal
-                // world, multiple instances of this expression would be
-                // de-duplicated.
-                Ok((val, scope))
+                Ok((expr, scope))
             }
             Id::Global(id) => {
                 let item = self.scx.get_item_by_id(&id);

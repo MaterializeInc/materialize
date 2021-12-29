@@ -207,6 +207,8 @@ boundary don't silently merge their release notes into the wrong place.
   This bug could cause incorrect results in queries that combined `RIGHT` and
   `FULL` [joins](/sql/join) with comma-separated `FROM` items.
 
+- Materialize no longer inlines the CTE where it's referenced {{% gh 4867 %}}.
+
 {{% version-header v0.12.0 %}}
 
 - Optionally emit the message partition, offset, and timestamp in [Kafka

@@ -37,8 +37,6 @@ use super::Explanation;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Just like MirRelationExpr, except where otherwise noted below.
-///
-/// - There is no equivalent to `MirRelationExpr::Let`.
 pub enum HirRelationExpr {
     Constant {
         rows: Vec<Row>,
@@ -47,6 +45,16 @@ pub enum HirRelationExpr {
     Get {
         id: expr::Id,
         typ: RelationType,
+    },
+    /// CTE
+    Let {
+        name: String,
+        /// The identifier to be used in `Get` variants to retrieve `value`.
+        id: expr::LocalId,
+        /// The collection to be bound to `name`.
+        value: Box<HirRelationExpr>,
+        /// The result of the `Let`, evaluated with `name` bound to `value`.
+        body: Box<HirRelationExpr>,
     },
     Project {
         input: Box<HirRelationExpr>,
@@ -689,6 +697,7 @@ impl HirRelationExpr {
         stack::maybe_grow(|| match self {
             HirRelationExpr::Constant { typ, .. } => typ.clone(),
             HirRelationExpr::Get { typ, .. } => typ.clone(),
+            HirRelationExpr::Let { body, .. } => body.typ(outers, params),
             HirRelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ(outers, params);
                 RelationType::new(
@@ -774,6 +783,7 @@ impl HirRelationExpr {
         match self {
             HirRelationExpr::Constant { typ, .. } => typ.column_types.len(),
             HirRelationExpr::Get { typ, .. } => typ.column_types.len(),
+            HirRelationExpr::Let { body, .. } => body.arity(),
             HirRelationExpr::Project { outputs, .. } => outputs.len(),
             HirRelationExpr::Map { input, scalars } => input.arity() + scalars.len(),
             HirRelationExpr::CallTable { func, .. } => func.output_arity(),
@@ -985,6 +995,10 @@ impl HirRelationExpr {
             HirRelationExpr::Constant { .. }
             | HirRelationExpr::Get { .. }
             | HirRelationExpr::CallTable { .. } => (),
+            HirRelationExpr::Let { body, value, .. } => {
+                f(value);
+                f(body);
+            }
             HirRelationExpr::Project { input, .. } => {
                 f(input);
             }
@@ -1041,6 +1055,10 @@ impl HirRelationExpr {
             HirRelationExpr::Constant { .. }
             | HirRelationExpr::Get { .. }
             | HirRelationExpr::CallTable { .. } => (),
+            HirRelationExpr::Let { body, value, .. } => {
+                f(value);
+                f(body);
+            }
             HirRelationExpr::Project { input, .. } => {
                 f(input);
             }
@@ -1091,6 +1109,10 @@ impl HirRelationExpr {
         F: FnMut(usize, &ColumnRef),
     {
         match self {
+            HirRelationExpr::Let { body, value, .. } => {
+                value.visit_columns(depth, f);
+                body.visit_columns(depth, f);
+            }
             HirRelationExpr::Join {
                 on, left, right, ..
             } => {
@@ -1148,6 +1170,10 @@ impl HirRelationExpr {
         F: FnMut(usize, &mut ColumnRef),
     {
         match self {
+            HirRelationExpr::Let { body, value, .. } => {
+                value.visit_columns_mut(depth, f);
+                body.visit_columns_mut(depth, f);
+            }
             HirRelationExpr::Join {
                 on, left, right, ..
             } => {
@@ -1203,6 +1229,10 @@ impl HirRelationExpr {
     /// corresponding datum from `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
         match self {
+            HirRelationExpr::Let { body, value, .. } => {
+                value.bind_parameters(params)?;
+                body.bind_parameters(params)
+            }
             HirRelationExpr::Join {
                 on, left, right, ..
             } => {
@@ -1255,6 +1285,10 @@ impl HirRelationExpr {
     /// See the documentation for [`HirScalarExpr::splice_parameters`].
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
         match self {
+            HirRelationExpr::Let { body, value, .. } => {
+                value.splice_parameters(params, depth);
+                body.splice_parameters(params, depth);
+            }
             HirRelationExpr::Join {
                 on, left, right, ..
             } => {
