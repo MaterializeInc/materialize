@@ -70,7 +70,6 @@ gid=$(id -g)
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
-    cache_tag=cache-$arch_go
     docker buildx build --pull \
         --cache-from=materialize/ci-builder:"$cache_tag" \
         --cache-to=type=inline,mode=max \

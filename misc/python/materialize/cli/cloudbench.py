@@ -87,8 +87,7 @@ class BenchSuccessResult(NamedTuple):
 
 
 class BenchFailureLogs(NamedTuple):
-    stdout: str
-    stderr: str
+    log: str
 
 
 def configure_check(parser: argparse.ArgumentParser) -> None:
@@ -131,14 +130,11 @@ def check(ns: argparse.Namespace) -> None:
             maybe_result = try_get_object(f"{bench_id}/{insts[i]}.csv", ns.s3_root)
             if maybe_result is None:
                 maybe_out = try_get_object(
-                    f"{bench_id}/{insts[i]}-FAILURE.out", ns.s3_root
+                    f"{bench_id}/{insts[i]}-FAILURE.log", ns.s3_root
                 )
-                maybe_err = try_get_object(
-                    f"{bench_id}/{insts[i]}-FAILURE.err", ns.s3_root
-                )
-                if (maybe_out is None) or (maybe_err is None):
+                if maybe_out is None:
                     continue
-                results[i] = BenchFailureLogs(stdout=maybe_out, stderr=maybe_err)
+                results[i] = BenchFailureLogs(maybe_out)
             else:
                 results[i] = BenchSuccessResult(stdout=maybe_result)
 
@@ -155,7 +151,7 @@ def check(ns: argparse.Namespace) -> None:
     if failed:
         for i, f in failed:
             print(
-                f"Run of instance {insts[i]} failed, stdout:\n{f.stdout}stderr:\n{f.stderr}",
+                f"Run of instance {insts[i]} failed, log:\n{f.log}",
                 file=sys.stderr,
             )
         raise RuntimeError(f"{len(failed)} runs FAILED!")
@@ -213,14 +209,13 @@ python3 -m venv /tmp/mzenv >&2
 . /tmp/mzenv/bin/activate >&2
 python3 -m pip install --upgrade pip >&2
 pip3 install ./mz.tar.gz[dev] >&2
-MZ_ROOT=/home/ubuntu/materialize python3 -u -m {script_name} {script_args}
+MZ_ROOT=/home/ubuntu/materialize python3 -m {script_name} {script_args}
 result=$?
 echo $result > ~/bench_exit_code
 if [ $result -eq 0 ]; then
-    {munge_result} < ~/mzscratch-startup.out | aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID.csv >&2
+    {munge_result} < ~/materialize/results.csv | aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID.csv >&2
 else
-    aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.out < ~/mzscratch-startup.out >&2
-    aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.err < ~/mzscratch-startup.err
+    aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.log < ~/mzscratch.log >&2
 fi
 sudo shutdown -h now # save some money
 """
@@ -237,7 +232,16 @@ sudo shutdown -h now # save some money
             ),
         ]
     elif ns.profile == "confluent":
-        confluent_launch_script = f"""bin/mzcompose --find load-tests up"""
+        confluent_launch_script = """
+curl https://packages.confluent.io/deb/7.0/archive.key | sudo apt-key add -
+sudo add-apt-repository "deb https://packages.confluent.io/deb/7.0 stable main"
+sudo add-apt-repository "deb https://packages.confluent.io/clients/deb $(lsb_release -cs) main"
+sudo apt-get update
+sudo apt-get install -y openjdk-8-jre-headless confluent-kafka confluent-schema-registry
+sudo systemctl start confluent-zookeeper
+sudo systemctl start confluent-kafka
+sudo systemctl start confluent-schema-registry
+"""
         descs = [
             scratch.MachineDesc(
                 name="materialized",

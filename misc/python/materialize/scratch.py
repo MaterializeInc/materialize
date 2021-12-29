@@ -144,7 +144,7 @@ def launch(
         network_interface["SubnetId"] = subnet_id
 
     say(f"launching instance {display_name or '(unnamed)'}")
-    with open(ROOT / "misc" / "load-tests" / "provision.bash") as f:
+    with open(ROOT / "misc" / "scratch" / "provision.bash") as f:
         provisioning_script = f.read()
     kwargs: RunInstancesRequestRequestTypeDef = {
         "MinCount": 1,
@@ -232,6 +232,7 @@ def mkrepo(i: Instance, rev: str) -> None:
         [
             "git",
             "push",
+            "--no-verify",
             f"{instance_host(i)}:materialize/.git",
             # Explicit refspec is required if the host repository is in detached
             # HEAD mode.

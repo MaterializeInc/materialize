@@ -77,7 +77,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         nargs="?",
         const=None,
         help=(
-            "Use a config from {machine}.json in `misc/machines`. "
+            "Use a config from {machine}.json in `misc/scratch`. "
             "Hint: `dev-box` is a good starter!"
         ),
     )
@@ -99,7 +99,7 @@ def run(args: argparse.Namespace) -> None:
     extra_tags["LaunchedBy"] = whoami()
 
     if args.machine:
-        with open(ROOT / "misc" / "machines" / "{}.json".format(args.machine)) as f:
+        with open(ROOT / "misc" / "scratch" / "{}.json".format(args.machine)) as f:
 
             print("Reading machine configs from {}".format(f.name))
             descs = [MachineDesc.parse_obj(obj) for obj in multi_json(f.read())]
