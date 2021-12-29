@@ -738,3 +738,11 @@ canonicalize-join
 ----
 [#0 (isnull(#2) || isnull(#3))]
 [(#2 + #3) coalesce(#0, #1, false)]
+
+# impossible condition detection during predicate canonicalization produces
+# reliable output regardless of the order of the input predicates
+canonicalize
+[(call_binary eq #0 10) (call_unary is_null #0)]
+[int64]
+----
+false
