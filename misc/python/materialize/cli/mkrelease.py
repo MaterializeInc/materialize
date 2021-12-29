@@ -19,7 +19,8 @@ import click
 import requests
 from semver.version import Version
 
-from materialize import errors, git, spawn, ui
+from materialize import git, spawn, ui
+from materialize.ui import UIError
 
 BIN_CARGO_TOML = "src/materialized/Cargo.toml"
 LICENSE = "LICENSE"
@@ -85,9 +86,7 @@ def new_rc(
     new_version = None
     if level == "rc":
         if tag.prerelease is None or not tag.prerelease.startswith("rc"):
-            raise errors.MzConfigurationError(
-                "Attempted to bump an rc version without starting an RC"
-            )
+            raise UIError("Attempted to bump an rc version without starting an RC")
         next_rc = int(tag.prerelease[2:]) + 1
         new_version = tag.replace(prerelease=f"rc{next_rc}")
     elif level == "patch":
@@ -259,9 +258,7 @@ def release(
         version: The version to release. The `v` prefix is optional
     """
     if git.is_dirty():
-        raise errors.MzConfigurationError(
-            "working directory is not clean, stash or commit your changes"
-        )
+        raise UIError("working directory is not clean, stash or commit your changes")
 
     the_tag = f"v{version}"
     confirm_version_is_next(version, affect_remote)
@@ -338,7 +335,7 @@ def update_versions_list(released_version: Version) -> None:
                 fh.write(toml_line)
                 wrote_line = True
     if not wrote_line:
-        raise errors.MzRuntimeError("Couldn't determine where to insert new version")
+        raise UIError("Couldn't determine where to insert new version")
 
 
 @cli.command()
@@ -396,7 +393,7 @@ def change_line(fname: str, line_start: str, replacement: str) -> None:
         fh.write("\n")
 
     if changes != 1:
-        raise errors.MzConfigurationError(f"Found {changes} {line_start}s in {fname}")
+        raise UIError(f"Found {changes} {line_start}s in {fname}")
 
 
 def four_years_hence() -> str:
@@ -550,7 +547,7 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
         with open(creds_path) as fh:
             token = fh.read().strip()
     except FileNotFoundError:
-        raise errors.MzConfigurationError(
+        raise UIError(
             f"""No developer tool api token at {creds_path!r}
     please create an access token at https://github.com/settings/tokens"""
         )
@@ -574,11 +571,11 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
                 title = contents["title"]
                 collected.append((url, title))
             except KeyError:
-                raise errors.MzRuntimeError(contents)
+                raise UIError(contents)
     for url, title in sorted(collected):
         print(url, title)
 
 
 if __name__ == "__main__":
-    with errors.error_handler(say):
+    with ui.error_handler("mkrelease"):
         cli()

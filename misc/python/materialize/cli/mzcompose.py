@@ -24,12 +24,14 @@ code, please talk to me first!
 
 import argparse
 import os
+import subprocess
 import sys
 import webbrowser
 from pathlib import Path
 from typing import List, Optional, Sequence, Text, Tuple
 
-from materialize import errors, mzbuild, mzcompose, spawn, ui
+from materialize import mzbuild, mzcompose, spawn, ui
+from materialize.ui import UIError
 
 announce = ui.speaker("==> ")
 say = ui.speaker("")
@@ -152,24 +154,21 @@ def load_composition(args: argparse.Namespace) -> mzcompose.Composition:
     repo = load_repo(args)
     try:
         return mzcompose.Composition(repo, args.find or Path.cwd().name)
-    except errors.UnknownComposition:
+    except mzcompose.UnknownCompositionError as e:
         if args.find:
-            print(f"error: unknown composition {args.find!r}", file=sys.stderr)
-            print("hint: available compositions:", file=sys.stderr)
+            hint = "available compositions:\n"
             for name in repo.compositions:
-                print(f"    {name}", file=sys.stderr)
+                hint += f"    {name}\n"
+            e.set_hint(hint)
+            raise e
         else:
-            print(
-                "error: directory does not contain a mzcompose.yml or mzworkflows.py file",
-                file=sys.stderr,
-            )
-            print(
-                "hint: enter one of the following directories and run ./mzcompose:",
-                file=sys.stderr,
-            )
+            hint = "enter one of the following directories and run ./mzcompose:\n"
             for path in repo.compositions.values():
-                print(f"    {path.relative_to(Path.cwd())}", file=sys.stderr)
-        sys.exit(1)
+                hint += f"    {path.relative_to(Path.cwd())}\n"
+            raise UIError(
+                "directory does not contain an mzcompose.yml or mzworkflows.py",
+                hint,
+            )
 
 
 class Command:
@@ -267,7 +266,7 @@ class LintCommand(Command):
         for error in sorted(errors):
             print(error)
         if errors:
-            sys.exit(1)
+            raise UIError("lint errors discovered")
 
 
 class ListCompositionsCommand(Command):
@@ -317,14 +316,12 @@ class WebCommand(Command):
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
         ports = composition.find_host_ports(args.service)
-        if len(ports) == 1:
-            webbrowser.open(f"http://localhost:{ports[0]}")
-        elif not ports:
-            raise errors.MzRuntimeError(f"No running services matched {args.service!r}")
-        else:
-            raise errors.MzRuntimeError(
-                f"Too many ports matched {args.service!r}, found: {ports}"
+        if not ports:
+            raise UIError(
+                f"no ports discovered for service {args.service!r}",
+                hint="if the service name is valid, is it running?",
             )
+        webbrowser.open(f"http://localhost:{ports[0]}")
 
 
 class DockerComposeCommand(Command):
@@ -348,9 +345,7 @@ class DockerComposeCommand(Command):
 
     def run(self, args: argparse.Namespace) -> None:
         if args.help:
-            output = spawn.capture(
-                ["docker-compose", self.name, "--help"], stderr_too=True, unicode=True
-            )
+            output = self.capture([self.name, "--help"], stderr_too=True)
             output = output.replace("docker-compose", "./mzcompose")
             output += "\nThis command is a wrapper around Docker Compose."
             if self.help_epilog:
@@ -360,15 +355,13 @@ class DockerComposeCommand(Command):
             return
 
         # Make sure Docker Compose is new enough.
-        output = (
-            spawn.capture(["docker-compose", "version", "--short"], unicode=True)
-            .strip()
-            .strip("v")
-        )
+        output = self.capture(["version", "--short"], stderr_too=True).strip().strip("v")
         version = tuple(int(i) for i in output.split("."))
         if version < MIN_COMPOSE_VERSION:
-            msg = f"Unsupported docker-compose version: {version}, min required: {MIN_COMPOSE_VERSION}"
-            raise errors.MzConfigurationError(msg)
+            raise UIError(
+                f"unsupported docker-compose version v{output}",
+                hint=f"minimum version allowed: v{'.'.join(str(p) for p in MIN_COMPOSE_VERSION)}",
+            )
 
         composition = load_composition(args)
         announce("Collecting mzbuild dependencies")
@@ -390,11 +383,20 @@ class DockerComposeCommand(Command):
         self, args: argparse.Namespace, composition: mzcompose.Composition
     ) -> None:
         announce("Delegating to Docker Compose")
-        proc = composition.run(
+        composition.run(
             [*args.unknown_args, self.name, *args.unknown_subargs],
             check=False,
         )
-        sys.exit(proc.returncode)
+
+    def capture(self, args: List[str], stderr_too: bool = False) -> str:
+        try:
+            return spawn.capture(["docker-compose", *args], stderr_too=stderr_too, unicode=True)
+        except subprocess.CalledProcessError as e:
+            # Print any captured output, since it probably hints at the problem.
+            print(e.output, file=sys.stderr, end="")
+            raise UIError(f"running docker-compose failed (exit status {e.returncode})")
+        except FileNotFoundError:
+            raise UIError("unable to launch `docker-compose`", hint="is Docker Compose installed?")
 
 
 class RunCommand(DockerComposeCommand):
@@ -441,8 +443,11 @@ To see the available workflows, run:
             # workflow instead of Docker Compose.
             unknown_args = [*args.unknown_args, *args.unknown_subargs]
             if unknown_args:
-                raise errors.MzRuntimeError(
-                    f"cannot specify option {unknown_args[0]!r} when running a workflow"
+                raise UIError(
+                    f"unknown option {unknown_args[0]!r}",
+                    hint=f"if {unknown_args[0]!r} is a valid Docker Compose option, "
+                    f"it can't be used when running {args.workflow!r}, because {args.workflow!r} "
+                    "is a custom mzcompose workflow, not a Docker Compose service",
                 )
             workflow.run()
 
@@ -516,5 +521,5 @@ class ArgumentSubparser(argparse.ArgumentParser):
 
 
 if __name__ == "__main__":
-    with errors.error_handler(lambda *args: print(*args, file=sys.stderr)):
+    with ui.error_handler("mzcompose"):
         main(sys.argv[1:])

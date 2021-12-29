@@ -17,7 +17,7 @@ from typing import List, Optional, Set, Union
 
 import semver.version
 
-from materialize import errors, spawn
+from materialize import spawn
 
 
 def rev_count(rev: str) -> int:
@@ -52,7 +52,7 @@ def rev_parse(rev: str, *, abbrev: bool = False) -> str:
     a = ["--abbrev-ref"] if abbrev else []
     out = spawn.capture(["git", "rev-parse", *a, "--verify", rev], unicode=True).strip()
     if not out:
-        raise errors.MzRuntimeError(f"No parsed rev for {rev}")
+        raise RuntimeError(f"No parsed rev for {rev}")
     return out
 
 

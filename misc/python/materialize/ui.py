@@ -15,7 +15,10 @@ import os
 import shlex
 import sys
 import time
+from contextlib import contextmanager
 from typing import Any, AsyncGenerator, Callable, Generator, Iterable, Optional, Union
+
+from colored import attr, fg
 
 from materialize import docker
 
@@ -183,3 +186,44 @@ def humanize(val: Union[int, float], kind: str = "B") -> str:
         index += 1
     suffix = suffixes[index]
     return f"{val:.1f} {suffix}{kind}"
+
+
+class UIError(Exception):
+    """An error intended for display to humans.
+
+    Use this exception type when the error is something the user can be expected
+    to handle. If the error indicates a truly unexpected condition (i.e., a
+    programming error), use a different exception type that will produce a
+    backtrace instead.
+
+    Attributes:
+        hint: An optional hint to display alongside the error message.
+    """
+
+    def __init__(self, message: str, hint: Optional[str] = None):
+        super().__init__(message)
+        self.hint = hint
+
+    def set_hint(self, hint: str) -> None:
+        """Attaches a hint to the error.
+
+        This method will overwrite the existing hint, if any.
+        """
+        self.hint = hint
+
+
+@contextmanager
+def error_handler(prog: str) -> Any:
+    """Catches and pretty-prints any raised `UIError`s.
+
+    Args:
+        prog: The name of the program with which to prefix the error message.
+    """
+    try:
+        yield
+    except UIError as e:
+        print(f"{prog}: {fg('red')}error:{attr('reset')} {e}", file=sys.stderr)
+        if e.hint:
+            print(f"{attr('bold')}hint:{attr('reset')} {e.hint}")
+    except KeyboardInterrupt:
+        sys.exit(1)
