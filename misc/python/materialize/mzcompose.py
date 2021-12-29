@@ -1113,6 +1113,7 @@ class Testdrive(PythonService):
         no_reset: bool = False,
         default_timeout: str = "30s",
         seed: Optional[int] = None,
+        consistent_seed: bool = False,
         validate_catalog: bool = True,
         entrypoint: Optional[List[str]] = None,
         shell_eval: Optional[bool] = False,
@@ -1156,7 +1157,11 @@ class Testdrive(PythonService):
 
         entrypoint.append(f"--default-timeout {default_timeout}")
 
-        if seed:
+        if seed and consistent_seed:
+            raise RuntimeError("Can't pass `seed` and `consistent_seed` at same time")
+        elif consistent_seed:
+            entrypoint.append(f"--seed {random.getrandbits(32)}")
+        elif seed:
             entrypoint.append(f"--seed {seed}")
 
         if shell_eval:

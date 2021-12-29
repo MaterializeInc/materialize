@@ -43,7 +43,7 @@ services = [
     materialized,
     mz_disable_user_indexes,
     mz_without_system_tables,
-    Testdrive(no_reset=True, seed=1),
+    Testdrive(no_reset=True, consistent_seed=True),
 ]
 
 td_test = os.environ.pop("TD_TEST", "*")

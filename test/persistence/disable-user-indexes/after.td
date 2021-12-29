@@ -23,7 +23,7 @@ $ set schema={
         ]
     }
 
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-disable-user-indexes-1'->'partitions'->'0'->'msgs' AS INT)) IS NULL FROM mz_kafka_source_statistics;
+> SELECT SUM(CAST(statistics->'topics'->'testdrive-disable-user-indexes-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) IS NULL FROM mz_kafka_source_statistics;
 true
 
 > ALTER INDEX disable_user_indexes_primary_idx SET ENABLED;
@@ -37,5 +37,5 @@ true
 
 # We expect the counter to be at 1, that is no data was re-ingested
 # from the Kafka topic after the indexes were enabled
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-disable-user-indexes-1'->'partitions'->'0'->'msgs' AS INT)) = 1 FROM mz_kafka_source_statistics;
+> SELECT SUM(CAST(statistics->'topics'->'testdrive-disable-user-indexes-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) = 1 FROM mz_kafka_source_statistics;
 true
