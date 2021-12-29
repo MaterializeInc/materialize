@@ -30,10 +30,14 @@ import webbrowser
 from pathlib import Path
 from typing import List, Optional, Sequence, Text, Tuple
 
+from humanize import naturalsize
+
 from materialize import mzbuild, mzcompose, spawn, ui
 from materialize.ui import UIError
 
 MIN_COMPOSE_VERSION = (1, 24, 0)
+RECOMMENDED_MIN_MEM = 8 * 1024 ** 3  # 8GiB
+RECOMMENDED_MIN_CPUS = 2
 
 
 def main(argv: List[str]) -> None:
@@ -330,19 +334,21 @@ class DockerComposeCommand(Command):
         name: str,
         help: str,
         help_epilog: Optional[str] = None,
-        acquire_deps: bool = False,
+        runs_containers: bool = False,
     ):
         self.name = name
         self.help = help
         self.help_epilog = help_epilog
-        self.acquire_deps = acquire_deps
+        self.runs_containers = runs_containers
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("-h", "--help", action="store_true")
 
     def run(self, args: argparse.Namespace) -> None:
         if args.help:
-            output = self.capture([self.name, "--help"], stderr_too=True)
+            output = self.capture(
+                ["docker-compose", self.name, "--help"], stderr_too=True
+            )
             output = output.replace("docker-compose", "./mzcompose")
             output += "\nThis command is a wrapper around Docker Compose."
             if self.help_epilog:
@@ -353,7 +359,9 @@ class DockerComposeCommand(Command):
 
         # Make sure Docker Compose is new enough.
         output = (
-            self.capture(["version", "--short"], stderr_too=True).strip().strip("v")
+            self.capture(["docker-compose", "version", "--short"], stderr_too=True)
+            .strip()
+            .strip("v")
         )
         version = tuple(int(i) for i in output.split("."))
         if version < MIN_COMPOSE_VERSION:
@@ -368,12 +376,13 @@ class DockerComposeCommand(Command):
         for d in deps:
             ui.say(d.spec())
 
-        if self.acquire_deps:
+        if self.runs_containers:
             if args.coverage:
                 # If the user has requested coverage information, create the
                 # coverage directory as the current user, so Docker doesn't create
                 # it as root.
                 (composition.path / "coverage").mkdir(exist_ok=True)
+            self.check_docker_resource_limits()
             deps.acquire()
 
         self.handle_composition(args, composition)
@@ -387,18 +396,34 @@ class DockerComposeCommand(Command):
             check=False,
         )
 
+    def check_docker_resource_limits(self) -> None:
+        output = self.capture(
+            ["docker", "system", "info", "--format", "{{.MemTotal}} {{.NCPU}}"]
+        )
+        [mem, ncpus] = [int(field) for field in output.split()]
+        if mem < RECOMMENDED_MIN_MEM:
+            ui.warn(
+                f"Docker only has {naturalsize(mem, binary=True)} of memory available. "
+                f"We recommend at least {naturalsize(RECOMMENDED_MIN_MEM, binary=True)} of memory. "
+                "See https://materialize.com/docs/third-party/docker/."
+            )
+        if ncpus < RECOMMENDED_MIN_CPUS:
+            ui.warn(
+                f"Docker only has {ncpus} CPU available. "
+                f"We recommend at least {RECOMMENDED_MIN_CPUS} CPUs. "
+                "See https://materialize.com/docs/third-party/docker/."
+            )
+
     def capture(self, args: List[str], stderr_too: bool = False) -> str:
         try:
-            return spawn.capture(
-                ["docker-compose", *args], stderr_too=stderr_too, unicode=True
-            )
+            return spawn.capture(args, stderr_too=stderr_too, unicode=True)
         except subprocess.CalledProcessError as e:
             # Print any captured output, since it probably hints at the problem.
             print(e.output, file=sys.stderr, end="")
-            raise UIError(f"running docker-compose failed (exit status {e.returncode})")
+            raise UIError(f"running `{args[0]}` failed (exit status {e.returncode})")
         except FileNotFoundError:
             raise UIError(
-                "unable to launch `docker-compose`", hint="is Docker Compose installed?"
+                f"unable to launch `{args[0]}`", hint=f"is {args[0]} installed?"
             )
 
 
@@ -407,7 +432,7 @@ class RunCommand(DockerComposeCommand):
         super().__init__(
             "run",
             "run a one-off command",
-            acquire_deps=True,
+            runs_containers=True,
             help_epilog="""As an mzcompose extension, run also supports running a workflow, as in:
 
     $ ./mzcompose run WORKFLOW
@@ -457,7 +482,7 @@ To see the available workflows, run:
 
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")
 ConfigCommand = DockerComposeCommand("config", "validate and view the Compose file")
-CreateCommand = DockerComposeCommand("create", "create services", acquire_deps=True)
+CreateCommand = DockerComposeCommand("create", "create services", runs_containers=True)
 DownCommand = DockerComposeCommand("down", "stop and remove resources")
 EventsCommand = DockerComposeCommand(
     "events", "receive real time events from containers"
@@ -474,11 +499,13 @@ PushCommand = DockerComposeCommand("push", "push service images")
 RestartCommand = DockerComposeCommand("restart", "restart services")
 RmCommand = DockerComposeCommand("rm", "remove stopped containers")
 ScaleCommand = DockerComposeCommand("scale", "set number of containers for a service")
-StartCommand = DockerComposeCommand("start", "start services", acquire_deps=True)
+StartCommand = DockerComposeCommand("start", "start services", runs_containers=True)
 StopCommand = DockerComposeCommand("stop", "stop services")
 TopCommand = DockerComposeCommand("top", "display the running processes")
 UnpauseCommand = DockerComposeCommand("unpause", "unpause services")
-UpCommand = DockerComposeCommand("up", "create and start containers", acquire_deps=True)
+UpCommand = DockerComposeCommand(
+    "up", "create and start containers", runs_containers=True
+)
 
 # The following commands are intentionally omitted:
 #

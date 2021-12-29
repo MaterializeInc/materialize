@@ -16,11 +16,9 @@ import shlex
 import sys
 import time
 from contextlib import contextmanager
-from typing import Any, AsyncGenerator, Callable, Generator, Iterable, Optional, Union
+from typing import Any, AsyncGenerator, Callable, Generator, Iterable, Optional
 
 from colored import attr, fg
-
-from materialize import docker
 
 
 class Verbosity:
@@ -61,6 +59,11 @@ def speaker(prefix: str) -> Callable[..., None]:
 
 header = speaker("==> ")
 say = speaker("")
+
+
+def warn(message: str) -> None:
+    """Emits a warning message to stderr."""
+    print(f"{fg('yellow')}warning:{attr('reset')} {message}")
 
 
 def confirm(question: str) -> bool:
@@ -152,44 +155,6 @@ def env_is_truthy(env_var: str) -> bool:
     if env is not None:
         return env not in ("", "0", "no")
     return False
-
-
-def warn_docker_resource_limits() -> None:
-    """Check docker for recommended resource limits"""
-    warn = speaker("WARN:")
-
-    limits = docker.resource_limits()
-    if limits.mem_total < docker.RECOMMENDED_MIN_MEM:
-        actual = humanize(limits.mem_total)
-        desired = humanize(docker.RECOMMENDED_MIN_MEM)
-        warn(
-            f"Docker only has {actual} memory, "
-            f"less than {desired} can cause demos to fail in unexpected ways.\n"
-            "    See https://materialize.com/docs/third-party/docker/\n"
-        )
-    if limits.ncpus < docker.RECOMMENDED_MIN_CPUS:
-        warn(
-            f"Docker only has access to {limits.ncpus}, "
-            f"fewer than {docker.RECOMMENDED_MIN_CPUS} can cause demos to fail in unexpected ways.\n"
-            "    See https://materialize.com/docs/third-party/docker/\n"
-        )
-
-
-def humanize(val: Union[int, float], kind: str = "B") -> str:
-    """A convert val to a human-readable number
-
-    ::
-
-        >>> humanize(16795869184, "B")
-        '15.6 GiB'
-    """
-    suffixes = ["", "Ki", "Mi", "Gi", "Ti"]
-    index = 0
-    while val > 1024:
-        val /= 1024
-        index += 1
-    suffix = suffixes[index]
-    return f"{val:.1f} {suffix}{kind}"
 
 
 class UIError(Exception):
