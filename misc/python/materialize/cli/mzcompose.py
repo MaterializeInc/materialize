@@ -23,6 +23,7 @@ code, please talk to me first!
 
 
 import argparse
+import inspect
 import os
 import subprocess
 import sys
@@ -31,6 +32,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Text, Tuple
 
 from humanize import naturalsize
+from prettytable import PrettyTable
 
 from materialize import mzbuild, mzcompose, spawn, ui
 from materialize.ui import UIError
@@ -296,15 +298,25 @@ class ListPortsCommand(Command):
 
 
 class ListWorkflowsCommand(Command):
-    name = "list-workflows"
-    help = "list workflows in the composition"
+    name = "list"
+    help = "list services and workflows in the composition"
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
-        for name in sorted(
-            list(composition.yaml_workflows) + list(composition.python_funcs)
-        ):
-            print(name)
+        table = PrettyTable(["Name", "Type", "File", "Description"], align="l")
+
+        for name in composition.services:
+            table.add_row([name, "service", "mzcompose.yml", ""])
+
+        for name in composition.yaml_workflows:
+            table.add_row([name, "workflow", "mzcompose.yml", ""])
+
+        for name, fn in composition.python_funcs.items():
+            table.add_row(
+                [name, "workflow", "mzworkflows.py", inspect.getdoc(fn) or ""]
+            )
+
+        print(table.get_string(sortkey=lambda d: (d[1], d[0])))
 
 
 class WebCommand(Command):

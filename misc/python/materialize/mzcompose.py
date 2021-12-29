@@ -293,6 +293,8 @@ class Composition:
                 config["image"] = deps[config["mzbuild"]].spec()
                 del config["mzbuild"]
 
+        self.services = compose["services"]
+
         # Emit the munged configuration to a temporary file so that we can later
         # pass it to Docker Compose.
         tempfile = TemporaryFile()

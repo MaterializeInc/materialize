@@ -47,11 +47,13 @@ ci_output = "--ci-output" if os.getenv("BUILDKITE") else ""
 
 
 def workflow_testdrive(w: Workflow):
+    """Run non-esoteric tests with localstack"""
     w.start_and_wait_for_tcp(services=[localstack])
     test_testdrive(w, mz_default, aws_localstack, tests)
 
 
 def workflow_testdrive_ci(w: Workflow):
+    """Run all tests with actual AWS credentials"""
     test_testdrive(w, mz_default, aws_amazon, tests_ci)
 
 
