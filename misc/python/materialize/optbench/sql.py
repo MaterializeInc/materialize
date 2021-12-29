@@ -13,10 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
-import psycopg2
-import psycopg2.extensions
-import sqlparse  # type: ignore
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import pg8000
+import sqlparse
 
 from . import Scenario, util
 
@@ -73,14 +71,8 @@ class Database:
         host: str,
         user: str,
     ) -> None:
-        kwargs = dict(
-            host=host,
-            port=port,
-            user=user,
-        )
-        logging.debug(f"Initialize Database with connection={kwargs}")
-        self.conn = psycopg2.connect(**kwargs)
-        self.conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)  # type: ignore
+        logging.debug(f"Initialize Database with host={host} port={port}, user={user}")
+        self.conn = pg8000.connect(host=host, port=port, user=user)
 
     def mz_version(self) -> str:
         result = self.query_one("SELECT mz_version()")
@@ -128,4 +120,4 @@ class Database:
 
 def parse_from_file(path: Path) -> List[str]:
     """Parses a *.sql file to a list of queries."""
-    return cast(List[str], sqlparse.split(path.read_text()))
+    return sqlparse.split(path.read_text())

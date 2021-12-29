@@ -48,7 +48,7 @@ from typing import (
     cast,
 )
 
-import pg8000  # type: ignore
+import pg8000
 import pymysql
 import yaml
 
