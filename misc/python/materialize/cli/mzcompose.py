@@ -32,7 +32,7 @@ from typing import List, Optional, Sequence, Text, Tuple
 
 from humanize import naturalsize
 
-from materialize import mzbuild, mzcompose, spawn, ui
+from materialize import ROOT, mzbuild, mzcompose, spawn, ui
 from materialize.ui import UIError
 
 MIN_COMPOSE_VERSION = (1, 24, 0)
@@ -57,8 +57,7 @@ For help on a specific command, run `mzcompose COMMAND --help`.
 For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     )
 
-    # Global arguments. For all arguments but `--mz-quiet` the `--mz` prefix
-    # is accepted for backwards compatibility.
+    # Global arguments.
     parser.add_argument(
         "--mz-quiet",
         action="store_true",
@@ -66,23 +65,10 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     )
     parser.add_argument(
         "--find",
-        "--mz-find",
         metavar="DIR",
         help="use the mzcompose.yml file from DIR, rather than the current directory",
     )
-    parser.add_argument(
-        "--build-mode",
-        "--mz-build-mode",
-        default="release",
-        choices=["dev", "release"],
-        help="specify the Cargo profile to use when compiling Rust crates",
-    )
-    parser.add_argument(
-        "--coverage",
-        "--mz-coverage",
-        action="store_true",
-        help='emit code coverage reports to the "coverage" directory',
-    )
+    mzbuild.Repository.install_arguments(parser)
 
     # Docker Compose arguments that we explicitly ban. Since we don't support
     # these, we hide them from the help output.
@@ -139,20 +125,9 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     args.command.invoke(args)
 
 
-def load_repo(args: argparse.Namespace) -> mzbuild.Repository:
-    """Load the repository in the mode specified by the command-line
-    arguments."""
-    root = Path(os.environ["MZ_ROOT"])
-    return mzbuild.Repository(
-        root,
-        release_mode=(args.build_mode == "release"),
-        coverage=args.coverage,
-    )
-
-
 def load_composition(args: argparse.Namespace) -> mzcompose.Composition:
     """Loads the composition specified by the command-line arguments."""
-    repo = load_repo(args)
+    repo = mzbuild.Repository.from_arguments(ROOT, args)
     try:
         return mzcompose.Composition(repo, args.find or Path.cwd().name)
     except mzcompose.UnknownCompositionError as e:
@@ -232,7 +207,7 @@ class GenShortcutsCommand(Command):
     help = "generate shortcut `mzcompose` shell scripts in mzcompose directories"
 
     def run(self, args: argparse.Namespace) -> None:
-        repo = load_repo(args)
+        repo = mzbuild.Repository.from_arguments(ROOT, args)
         template = """#!/usr/bin/env bash
 
 # Copyright Materialize, Inc. and contributors. All rights reserved.
@@ -260,7 +235,7 @@ class LintCommand(Command):
     help = "surface common errors in compositions"
 
     def run(cls, args: argparse.Namespace) -> None:
-        repo = load_repo(args)
+        repo = mzbuild.Repository.from_arguments(ROOT, args)
         errors = []
         for name in repo.compositions:
             errors += mzcompose.Composition.lint(repo, name)
@@ -275,7 +250,7 @@ class ListCompositionsCommand(Command):
     help = "list the directories that contain compositions"
 
     def run(cls, args: argparse.Namespace) -> None:
-        repo = load_repo(args)
+        repo = mzbuild.Repository.from_arguments(ROOT, args)
         for name in sorted(repo.compositions):
             print(name)
 

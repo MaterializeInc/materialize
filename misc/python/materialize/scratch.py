@@ -15,7 +15,6 @@ import datetime
 import os
 import shlex
 import sys
-from pathlib import Path
 from subprocess import CalledProcessError
 from typing import IO, Dict, List, NamedTuple, Optional, Union
 
@@ -29,14 +28,13 @@ from mypy_boto3_ec2.type_defs import (
 from prettytable import PrettyTable
 from pydantic import BaseModel
 
-from materialize import git, spawn, ui, util
+from materialize import ROOT, git, spawn, ui, util
 
 # Sane defaults for internal Materialize use in the scratch account
 DEFAULT_SUBNET_ID = "subnet-00bdfbd2d97eddb86"
 DEFAULT_SECURITY_GROUP_ID = "sg-06f780c8e23c0d944"
 DEFAULT_INSTANCE_PROFILE_NAME = "admin-instance"
 
-ROOT = Path(os.environ["MZ_ROOT"])
 SSH_COMMAND = ["mssh", "-o", "StrictHostKeyChecking=off"]
 
 say = ui.speaker("scratch> ")

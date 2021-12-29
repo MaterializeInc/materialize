@@ -233,14 +233,14 @@ composition is the name of a directory containing an mzcompose.yml or
 mzworkflows.py file. A workflow is the name of a service or Python function to
 run within the composition. You can see the definition of each CI job in
 [ci/test/pipeline.template.yml](./test/pipeline.template.yml). To invoke a
-workflow manually, you run `bin/mzcompose --mz-find COMPOSITION run WORKFLOW`.
+workflow manually, you run `bin/mzcompose --find COMPOSITION run WORKFLOW`.
 
 For example, here's how you'd run the testdrive job on the EC2 instance:
 
 ```
 bin/scratch ssh INSTANCE-ID
 cd materialize
-bin/mzcompose --mz-find testdrive run testdrive-ci
+bin/mzcompose --find testdrive run testdrive-ci
 ```
 
 If the test fails like it did in CI, you're set! You now have a reliable way to

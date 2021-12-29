@@ -58,7 +58,7 @@ The mzcompose configuration will automatically set up all of testdrive's depende
 Zookeeper, Kafka, the Confluent Schema Registry, and mock versions of AWS S3 and Kinesis.
 
 ```
-TD_TEST=*.td ./mzcompose --mz-build-mode=dev run testdrive
+TD_TEST=*.td ./mzcompose --dev run testdrive
 ```
 
 Supported **environment variables**:
@@ -67,7 +67,7 @@ Supported **environment variables**:
   default is to not run any of the "esoteric" tests.
 
   ```
-  TD_TEST=joins.td ./mzcompose --mz-build-mode=dev run testdrive
+  TD_TEST=joins.td ./mzcompose --dev run testdrive
   ```
 
 * `AWS_REGION`/`AWS_ENDPOINT`: will be supplied to the testdrive `--aws-region`/`--aws-endpoint`

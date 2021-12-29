@@ -1,6 +1,6 @@
 {
     "name": "chbench",
-    "launch_script": "MZ_WORKERS=4 bin/mzcompose --mz-find chbench run cloud-load-test",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --find chbench run cloud-load-test",
     "instance_type": "r5a.4xlarge",
     "ami": "ami-0b29b6e62f2343b46",
     "size_gb": 200,
@@ -16,7 +16,7 @@
 
 {
     "name": "kinesis",
-    "launch_script": "MZ_WORKERS=4 bin/mzcompose --mz-find perf-kinesis run cloud-load-test",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --find perf-kinesis run cloud-load-test",
     "instance_type": "r5a.4xlarge",
     "ami": "ami-0b29b6e62f2343b46",
     "size_gb": 64,
@@ -32,7 +32,7 @@
 
 {
     "name": "chaos",
-    "launch_script": "MZ_WORKERS=4 bin/mzcompose --mz-find chaos run test-bytes-to-kafka",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --find chaos run test-bytes-to-kafka",
     "instance_type": "r5a.4xlarge",
     "ami": "ami-0b29b6e62f2343b46",
     "size_gb": 64,

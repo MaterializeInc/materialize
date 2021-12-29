@@ -13,10 +13,9 @@ import os
 import platform
 import sys
 from enum import Enum
-from pathlib import Path
 from typing import List
 
-from materialize import spawn
+from materialize import ROOT, spawn
 
 
 class Arch(Enum):
@@ -167,7 +166,6 @@ def _enter_builder(arch: Arch) -> List[str]:
 
 
 def _bootstrap_darwin(arch: Arch) -> None:
-    ROOT = Path(os.environ["MZ_ROOT"])
     BOOTSTRAP_VERSION = "4"
     BOOTSTRAP_FILE = ROOT / "target" / target(arch) / ".xcompile-bootstrap"
     try:
