@@ -12,6 +12,7 @@
 
 use crate::{func, BinaryFunc, MirScalarExpr, UnaryFunc};
 use repr::{Datum, RelationType, ScalarType};
+use std::collections::HashSet;
 
 /// Canonicalize equivalence classes of a join and expressions contained in them.
 ///
@@ -216,7 +217,20 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
         }
     }
 
-    // 3) Reduce across `predicates`.
+    // 3) Make non-null requirements explicit as predicates in order for
+    // step 4) to be able to simplify AND/OR expressions with IS NULL
+    // sub-predicates. This redundancy is removed later by step 5).
+    let mut non_null_columns = HashSet::new();
+    for p in predicates.iter() {
+        p.non_null_requirements(&mut non_null_columns);
+    }
+    predicates.extend(non_null_columns.iter().map(|c| {
+        MirScalarExpr::column(*c)
+            .call_unary(UnaryFunc::IsNull(func::IsNull))
+            .call_unary(UnaryFunc::Not(func::Not))
+    }));
+
+    // 4) Reduce across `predicates`.
     // If a predicate `p` cannot be null, and `f(p)` is a nullable bool
     // then the predicate `p & f(p)` is equal to `p & f(true)`, and
     // `!p & f(p)` is equal to `!p & f(false)`. For any index i, the `Vec` of
@@ -300,7 +314,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
         completed.push(predicate_to_apply);
     }
 
-    // Remove redundant !isnull/isnull predicates after performing the replacements
+    // 5) Remove redundant !isnull/isnull predicates after performing the replacements
     // in the loop above.
     std::mem::swap(&mut todo, &mut completed);
     while let Some(predicate_to_apply) = todo.pop() {
