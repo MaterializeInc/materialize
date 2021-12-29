@@ -70,13 +70,17 @@ gid=$(id -g)
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
-    docker build --pull \
+    cache_tag=cache-$arch_go
+    docker buildx build --pull \
+        --cache-from=materialize/ci-builder:"$cache_tag" \
+        --cache-to=type=inline,mode=max \
         --build-arg "ARCH_GCC=$arch_gcc" \
         --build-arg "ARCH_GO=$arch_go" \
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
         --build-arg "RUST_COMPONENTS=$rust_components" \
         --tag materialize/ci-builder:"$tag" \
+        --tag materialize/ci-builder:"$cache_tag" \
         "$@" ci/builder
 }
 
@@ -103,6 +107,7 @@ input = sys.stdin.buffer.read()
 hash = base64.b32encode(hashlib.sha1(input).digest())
 print(hash.decode())
 ')
+cache_tag=cache-$rust_version-$arch_go
 
 
 case "$cmd" in
@@ -115,6 +120,7 @@ case "$cmd" in
     push)
         build "$@"
         docker push materialize/ci-builder:"$tag"
+        docker push materialize/ci-builder:"$cache_tag"
         ;;
     run)
         args=(

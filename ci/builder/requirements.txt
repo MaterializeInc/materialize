@@ -1,4 +1,5 @@
 click==8.0.3
+colored==1.4.3
 pg8000==1.23.0
 PyMySQL==1.0.2
 pyyaml==6.0

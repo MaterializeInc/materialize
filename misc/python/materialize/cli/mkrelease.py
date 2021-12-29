@@ -19,7 +19,8 @@ import click
 import requests
 from semver.version import Version
 
-from materialize import errors, git, spawn, ui
+from materialize import git, spawn, ui
+from materialize.ui import UIError
 
 BIN_CARGO_TOML = "src/materialized/Cargo.toml"
 LICENSE = "LICENSE"
@@ -39,9 +40,6 @@ OPT_AFFECT_REMOTE = click.option(
     default=True,
     help="Whether or not to interact with origin at all",
 )
-
-
-say = ui.speaker("")
 
 
 @click.group()
@@ -85,9 +83,7 @@ def new_rc(
     new_version = None
     if level == "rc":
         if tag.prerelease is None or not tag.prerelease.startswith("rc"):
-            raise errors.MzConfigurationError(
-                "Attempted to bump an rc version without starting an RC"
-            )
+            raise UIError("Attempted to bump an rc version without starting an RC")
         next_rc = int(tag.prerelease[2:]) + 1
         new_version = tag.replace(prerelease=f"rc{next_rc}")
     elif level == "patch":
@@ -259,9 +255,7 @@ def release(
         version: The version to release. The `v` prefix is optional
     """
     if git.is_dirty():
-        raise errors.MzConfigurationError(
-            "working directory is not clean, stash or commit your changes"
-        )
+        raise UIError("working directory is not clean, stash or commit your changes")
 
     the_tag = f"v{version}"
     confirm_version_is_next(version, affect_remote)
@@ -284,7 +278,7 @@ def release(
         future = four_years_hence()
         change_line(LICENSE, "Change Date", f"Change Date:               {future}")
 
-    say("Updating Cargo.lock")
+    ui.say("Updating Cargo.lock")
     spawn.runv(["cargo", "check", "-p", "materialized"])
     spawn.runv(["cargo", "check", "-p", "materialized"])
     spawn.runv(["cargo", "check", "-p", "materialized", "--locked"])
@@ -310,14 +304,14 @@ def release(
             ):
                 spawn.runv(["git", "push", matching, the_tag])
         else:
-            say("")
-            say(
+            ui.say("")
+            ui.say(
                 f"Next step is to push {the_tag} to the MaterializeInc/materialize repo"
             )
     else:
         branch = git.rev_parse("HEAD", abbrev=True)
-        say("")
-        say(f"Create a PR with your branch: '{branch}'")
+        ui.say("")
+        ui.say(f"Create a PR with your branch: '{branch}'")
 
 
 def update_versions_list(released_version: Version) -> None:
@@ -338,7 +332,7 @@ def update_versions_list(released_version: Version) -> None:
                 fh.write(toml_line)
                 wrote_line = True
     if not wrote_line:
-        raise errors.MzRuntimeError("Couldn't determine where to insert new version")
+        raise UIError("Couldn't determine where to insert new version")
 
 
 @cli.command()
@@ -364,7 +358,7 @@ def update_upgrade_tests(released_version: Optional[Version], force: bool) -> No
 
 def update_upgrade_tests_inner(released_version: Version, force: bool = False) -> None:
     if released_version.prerelease is not None:
-        say("Not updating upgrade tests for prerelease")
+        ui.say("Not updating upgrade tests for prerelease")
         return
 
     upgrade_dir = Path("./test/upgrade")
@@ -396,7 +390,7 @@ def change_line(fname: str, line_start: str, replacement: str) -> None:
         fh.write("\n")
 
     if changes != 1:
-        raise errors.MzConfigurationError(f"Found {changes} {line_start}s in {fname}")
+        raise UIError(f"Found {changes} {line_start}s in {fname}")
 
 
 def four_years_hence() -> str:
@@ -432,7 +426,7 @@ def confirm_version_is_next(this_tag: Version, affect_remote: bool) -> None:
             and this_tag.prerelease is None
             and latest_tag.prerelease is not None
         ):
-            say("Congratulations on the successful release!")
+            ui.say("Congratulations on the successful release!")
         elif (
             this_tag.minor == latest_tag.minor
             and this_tag.patch == latest_tag.patch + 1
@@ -441,7 +435,7 @@ def confirm_version_is_next(this_tag: Version, affect_remote: bool) -> None:
             # prepare next
             pass
         else:
-            say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
+            ui.say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
             sys.exit(1)
     elif this_tag.minor == latest_tag.minor + 1 and this_tag.patch == 0:
         click.confirm("Are you sure you want to bump the minor version?", abort=True)
@@ -500,7 +494,7 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
                     ancestor_ref = str(ref)
                     break
 
-            say(
+            ui.say(
                 f"Using recent_ref={recent_ref}  ancestor_ref={ancestor_ref}",
             )
 
@@ -535,13 +529,13 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
             prs.append(pr)
 
     if not found_ref:
-        say(
+        ui.say(
             "WARNING: you probably don't have pullreqs configured for your repo",
         )
-        say(
+        ui.say(
             "Add the following line to the MaterializeInc/materialize remote section in your .git/config",
         )
-        say("  fetch = +refs/pull/*/head:refs/pullreqs/*")
+        ui.say("  fetch = +refs/pull/*/head:refs/pullreqs/*")
 
     username = input("Enter your github username: ")
     creds_path = os.path.expanduser("~/.config/materialize/dev-tools-access-token")
@@ -550,7 +544,7 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
         with open(creds_path) as fh:
             token = fh.read().strip()
     except FileNotFoundError:
-        raise errors.MzConfigurationError(
+        raise UIError(
             f"""No developer tool api token at {creds_path!r}
     please create an access token at https://github.com/settings/tokens"""
         )
@@ -574,11 +568,11 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
                 title = contents["title"]
                 collected.append((url, title))
             except KeyError:
-                raise errors.MzRuntimeError(contents)
+                raise UIError(contents)
     for url, title in sorted(collected):
         print(url, title)
 
 
 if __name__ == "__main__":
-    with errors.error_handler(say):
+    with ui.error_handler("mkrelease"):
         cli()

@@ -52,7 +52,8 @@ import pg8000  # type: ignore
 import pymysql
 import yaml
 
-from materialize import errors, mzbuild, spawn, ui
+from materialize import mzbuild, spawn, ui
+from materialize.ui import UIError
 
 T = TypeVar("T")
 say = ui.speaker("C> ")
@@ -79,6 +80,13 @@ DEFAULT_DEBEZIUM_VERSION = "1.6"
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 DEFAULT_MZ_VOLUMES = ["mzdata:/share/mzdata", "tmp:/share/tmp"]
+
+
+class UnknownCompositionError(UIError):
+    """The specified composition was unknown."""
+
+    def __init__(self, name: str):
+        super().__init__(f"unknown composition {name!r}")
 
 
 class LintError:
@@ -196,7 +204,7 @@ class Composition:
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
         else:
-            raise errors.UnknownComposition
+            raise UnknownCompositionError(name)
 
         # load the mzcompose.yml file, if one exists
         mzcompose_yml = self.path / "mzcompose.yml"
@@ -244,7 +252,7 @@ class Composition:
                 image_name = config["mzbuild"]
 
                 if image_name not in self.repo.images:
-                    raise errors.BadSpec(f"mzcompose: unknown image {image_name}")
+                    raise UIError(f"mzcompose: unknown image {image_name}")
 
                 image = self.repo.images[image_name]
                 override_tag = os.getenv(
@@ -302,7 +310,7 @@ class Composition:
             raw_env = {}
 
         if not isinstance(raw_env, dict) and raw_env is not None:
-            raise errors.BadSpec(
+            raise UIError(
                 f"Workflow {workflow_name} has wrong type for env: "
                 f"expected mapping, got {type(raw_env).__name__}: {raw_env}",
             )
@@ -362,9 +370,7 @@ class Composition:
                 step = step_ty(**munged)
             except TypeError as e:
                 a = " ".join([f"{k}={v}" for k, v in munged.items()])
-                raise errors.BadSpec(
-                    f"Unable to construct {step_name} with args {a}: {e}"
-                )
+                raise UIError(f"Unable to construct {step_name} with args {a}: {e}")
             built_steps.append(step)
 
         return Workflow(workflow_name, built_steps, env=workflow_env, composition=self)
@@ -373,7 +379,7 @@ class Composition:
     def lint(cls, repo: mzbuild.Repository, name: str) -> List[LintError]:
         """Checks a composition for common errors."""
         if not name in repo.compositions:
-            raise errors.UnknownComposition
+            raise UnknownCompositionError(name)
 
         errs: List[LintError] = []
 
@@ -421,21 +427,24 @@ class Composition:
         if capture_combined:
             stdout = subprocess.PIPE
             stderr = subprocess.STDOUT
-        return subprocess.run(
-            [
-                "docker-compose",
-                f"-f/dev/fd/{self.file.fileno()}",
-                "--project-directory",
-                self.path,
-                *args,
-            ],
-            env=env,
-            close_fds=False,
-            check=check,
-            stdout=stdout,
-            stderr=stderr,
-            encoding="utf-8",
-        )
+        try:
+            return subprocess.run(
+                [
+                    "docker-compose",
+                    f"-f/dev/fd/{self.file.fileno()}",
+                    "--project-directory",
+                    self.path,
+                    *args,
+                ],
+                env=env,
+                close_fds=False,
+                check=check,
+                stdout=stdout,
+                stderr=stderr,
+                encoding="utf-8",
+            )
+        except subprocess.CalledProcessError as e:
+            raise UIError(f"running docker-compose failed (exit status {e.returncode})")
 
     def find_host_ports(self, service: str) -> List[str]:
         """Find all ports open on the host for a given service"""
@@ -514,13 +523,13 @@ class Composition:
                 if m:
                     matches.append(m.group("c_id"))
             if len(matches) != 1:
-                raise errors.Failed(
+                raise UIError(
                     f"failed to get a unique container id for service {service}, found: {matches}"
                 )
 
             return matches[0]
         except subprocess.CalledProcessError as e:
-            raise errors.Failed(f"failed to get container id for {service}: {e}")
+            raise UIError(f"failed to get container id for {service}: {e}")
 
     def docker_inspect(self, format: str, container_id: str) -> str:
         try:
@@ -532,7 +541,7 @@ class Composition:
                     container_id, ui.shell_quote(cmd), e, e.stdout, e.stderr
                 )
             )
-            raise errors.Failed(f"failed to inspect Docker container: {e}")
+            raise UIError(f"failed to inspect Docker container: {e}")
         else:
             return output
 
@@ -567,7 +576,7 @@ def _substitute_env_vars(val: T, env: Dict[str, str]) -> T:
 def _subst(env: Dict[str, str], match: Match) -> str:
     var = match.group("var")
     if var is None:
-        raise errors.BadSpec(f"Unable to parse environment variable {match.group(0)}")
+        raise UIError(f"Unable to parse environment variable {match.group(0)}")
     # https://github.com/python/typeshed/issues/3902
     default = cast(Optional[str], match.group("default"))
 
@@ -585,7 +594,7 @@ def _subst(env: Dict[str, str], match: Match) -> str:
 def _alt_subst(env: Dict[str, str], match: Match) -> str:
     var = match.group("var")
     if var is None:
-        raise errors.BadSpec(f"Unable to parse environment variable {match.group(0)}")
+        raise UIError(f"Unable to parse environment variable {match.group(0)}")
     # https://github.com/python/typeshed/issues/3902
     altvar = cast(Optional[str], match.group("alt_var"))
     assert altvar is not None, "alt var not captured by regex"
@@ -1265,7 +1274,7 @@ class Steps:
         try:
             return cls._steps[name]
         except KeyError:
-            raise errors.UnknownItem("step", name, list(cls._steps))
+            raise UIError(f"unknown step {name!r}")
 
     @classmethod
     def register(
@@ -1291,7 +1300,7 @@ class Steps:
             if not hasattr(Workflow, func_name):
                 setattr(Workflow, func_name, run_step)
             else:
-                raise errors.Failed(
+                raise UIError(
                     f"Unable to register method Workflow.{func_name} as one already exists."
                 )
 
@@ -1350,14 +1359,14 @@ class StartServicesStep(WorkflowStep):
     def __init__(self, *, services: Optional[List[str]] = None) -> None:
         self._services = services if services is not None else []
         if not isinstance(self._services, list):
-            raise errors.BadSpec(f"services should be a list, got: {self._services}")
+            raise UIError(f"services should be a list, got: {self._services}")
 
     def run(self, workflow: Workflow) -> None:
         try:
             workflow.run_compose(["up", "-d", *self._services])
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
-            raise errors.Failed(f"ERROR: services didn't come up cleanly: {services}")
+            raise UIError(f"services didn't come up cleanly: {services}")
 
 
 @Steps.register("start-and-wait-for-tcp")
@@ -1369,13 +1378,13 @@ class StartAndWaitForTcp(WorkflowStep):
 
     def __init__(self, *, services: List[PythonService], **kwargs: Any) -> None:
         if not isinstance(services, list):
-            raise errors.BadSpec(
+            raise UIError(
                 f"services for start-and-wait-for-tcp should be a list, got: {services}"
             )
 
         for service in services:
             if not isinstance(service, PythonService):
-                raise errors.BadSpec(
+                raise UIError(
                     f"services for start-and-wait-for-tcp should be a list of PythonService, got: {service}"
                 )
 
@@ -1403,7 +1412,7 @@ class KillServicesStep(WorkflowStep):
     ) -> None:
         self._services = services if services is not None else []
         if not isinstance(self._services, list):
-            raise errors.BadSpec(f"services should be a list, got: {self._services}")
+            raise UIError(f"services should be a list, got: {self._services}")
         self._signal = signal
 
     def run(self, workflow: Workflow) -> None:
@@ -1416,7 +1425,7 @@ class KillServicesStep(WorkflowStep):
             workflow.run_compose(compose_cmd)
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
-            raise errors.Failed(f"ERROR: services didn't die cleanly: {services}")
+            raise UIError(f"services didn't die cleanly: {services}")
 
 
 @Steps.register("restart-services")
@@ -1429,14 +1438,14 @@ class RestartServicesStep(WorkflowStep):
     def __init__(self, *, services: Optional[List[str]] = None) -> None:
         self._services = services if services is not None else []
         if not isinstance(self._services, list):
-            raise errors.BadSpec(f"services should be a list, got: {self._services}")
+            raise UIError(f"services should be a list, got: {self._services}")
 
     def run(self, workflow: Workflow) -> None:
         try:
             workflow.run_compose(["restart", *self._services])
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
-            raise errors.Failed(f"ERROR: services didn't restart cleanly: {services}")
+            raise UIError(f"services didn't restart cleanly: {services}")
 
 
 @Steps.register("remove-services")
@@ -1456,7 +1465,7 @@ class RemoveServicesStep(WorkflowStep):
         self._services = services if services is not None else []
         self._destroy_volumes = destroy_volumes
         if not isinstance(self._services, list):
-            raise errors.BadSpec(f"services should be a list, got: {self._services}")
+            raise UIError(f"services should be a list, got: {self._services}")
 
     def run(self, workflow: Workflow) -> None:
         try:
@@ -1471,7 +1480,7 @@ class RemoveServicesStep(WorkflowStep):
             )
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
-            raise errors.Failed(f"ERROR: services didn't restart cleanly: {services}")
+            raise UIError(f"services didn't restart cleanly: {services}")
 
 
 @Steps.register("remove-volumes")
@@ -1484,7 +1493,7 @@ class RemoveVolumesStep(WorkflowStep):
     def __init__(self, *, volumes: List[str]) -> None:
         self._volumes = volumes
         if not isinstance(self._volumes, list):
-            raise errors.BadSpec(f"volumes should be a list, got: {self._volumes}")
+            raise UIError(f"volumes should be a list, got: {self._volumes}")
 
     def run(self, workflow: Workflow) -> None:
         volumes = (f"{workflow.composition.name}_{v}" for v in self._volumes)
@@ -1541,7 +1550,7 @@ class WaitForPgStep(WorkflowStep):
                     )
                 else:
                     msg = f"No ports found for {self._service}\nService logs:\n{logs}"
-                raise errors.Failed(msg)
+                raise UIError(msg)
             port = int(ports[0])
         else:
             port = self._port
@@ -1557,9 +1566,9 @@ class WaitForPgStep(WorkflowStep):
                 expected=self._expected,
                 print_result=self._print_result,
             )
-        except errors.Failed as e:
+        except UIError as e:
             logs = workflow.composition.service_logs(self._service)
-            raise errors.Failed(f"{e}:\nService logs:\n{logs}")
+            raise UIError(f"{e}:\nService logs:\n{logs}")
 
 
 @Steps.register("wait-for-mz")
@@ -1624,7 +1633,7 @@ class WaitForMysqlStep(WorkflowStep):
         if self._port is None:
             ports = workflow.composition.find_host_ports(self._service)
             if len(ports) != 1:
-                raise errors.Failed(
+                raise UIError(
                     f"Could not unambiguously determine port for {self._service} "
                     f"found: {','.join(ports)}"
                 )
@@ -1673,7 +1682,7 @@ class RunMysql(WorkflowStep):
         if self._port is None:
             ports = workflow.composition.find_host_ports(self._service)
             if len(ports) != 1:
-                raise errors.Failed(
+                raise UIError(
                     f"Could not unambiguously determine port for {self._service} "
                     f"found: {','.join(ports)}"
                 )
@@ -1757,7 +1766,7 @@ class WaitForTcpStep(WorkflowStep):
                     message += "\nDependency service logs:\n"
                     message += dep_logs
                     ui.progress(" error!", finish=True)
-                    raise errors.Failed(message)
+                    raise UIError(message)
 
         ui.progress(" error!", finish=True)
         try:
@@ -1765,7 +1774,7 @@ class WaitForTcpStep(WorkflowStep):
         except Exception as e:
             logs = f"unable to determine logs: {e}"
 
-        raise errors.Failed(
+        raise UIError(
             f"Unable to connect to {self._host}:{self._port}\nService logs:\n{logs}"
         )
 
@@ -1873,7 +1882,7 @@ class RandomChaos(WorkflowStep):
             procs = [json.loads(line) for line in out.splitlines()]
             return cast(List[Dict[str, Any]], procs)
         except subprocess.CalledProcessError as e:
-            raise errors.Failed(f"failed to get Docker container ids: {e}")
+            raise UIError(f"failed to get Docker container ids: {e}")
 
     def get_container_names(
         self, services: List[str] = [], running: bool = False
@@ -1897,7 +1906,7 @@ class RandomChaos(WorkflowStep):
 
             return matches
         except subprocess.CalledProcessError as e:
-            raise errors.Failed(f"failed to get Docker container ids: {e}")
+            raise UIError(f"failed to get Docker container ids: {e}")
 
     def run_cmd(self, cmd: str) -> None:
         try:
@@ -1933,7 +1942,7 @@ class RandomChaos(WorkflowStep):
         else:
             container_ids = self.get_container_names(services=[self._other_service])
             if len(container_ids) != 1:
-                raise errors.Failed(
+                raise UIError(
                     f"wrong number of container ids found for service {self._other_service}. expected 1, found: {len(container_ids)}"
                 )
 
@@ -1990,7 +1999,7 @@ class RandomChaos(WorkflowStep):
                 add_cmd=f"docker exec -t {random_container} tc qdisc add dev eth0 root netem corrupt 10",
             )
         else:
-            raise errors.Failed(f"unexpected type of chaos: {random_chaos}")
+            raise UIError(f"unexpected type of chaos: {random_chaos}")
 
 
 @Steps.register("chaos-confirm")
@@ -2021,9 +2030,7 @@ class ChaosConfirmStep(WorkflowStep):
         container_id = workflow.composition.get_container_id(self._service)
         if self._running:
             if not workflow.composition.docker_container_is_running(container_id):
-                raise errors.Failed(
-                    f"chaos-confirm: container {container_id} is not running"
-                )
+                raise UIError(f"chaos-confirm: container {container_id} is not running")
         else:
             if self._wait:
                 while workflow.composition.docker_container_is_running(container_id):
@@ -2031,7 +2038,7 @@ class ChaosConfirmStep(WorkflowStep):
                     time.sleep(60)
             else:
                 if workflow.composition.docker_container_is_running(container_id):
-                    raise errors.Failed(
+                    raise UIError(
                         f"chaos-confirm: expected {container_id} to have exited, is running"
                     )
 
@@ -2039,7 +2046,7 @@ class ChaosConfirmStep(WorkflowStep):
                 "{{.State.ExitCode}}", container_id
             )
             if actual_exit_code != f"'{self._exit_code}'":
-                raise errors.Failed(
+                raise UIError(
                     f"chaos-confirm: expected exit code '{self._exit_code}' for {container_id}, found {actual_exit_code}"
                 )
 
@@ -2058,11 +2065,7 @@ class WorkflowWorkflowStep(WorkflowStep):
             print(f"Running workflow {child_workflow.name} ...")
             child_workflow.run()
         except KeyError:
-            raise errors.UnknownItem(
-                f"workflow in {workflow.composition.name}",
-                self._workflow,
-                (w for w in workflow.composition.yaml_workflows),
-            )
+            raise UIError(f"unknown workflow {workflow.composition.name!r}")
 
 
 @Steps.register("run")
@@ -2127,7 +2130,7 @@ class RunStep(WorkflowStep):
                 ],
             ).stdout
         except subprocess.CalledProcessError:
-            raise errors.Failed("giving up: {}".format(ui.shell_quote(self._command)))
+            raise UIError("giving up: {}".format(ui.shell_quote(self._command)))
 
 
 @Steps.register("exec")
@@ -2156,7 +2159,7 @@ class ExecStep(WorkflowStep):
         try:
             workflow.run_compose(self._command)
         except subprocess.CalledProcessError:
-            raise errors.Failed("giving up: {}".format(ui.shell_quote(self._command)))
+            raise UIError("giving up: {}".format(ui.shell_quote(self._command)))
 
 
 @Steps.register("ensure-stays-up")
@@ -2182,7 +2185,7 @@ class EnsureStaysUpStep(WorkflowStep):
                     logs = (
                         f"Unable to determine service logs, docker output:\n{e.output}"
                     )
-                raise errors.Failed(
+                raise UIError(
                     f"container {self._container} stopped running!\nService logs:\n{logs}"
                 )
             ui.progress(f" {i}")
@@ -2215,11 +2218,11 @@ class WaitStep(WorkflowStep):
         ps_proc = workflow.run_compose(["ps", "-q", self._service], capture=True)
         container_ids = [c for c in ps_proc.stdout.strip().split("\n")]
         if len(container_ids) > 1:
-            raise errors.Failed(
+            raise UIError(
                 f"Expected to get a single container for {self._service}; got: {container_ids}"
             )
         elif not container_ids:
-            raise errors.Failed(f"No containers returned for service {self._service}")
+            raise UIError(f"No containers returned for service {self._service}")
 
         container_id = container_ids[0]
         wait_cmd = ["docker", "wait", container_id]
@@ -2228,13 +2231,13 @@ class WaitStep(WorkflowStep):
             int(c) for c in wait_proc.stdout.decode("utf-8").strip().split("\n")
         ]
         if len(return_codes) != 1:
-            raise errors.Failed(
+            raise UIError(
                 f"Expected single exit code for {container_id}; got: {return_codes}"
             )
 
         return_code = return_codes[0]
         if return_code != self._expected_return_code:
-            raise errors.Failed(
+            raise UIError(
                 f"Expected exit code {self._expected_return_code} for {container_id}; got: {return_code}"
             )
 
@@ -2289,7 +2292,7 @@ def wait_for_pg(
             ui.progress(" " + str(int(remaining)))
             error = e
     ui.progress(finish=True)
-    raise errors.Failed(f"never got correct result for {args}: {error}")
+    raise UIError(f"never got correct result for {args}: {error}")
 
 
 def wait_for_mysql(
@@ -2314,4 +2317,4 @@ def wait_for_mysql(
             error = e
     ui.progress(finish=True)
 
-    raise errors.Failed(f"Never got correct result for {args}: {error}")
+    raise UIError(f"Never got correct result for {args}: {error}")

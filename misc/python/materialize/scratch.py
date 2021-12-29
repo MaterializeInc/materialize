@@ -36,9 +36,10 @@ DEFAULT_SUBNET_ID = "subnet-00bdfbd2d97eddb86"
 DEFAULT_SECURITY_GROUP_ID = "sg-06f780c8e23c0d944"
 DEFAULT_INSTANCE_PROFILE_NAME = "admin-instance"
 
-SPEAKER = ui.speaker("scratch> ")
 ROOT = Path(os.environ["MZ_ROOT"])
 SSH_COMMAND = ["mssh", "-o", "StrictHostKeyChecking=off"]
+
+say = ui.speaker("scratch> ")
 
 
 def tags(i: Instance) -> Dict[str, str]:
@@ -144,7 +145,7 @@ def launch(
     if subnet_id:
         network_interface["SubnetId"] = subnet_id
 
-    SPEAKER(f"launching instance {display_name or '(unnamed)'}")
+    say(f"launching instance {display_name or '(unnamed)'}")
     with open(ROOT / "misc" / "load-tests" / "provision.bash") as f:
         provisioning_script = f.read()
     kwargs: RunInstancesRequestRequestTypeDef = {
@@ -200,7 +201,7 @@ async def setup(
 
     done = False
     async for remaining in ui.async_timeout_loop(60, 5):
-        SPEAKER(f"Waiting for instance to become ready: {remaining}s remaining")
+        say(f"Waiting for instance to become ready: {remaining}s remaining")
         i.reload()
         if is_ready(i):
             done = True
@@ -212,7 +213,7 @@ async def setup(
 
     done = False
     async for remaining in ui.async_timeout_loop(180, 5):
-        SPEAKER(f"Checking whether setup has completed: {remaining}s remaining")
+        say(f"Checking whether setup has completed: {remaining}s remaining")
         try:
             mssh(i, "[[ -f /opt/provision/docker-installed ]]")
             done = True

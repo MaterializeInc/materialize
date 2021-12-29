@@ -13,7 +13,6 @@ from unittest.mock import patch
 
 from semver import Version, VersionInfo
 
-from materialize import errors
 from materialize.git import get_version_tags
 from materialize.mzcompose import (
     Kafka,
@@ -33,7 +32,7 @@ min_tested_tag = VersionInfo.parse(os.getenv("MIN_TESTED_TAG", "0.8.0"))
 
 all_tags = [tag for tag in get_version_tags(fetch=False) if tag.prerelease is None]
 if not all_tags:
-    raise error.MzRuntimeError(
+    raise RuntimeError(
         "No tags found in current repository. Please run git fetch --all to obtain tags."
     )
 
