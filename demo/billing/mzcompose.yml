@@ -93,10 +93,6 @@ mzworkflows:
       service: billing-demo
       daemon: false
   ci:
-    env:
-      MZ_PORT: 6875
-      KAFKA_PORT: 9092
-      SR_PORT: 8081
     steps:
     - step: workflow
       workflow: start-everything
@@ -117,8 +113,6 @@ mzworkflows:
       destroy_volumes: true
 
   cloud-load-test:
-    env:
-      MZ_SQL_EXPORTER_PORT: "9400:9399"
     steps:
     - step: workflow
       workflow: start-everything

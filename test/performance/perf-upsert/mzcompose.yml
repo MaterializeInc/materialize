@@ -82,8 +82,6 @@ mzworkflows:
       destroy_volumes: true
 
   cloud-load-test:
-    env:
-      MZ_SQL_EXPORTER_PORT: "9400:9399"
     steps:
     - step: workflow
       workflow: start-everything
