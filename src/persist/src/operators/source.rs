@@ -9,18 +9,17 @@
 
 //! A Timely Dataflow operator that mirrors a persisted stream.
 
-use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::{Concat, Map};
+use timely::dataflow::operators::Concat;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::Data as TimelyData;
 
 use crate::indexed::runtime::StreamReadHandle;
-use crate::indexed::{ListenEvent, ListenFn};
+use crate::indexed::ListenEvent;
 use crate::operators::replay::Replay;
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
@@ -43,14 +42,8 @@ where
         &mut self,
         read: StreamReadHandle<K, V>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
-        let (listen_tx, listen_rx) = mpsc::channel();
-        let listen_fn = ListenFn(Box::new(move |e| {
-            // TODO: If send fails, it means the operator is no longer running.
-            // We should probably allow the listen to deregister itself.
-            let _ = listen_tx.send(e);
-        }));
-
-        let snapshot = read.listen(listen_fn);
+        let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
+        let snapshot = read.listen(listen_tx);
 
         let snapshot_seal = snapshot
             .as_ref()
@@ -76,14 +69,14 @@ fn listen_source<G, K, V>(
     // initial frontier because an empty frontier would signal that we are at "the end of time",
     // meaning that there will be no more events in the future.
     initial_frontier: Option<Antichain<u64>>,
-    listen_rx: Receiver<ListenEvent>,
+    listen_rx: crossbeam_channel::Receiver<ListenEvent>,
 ) -> Stream<G, (Result<(K, V), String>, u64, isize)>
 where
     G: Scope<Timestamp = u64>,
     K: TimelyData + Codec + Send,
     V: TimelyData + Codec + Send,
 {
-    let source_stream = operator::source(scope, "PersistedSource", |mut capability, info| {
+    operator::source(scope, "PersistedSource", |mut capability, info| {
         let worker_index = scope.index();
         let activator = scope.activator_for(&info.address[..]);
 
@@ -99,24 +92,31 @@ where
             }
         }
 
-        let mut cap = Some(capability);
+        // TODO: This currently works by only emitting the persisted data on worker
+        // 0 because that was the simplest thing to do initially. Instead, we should
+        // shard up the responsibility between all the workers.
+        let (mut receiver_cap, mut done) = match worker_index {
+            0 => (Some((listen_rx, capability)), false),
+            _ => (None, true),
+        };
         move |output| {
-            let mut done = false;
-            if let Some(cap) = cap.as_mut() {
+            if let Some((listen_rx, cap)) = receiver_cap.as_mut() {
                 let mut session = output.session(cap);
+
                 match listen_rx.try_recv() {
                     Ok(e) => match e {
                         ListenEvent::Records(mut records) => {
-                            // TODO: This currently works by only emitting the persisted data on worker
-                            // 0 because that was the simplest thing to do initially. Instead, we should
-                            // shard up the responsibility between all the workers.
-                            if worker_index == 0 {
-                                for record in records.drain(..) {
-                                    let ((k, v), ts, diff) = record;
-                                    let k = K::decode(&k);
-                                    let v = V::decode(&v);
-                                    session.give(((k, v), ts, diff));
-                                }
+                            for record in records.drain(..) {
+                                let ((k, v), ts, diff) = record;
+                                let k = K::decode(&k);
+                                let v = V::decode(&v);
+                                let result = match ((k, v), ts, diff) {
+                                    ((Ok(k), Ok(v)), ts, diff) => (Ok((k, v)), ts, diff),
+                                    ((Err(err), _), ts, diff) => (Err(err), ts, diff),
+                                    ((_, Err(err)), ts, diff) => (Err(err), ts, diff),
+                                };
+
+                                session.give(result);
                             }
                             activator.activate();
                         }
@@ -125,31 +125,24 @@ where
                             activator.activate();
                         }
                     },
-                    Err(TryRecvError::Empty) => {
-                        // TODO: Hook the activator up to the callback instead of
-                        // TryRecvError::Empty.
+                    Err(crossbeam_channel::TryRecvError::Empty) => {
                         activator.activate_after(Duration::from_millis(100));
                     }
-                    Err(TryRecvError::Disconnected) => {
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
                         done = true;
                     }
                 }
             }
             if done {
-                cap = None;
+                receiver_cap = None;
             }
         }
-    });
-
-    source_stream.map(|u| match u {
-        ((Ok(k), Ok(v)), ts, diff) => (Ok((k, v)), ts, diff),
-        ((Err(err), _), ts, diff) => (Err(err), ts, diff),
-        ((_, Err(err)), ts, diff) => (Err(err), ts, diff),
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
 
     use timely::dataflow::operators::capture::Extract;

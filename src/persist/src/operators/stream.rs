@@ -527,16 +527,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-
+    use futures_executor::block_on;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::input::Handle;
     use timely::dataflow::operators::probe::Probe;
     use timely::dataflow::operators::Capture;
     use timely::Config;
+    use tokio::runtime::Runtime;
 
     use crate::error::Error;
-    use crate::indexed::{ListenEvent, ListenFn, SnapshotExt};
+    use crate::indexed::{ListenEvent, SnapshotExt};
     use crate::mem::MemRegistry;
     use crate::unreliable::UnreliableHandle;
 
@@ -769,38 +769,55 @@ mod tests {
         let (_write, primary_read) = p.create_or_load::<(), ()>("primary");
         let (_write, condition_read) = p.create_or_load::<(), ()>("condition");
 
-        #[derive(Debug, PartialEq, Eq)]
+        #[derive(Copy, Clone, Debug, PartialEq, Eq)]
         enum Sealed {
             Primary(u64),
             Condition(u64),
         }
 
-        let (listen_tx, listen_rx) = mpsc::channel();
+        let (primary_listen_tx, primary_listen_rx) = crossbeam_channel::unbounded();
+        primary_read.listen(primary_listen_tx)?;
 
-        {
-            let listen_tx = listen_tx.clone();
-            let listen_fn = ListenFn(Box::new(move |e| {
-                match e {
-                    ListenEvent::Sealed(t) => listen_tx.send(Sealed::Primary(t)).unwrap(),
-                    _ => panic!("unexpected data"),
+        let (condition_listen_tx, condition_listen_rx) = crossbeam_channel::unbounded();
+        condition_read.listen(condition_listen_tx)?;
+        let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
+
+        let runtime = Runtime::new()?;
+        let listener_handle = runtime.spawn(async move {
+            let mut num_channels_closed = 0;
+            loop {
+                crossbeam_channel::select! {
+                    recv(primary_listen_rx) -> msg => {
+                        match msg {
+                            Ok(ListenEvent::Sealed(ts)) => {
+                                let _ = listen_tx.send(Sealed::Primary(ts));
+                            }
+                            Ok(ListenEvent::Records(_)) => (),
+                            Err(crossbeam_channel::RecvError) => {
+                                num_channels_closed += 1;
+                            }
+                        }
+                    }
+                    recv(condition_listen_rx) -> msg => {
+                        match msg {
+                            Ok(ListenEvent::Sealed(ts)) => {
+                                let _ = listen_tx.send(Sealed::Condition(ts));
+                            }
+                            Ok(ListenEvent::Records(_)) => (),
+                            Err(crossbeam_channel::RecvError) => {
+                                num_channels_closed += 1;
+                            }
+                        }
+                    }
                 };
-                ()
-            }));
 
-            primary_read.listen(listen_fn)?;
-        };
-        {
-            let listen_fn = ListenFn(Box::new(move |e| {
-                match e {
-                    ListenEvent::Sealed(t) => listen_tx.send(Sealed::Condition(t)).unwrap(),
-                    _ => panic!("unexpected data"),
-                };
-                ()
-            }));
+                if num_channels_closed == 2 {
+                    break;
+                }
+            }
+        });
 
-            condition_read.listen(listen_fn)?;
-        };
-
+        let mut p_clone = p.clone();
         timely::execute_directly(move |worker| {
             let (mut primary_input, mut condition_input, seal_probe) = worker.dataflow(|scope| {
                 let (primary_write, _read) = p.create_or_load::<(), ()>("primary");
@@ -827,6 +844,7 @@ mod tests {
             condition_input.send((((), ()), 0, 1));
 
             primary_input.advance_to(1);
+
             condition_input.advance_to(1);
             while seal_probe.less_than(&1) {
                 worker.step();
@@ -845,13 +863,31 @@ mod tests {
             while seal_probe.less_than(&3) {
                 worker.step();
             }
+
+            // Advance conditional input ahead of the primary.
+            condition_input.advance_to(4);
+
+            // Give the worker a chance to process the work. We can't use the existing
+            // probe here, because only the conditional input gets sealed. Ideally, we
+            // would be able to insert a probe within the conditional_seal operator
+            // itself but that's not possible at the moment.
+            for _ in 1..10 {
+                worker.step();
+            }
         });
 
+        // Stop the runtime so the listener task can exit.
+        p_clone.stop()?;
+        if let Err(e) = block_on(listener_handle) {
+            return Err(Error::from(e.to_string()));
+        }
         let actual_seals: Vec<_> = listen_rx.try_iter().collect();
 
         // Assert that:
         //  a) We don't seal primary when condition has not sufficiently advanced.
-        //  b) Condition is sealed before primary for the same timestamp.
+        //  b) Condition is sealed before primary for the same timestamp OR
+        //     primary and condition got swapped when reading from two channels and a
+        //     primary seal at t is just before the condition seal at a time t' >= t.
         //  c) We seal up, even when never receiving any data.
         //  d) Seals happen in timestamp order.
         //
@@ -859,19 +895,42 @@ mod tests {
 
         let mut current_condition_seal = 0;
         let mut current_primary_seal = 0;
-        for seal in actual_seals {
+        let mut condition_seals = vec![];
+        let mut primary_seals = vec![];
+        let mut seal_pairs = vec![];
+
+        // Chunk up the list of seals into overlapping pairs so we can easily find
+        // the next seal.
+        for i in 0..actual_seals.len() - 1 {
+            seal_pairs.push((actual_seals[i], Some(actual_seals[i + 1])));
+        }
+
+        seal_pairs.push((actual_seals[actual_seals.len() - 1], None));
+
+        for (seal, optional_next) in seal_pairs {
             match seal {
                 Sealed::Condition(ts) => {
                     assert!(ts >= current_condition_seal);
                     current_condition_seal = ts;
+                    condition_seals.push(ts);
                 }
                 Sealed::Primary(ts) => {
-                    assert!(ts <= current_condition_seal);
                     assert!(ts >= current_primary_seal);
+                    if let Some(Sealed::Condition(next_condition_seal)) = optional_next {
+                        assert!(ts <= next_condition_seal);
+                    } else {
+                        assert!(ts <= current_condition_seal);
+                    };
                     current_primary_seal = ts;
+                    primary_seals.push(ts);
                 }
             }
         }
+
+        // Check that the seal values for each collection are exactly what
+        // we expect.
+        assert_eq!(condition_seals, vec![1, 2, 3, 4]);
+        assert_eq!(primary_seals, vec![1, 2, 3]);
 
         Ok(())
     }
