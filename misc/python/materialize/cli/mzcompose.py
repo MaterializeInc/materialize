@@ -25,8 +25,10 @@ code, please talk to me first!
 import argparse
 import inspect
 import os
+import shutil
 import subprocess
 import sys
+import textwrap
 import webbrowser
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Text, Tuple
@@ -278,6 +280,7 @@ class ListWorkflowsCommand(Command):
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
+
         table = PrettyTable(["Name", "Type", "File", "Description"], align="l")
 
         for name in composition.services:
@@ -287,9 +290,12 @@ class ListWorkflowsCommand(Command):
             table.add_row([name, "workflow", "mzcompose.yml", ""])
 
         for name, fn in composition.python_funcs.items():
-            table.add_row(
-                [name, "workflow", "mzworkflows.py", inspect.getdoc(fn) or ""]
-            )
+            # Width heuristic to avoid a too-wide table is arbitrary, but it
+            # seems to work well.
+            width = shutil.get_terminal_size().columns - 50
+            description = inspect.getdoc(fn) or ""
+            description = textwrap.fill(description, width)
+            table.add_row([name, "workflow", "mzworkflows.py", description])
 
         print(table.get_string(sortkey=lambda d: (d[1], d[0])))
 

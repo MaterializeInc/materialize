@@ -284,8 +284,13 @@ class Composition:
                 config.setdefault("volumes", []).append("./coverage:/coverage")
 
         # Add default volumes
-        compose.setdefault("volumes", {})["mzdata"] = None
-        compose.setdefault("volumes", {})["tmp"] = None
+        compose.setdefault("volumes", {}).update(
+            {
+                "mzdata": None,
+                "tmp": None,
+                "secrets": None,
+            }
+        )
 
         deps = self.repo.resolve_dependencies(self.images)
         for config in compose["services"].values():
@@ -699,10 +704,11 @@ class Materialized(PythonService):
         memory: Optional[str] = None,
         data_directory: str = "/share/mzdata",
         timestamp_frequency: str = "100ms",
-        options: str = "",
+        options: Union[str, List[str]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
+        depends_on: Optional[List[str]] = None,
     ) -> None:
         if environment is None:
             environment = [
@@ -734,8 +740,10 @@ class Materialized(PythonService):
             "--retain-prometheus-metrics 1s",
         ]
 
-        if options:
+        if isinstance(options, str):
             command_list.append(options)
+        else:
+            command_list.extend(options)
 
         if workers:
             command_list.append(f"--workers {workers}")
@@ -754,6 +762,7 @@ class Materialized(PythonService):
 
         config.update(
             {
+                "depends_on": depends_on or [],
                 "command": " ".join(command_list),
                 "ports": [port],
                 "environment": environment,
@@ -1198,6 +1207,20 @@ class Testdrive(PythonService):
                 "volumes": volumes,
                 "propagate_uid_gid": True,
                 "init": True,
+            },
+        )
+
+
+class TestCerts(PythonService):
+    def __init__(
+        self,
+        name: str = "test-certs",
+    ) -> None:
+        super().__init__(
+            name="test-certs",
+            config={
+                "mzbuild": "test-certs",
+                "volumes": ["secrets:/secrets"],
             },
         )
 
@@ -2098,6 +2121,7 @@ class RunStep(WorkflowStep):
         *,
         service: str,
         command: Optional[Union[str, list]] = None,
+        env: Dict[str, str] = {},
         capture: bool = False,
         daemon: bool = False,
         entrypoint: Optional[str] = None,
@@ -2119,6 +2143,7 @@ class RunStep(WorkflowStep):
         self._service_ports = service_ports
         self._command = cmd
         self._capture = capture
+        self._env = env
 
     def run(self, workflow: Workflow) -> Any:
         try:
@@ -2128,6 +2153,7 @@ class RunStep(WorkflowStep):
                     "run",
                     *(["--service-ports"] if self._service_ports else []),
                     *(["--name", self._service] if self._force_service_name else []),
+                    *(f"-e{k}={v}" for k, v in self._env.items()),
                     *self._command,
                 ],
             ).stdout
