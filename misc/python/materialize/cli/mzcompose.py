@@ -29,7 +29,7 @@ import subprocess
 import sys
 import webbrowser
 from pathlib import Path
-from typing import List, Optional, Sequence, Text, Tuple
+from typing import Any, List, Optional, Sequence, Text, Tuple
 
 from humanize import naturalsize
 from prettytable import PrettyTable
@@ -432,36 +432,69 @@ To see the available workflows, run:
 """,
         )
 
-    def configure(self, parser: argparse.ArgumentParser) -> None:
-        super().configure(parser)
-        parser.add_argument("workflow", nargs="?")
+    def find_workflow_arg(self, args: argparse.Namespace) -> Any:
+        """Finds the first non-option argument in a `docker-compose run`
+        invocation."""
+
+        # This is a bit gross, but to determine the first position argument to
+        # `run` we have no choice but to hardcode the list of `run` options that
+        # take a value. E.g., in `run --entrypoint bash service`, we need to
+        # return `service`, not `bash`.
+        KNOWN_OPTIONS_WITH_ARGUMENT = [
+            "-d",
+            "--detach",
+            "--name",
+            "--entrypoint",
+            "-e",
+            "-l",
+            "--label",
+            "-p",
+            "--publish",
+            "-v",
+            "--volume",
+            "-w",
+            "--workdir",
+        ]
+        args = iter(args.unknown_subargs)
+        for arg in args:
+            if arg in KNOWN_OPTIONS_WITH_ARGUMENT:
+                # This is an option that's known to take a value, so skip the
+                # next argument too.
+                next(args, None)
+            elif arg.startswith("-"):
+                # Flag option. Skip it.
+                pass
+            else:
+                # Found a positional argument. Return it.
+                return arg
 
     def handle_composition(
         self, args: argparse.Namespace, composition: mzcompose.Composition
     ) -> None:
+        workflow_name = self.find_workflow_arg(args)
         try:
-            workflow = composition.get_workflow(args.workflow, dict(os.environ))
+            workflow = composition.get_workflow(workflow_name, dict(os.environ))
         except KeyError:
             # Restart any dependencies whose definitions have changed. This is
             # Docker Compose's default behavior for `up`, but not for `run`,
             # which is a constant irritation that we paper over here. The trick,
             # taken from Buildkite's Docker Compose plugin, is to run an `up`
             # command that requests zero instances of the requested service.
-            if args.workflow:
+            if workflow_name:
                 composition.run(
-                    ["up", "-d", "--scale", f"{args.workflow}=0", args.workflow]
+                    ["up", "-d", "--scale", f"{workflow_name}=0", workflow_name]
                 )
-            args.unknown_subargs = [args.workflow] + args.unknown_subargs
             super().handle_composition(args, composition)
         else:
             # The user has specified a workflow rather than a service. Run the
             # workflow instead of Docker Compose.
-            unknown_args = [*args.unknown_args, *args.unknown_subargs]
+            unknown_args = [*args.unknown_subargs, *args.unknown_args]
+            unknown_args.remove(workflow_name)
             if unknown_args:
                 raise UIError(
                     f"unknown option {unknown_args[0]!r}",
                     hint=f"if {unknown_args[0]!r} is a valid Docker Compose option, "
-                    f"it can't be used when running {args.workflow!r}, because {args.workflow!r} "
+                    f"it can't be used when running {workflow_name!r}, because {workflow_name!r} "
                     "is a custom mzcompose workflow, not a Docker Compose service",
                 )
             workflow.run()
