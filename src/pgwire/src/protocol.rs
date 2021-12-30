@@ -369,7 +369,11 @@ where
         }
 
         self.metrics.query_count.inc();
-        let result = match self.coord_client.execute(EMPTY_PORTAL.to_string()).await {
+        let result = match self
+            .coord_client
+            .execute_retry(EMPTY_PORTAL.to_string())
+            .await
+        {
             Ok(response) => {
                 self.send_execute_response(
                     response,
@@ -700,7 +704,7 @@ where
                     // Postgres).
                     self.start_transaction(Some(1)).await;
 
-                    match self.coord_client.execute(portal_name.clone()).await {
+                    match self.coord_client.execute_retry(portal_name.clone()).await {
                         Ok(response) => {
                             self.send_execute_response(
                                 response,

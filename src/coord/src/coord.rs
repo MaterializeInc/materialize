@@ -3204,7 +3204,10 @@ where
                                         .less_equal(&0)
                                 })
                                 .collect::<Vec<_>>();
-                            return Err(CoordError::IncompleteTimestamp(unstarted));
+                            return Err(CoordError::IncompleteTimestamp {
+                                unstarted: unstarted.clone(),
+                                timeline: self.validate_timeline(unstarted)?,
+                            });
                         }
                     } else {
                         // A complete trace can be read in its final form with this time.

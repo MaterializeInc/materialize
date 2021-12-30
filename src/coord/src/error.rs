@@ -10,6 +10,7 @@
 use std::error::Error;
 use std::fmt;
 
+use dataflow_types::Timeline;
 use expr::EvalError;
 use ore::stack::RecursionLimitError;
 use ore::str::StrExt;
@@ -41,7 +42,10 @@ pub enum CoordError {
     /// The ID allocator exhausted all valid IDs.
     IdExhaustionError,
     /// At least one input has no complete timestamps yet
-    IncompleteTimestamp(Vec<expr::GlobalId>),
+    IncompleteTimestamp {
+        unstarted: Vec<expr::GlobalId>,
+        timeline: Option<Timeline>,
+    },
     /// Specified index is disabled, but received non-enabling update request
     InvalidAlterOnDisabledIndex(String),
     /// The value for the specified parameter does not have the right type.
@@ -239,7 +243,7 @@ impl fmt::Display for CoordError {
             }
             CoordError::Eval(e) => e.fmt(f),
             CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
-            CoordError::IncompleteTimestamp(unstarted) => write!(
+            CoordError::IncompleteTimestamp { unstarted, .. } => write!(
                 f,
                 "At least one input has no complete timestamps yet: {:?}",
                 unstarted

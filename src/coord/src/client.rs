@@ -12,9 +12,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio::time::{self, Duration};
 use uuid::Uuid;
 
-use dataflow_types::PeekResponse;
+use dataflow_types::{PeekResponse, Timeline};
 use expr::GlobalId;
 use ore::collections::CollectionExt;
 use ore::thread::JoinOnDropHandle;
@@ -310,6 +311,33 @@ impl SessionClient {
             tx,
         })
         .await
+    }
+
+    /// Executes a previously-bound portal. Incomplete timestamp errors on the
+    /// system timeline are retried.
+    pub async fn execute_retry(
+        &mut self,
+        portal_name: String,
+    ) -> Result<ExecuteResponse, CoordError> {
+        loop {
+            match self.execute(portal_name.clone()).await {
+                Err(CoordError::IncompleteTimestamp {
+                    timeline: Some(Timeline::EpochMilliseconds),
+                    ..
+                }) => {
+                    // If we encountered incomplete timestamps on the system timeline, sleep for a
+                    // second and retry. All sources on this timeline (except the rare case where
+                    // a CDC source uses `epoch_ms_timeline`) have timestamps automatically closed,
+                    // so we expect that this error only occurs when the system is processing data
+                    // and needs time until it is ready.
+                    tokio::select! {
+                        _ = time::sleep(Duration::from_millis(1_000)) => continue,
+                        _ = self.canceled() => return Ok(ExecuteResponse::Cancelled),
+                    }
+                }
+                result @ _ => return result,
+            }
+        }
     }
 
     /// Starts a transaction based on implicit:

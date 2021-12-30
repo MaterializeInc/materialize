@@ -350,7 +350,7 @@ impl ErrorResponse {
             CoordError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             CoordError::Eval(_) => SqlState::INTERNAL_ERROR,
             CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
-            CoordError::IncompleteTimestamp(_) => SqlState::SQL_STATEMENT_NOT_YET_COMPLETE,
+            CoordError::IncompleteTimestamp { .. } => SqlState::SQL_STATEMENT_NOT_YET_COMPLETE,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
