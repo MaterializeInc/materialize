@@ -79,3 +79,5 @@ debug = 1
 [patch.crates-io]
 # Waiting on https://github.com/hyperium/headers/pull/99.
 headers = { git = "https://github.com/MaterializeInc/headers.git" }
+# Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
+parquet-format-async-temp = { git = "https://github.com/MaterializeInc/parquet-format-rs", branch = "main" }

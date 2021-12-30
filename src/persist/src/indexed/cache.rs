@@ -21,7 +21,7 @@ use persist_types::Codec;
 use semver::Version;
 
 use crate::error::Error;
-use crate::gen::persist::ProtoMeta;
+use crate::gen::persist::{ProtoBatchFormat, ProtoMeta};
 use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, TraceBatchMeta, UnsealedBatchMeta,
 };
@@ -150,7 +150,7 @@ impl<B: Blob> BlobCache<B> {
         &mut self,
         key: String,
         batch: BlobUnsealedBatch,
-    ) -> Result<u64, Error> {
+    ) -> Result<(ProtoBatchFormat, u64), Error> {
         if key == Self::META_KEY {
             return Err(format!(
                 "cannot write unsealed batch to meta key: {}",
@@ -161,6 +161,7 @@ impl<B: Blob> BlobCache<B> {
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
         let mut val = Vec::new();
+        let format = ProtoBatchFormat::ParquetKVTD;
         batch.encode(&mut val);
         let val_len = u64::cast_from(val.len());
 
@@ -175,7 +176,7 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.unsealed.blob_write_bytes.inc_by(val_len);
 
         self.unsealed.lock()?.insert(key, Arc::new(batch));
-        Ok(val_len)
+        Ok((format, val_len))
     }
 
     /// Removes a batch from both [Blob] storage and the local cache.
@@ -251,13 +252,18 @@ impl<B: Blob> BlobCache<B> {
     /// Writes a batch to backing [Blob] storage.
     ///
     /// Returns the size of the encoded blob value in bytes.
-    pub fn set_trace_batch(&self, key: String, batch: BlobTraceBatch) -> Result<u64, Error> {
+    pub fn set_trace_batch(
+        &self,
+        key: String,
+        batch: BlobTraceBatch,
+    ) -> Result<(ProtoBatchFormat, u64), Error> {
         if key == Self::META_KEY {
             return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
         }
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
         let mut val = Vec::new();
+        let format = ProtoBatchFormat::ParquetKVTD;
         batch.encode(&mut val);
         let val_len = u64::cast_from(val.len());
 
@@ -272,7 +278,7 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.trace.blob_write_bytes.inc_by(val_len);
 
         self.trace.lock()?.insert(key, Arc::new(batch));
-        Ok(val_len)
+        Ok((format, val_len))
     }
 
     /// Removes a batch from both [Blob] storage and the local cache.

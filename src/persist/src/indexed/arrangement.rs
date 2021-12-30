@@ -247,9 +247,10 @@ impl Arrangement {
         };
 
         debug_assert!(ts_upper >= ts_lower);
-        let size_bytes = blob.set_unsealed_batch(key.clone(), batch)?;
+        let (format, size_bytes) = blob.set_unsealed_batch(key.clone(), batch)?;
         Ok(UnsealedBatchMeta {
             key,
+            format,
             desc,
             ts_upper,
             ts_lower,
@@ -559,11 +560,12 @@ impl Arrangement {
         }
         let desc = batch.desc.clone();
         let key = Self::new_blob_key();
-        let size_bytes = blob.set_trace_batch(key.clone(), batch)?;
+        let (format, size_bytes) = blob.set_trace_batch(key.clone(), batch)?;
         // As mentioned above, batches are inserted into the trace with compaction
         // level set to 0.
         self.trace_batches.push(TraceBatchMeta {
             key,
+            format,
             desc,
             level: 0,
             size_bytes,
@@ -905,6 +907,7 @@ mod tests {
     use differential_dataflow::trace::Description;
     use tokio::runtime::Runtime;
 
+    use crate::gen::persist::ProtoBatchFormat;
     use crate::indexed::encoding::Id;
     use crate::indexed::metrics::Metrics;
     use crate::indexed::SnapshotExt;
@@ -952,6 +955,7 @@ mod tests {
     ) -> UnsealedBatchMeta {
         UnsealedBatchMeta {
             key: key.to_string(),
+            format: ProtoBatchFormat::ParquetKVTD,
             desc: SeqNo(lower)..SeqNo(upper),
             ts_upper,
             ts_lower,
@@ -1013,6 +1017,7 @@ mod tests {
             id: Id(0),
             trace_batches: vec![TraceBatchMeta {
                 key: "key1".to_string(),
+                format: ProtoBatchFormat::Unknown,
                 desc: desc_from(0, 2, 0),
                 level: 1,
                 size_bytes: 0,
@@ -1255,6 +1260,7 @@ mod tests {
             id: Id(0),
             trace_batches: vec![TraceBatchMeta {
                 key: "key1".to_string(),
+                format: ProtoBatchFormat::Unknown,
                 desc: desc_from(0, 10, 5),
                 level: 1,
                 size_bytes: 0,
@@ -1293,6 +1299,7 @@ mod tests {
             id: Id(0),
             trace_batches: vec![TraceBatchMeta {
                 key: "key1".to_string(),
+                format: ProtoBatchFormat::Unknown,
                 desc: Description::new(
                     Antichain::from_elem(0),
                     Antichain::from_elem(10),
@@ -1380,12 +1387,14 @@ mod tests {
             vec![
                 TraceBatchMeta {
                     key: "KEY".to_string(),
+                    format: ProtoBatchFormat::ParquetKVTD,
                     desc: desc_from(0, 3, 3),
                     level: 1,
                     size_bytes: 0,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
+                    format: ProtoBatchFormat::ParquetKVTD,
                     desc: desc_from(3, 9, 0),
                     level: 0,
                     size_bytes: 0,
@@ -1437,12 +1446,14 @@ mod tests {
             vec![
                 TraceBatchMeta {
                     key: "KEY".to_string(),
+                    format: ProtoBatchFormat::ParquetKVTD,
                     desc: desc_from(0, 3, 3),
                     level: 1,
                     size_bytes: 0,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
+                    format: ProtoBatchFormat::ParquetKVTD,
                     desc: desc_from(3, 10, 10),
                     level: 0,
                     size_bytes: 0,
