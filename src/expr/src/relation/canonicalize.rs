@@ -12,6 +12,7 @@
 
 use crate::{func, BinaryFunc, MirScalarExpr, UnaryFunc};
 use repr::{Datum, RelationType, ScalarType};
+use std::cmp::Ordering;
 use std::collections::HashSet;
 
 /// Canonicalize equivalence classes of a join and expressions contained in them.
@@ -359,7 +360,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     }
 
     // 4) Sort and dedup predicates.
-    predicates.sort();
+    predicates.sort_by(compare_predicates);
     predicates.dedup();
 }
 
@@ -453,4 +454,10 @@ fn propagates_null_from_subexpression(expr: &MirScalarExpr, operand: &MirScalarE
     } else {
         false
     }
+}
+
+/// Comparison method for sorting predicates by their complexity, measured by the total
+/// number of non-literal expression nodes within the expression.
+fn compare_predicates(x: &MirScalarExpr, y: &MirScalarExpr) -> Ordering {
+    (rank_complexity(x), x).cmp(&(rank_complexity(y), y))
 }

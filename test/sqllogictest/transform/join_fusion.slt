@@ -32,7 +32,7 @@ EXPLAIN SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 =
 ----
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#1)), (#0 > 0)
+| Filter (#0 > 0), !(isnull(#1))
 | ArrangeBy (#0)
 
 %1 =
@@ -169,7 +169,7 @@ EXPLAIN SELECT  MIN( o_orderkey  )
 %6 = Let l1 =
 | Join %1 %2 %5 (= #0 #3) (= #1 #5)
 | | implementation = Differential %5 %2.(#0) %1.(#0)
-| Filter (1997-08-25 00:00:00 = datetots(#4)), (#1 <= 195), (#1 >= 38)
+| Filter (#1 <= 195), (#1 >= 38), (1997-08-25 00:00:00 = datetots(#4))
 | Project (#1)
 | Reduce group=()
 | | agg min(#0)
