@@ -25,16 +25,13 @@ code, please talk to me first!
 import argparse
 import inspect
 import os
-import shutil
 import subprocess
 import sys
-import textwrap
 import webbrowser
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Text, Tuple
 
 from humanize import naturalsize
-from prettytable import PrettyTable
 
 from materialize import ROOT, mzbuild, mzcompose, spawn, ui
 from materialize.ui import UIError
@@ -88,6 +85,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     BuildCommand.register(parser, subparsers)
     ConfigCommand.register(parser, subparsers)
     CreateCommand.register(parser, subparsers)
+    DescribeCommand().register(parser, subparsers)
     DownCommand.register(parser, subparsers)
     EventsCommand.register(parser, subparsers)
     ExecCommand.register(parser, subparsers)
@@ -157,6 +155,9 @@ class Command:
     name: str
     """The name of the command."""
 
+    aliases: List[str] = []
+    """Aliases to register for the command."""
+
     help: str
     """The help text displayed in top-level usage output."""
 
@@ -174,7 +175,11 @@ class Command:
         """Register this command as a subcommand of an argument parser."""
         self.root_parser = root_parser
         parser = subparsers.add_parser(
-            self.name, help=self.help, description=self.help, add_help=self.add_help
+            self.name,
+            aliases=self.aliases,
+            help=self.help,
+            description=self.help,
+            add_help=self.add_help,
         )
         parser.set_defaults(command=self)
         self.configure(parser)
@@ -275,29 +280,47 @@ class ListPortsCommand(Command):
 
 
 class ListWorkflowsCommand(Command):
-    name = "list"
-    help = "list services and workflows in the composition"
+    name = "list-workflows"
+    help = "list workflows in the composition"
+
+    def run(self, args: argparse.Namespace) -> None:
+        composition = load_composition(args)
+        for name in sorted(
+            list(composition.yaml_workflows) + list(composition.python_funcs)
+        ):
+            print(name)
+
+
+class DescribeCommand(Command):
+    name = "describe"
+    aliases = ["ls", "list"]
+    help = "describe services and workflows in the composition"
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
 
-        table = PrettyTable(["Name", "Type", "File", "Description"], align="l")
-
-        for name in composition.services:
-            table.add_row([name, "service", "mzcompose.yml", ""])
-
+        workflows = []
         for name in composition.yaml_workflows:
-            table.add_row([name, "workflow", "mzcompose.yml", ""])
-
+            workflows.append((name, ""))
         for name, fn in composition.python_funcs.items():
-            # Width heuristic to avoid a too-wide table is arbitrary, but it
-            # seems to work well.
-            width = shutil.get_terminal_size().columns - 50
-            description = inspect.getdoc(fn) or ""
-            description = textwrap.fill(description, width)
-            table.add_row([name, "workflow", "mzworkflows.py", description])
+            workflows.append((name, inspect.getdoc(fn) or ""))
+        workflows.sort()
 
-        print(table.get_string(sortkey=lambda d: (d[1], d[0])))
+        name_width = min(max(len(name) for name, _ in workflows), 16)
+
+        print("Services:")
+        for name in sorted(composition.services):
+            print(f"    {name}")
+
+        print()
+        print("Workflows:")
+        for name, description in workflows:
+            if len(name) <= name_width:
+                print(f"    {name: <{name_width}}    {description}")
+            else:
+                print(f"    {name}")
+                print(f"    {' ' * name_width}    {description}")
+
         print()
         print(
             """For help on a specific workflow, run:
