@@ -847,16 +847,12 @@ impl Plan {
                         .map(|inputs| Plan::Union { inputs })
                         .collect()
                 }
-                Plan::ArrangeBy {
-                    input,
-                    keys: ensure_arrangements,
-                    arity,
-                } => input
+                Plan::ArrangeBy { input, keys, arity } => input
                     .partition_among(parts)
                     .into_iter()
                     .map(|input| Plan::ArrangeBy {
                         input: Box::new(input),
-                        keys: ensure_arrangements.clone(),
+                        keys: keys.clone(),
                         arity,
                     })
                     .collect(),

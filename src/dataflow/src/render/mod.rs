@@ -542,13 +542,9 @@ where
                 let errs = differential_dataflow::collection::concatenate(scope, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
-            Plan::ArrangeBy {
-                input,
-                keys: ensure_arrangements,
-                arity,
-            } => {
+            Plan::ArrangeBy { input, keys, arity } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                input.ensure_arrangements(ensure_arrangements, arity)
+                input.ensure_arrangements(keys, arity)
             }
         }
     }
