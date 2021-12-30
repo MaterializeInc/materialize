@@ -47,6 +47,12 @@ you view it as [rustdoc for the persist crate].
   - _(internal) collection id_: The internal equivalent of a collection name.
     TODO: For efficiency, this is currently exposed in the public API in one
     place, but it'd be nice to eliminate this.
+  - _write_: Durably adding a set of records to a persisted collection.
+  - _seal_: Durably advancing the frontier of a persisted collection. NB: A
+    common initial misconception when encountering persist is that _write_ is
+    like a filesystem write with minimal durability guarantees and _seal_ like
+    is like fsync, but this incorrect. A write whose future has resolved as
+    successful is durable, regardless of when or if it's sealed.
   - _storage_: An external source of data durability. All of persist's
     interactions with the outside world are abstracted through the [Blob] and
     [Log] traits, together collectively called storage. One valid way to think
@@ -92,11 +98,17 @@ following dataflow:
 ```
 
 - `input.send_batch` is roughly equivalent to persist's
-  [StreamWriteHandle::write].
+  [StreamWriteHandle::write]. The write call returns a [std::future::Future].
+  When this Future has resolved as successful, then this write is guaranteed to
+  be durable, regardless of seals.
 - `input.advance_to` is roughly equivalent to persist's
-  [StreamWriteHandle::seal].
-- `arranged.trace.set_logical_compaction` is roughly equivalent to
-  persist's [StreamWriteHandle::allow_compaction].
+  [StreamWriteHandle::seal]. The seal call returns a [std::future::Future]. When
+  this Future has resolved as successful, then this frontier advancement is
+  guaranteed to be durable.
+- `arranged.trace.set_logical_compaction` is roughly equivalent to persist's
+  [StreamWriteHandle::allow_compaction]. The seal call returns a
+  [std::future::Future]. When this Future has resolved as successful, then this
+  is guaranteed to be durable.
 - `arranged.stream` is (very) roughly equivalent to persist's
   [StreamReadHandle::listen].
 
@@ -258,7 +270,7 @@ location, persist only allows one writer at a time, but supports any number of
 concurrent readers (including while there is a writer).
 
 The [persist write lock] is "reentrant" to allow Kubernetes deployments to crash
-processes without cleaning releasing the lock. The code generalizes this to a
+processes without cleanly releasing the lock. The code generalizes this to a
 "reentrance ID", but in single-node Materialize, the catalog ID is used (this
 will have to be changed for platform). If reentrance is misused to allow
 multiple persist instances to think they each have exclusive writer access, then
