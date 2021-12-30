@@ -118,6 +118,18 @@ impl MirScalarExpr {
         }
     }
 
+    pub fn as_is_null(self) -> Self {
+        self.call_unary(UnaryFunc::IsNull(func::IsNull))
+    }
+
+    pub fn not(self) -> Self {
+        self.call_unary(UnaryFunc::Not(func::Not))
+    }
+
+    pub fn as_is_not_null(self) -> Self {
+        self.as_is_null().not()
+    }
+
     /// Applies an infallible immutable `f` to each child of type `MirScalarExpr`.
     ///
     /// Deletages to `MirScalarExprVisitor::visit_children`.
@@ -596,8 +608,7 @@ impl MirScalarExpr {
                                     // NULL <cond> results in: (FALSE AND NULL) OR (<els>) => (<els>)
                                     *e = cond
                                         .clone()
-                                        .call_unary(UnaryFunc::IsNull(func::IsNull))
-                                        .call_unary(UnaryFunc::Not(func::Not))
+                                        .as_is_not_null()
                                         .call_binary(cond.take(), BinaryFunc::And)
                                         .call_binary(els.take(), BinaryFunc::Or);
                                 }
@@ -606,11 +617,8 @@ impl MirScalarExpr {
                                     // NULL <cond> results in: (NULL OR TRUE) AND (<els>) => TRUE AND (<els>) => (<els>)
                                     *e = cond
                                         .clone()
-                                        .call_unary(UnaryFunc::Not(func::Not))
-                                        .call_binary(
-                                            cond.take().call_unary(UnaryFunc::IsNull(func::IsNull)),
-                                            BinaryFunc::Or,
-                                        )
+                                        .not()
+                                        .call_binary(cond.take().as_is_null(), BinaryFunc::Or)
                                         .call_binary(els.take(), BinaryFunc::And);
                                 }
                                 (_, Some(Ok(Datum::True))) => {
@@ -618,11 +626,8 @@ impl MirScalarExpr {
                                     // NULL <cond> results in: NULL OR TRUE OR (<then>) => TRUE
                                     *e = cond
                                         .clone()
-                                        .call_unary(UnaryFunc::Not(func::Not))
-                                        .call_binary(
-                                            cond.take().call_unary(UnaryFunc::IsNull(func::IsNull)),
-                                            BinaryFunc::Or,
-                                        )
+                                        .not()
+                                        .call_binary(cond.take().as_is_null(), BinaryFunc::Or)
                                         .call_binary(then.take(), BinaryFunc::Or);
                                 }
                                 (_, Some(Ok(Datum::False))) => {
@@ -630,8 +635,7 @@ impl MirScalarExpr {
                                     // NULL <cond> results in: FALSE AND NULL AND (<then>) => FALSE
                                     *e = cond
                                         .clone()
-                                        .call_unary(UnaryFunc::IsNull(func::IsNull))
-                                        .call_unary(UnaryFunc::Not(func::Not))
+                                        .as_is_not_null()
                                         .call_binary(cond.take(), BinaryFunc::And)
                                         .call_binary(then.take(), BinaryFunc::And);
                                 }
@@ -705,8 +709,8 @@ impl MirScalarExpr {
             // (<expr1> <op> <expr2>) IS NULL can often be simplified to
             // (<expr1> IS NULL) OR (<expr2> IS NULL).
             if func.propagates_nulls() && !func.introduces_nulls() {
-                let expr1 = expr1.take().call_unary(UnaryFunc::IsNull(func::IsNull));
-                let expr2 = expr2.take().call_unary(UnaryFunc::IsNull(func::IsNull));
+                let expr1 = expr1.take().as_is_null();
+                let expr2 = expr2.take().as_is_null();
                 return Some(expr1.call_binary(expr2, BinaryFunc::Or));
             }
         } else if let MirScalarExpr::CallUnary {

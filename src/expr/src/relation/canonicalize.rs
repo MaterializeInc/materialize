@@ -225,11 +225,11 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     for p in predicates.iter() {
         p.non_null_requirements(&mut non_null_columns);
     }
-    predicates.extend(non_null_columns.iter().map(|c| {
-        MirScalarExpr::column(*c)
-            .call_unary(UnaryFunc::IsNull(func::IsNull))
-            .call_unary(UnaryFunc::Not(func::Not))
-    }));
+    predicates.extend(
+        non_null_columns
+            .iter()
+            .map(|c| MirScalarExpr::column(*c).as_is_not_null()),
+    );
 
     // 4) Reduce across `predicates`.
     // If a predicate `p` cannot be null, and `f(p)` is a nullable bool

@@ -115,9 +115,7 @@ impl PredicateKnowledge {
                                 // Having found a literal, if it is Null use `IsNull` and otherwise use `Eq`.
                                 if datum == Datum::Null {
                                     predicates.push(Constraint::Predicate(
-                                        MirScalarExpr::Column(column).call_unary(
-                                            expr::UnaryFunc::IsNull(expr::func::IsNull),
-                                        ),
+                                        MirScalarExpr::Column(column).as_is_null(),
                                     ));
                                 } else {
                                     predicates.push(Constraint::Equivalence(vec![
@@ -131,9 +129,7 @@ impl PredicateKnowledge {
                             }
                             if non_null[column] {
                                 predicates.push(Constraint::Predicate(
-                                    MirScalarExpr::column(column)
-                                        .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                                        .call_unary(UnaryFunc::Not(expr::func::Not)),
+                                    MirScalarExpr::column(column).as_is_not_null(),
                                 ));
                             }
                         }
@@ -308,8 +304,7 @@ impl PredicateKnowledge {
                         if let Some(Ok(literal)) = aggregate.as_literal() {
                             if literal == Datum::Null {
                                 predicates.push(Constraint::Predicate(
-                                    MirScalarExpr::Column(column)
-                                        .call_unary(expr::UnaryFunc::IsNull(expr::func::IsNull)),
+                                    MirScalarExpr::Column(column).as_is_null(),
                                 ));
                             } else {
                                 predicates.push(Constraint::Equivalence(vec![
@@ -320,9 +315,7 @@ impl PredicateKnowledge {
                                     ),
                                 ]));
                                 predicates.push(Constraint::Predicate(
-                                    MirScalarExpr::column(column)
-                                        .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                                        .call_unary(UnaryFunc::Not(expr::func::Not)),
+                                    MirScalarExpr::column(column).as_is_not_null(),
                                 ));
                             }
                         } else {
@@ -338,9 +331,7 @@ impl PredicateKnowledge {
                                     }
                                 }
                                 predicates.push(Constraint::Predicate(
-                                    MirScalarExpr::column(column)
-                                        .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                                        .call_unary(UnaryFunc::Not(expr::func::Not)),
+                                    MirScalarExpr::column(column).as_is_not_null(),
                                 ));
                             } else {
                                 // TODO: Something more sophisticated using `input_knowledge` too.
@@ -368,9 +359,7 @@ impl PredicateKnowledge {
                 |(col_idx, col_typ)| {
                     if !col_typ.nullable {
                         Some(Constraint::Predicate(
-                            MirScalarExpr::column(col_idx)
-                                .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                                .call_unary(UnaryFunc::Not(expr::func::Not)),
+                            MirScalarExpr::column(col_idx).as_is_not_null(),
                         ))
                     } else {
                         None
@@ -531,12 +520,7 @@ fn append_constraint(constraints: &mut Vec<Constraint>, predicate: MirScalarExpr
         func: BinaryFunc::Eq,
     } = predicate
     {
-        constraints.push(Constraint::Predicate(
-            expr1
-                .clone()
-                .call_unary(UnaryFunc::IsNull(expr::func::IsNull))
-                .call_unary(UnaryFunc::Not(expr::func::Not)),
-        ));
+        constraints.push(Constraint::Predicate(expr1.clone().as_is_not_null()));
         constraints.push(Constraint::Equivalence(vec![*expr1, *expr2]));
     } else {
         constraints.push(Constraint::Predicate(predicate));

@@ -2138,14 +2138,10 @@ impl AggregateExpr {
     pub fn on_unique(&self, input_type: &RelationType) -> MirScalarExpr {
         match self.func {
             // Count is one if non-null, and zero if null.
-            AggregateFunc::Count => self
-                .expr
-                .clone()
-                .call_unary(UnaryFunc::IsNull(crate::func::IsNull))
-                .if_then_else(
-                    MirScalarExpr::literal_ok(Datum::Int64(0), ScalarType::Int64),
-                    MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                ),
+            AggregateFunc::Count => self.expr.clone().as_is_null().if_then_else(
+                MirScalarExpr::literal_ok(Datum::Int64(0), ScalarType::Int64),
+                MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+            ),
 
             // SumInt16 takes Int16s as input, but outputs Int64s.
             AggregateFunc::SumInt16 => self
