@@ -26,7 +26,6 @@ message ProtoMeta {
     string version = 1;
 
     uint64 seqno = 2;
-    // TODO: Should these all be protobuf maps?
     map<uint64, ProtoStreamRegistration> id_mapping = 3;
     map<uint64, ProtoStreamRegistration> graveyard = 4;
     map<uint64, ProtoArrangement> arrangements = 5;
@@ -69,4 +68,21 @@ message ProtoU64Description {
     ProtoU64Antichain lower = 1;
     ProtoU64Antichain upper = 2;
     ProtoU64Antichain since = 3;
+}
+
+message ProtoBatchInline {
+    ProtoBatchFormat format = 1;
+    oneof batch_type {
+        // To save bytes, only the seqno_lower and seqno_upper fields are set on
+        // this.
+        ProtoUnsealedBatchMeta unsealed = 2;
+        // To save bytes, only the desc field is set on this.
+        ProtoTraceBatchMeta trace = 3;
+    }
+}
+
+enum ProtoBatchFormat {
+    Unknown = 0;
+    ArrowKVTD = 1;
+    ParquetKVTD = 2;
 }
