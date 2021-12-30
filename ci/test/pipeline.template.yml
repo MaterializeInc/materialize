@@ -213,15 +213,6 @@ steps:
           run: ci
     timeout_in_minutes: 10
 
-  - id: tb
-    label: tb
-    depends_on: build-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: tb
-          run: ci
-    timeout_in_minutes: 30
-
   - id: catalog-compat
     label: ":book: catalog compatibility check"
     depends_on: build-x86_64
