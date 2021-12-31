@@ -101,7 +101,7 @@ impl JoinClosure {
         columns: &mut HashMap<usize, usize>,
         equivalences: &mut Vec<Vec<MirScalarExpr>>,
         mfp: &mut MapFilterProject,
-        thinned_stream_key_and_arity: Option<(&[MirScalarExpr], usize)>,
+        stream_key_and_thinned_arity: Option<(&[MirScalarExpr], usize)>,
         lookup_key: &[MirScalarExpr],
     ) -> Self {
         // First, determine which columns should be compared due to `equivalences`.
@@ -139,7 +139,7 @@ impl JoinClosure {
             .map(|col| col + 1)
             .unwrap_or(0);
         let permutation: HashMap<_, _> =
-            if let Some((stream_key, thinned_stream_arity)) = thinned_stream_key_and_arity {
+            if let Some((stream_key, thinned_stream_arity)) = stream_key_and_thinned_arity {
                 permutation_for_joined_arrangements(
                     stream_key,
                     thinned_stream_arity,
@@ -220,7 +220,7 @@ impl JoinClosure {
         }
 
         // Absorb permutations in `before`
-        if let Some((stream_key, stream_arity)) = thinned_stream_key_and_arity {
+        if let Some((stream_key, stream_arity)) = stream_key_and_thinned_arity {
             before.permute_for_joined_arrangements(stream_key, stream_arity, lookup_key);
         } else {
             before = before.permute_for_arrangement(lookup_key);
@@ -354,14 +354,14 @@ impl JoinBuildState {
     /// consider using the `.is_identity()` method to determine non-triviality.
     fn extract_closure(
         &mut self,
-        thinned_stream_key_and_arity: Option<(&[MirScalarExpr], usize)>,
+        stream_key_and_thinned_arity: Option<(&[MirScalarExpr], usize)>,
         lookup_key: &[MirScalarExpr],
     ) -> JoinClosure {
         JoinClosure::build(
             &mut self.column_map,
             &mut self.equivalences,
             &mut self.mfp,
-            thinned_stream_key_and_arity,
+            stream_key_and_thinned_arity,
             lookup_key,
         )
     }
