@@ -34,7 +34,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use expr::{MapFilterProject, MirScalarExpr};
+use expr::{MapFilterProject, MirScalarExpr, permutation_for_joined_arrangements, permutation_for_arrangement};
 use repr::{Datum, Row, RowArena};
 
 pub use delta_join::DeltaJoinPlan;
@@ -129,11 +129,19 @@ impl JoinClosure {
             }
         }
         equivalences.retain(|e| e.len() > 1);
-
+        let max_column = columns.values().cloned().max().unwrap_or(0);
+        let permutation: HashMap<_, _> = if let Some((stream_key, thinned_stream_arity)) =
+            thinned_stream_key_and_arity
+        {
+            permutation_for_joined_arrangements(stream_key, thinned_stream_arity, lookup_key, max_column).0
+        } else {
+            permutation_for_arrangement(&lookup_key, max_column).0
+        };
+        let permuted_columns = columns.iter().map(|(k, v)| (*k, permutation[v])).collect();
         // Update ready_equivalences to reference correct column locations.
         for exprs in ready_equivalences.iter_mut() {
             for expr in exprs.iter_mut() {
-                expr.permute_map(&columns);
+                expr.permute_map(&permuted_columns);
             }
         }
 
