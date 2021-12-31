@@ -710,6 +710,7 @@ class Materialized(PythonService):
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
+        volumes_extra: Optional[List[str]] = None,
         depends_on: Optional[List[str]] = None,
     ) -> None:
         if environment is None:
@@ -730,7 +731,9 @@ class Materialized(PythonService):
             environment.extend(environment_extra)
 
         if volumes is None:
-            volumes = DEFAULT_MZ_VOLUMES
+            volumes = [*DEFAULT_MZ_VOLUMES]
+        if volumes_extra:
+            volumes.extend(volumes_extra)
 
         command_list = [
             f"--data-directory={data_directory}",
