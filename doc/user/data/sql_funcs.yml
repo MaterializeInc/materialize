@@ -109,6 +109,12 @@
     - signature: 'list_prepend(e: listelementany, l: listany) -> listany'
       description: Prepends `e` to `l`.
 
+    - signature: 'list_remove(l: listany, e: listelementany) -> listany'
+      description: >-
+        '[Experimental](/cli/#experimental-mode)––Returns the list `l` without
+        any elements equal to the given value `e`. Comparisons are done using
+        IS NOT DISTINCT FROM semantics, so it is possible to remove NULLs.
+
 - type: Numbers
   description: Number functions take number-like arguments, e.g. [`int`](../types/int),
     [`float`](../types/float), [`numeric`](../types/numeric), unless otherwise specified.
@@ -520,6 +526,11 @@
       Concatenates the elements of `array` together separated by `sep`.
       Null elements are omitted unless `ifnull` is non-null, in which case
       null elements are replaced with the value of `ifnull`.
+  - signature: 'array_remove(a: anyarray, e: anyelement) -> anyarray'
+    description: >-
+      Returns the array `a` without any elements equal to the given value `e`.
+      The array must be one-dimensional. Comparisons are done using IS NOT
+      DISTINCT FROM semantics, so it is possible to remove NULLs.
 
 - type: Cryptography
   functions:

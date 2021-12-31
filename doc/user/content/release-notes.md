@@ -112,6 +112,8 @@ changes that have not yet been documented.
 - **Breaking change.** Disallow window functions outside of `SELECT`
   lists, `DISTINCT ON` clauses, and `ORDER BY` clauses.
 
+- Add the `array_remove` and `list_remove` functions.
+
 {{< comment >}}
 Only add new release notes above this line.
 
