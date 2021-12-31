@@ -453,7 +453,6 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
                     "mysql-connect" => Box::new(mysql::build_connect(builtin).map_err(wrap_err)?),
                     "mysql-execute" => Box::new(mysql::build_execute(builtin).map_err(wrap_err)?),
-
                     "postgres-connect" => {
                         Box::new(postgres::build_connect(builtin).map_err(wrap_err)?)
                     }

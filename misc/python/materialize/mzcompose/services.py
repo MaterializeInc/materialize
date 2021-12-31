@@ -346,6 +346,33 @@ class SchemaRegistry(Service):
         )
 
 
+class MySql(Service):
+    def __init__(
+        self,
+        mysql_root_password: str,
+        name: str = "mysql",
+        image: str = "mysql:8.0.27",
+        command: str = "--default-authentication-plugin=mysql_native_password",
+        port: int = 3306,
+        environment: Optional[List[str]] = None,
+    ) -> None:
+        if environment is None:
+            environment = []
+        environment.append(f"MYSQL_ROOT_PASSWORD={mysql_root_password}")
+
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "ports": [port],
+                "environment": environment,
+                "command": command,
+            },
+        )
+
+        self.mysql_root_password = mysql_root_password
+
+
 class Postgres(Service):
     def __init__(
         self,
