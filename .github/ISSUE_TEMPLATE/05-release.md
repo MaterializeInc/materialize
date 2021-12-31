@@ -130,7 +130,6 @@ of PRs and adds release notes for any features or bugs that were missed.
   Load tests for release v0.9.2-rc1
   * chbench: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=chbench&var-purpose=load_test&var-env=scratch
   * kinesis: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=kinesis&var-purpose=load_test&var-env=scratch
-  * chaos: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=chaos&var-purpose=chaos&var-env=scratch
   ```
   </details>
 
@@ -139,10 +138,6 @@ of PRs and adds release notes for any features or bugs that were missed.
   - [ ] chbench: The ingest rate should not be slower than the previous release.
   - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
     have remained at 0ms or similar for the entirety of the run.
-
-- [ ] Let the chaos test run for 24 hours. The test's `chaos_run` container should complete with a
-  `0` exit code. To check this, SSH into the EC2 instance running the chaos test and run `docker ps
-  -a`. You can ssh in using our [teleport cluster][], the chaos test has a `purpose=chaos` label.
 
 - [ ] Remove all load test machines:
 

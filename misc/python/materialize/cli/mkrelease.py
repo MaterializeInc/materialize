@@ -219,12 +219,6 @@ def dashboard_links(start_time: str, env: str) -> None:
         )
         tests.append((test, url))
 
-    purpose = test = "chaos"
-    url = template.format(
-        time_from=time_from, time_to=time_to, test=test, purpose=purpose, env=env
-    )
-    tests.append((test, url))
-
     print(f"Load tests for release v{tag}")
     for test, url in tests:
         print(f"* {test}: {url}")
