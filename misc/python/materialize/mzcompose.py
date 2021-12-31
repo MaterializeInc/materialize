@@ -950,13 +950,18 @@ class Zookeeper(PythonService):
     def __init__(
         self,
         name: str = "zookeeper",
-        image: str = f"confluentinc/cp-zookeeper:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        image: str = "confluentinc/cp-zookeeper",
+        tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 2181,
         environment: List[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
     ) -> None:
         super().__init__(
             name="zookeeper",
-            config={"image": image, "ports": [port], "environment": environment},
+            config={
+                "image": f"{image}:{tag}",
+                "ports": [port],
+                "environment": environment,
+            },
         )
 
 
@@ -964,7 +969,8 @@ class Kafka(PythonService):
     def __init__(
         self,
         name: str = "kafka",
-        image: str = f"confluentinc/cp-kafka:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        image: str = "confluentinc/cp-kafka",
+        tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 9092,
         auto_create_topics: bool = False,
         broker_id: int = 1,
@@ -986,7 +992,7 @@ class Kafka(PythonService):
             f"KAFKA_BROKER_ID={broker_id}",
         ]
         config: PythonServiceConfig = {
-            "image": image,
+            "image": f"{image}:{tag}",
             "ports": [port],
             "environment": [
                 *environment,
@@ -1052,7 +1058,8 @@ class SchemaRegistry(PythonService):
     def __init__(
         self,
         name: str = "schema-registry",
-        image: str = f"confluentinc/cp-schema-registry:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        image: str = "confluentinc/cp-schema-registry",
+        tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 8081,
         kafka_servers: List[str] = ["kafka"],
         environment: List[str] = [
@@ -1073,7 +1080,7 @@ class SchemaRegistry(PythonService):
         super().__init__(
             name=name,
             config={
-                "image": image,
+                "image": f"{image}:{tag}",
                 "ports": [port],
                 "environment": environment,
                 "depends_on": depends_on or [*kafka_servers, "zookeeper"],
