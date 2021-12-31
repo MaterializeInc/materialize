@@ -43,6 +43,7 @@ from typing import (
     Literal,
     Match,
     Optional,
+    Sequence,
     Type,
     TypedDict,
     TypeVar,
@@ -671,7 +672,7 @@ class PythonServiceConfig(TypedDict, total=False):
     image: str
     hostname: str
     command: str
-    ports: List[int]
+    ports: Sequence[Union[int, str]]
     environment: List[str]
     depends_on: List[str]
     entrypoint: List[str]
@@ -691,7 +692,7 @@ class PythonService:
         self.name = name
         self.config = config
 
-    def ports(self) -> List[int]:
+    def ports(self) -> Sequence[Union[int, str]]:
         return self.config["ports"]
 
 
@@ -701,7 +702,7 @@ class Materialized(PythonService):
         name: str = "materialized",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
-        port: int = 6875,
+        port: Union[int, str] = 6875,
         workers: Optional[int] = None,
         memory: Optional[str] = None,
         data_directory: str = "/share/mzdata",
@@ -735,9 +736,13 @@ class Materialized(PythonService):
         if volumes_extra:
             volumes.extend(volumes_extra)
 
+        guest_port = port
+        if isinstance(port, str) and ":" in port:
+            guest_port = port.split(":")[1]
+
         command_list = [
             f"--data-directory={data_directory}",
-            f"--listen-addr 0.0.0.0:{port}",
+            f"--listen-addr 0.0.0.0:{guest_port}",
             "--disable-telemetry",
             "--experimental",
             f"--timestamp-frequency {timestamp_frequency}",
@@ -1254,6 +1259,17 @@ class SqlLogicTest(PythonService):
                 "depends_on": depends_on,
                 "propagate_uid_gid": True,
                 "init": True,
+            },
+        )
+
+
+class PrometheusSQLExporter(PythonService):
+    def __init__(self) -> None:
+        super().__init__(
+            name="prometheus-sql-exporter",
+            config={
+                "mzbuild": "ci-mz-sql-exporter",
+                "ports": ["9400:9399"],
             },
         )
 
