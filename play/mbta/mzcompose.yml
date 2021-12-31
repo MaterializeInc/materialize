@@ -7,80 +7,33 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-x-port-mappings:
-  - &kafka ${KAFKA_PORT:-9092:9092}
-  - &materialized ${MZ_PORT:-6875:6875}
-
 version: '3.7'
 services:
+  mbta-demo:
+    mzbuild: mbta-demo
+    volumes: [.:/workdir]
+    depends_on: [kafka]
+
   materialized:
     mzbuild: materialized
     command: --disable-telemetry
     environment:
       - MZ_DEV=1
-    ports:
-      - *materialized
-    volumes:
-      - .:/workdir
+    ports: [6875]
+    volumes: [.:/workdir]
+
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
     - ZOOKEEPER_CLIENT_PORT=2181
+
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.4
-    ports:
-      - *kafka
+    ports: [9092]
     depends_on: [zookeeper]
     environment:
     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
-    - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:${KAFKA_PORT:-9092}
+    - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
     - KAFKA_BROKER_ID=1
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
     - KAFKA_JMX_PORT=9991
-  mbta-demo:
-    mzbuild: mbta-demo
-    volumes:
-      - .:/workdir
-    depends_on: [kafka]
-
-mzworkflows:
-  #user-facing workflows
-
-  start-live-data:
-    steps:
-    - step: workflow
-      workflow: start-everything
-    - step: run
-      service: mbta-demo
-      daemon: true
-      command: >-
-        start_docker
-        ${CONFIG_FILE_PATH:-/workdir/examples/all-frequent-routes-config-weekend.csv}
-        kafka:${KAFKA_PORT:-9092}
-        ${API_KEY}
-        ${ARCHIVE_AT_SHUTDOWN:-0}
-
-  replay:
-    steps:
-    - step: workflow
-      workflow: start-everything
-    - step: run
-      service: mbta-demo
-      daemon: true
-      command: >-
-        replay
-        ${CONFIG_FILE_PATH:-/workdir/examples/all-frequent-routes-config-weekend.csv}
-        ${ARCHIVE_PATH}
-        kafka:${KAFKA_PORT:-9092}
-
-  # Helper workflows
-  start-everything:
-    steps:
-    - step: start-services
-      services: [kafka, materialized]
-    - step: wait-for-tcp
-      host: kafka
-      port: ${KAFKA_PORT:-9092}
-    - step: wait-for-tcp
-      host: materialized
-      port: ${MZ_PORT:-6875}
