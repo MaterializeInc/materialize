@@ -41,6 +41,7 @@ mod file;
 mod http;
 mod kafka;
 mod kinesis;
+mod mysql;
 mod postgres;
 mod protobuf;
 mod psql;
@@ -124,6 +125,7 @@ pub struct State {
     default_timeout: Duration,
     initial_backoff: Duration,
     backoff_factor: f64,
+    mysql_clients: HashMap<String, mysql_async::Conn>,
     postgres_clients: HashMap<String, tokio_postgres::Client>,
     sql_server_clients:
         HashMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
@@ -449,6 +451,9 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
                     }
                     "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
+                    "mysql-connect" => Box::new(mysql::build_connect(builtin).map_err(wrap_err)?),
+                    "mysql-execute" => Box::new(mysql::build_execute(builtin).map_err(wrap_err)?),
+
                     "postgres-connect" => {
                         Box::new(postgres::build_connect(builtin).map_err(wrap_err)?)
                     }
@@ -767,6 +772,7 @@ pub async fn create_state(
         default_timeout: config.default_timeout,
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
+        mysql_clients: HashMap::new(),
         postgres_clients: HashMap::new(),
         sql_server_clients: HashMap::new(),
     };
