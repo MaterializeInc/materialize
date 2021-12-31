@@ -905,12 +905,12 @@ class Kafka(PythonService):
         image: str = f"confluentinc/cp-kafka:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
         port: int = 9092,
         auto_create_topics: bool = False,
+        broker_id: int = 1,
+        offsets_topic_replication_factor: int = 1,
         environment: List[str] = [
             "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
-            "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092",
             "KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false",
             "KAFKA_MIN_INSYNC_REPLICAS=1",
-            "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
             "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
             "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
             "KAFKA_MESSAGE_MAX_BYTES=15728640",
@@ -918,11 +918,19 @@ class Kafka(PythonService):
         ],
         depends_on: List[str] = ["zookeeper"],
     ) -> None:
+        environment = [
+            *environment,
+            f"KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://{name}:9092",
+            f"KAFKA_BROKER_ID={broker_id}",
+        ]
         config: PythonServiceConfig = {
             "image": image,
             "ports": [port],
-            "environment": environment
-            + [f"KAFKA_AUTO_CREATE_TOPICS_ENABLE={auto_create_topics}"],
+            "environment": [
+                *environment,
+                f"KAFKA_AUTO_CREATE_TOPICS_ENABLE={auto_create_topics}",
+                f"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR={offsets_topic_replication_factor}",
+            ],
             "depends_on": depends_on,
         }
         super().__init__(name=name, config=config)
@@ -984,22 +992,29 @@ class SchemaRegistry(PythonService):
         name: str = "schema-registry",
         image: str = f"confluentinc/cp-schema-registry:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
         port: int = 8081,
+        kafka_servers: List[str] = ["kafka"],
         environment: List[str] = [
-            "SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092",
             # NOTE(guswynn): under docker, kafka *can* be really slow, which means
             # the default of 500ms won't work, so we give it PLENTY of time
             "SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000",
             "SCHEMA_REGISTRY_HOST_NAME=localhost",
         ],
-        depends_on: List[str] = ["kafka", "zookeeper"],
+        depends_on: Optional[List[str]] = None,
     ) -> None:
+        bootstrap_servers = ",".join(
+            f"PLAINTEXT://{kafka}:9092" for kafka in kafka_servers
+        )
+        environment = [
+            *environment,
+            f"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS={bootstrap_servers}",
+        ]
         super().__init__(
             name=name,
             config={
                 "image": image,
                 "ports": [port],
                 "environment": environment,
-                "depends_on": depends_on,
+                "depends_on": depends_on or [*kafka_servers, "zookeeper"],
             },
         )
 
