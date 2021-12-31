@@ -168,15 +168,6 @@ steps:
           composition: perf-kinesis
           run: ci
 
-  - id: perf-upsert
-    label: ":point_up: upsert streaming demo"
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: perf-upsert
-          run: ci
-
   - id: chbench-demo
     label: "chbench sanity check"
     depends_on: build-x86_64
