@@ -12,4 +12,5 @@ prettytable==2.5.0
 PyMySQL==1.0.2
 pyyaml==6.0
 semver==3.0.0-dev.2
+sqlparse==0.4.2
 toml==0.10.2

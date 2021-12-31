@@ -52,6 +52,7 @@ from typing import (
 
 import pg8000
 import pymysql
+import sqlparse
 import yaml
 
 from materialize import mzbuild, spawn, ui
@@ -664,6 +665,15 @@ class Workflow:
         self, args: List[str], capture: bool = False
     ) -> subprocess.CompletedProcess:
         return self.composition.run(args, self.env, capture=capture)
+
+    def run_sql(self, sql: str) -> None:
+        """Run a batch of SQL statements against the materialized service."""
+        ports = self.composition.find_host_ports("materialized")
+        conn = pg8000.connect(host="localhost", user="materialize", port=int(ports[0]))
+        conn.autocommit = True
+        cursor = conn.cursor()
+        for statement in sqlparse.split(sql):
+            cursor.execute(statement)
 
 
 class PythonServiceConfig(TypedDict, total=False):
