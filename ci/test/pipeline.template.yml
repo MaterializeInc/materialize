@@ -320,15 +320,6 @@ steps:
           composition: persistence
           run: persistence
 
-  - id: mzcompose-self
-    label: "mzcompose self test"
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: mzcompose
-          run: ci
-
   - id: lang-csharp
     label: ":csharp: tests"
     depends_on: build-x86_64
