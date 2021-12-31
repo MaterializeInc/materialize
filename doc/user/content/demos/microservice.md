@@ -413,7 +413,7 @@ In a future iteration, we'll make this demo more interactive.
 
     ```shell
     cd materialize/demo/billing
-    ./mzcompose run local
+    ./mzcompose run demo
     ```
 
    Note that downloading the Docker images necessary for the demo can take quite
@@ -430,7 +430,7 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
 1. Launch `psql` (or any Materialize CLI client), connecting to `materialize`:
 
     ```shell
-    psql -U materialize -h localhost -p 6875 -d materialize
+    psql -U materialize -h localhost -p $(./mzcompose list-ports materialized) -d materialize
     ```
 
 1. Show the source we've created:
