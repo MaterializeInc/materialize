@@ -1,5 +1,0 @@
-# Install the Pure Python version of psycopg3 from source
-asyncpg==0.22.0
-git+https://github.com/psycopg/psycopg3.git@4f053f14901454a7c7895b527ddeb9d8ab57d7fe#subdirectory=psycopg3
-tornado==6.1
-websockets==9.1

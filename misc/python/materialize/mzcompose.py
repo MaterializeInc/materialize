@@ -51,8 +51,8 @@ from typing import (
 )
 
 import pg8000
-import sqlparse
 import pymysql
+import sqlparse
 import yaml
 
 from materialize import mzbuild, spawn, ui
@@ -674,7 +674,6 @@ class Workflow:
         cursor = conn.cursor()
         for statement in sqlparse.split(sql):
             cursor.execute(statement)
-
 
 
 class PythonServiceConfig(TypedDict, total=False):
