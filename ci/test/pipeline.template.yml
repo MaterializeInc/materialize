@@ -175,7 +175,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: chbench
-          run: ci
+          run: demo
+          args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
 
   - id: catalog-compat

@@ -15,14 +15,14 @@ from materialize import scratch
 def main() -> None:
     desc = scratch.MachineDesc(
         name="chbench monthly",
-        launch_script="MZ_WORKERS=4 bin/mzcompose --find chbench run cloud-load-test",
+        launch_script="MZ_WORKERS=4 bin/mzcompose --find chbench run load-test",
         instance_type="r5ad.4xlarge",
         ami="ami-0b29b6e62f2343b46",
         tags={
             "scrape_benchmark_numbers": "true",
             "lt_name": "monthly-chbench",
             "purpose": "load_test_monthly",
-            "mzconduct_workflow": "cloud-load-test",
+            "mzconduct_workflow": "load-test",
             "test": "chbench",
             "environment": "scratch",
         },

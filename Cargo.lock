@@ -3259,27 +3259,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7778906d9321dd56cde1d1ffa69a73e59dcf5fda6d366f62727adf2bd4193aee"
 
 [[package]]
-name = "peeker"
-version = "0.0.0"
-dependencies = [
- "chrono",
- "clap",
- "env_logger",
- "hyper",
- "lazy_static",
- "log",
- "mz-process-collector",
- "ore",
- "postgres",
- "prometheus",
- "regex",
- "repr",
- "serde",
- "tokio",
- "toml",
-]
-
-[[package]]
 name = "percent-encoding"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4692,28 +4671,6 @@ checksum = "86ca8ced750734db02076f44132d802af0b33b09942331f4459dde8636fd2406"
 dependencies = [
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "test-correctness"
-version = "0.0.0"
-dependencies = [
- "chrono",
- "clap",
- "env_logger",
- "futures",
- "lazy_static",
- "log",
- "ore",
- "pgrepr",
- "postgres",
- "postgres-types",
- "regex",
- "repr",
- "serde",
- "tokio",
- "tokio-postgres",
- "toml",
 ]
 
 [[package]]
