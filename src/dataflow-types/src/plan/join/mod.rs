@@ -132,18 +132,23 @@ impl JoinClosure {
             }
         }
         equivalences.retain(|e| e.len() > 1);
-        let max_column = columns.values().cloned().max().unwrap_or(0);
+        let columns_arity = columns
+            .values()
+            .cloned()
+            .max()
+            .map(|col| col + 1)
+            .unwrap_or(0);
         let permutation: HashMap<_, _> =
             if let Some((stream_key, thinned_stream_arity)) = thinned_stream_key_and_arity {
                 permutation_for_joined_arrangements(
                     stream_key,
                     thinned_stream_arity,
                     lookup_key,
-                    max_column,
+                    columns_arity,
                 )
                 .0
             } else {
-                permutation_for_arrangement(&lookup_key, max_column).0
+                permutation_for_arrangement(&lookup_key, columns_arity).0
             };
         let permuted_columns = columns.iter().map(|(k, v)| (*k, permutation[v])).collect();
         // Update ready_equivalences to reference correct column locations.
