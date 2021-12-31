@@ -458,8 +458,7 @@ where
     /// once, and thereby avoid any skew in the two uses of the logic.
     ///
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
-    /// where key and value are rows. Often, a [Permutation] is approriate to present the row's
-    /// columns in the expected order.
+    /// where key and value are rows.
     fn flat_map_core<Tr, I, L>(
         trace: &Arranged<S, Tr>,
         key: Option<Row>,
