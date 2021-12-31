@@ -751,6 +751,24 @@ SELECT (INTERVAL '1-3' YEAR TO MONTH)::text
 ----
 1 year 3 months
 
+query RRRRR
+SELECT EXTRACT(hour from TIME '11:12:42.666'),
+    EXTRACT(minute from TIME '11:12:42.666'),
+    EXTRACT(second from TIME '11:12:42.666'),
+    EXTRACT(milliseconds from TIME '11:12:42.666'),
+    EXTRACT(microseconds from TIME '11:12:42.666')
+----
+11 12 42.666 42666 42666000
+
+query error
+SELECT EXTRACT(year from TIME '11:12:42.666')
+
+query error
+SELECT EXTRACT(month from TIME '11:12:42.666')
+
+query error
+SELECT EXTRACT(day from TIME '11:12:42.666')
+
 query RR
 SELECT EXTRACT(dow FROM TIMESTAMP '1999-12-26 00:00:00'), EXTRACT(dow FROM TIMESTAMP '2000-01-01 00:00:00')
 ----

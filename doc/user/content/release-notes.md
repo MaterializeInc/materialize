@@ -112,6 +112,9 @@ changes that have not yet been documented.
 - **Breaking change.** Disallow window functions outside of `SELECT`
   lists, `DISTINCT ON` clauses, and `ORDER BY` clauses.
 
+- Return an error when trying to extract date related fields from a Time data
+  type.
+
 {{< comment >}}
 Only add new release notes above this line.
 

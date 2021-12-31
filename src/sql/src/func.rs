@@ -1458,6 +1458,7 @@ lazy_static! {
             },
             "date_part" => Scalar {
                 params!(String, Interval) => BinaryFunc::DatePartInterval, 1172;
+                params!(String, Time) => BinaryFunc::DatePartTime, 1385;
                 params!(String, Timestamp) => BinaryFunc::DatePartTimestamp, 2021;
                 params!(String, TimestampTz) => BinaryFunc::DatePartTimestampTz, 1171;
             },
