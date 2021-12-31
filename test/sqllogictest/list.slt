@@ -2485,3 +2485,50 @@ query T
 SELECT sum(a ORDER BY b) FROM t2
 ----
 4
+
+# list_remove
+
+query T
+SELECT list_remove(LIST[1,2,3,2], 2)::text
+----
+{1,3}
+
+query T
+SELECT list_remove(LIST[1,2,3,2], 5)::text
+----
+{1,2,3,2}
+
+query T
+SELECT list_remove(LIST[1,2,3,NULL::INT], NULL::INT)::text
+----
+{1,2,3}
+
+query T
+SELECT list_remove(LIST[1,NULL::INT,2,3,NULL::INT], NULL::INT)::text
+----
+{1,2,3}
+
+query T
+SELECT list_remove(NULL::integer list, NULL::INT)::text
+----
+NULL
+
+query T
+SELECT list_remove(NULL::integer list, 1)::text
+----
+NULL
+
+query T
+SELECT list_remove(LIST[1,1,1], 1)::text
+----
+{}
+
+query T
+SELECT list_remove(LIST[[1,2],[1],[1,2,3], LIST[1]], LIST[1])::text
+----
+{{1,2},{1,2,3}}
+
+query T
+SELECT list_remove(LIST[[1,2],[1],[1,2,3],LIST[1]], LIST[1,2,3])::text
+----
+{{1,2},{1},{1}}

@@ -2142,6 +2142,7 @@ pub enum BinaryFunc {
     ListListConcat,
     ListElementConcat,
     ElementListConcat,
+    ListRemove,
     DigestString,
     DigestBytes,
     MzRenderTypemod,
@@ -2373,6 +2374,7 @@ impl BinaryFunc {
             BinaryFunc::ListListConcat => Ok(eager!(list_list_concat, temp_storage)),
             BinaryFunc::ListElementConcat => Ok(eager!(list_element_concat, temp_storage)),
             BinaryFunc::ElementListConcat => Ok(eager!(element_list_concat, temp_storage)),
+            BinaryFunc::ListRemove => Ok(eager!(list_remove, temp_storage)),
             BinaryFunc::DigestString => eager!(digest_string, temp_storage),
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
             BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
@@ -2523,7 +2525,7 @@ impl BinaryFunc {
                 ScalarType::Int64.nullable(true)
             }
 
-            ArrayRemove | ListListConcat | ListElementConcat => input1_type
+            ArrayRemove | ListListConcat | ListElementConcat | ListRemove => input1_type
                 .scalar_type
                 .default_embedded_value()
                 .nullable(true),
@@ -2559,6 +2561,7 @@ impl BinaryFunc {
                 | BinaryFunc::ListElementConcat
                 | BinaryFunc::ElementListConcat
                 | BinaryFunc::ArrayRemove
+                | BinaryFunc::ListRemove
         )
     }
 
@@ -2777,7 +2780,8 @@ impl BinaryFunc {
             | PowerNumeric
             | RepeatString
             | PgGetConstraintdef
-            | ArrayRemove => false,
+            | ArrayRemove
+            | ListRemove => false,
         }
     }
 
@@ -2930,6 +2934,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListListConcat => f.write_str("||"),
             BinaryFunc::ListElementConcat => f.write_str("||"),
             BinaryFunc::ElementListConcat => f.write_str("||"),
+            BinaryFunc::ListRemove => f.write_str("list_remove"),
             BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
             BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
             BinaryFunc::Encode => f.write_str("encode"),
@@ -5220,6 +5225,22 @@ fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
             packer.push(a);
             if !b.is_null() {
                 for elem in b.unwrap_list().iter() {
+                    packer.push(elem);
+                }
+            }
+        })
+    })
+}
+
+fn list_remove<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    if a.is_null() {
+        return a;
+    }
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list_with(|packer| {
+            for elem in a.unwrap_list().iter() {
+                if elem != b {
                     packer.push(elem);
                 }
             }
