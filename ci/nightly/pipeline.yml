@@ -100,3 +100,11 @@
     - ./ci/plugins/mzcompose:
         composition: testdrive
         run: persistence-testdrive
+
+  - id: upgrade
+    label: "Upgrade testing"
+    timeout_in_minutes: 60
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upgrade
+          run: upgrade

@@ -15,10 +15,12 @@ documentation][user-docs].
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
 
+import argparse
 import functools
 import importlib
 import importlib.abc
 import importlib.util
+import inspect
 import ipaddress
 import json
 import os
@@ -654,7 +656,7 @@ class Workflow:
     def __repr__(self) -> str:
         return "Workflow<{}>".format(self.overview())
 
-    def run(self) -> None:
+    def run(self, args: List[str]) -> None:
         for step in self._steps:
             step.run(self)
 
@@ -1269,6 +1271,7 @@ class PythonWorkflow(Workflow):
         self.func = func
         self.env = env
         self.composition = composition
+        self.takes_args = len(inspect.signature(func).parameters) > 1
 
     def overview(self) -> str:
         return "{} [{}]".format(self.name, self.func)
@@ -1276,17 +1279,34 @@ class PythonWorkflow(Workflow):
     def __repr__(self) -> str:
         return "Workflow<{}>".format(self.overview())
 
-    def run(self) -> None:
+    def run(self, args: List[str]) -> None:
         print("Running Python function {}".format(self.name))
         old_env = dict(os.environ)
         os.environ.clear()
         os.environ.update(self.env)
 
         try:
-            self.func(self)
+            if self.takes_args:
+                self.func(self, args)
+            else:
+                # If the workflow doesn't have an `args` parameter, construct
+                # an empty parser to reject bogus arguments and to handle the
+                # trivial help message.
+                parser = WorkflowArgumentParser(self)
+                parser.parse_args(args)
+                self.func(self)
         finally:
             os.environ.clear()
             os.environ.update(old_env)
+
+
+class WorkflowArgumentParser(argparse.ArgumentParser):
+    """An argument parser that takes its name and description from a `Workflow`."""
+
+    def __init__(self, w: PythonWorkflow):
+        super().__init__(
+            prog=f"mzcompose run {w.name}", description=inspect.getdoc(w.func)
+        )
 
 
 class Steps:
@@ -2088,7 +2108,7 @@ class WorkflowWorkflowStep(WorkflowStep):
                 self._workflow, workflow.env
             )
             print(f"Running workflow {child_workflow.name} ...")
-            child_workflow.run()
+            child_workflow.run([])
         except KeyError:
             raise UIError(f"unknown workflow {workflow.composition.name!r}")
 

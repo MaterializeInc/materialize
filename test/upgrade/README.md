@@ -26,19 +26,31 @@ To run the entire sequence of tests:
 To run the tests against a particular version and all following versions:
 
 ```
-./mzcompose down -v ; MIN_TESTED_TAG=0.9.6 ./mzcompose run upgrade
+./mzcompose down -v ; ./mzcompose run upgrade --min-version 0.9.6
+```
+
+To run the tests against the last five versions:
+
+```
+./mzcompose down -v ; ./mzcompose run upgrade --most-recent 5
 ```
 
 To run the tests upgrading from the current source to the current source:
 
 ```
-./mzcompose down -v ; MIN_TESTED_TAG=99.99.99 ./mzcompose run upgrade
+./mzcompose down -v ; ./mzcompose run upgrade --most-recent 0
 ```
 
 To run just a particular test or tests:
 
 ```
-./mzcompose down -v ; TD_GLOB='persistent-user-tables*' ./mzcompose run upgrade
+./mzcompose down -v ; ./mzcompose run upgrade 'persistent-user-tables*'
+```
+
+For a full description of the command line options, run:
+
+```
+./mzcompose run upgrade --help
 ```
 
 ## Test naming convention

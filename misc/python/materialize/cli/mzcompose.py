@@ -25,16 +25,13 @@ code, please talk to me first!
 import argparse
 import inspect
 import os
-import shutil
 import subprocess
 import sys
-import textwrap
 import webbrowser
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Text, Tuple
 
 from humanize import naturalsize
-from prettytable import PrettyTable
 
 from materialize import ROOT, mzbuild, mzcompose, spawn, ui
 from materialize.ui import UIError
@@ -88,6 +85,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     BuildCommand.register(parser, subparsers)
     ConfigCommand.register(parser, subparsers)
     CreateCommand.register(parser, subparsers)
+    DescribeCommand().register(parser, subparsers)
     DownCommand.register(parser, subparsers)
     EventsCommand.register(parser, subparsers)
     ExecCommand.register(parser, subparsers)
@@ -157,6 +155,9 @@ class Command:
     name: str
     """The name of the command."""
 
+    aliases: List[str] = []
+    """Aliases to register for the command."""
+
     help: str
     """The help text displayed in top-level usage output."""
 
@@ -174,7 +175,11 @@ class Command:
         """Register this command as a subcommand of an argument parser."""
         self.root_parser = root_parser
         parser = subparsers.add_parser(
-            self.name, help=self.help, description=self.help, add_help=self.add_help
+            self.name,
+            aliases=self.aliases,
+            help=self.help,
+            description=self.help,
+            add_help=self.add_help,
         )
         parser.set_defaults(command=self)
         self.configure(parser)
@@ -275,29 +280,54 @@ class ListPortsCommand(Command):
 
 
 class ListWorkflowsCommand(Command):
-    name = "list"
-    help = "list services and workflows in the composition"
+    name = "list-workflows"
+    help = "list workflows in the composition"
+
+    def run(self, args: argparse.Namespace) -> None:
+        composition = load_composition(args)
+        for name in sorted(
+            list(composition.yaml_workflows) + list(composition.python_funcs)
+        ):
+            print(name)
+
+
+class DescribeCommand(Command):
+    name = "describe"
+    aliases = ["ls", "list"]
+    help = "describe services and workflows in the composition"
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
 
-        table = PrettyTable(["Name", "Type", "File", "Description"], align="l")
-
-        for name in composition.services:
-            table.add_row([name, "service", "mzcompose.yml", ""])
-
+        workflows = []
         for name in composition.yaml_workflows:
-            table.add_row([name, "workflow", "mzcompose.yml", ""])
-
+            workflows.append((name, ""))
         for name, fn in composition.python_funcs.items():
-            # Width heuristic to avoid a too-wide table is arbitrary, but it
-            # seems to work well.
-            width = shutil.get_terminal_size().columns - 50
-            description = inspect.getdoc(fn) or ""
-            description = textwrap.fill(description, width)
-            table.add_row([name, "workflow", "mzworkflows.py", description])
+            workflows.append((name, inspect.getdoc(fn) or ""))
+        workflows.sort()
 
-        print(table.get_string(sortkey=lambda d: (d[1], d[0])))
+        name_width = min(max(len(name) for name, _ in workflows), 16)
+
+        print("Services:")
+        for name in sorted(composition.services):
+            print(f"    {name}")
+
+        print()
+        print("Workflows:")
+        for name, description in workflows:
+            if len(name) <= name_width:
+                print(f"    {name: <{name_width}}    {description}")
+            else:
+                print(f"    {name}")
+                print(f"    {' ' * name_width}    {description}")
+
+        print()
+        print(
+            """For help on a specific workflow, run:
+
+    $ ./mzcompose run WORKFLOW --help
+"""
+        )
 
 
 class WebCommand(Command):
@@ -428,24 +458,27 @@ class RunCommand(DockerComposeCommand):
             runs_containers=True,
             help_epilog="""As an mzcompose extension, run also supports running a workflow, as in:
 
-    $ ./mzcompose run WORKFLOW
+    $ ./mzcompose run WORKFLOW [workflow-options...]
 
 In this form, run does not accept any of the arguments listed above.
 
 To see the available workflows, run:
 
-    $ ./mzcompose list-workflows
+    $ ./mzcompose list
 """,
         )
 
-    def find_workflow_arg(self, args: argparse.Namespace) -> Any:
-        """Finds the first non-option argument in a `docker-compose run`
-        invocation."""
+    def configure(self, parser: argparse.ArgumentParser) -> None:
+        pass
 
+    def run(self, args: argparse.Namespace) -> Any:
         # This is a bit gross, but to determine the first position argument to
         # `run` we have no choice but to hardcode the list of `run` options that
         # take a value. E.g., in `run --entrypoint bash service`, we need to
-        # return `service`, not `bash`.
+        # return `service`, not `bash`. We also distinguish between `run --help
+        # workflow` and `run workflow --help`: the former asks for help on the
+        # `run` command while the latter asks for help on the named `workflow`.
+
         KNOWN_OPTIONS_WITH_ARGUMENT = [
             "-d",
             "--detach",
@@ -461,49 +494,60 @@ To see the available workflows, run:
             "-w",
             "--workdir",
         ]
-        args = iter(args.unknown_subargs)
-        for arg in args:
-            if arg in KNOWN_OPTIONS_WITH_ARGUMENT:
+
+        setattr(args, "workflow", None)
+        setattr(args, "help", False)
+        arg_iter = iter(args.unknown_subargs)
+        for arg in arg_iter:
+            if arg in ["-h", "--help"]:
+                setattr(args, "help", True)
+            elif arg in KNOWN_OPTIONS_WITH_ARGUMENT:
                 # This is an option that's known to take a value, so skip the
                 # next argument too.
-                next(args, None)
+                next(arg_iter, None)
             elif arg.startswith("-"):
                 # Flag option. Skip it.
                 pass
             else:
-                # Found a positional argument. Return it.
-                return arg
+                # Found a positional argument. Save it.
+                setattr(args, "workflow", arg)
+                break
+
+        super().run(args)
 
     def handle_composition(
         self, args: argparse.Namespace, composition: mzcompose.Composition
     ) -> None:
-        workflow_name = self.find_workflow_arg(args)
         try:
-            workflow = composition.get_workflow(workflow_name, dict(os.environ))
+            workflow = composition.get_workflow(args.workflow, dict(os.environ))
         except KeyError:
             # Restart any dependencies whose definitions have changed. This is
             # Docker Compose's default behavior for `up`, but not for `run`,
             # which is a constant irritation that we paper over here. The trick,
             # taken from Buildkite's Docker Compose plugin, is to run an `up`
             # command that requests zero instances of the requested service.
-            if workflow_name:
+            if args.workflow:
                 composition.run(
-                    ["up", "-d", "--scale", f"{workflow_name}=0", workflow_name]
+                    ["up", "-d", "--scale", f"{args.workflow}=0", args.workflow]
                 )
             super().handle_composition(args, composition)
         else:
             # The user has specified a workflow rather than a service. Run the
             # workflow instead of Docker Compose.
-            unknown_args = [*args.unknown_subargs, *args.unknown_args]
-            unknown_args.remove(workflow_name)
-            if unknown_args:
+            if args.unknown_args:
+                bad_arg = args.unknown_args[0]
+            elif args.unknown_subargs[0].startswith("-"):
+                bad_arg = args.unknown_subargs[0]
+            else:
+                bad_arg = None
+            if bad_arg:
                 raise UIError(
-                    f"unknown option {unknown_args[0]!r}",
-                    hint=f"if {unknown_args[0]!r} is a valid Docker Compose option, "
-                    f"it can't be used when running {workflow_name!r}, because {workflow_name!r} "
+                    f"unknown option {bad_arg!r}",
+                    hint=f"if {bad_arg!r} is a valid Docker Compose option, "
+                    f"it can't be used when running {args.workflow!r}, because {args.workflow!r} "
                     "is a custom mzcompose workflow, not a Docker Compose service",
                 )
-            workflow.run()
+            workflow.run(args.unknown_subargs[1:])
 
 
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")

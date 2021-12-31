@@ -235,14 +235,11 @@ steps:
     label: "Upgrade testing"
     depends_on: build-x86_64
     timeout_in_minutes: 60
-    inputs: [test/upgrade]
-    exclude_image_dependencies:
-      - materialized
-      - testdrive
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
           run: upgrade
+          args: [--most-recent, "3"]
 
   - id: metabase-demo
     label: "metabase-demo"
