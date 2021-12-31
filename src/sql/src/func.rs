@@ -2226,6 +2226,9 @@ lazy_static! {
             "list_prepend" => Scalar {
                 vec![ListElementAny, ListAny] => BinaryFunc::ElementListConcat, oid::FUNC_LIST_PREPEND_OID;
             },
+            "list_remove" => Scalar {
+                vec![ListAny, ListElementAny] => BinaryFunc::ListRemove, oid::FUNC_LIST_REMOVE_OID;
+            },
             "mz_cluster_id" => Scalar {
                 params!() => Operation::nullary(mz_cluster_id), oid::FUNC_MZ_CLUSTER_ID_OID;
             },

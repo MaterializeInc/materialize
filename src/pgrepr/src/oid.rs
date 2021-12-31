@@ -72,4 +72,5 @@ pub const FUNC_LIST_AGG_OID: u32 = 16_444;
 pub const FUNC_MZ_ERROR_IF_NULL_OID: u32 = 16_445;
 pub const FUNC_MZ_DATE_BIN_UNIX_EPOCH_TS_OID: u32 = 16_446;
 pub const FUNC_MZ_DATE_BIN_UNIX_EPOCH_TSTZ_OID: u32 = 16_447;
-// next ID: 16_448
+pub const FUNC_LIST_REMOVE_OID: u32 = 16_448;
+// next ID: 16_449
