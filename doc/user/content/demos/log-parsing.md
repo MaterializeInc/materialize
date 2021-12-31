@@ -245,16 +245,16 @@ In a future iteration, we'll make this demo more interactive.
     Python 3.7.5
     ```
 
-1. Clone the Materialize repo:
+1. Clone the Materialize repo at the latest release:
 
     ```shell
-    git clone https://github.com/MaterializeInc/materialize.git
+    git clone --depth=1 --branch {{< version >}} https://github.com/MaterializeInc/materialize.git
     ```
 
 1. Move to the `demo/http_logs` dir:
 
     ```shell
-    cd <path to materialize>/demo/http_logs
+    cd materialize/demo/http_logs
     ```
 
     You can also find the demo's code on
@@ -275,7 +275,7 @@ Now that our deployment is running (and looks like the diagram shown above), we
 can see that Materialize is ingesting the logs and structuring them. We'll also
 get a chance to see how Materialize can handle queries on our data.
 
-1. Launch a new terminal window and `cd <path to materialize>/demo/http_logs`.
+1. Launch a new terminal window and `cd materialize/demo/http_logs`.
 
 1. Launch the Materialize CLI (`mzcli`) by running:
 

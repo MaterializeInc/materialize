@@ -403,22 +403,16 @@ In a future iteration, we'll make this demo more interactive.
 1. Clone the Materialize repository:
 
     ```shell
-    git clone https://github.com/MaterializeInc/materialize.git
-    ```
-
-1. Move to the Materialize directory:
-
-    ```shell
-    cd <path to materialize>/
+    git clone --depth=1 --branch {{< version >}} https://github.com/MaterializeInc/materialize.git
     ```
 
     You can also view the demo's code on
-    [GitHub](https://github.com/MaterializeInc/materialize/tree/main/demo/billing).
+    [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/billing).
 
 1. Download and start all of the components we've listed above by running:
 
     ```shell
-    cd demo/billing
+    cd materialize/demo/billing
     ./mzcompose run local
     ```
 

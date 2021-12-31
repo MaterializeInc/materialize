@@ -118,10 +118,10 @@ Putting this all together, our deployment looks like this:
    and 8GB memory. Running Docker for Mac with less resources may cause the demo
    to fail.
 
-1. Clone the Materialize repository:
+1. Clone the Materialize repository at the latest release:
 
     ```shell
-    git clone https://github.com/MaterializeInc/materialize.git
+    git clone --depth=1 --branch {{< version >}} https://github.com/MaterializeInc/materialize.git
     ```
 
    You can also view the demo's code on
@@ -130,7 +130,7 @@ Putting this all together, our deployment looks like this:
 1. Download and start all of the components we've listed above by running:
 
    ```shell
-   cd demo/chbench
+   cd materialize/demo/chbench
    ./mzcompose run demo
    ```
 
