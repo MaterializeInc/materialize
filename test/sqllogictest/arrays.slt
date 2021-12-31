@@ -418,3 +418,41 @@ SELECT ARRAY[1,2,3] > ARRAY['1','2','3']
 
 query error no overload for integer\[\] >= text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT ARRAY[1,2,3] >= ARRAY['1','2','3']
+
+query T
+SELECT array_remove(ARRAY[1,2,3,2], 2)
+----
+{1,3}
+
+query T
+SELECT array_remove(ARRAY[1,2,3,2], 5)
+----
+{1,2,3,2}
+
+query T
+SELECT array_remove(ARRAY[1,2,3,NULL::INT], NULL::INT)
+----
+{1,2,3}
+
+query T
+SELECT array_remove(ARRAY[1,NULL::INT,2,3,NULL::INT], NULL::INT)
+----
+{1,2,3}
+
+query T
+SELECT array_remove(NULL::INT[], NULL::INT)
+----
+NULL
+
+query T
+SELECT array_remove(NULL::INT[], 1)
+----
+NULL
+
+query T
+SELECT array_remove(ARRAY[1,1,1], 1)
+----
+{}
+
+query error removing elements from multidimensional arrays is not supported
+SELECT array_remove(ARRAY[[1]], 1)

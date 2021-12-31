@@ -1367,6 +1367,9 @@ lazy_static! {
             "array_lower" => Scalar {
                 params!(ArrayAny, Int64) => BinaryFunc::ArrayLower, 2091;
             },
+            "array_remove" => Scalar {
+                params!(ArrayAny, ArrayElementAny) => BinaryFunc::ArrayRemove, 3167;
+            },
             "array_to_string" => Scalar {
                 params!(ArrayAny, String) => Operation::variadic(array_to_string), 395;
                 params!(ArrayAny, String, String) => Operation::variadic(array_to_string), 384;
