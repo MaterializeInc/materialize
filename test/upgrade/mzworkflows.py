@@ -31,15 +31,11 @@ all_versions = util.known_materialize_versions()
 # The `materialized` options that are valid only at or above a certain version.
 mz_options = {Version.parse("0.9.2"): "--persistent-user-tables"}
 
-prerequisites = [
+services = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Postgres(),
-]
-
-services = [
-    *prerequisites,
     *(
         Materialized(
             name=f"materialized_v{version}",
@@ -99,7 +95,9 @@ def workflow_upgrade(w: Workflow, args: List[str]):
         tested_versions = tested_versions[: args.most_recent]
     tested_versions.reverse()
 
-    w.start_and_wait_for_tcp(services=prerequisites)
+    w.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "postgres"]
+    )
 
     for version in tested_versions:
         priors = [f"v{v}" for v in all_versions if v < version]

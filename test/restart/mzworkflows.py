@@ -16,11 +16,7 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-confluent = [
-    Zookeeper(),
-    Kafka(auto_create_topics=True),
-    SchemaRegistry(),
-]
+confluent = []
 
 mz_disable_user_indexes = Materialized(
     name="mz_disable_user_indexes",
@@ -31,7 +27,9 @@ mz_disable_user_indexes = Materialized(
 testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 
 services = [
-    *confluent,
+    Zookeeper(),
+    Kafka(auto_create_topics=True),
+    SchemaRegistry(),
     Materialized(),
     mz_disable_user_indexes,
     Testdrive(),
@@ -40,7 +38,7 @@ services = [
 
 
 def workflow_disable_user_indexes(w: Workflow):
-    w.start_and_wait_for_tcp(services=confluent)
+    w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     # Create catalog with vanilla MZ
     w.start_services(services=["materialized"])

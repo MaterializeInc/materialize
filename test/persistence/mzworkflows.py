@@ -37,9 +37,12 @@ mz_without_system_tables = Materialized(
     options="--persistent-user-tables --disable-persistent-system-tables-test --workers 1",
 )
 
-prerequisites = [Zookeeper(), Kafka(), SchemaRegistry()]
+prerequisites = ["zookeeper", "kafka", "schema-registry"]
+
 services = [
-    *prerequisites,
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
     materialized,
     mz_disable_user_indexes,
     mz_without_system_tables,
@@ -57,7 +60,7 @@ def workflow_persistence(w: Workflow):
 
 
 def workflow_kafka_sources(w: Workflow):
-    w.start_and_wait_for_tcp(services=prerequisites, timeout_secs=240)
+    w.start_and_wait_for_tcp(services=prerequisites)
 
     w.start_services(services=["materialized"])
     w.wait_for_mz(service="materialized")

@@ -19,9 +19,6 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-localstack = Localstack()
-prerequisites = [Zookeeper(), Kafka(), SchemaRegistry()]
-
 mz_default = Materialized(name="mz_default", hostname="materialized")
 mz_workers_1 = Materialized(name="mz_workers_1", hostname="materialized", workers=1)
 mz_workers_32 = Materialized(name="mz_workers_32", hostname="materialized", workers=32)
@@ -30,8 +27,10 @@ mz_persistence = Materialized(
 )
 
 services = [
-    *prerequisites,
-    localstack,
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
+    Localstack(),
     mz_default,
     mz_workers_1,
     mz_workers_32,
@@ -48,7 +47,7 @@ ci_output = "--ci-output" if os.getenv("BUILDKITE") else ""
 
 def workflow_testdrive(w: Workflow):
     """Run non-esoteric tests with localstack"""
-    w.start_and_wait_for_tcp(services=[localstack])
+    w.start_and_wait_for_tcp(services=["localstack"])
     test_testdrive(w, mz_default, aws_localstack, tests)
 
 
@@ -70,7 +69,9 @@ def workflow_persistence_testdrive(w: Workflow):
 
 
 def test_testdrive(w: Workflow, mz: Materialized, aws: str, tests: str):
-    w.start_and_wait_for_tcp(services=prerequisites + [mz], timeout_secs=240)
+    w.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", mz.name]
+    )
     w.wait_for_mz(service=mz.name)
     w.run_service(service="testdrive-svc", command=f"{ci_output} {aws} {tests}")
     w.kill_services(services=[mz.name])

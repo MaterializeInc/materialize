@@ -9,17 +9,15 @@
 
 from materialize.mzcompose import Materialized, Redpanda, Testdrive, Workflow
 
-prerequisites = [Redpanda(), Materialized()]
-
 services = [
-    *prerequisites,
+    Redpanda(),
+    Materialized(),
     Testdrive(shell_eval=True, volume_workdir="../testdrive:/workdir"),
 ]
 
 
 def workflow_redpanda_testdrive(w: Workflow):
-    w.start_and_wait_for_tcp(services=prerequisites)
-    w.wait_for_mz(service="materialized")
+    w.start_and_wait_for_tcp(services=["redpanda", "materialized"])
 
     # Features currently not supported by Redpanda:
     # - `kafka-time-offset.td` (https://github.com/vectorizedio/redpanda/issues/2397)

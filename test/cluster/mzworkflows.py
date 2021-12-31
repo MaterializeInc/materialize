@@ -17,9 +17,10 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-prerequisites = [Zookeeper(), Kafka(), SchemaRegistry()]
-
-mz_daemons = [
+services = [
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
     Dataflowd(
         name="dataflowd_1",
         options="--workers 2 --processes 2 --process 0 dataflowd_1:2101 dataflowd_2:2101",
@@ -36,11 +37,6 @@ mz_daemons = [
         name="materialized",
         options="--workers 4 dataflowd_1:6876 dataflowd_2:6876",
     ),
-]
-
-services = [
-    *prerequisites,
-    *mz_daemons,
     Testdrive(
         shell_eval=True,
         volumes=[
@@ -58,7 +54,7 @@ def workflow_cluster_smoke(w: Workflow):
 
 
 def workflow_cluster_testdrive(w: Workflow):
-    w.start_and_wait_for_tcp(services=prerequisites)
+    w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
     # Skip tests that use features that are not supported yet
     test_cluster(
         w, "grep -L -E 'mz_catalog|mz_kafka_|mz_records_|mz_metrics' testdrive/*.td"

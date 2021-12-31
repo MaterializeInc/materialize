@@ -1002,20 +1002,23 @@ class RowsJoinOuter(Generator):
         print(f"{cls.COUNT}")
 
 
-servers = [
+servers = []
+
+services = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Materialized(
         memory="8G", options="--persistent-user-tables --persistent-kafka-upsert-source"
     ),
+    Testdrive(),
 ]
-
-services = [*servers, Testdrive()]
 
 
 def workflow_limits(w: Workflow):
-    w.start_and_wait_for_tcp(services=servers)
+    w.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "materialized"]
+    )
 
     with tempfile.NamedTemporaryFile(mode="w", dir=w.composition.path) as tmp:
         with contextlib.redirect_stdout(tmp):

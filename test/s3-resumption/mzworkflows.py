@@ -18,13 +18,12 @@ from materialize.mzcompose import (
     Workflow,
 )
 
-daemons = [
+services = [
     Localstack(),
     Materialized(environment=["MZ_LOG_FILTER=dataflow::source::s3=trace,info"]),
     Toxiproxy(),
+    Testdrive(default_timeout="600s"),
 ]
-
-services = [*daemons, Testdrive(default_timeout="600s")]
 
 #
 # Test the S3 resumption logic by first instructing Toxiproxy to drop a connection
@@ -33,7 +32,7 @@ services = [*daemons, Testdrive(default_timeout="600s")]
 # shorter than the timeout.
 #
 def workflow_s3_resumption(w: Workflow):
-    w.start_and_wait_for_tcp(services=daemons)
+    w.start_and_wait_for_tcp(services=["localstack", "materialized", "toxiproxy"])
     w.wait_for_mz()
 
     # For different values of bytes_allowed, the following happens:
