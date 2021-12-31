@@ -9,6 +9,8 @@
 
 use async_trait::async_trait;
 
+use anyhow::anyhow;
+
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
@@ -18,7 +20,7 @@ pub struct ConnectAction {
     password: Option<String>,
 }
 
-pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, String> {
+pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, anyhow::Error> {
     let name = cmd.args.string("name")?;
     let url = cmd.args.string("url")?;
     // We allow the password to be specified outside of the URL
@@ -35,19 +37,19 @@ pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, String> {
 
 #[async_trait]
 impl Action for ConnectAction {
-    async fn undo(&self, _: &mut State) -> Result<(), String> {
+    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
-    async fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), anyhow::Error> {
         let opts_url = mysql_async::Opts::from_url(&self.url)
-            .map_err(|e| format!("Unable to parse MySQL URL {}: {}", self.url, e))?;
+            .map_err(|_| anyhow!("Unable to parse MySQL URL {}", self.url))?;
         let opts = mysql_async::OptsBuilder::from_opts(opts_url).pass(self.password.clone());
         let pool = mysql_async::Pool::new(opts);
         let conn = pool
             .get_conn()
             .await
-            .map_err(|e| format!("Unable to connect to MySQL server at {}: {}", self.url, e))?;
+            .map_err(|_| anyhow!("Unable to connect to MySQL server at {}", self.url))?;
 
         state.mysql_clients.insert(self.name.clone(), conn);
         Ok(())
