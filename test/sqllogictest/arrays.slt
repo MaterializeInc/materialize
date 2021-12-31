@@ -418,3 +418,297 @@ SELECT ARRAY[1,2,3] > ARRAY['1','2','3']
 
 query error no overload for integer\[\] >= text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT ARRAY[1,2,3] >= ARRAY['1','2','3']
+
+# array_cat
+
+query T
+SELECT array_cat(ARRAY[1, 2], ARRAY[3, 4])
+----
+{1,2,3,4}
+
+query T
+SELECT array_cat(ARRAY[1, 2], ARRAY[3])
+----
+{1,2,3}
+
+query T
+SELECT array_cat(ARRAY[1], ARRAY[2, 3])
+----
+{1,2,3}
+
+query T
+SELECT array_cat(ARRAY[]::INT[], ARRAY[]::INT[])
+----
+{}
+
+query T
+SELECT array_cat(ARRAY[[]]::INT[], ARRAY[[]]::INT[])
+----
+{}
+
+query T
+SELECT array_cat(ARRAY[[]]::INT[], ARRAY[[[[]]]]::INT[])
+----
+{}
+
+query T
+SELECT array_cat(ARRAY[[[[]]]]::INT[], ARRAY[[]]::INT[])
+----
+{}
+
+query T
+SELECT array_cat(ARRAY[1, 2], ARRAY[]::INT[])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[1, 2], ARRAY[[]]::INT[])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[1, 2], ARRAY[[[[[]]]]]::INT[])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[[1, 2]], ARRAY[]::INT[])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[[1, 2]], ARRAY[[]]::INT[])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[[1, 2]], ARRAY[[[[[]]]]]::INT[])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[]::INT[], ARRAY[1,2])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[[]]::INT[], ARRAY[1,2])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[[[[[[]]]]]]::INT[], ARRAY[1,2])
+----
+{1,2}
+
+query T
+SELECT array_cat(ARRAY[]::INT[], ARRAY[[1,2]])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[[]]::INT[], ARRAY[[1,2]])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[[[[[[]]]]]]::INT[], ARRAY[[1,2]])
+----
+{{1,2}}
+
+query T
+SELECT array_cat(ARRAY[1,2], NULL::INT[])
+----
+{1,2}
+
+query T
+SELECT array_cat(NULL::INT[], ARRAY[1,2])
+----
+{1,2}
+
+query T
+SELECT array_cat(NULL::INT[], NULL::INT[])
+----
+NULL
+
+query T
+SELECT array_cat(ARRAY[[1,2],[3,4]], ARRAY[[5,6]])
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT array_cat(ARRAY[[1,2]], ARRAY[[3,4],[5,6]])
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT array_cat(ARRAY[[1,2],[3,4]], ARRAY[5,6])
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT array_cat(ARRAY[1,2], ARRAY[[3,4],[5,6]])
+----
+{{1,2},{3,4},{5,6}}
+
+simple
+SELECT array_cat(ARRAY[[1,2]], ARRAY[[3,4,5]]);
+----
+db error: ERROR: cannot concatenate incompatible arrays
+DETAIL: Arrays with differing dimensions are not compatible for concatenation.
+
+simple
+SELECT array_cat(ARRAY[[[1,2]]], ARRAY[3,4]);
+----
+db error: ERROR: cannot concatenate incompatible arrays
+DETAIL: Arrays of 3 and 1 dimensions are not compatible for concatenation.
+
+query error
+SELECT array_cat(ARRAY[1,2], ARRAY['3'])
+
+# array concatenation operator
+
+query T
+SELECT ARRAY[1, 2] || ARRAY[3, 4]
+----
+{1,2,3,4}
+
+query T
+SELECT ARRAY[1, 2] || ARRAY[3]
+----
+{1,2,3}
+
+query T
+SELECT ARRAY[1] || ARRAY[2, 3]
+----
+{1,2,3}
+
+query T
+SELECT ARRAY[]::INT[] || ARRAY[]::INT[]
+----
+{}
+
+query T
+SELECT ARRAY[[]]::INT[] || ARRAY[[]]::INT[]
+----
+{}
+
+query T
+SELECT ARRAY[[]]::INT[] || ARRAY[[[[]]]]::INT[]
+----
+{}
+
+query T
+SELECT ARRAY[[[[]]]]::INT[] || ARRAY[[]]::INT[]
+----
+{}
+
+query T
+SELECT ARRAY[1, 2] || ARRAY[]::INT[]
+----
+{1,2}
+
+query T
+SELECT ARRAY[1, 2] || ARRAY[[]]::INT[]
+----
+{1,2}
+
+query T
+SELECT ARRAY[1, 2] || ARRAY[[[[[]]]]]::INT[]
+----
+{1,2}
+
+query T
+SELECT ARRAY[[1, 2]] || ARRAY[]::INT[]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[[1, 2]] || ARRAY[[]]::INT[]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[[1, 2]] || ARRAY[[[[[]]]]]::INT[]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[]::INT[] || ARRAY[1,2]
+----
+{1,2}
+
+query T
+SELECT ARRAY[[]]::INT[] || ARRAY[1,2]
+----
+{1,2}
+
+query T
+SELECT ARRAY[[[[[[]]]]]]::INT[] || ARRAY[1,2]
+----
+{1,2}
+
+query T
+SELECT ARRAY[]::INT[] || ARRAY[[1,2]]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[[]]::INT[] || ARRAY[[1,2]]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[[[[[[]]]]]]::INT[] || ARRAY[[1,2]]
+----
+{{1,2}}
+
+query T
+SELECT ARRAY[1,2] || NULL::INT[]
+----
+{1,2}
+
+query T
+SELECT NULL::INT[] || ARRAY[1,2]
+----
+{1,2}
+
+query T
+SELECT NULL::INT[] || NULL::INT[]
+----
+NULL
+
+query T
+SELECT ARRAY[[1,2],[3,4]] || ARRAY[[5,6]]
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT ARRAY[[1,2]] || ARRAY[[3,4],[5,6]]
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT ARRAY[[1,2],[3,4]] || ARRAY[5,6]
+----
+{{1,2},{3,4},{5,6}}
+
+query T
+SELECT ARRAY[1,2] || ARRAY[[3,4],[5,6]]
+----
+{{1,2},{3,4},{5,6}}
+
+simple
+SELECT ARRAY[[1,2]] || ARRAY[[3,4,5]];
+----
+db error: ERROR: cannot concatenate incompatible arrays
+DETAIL: Arrays with differing dimensions are not compatible for concatenation.
+
+simple
+SELECT ARRAY[[[1,2]]] || ARRAY[3,4];
+----
+db error: ERROR: cannot concatenate incompatible arrays
+DETAIL: Arrays of 3 and 1 dimensions are not compatible for concatenation.
+
+query error no overload for integer\[\] || text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT ARRAY[1,2] || ARRAY['3'])

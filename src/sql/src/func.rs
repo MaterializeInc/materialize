@@ -1330,6 +1330,9 @@ lazy_static! {
                 params!(Float32) => UnaryFunc::AbsFloat32(func::AbsFloat32), 1394;
                 params!(Float64) => UnaryFunc::AbsFloat64(func::AbsFloat64), 1395;
             },
+            "array_cat" => Scalar {
+                params!(ArrayAny, ArrayAny) => BinaryFunc::ArrayArrayConcat, 383;
+            },
             "array_in" => Scalar {
                 params!(String, Oid, Int32) => Operation::unary(|_ecx, _e| bail_unsupported!("array_in")), 750;
             },
@@ -2662,6 +2665,7 @@ lazy_static! {
                 }), 2780;
                 params!(String, String) => TextConcat, 654;
                 params!(Jsonb, Jsonb) => JsonbConcat, 3284;
+                params!(ArrayAny, ArrayAny) => ArrayArrayConcat, 375;
                 params!(ListAny, ListAny) => ListListConcat, oid::OP_CONCAT_LIST_LIST_OID;
                 params!(ListAny, ListElementAny) => ListElementConcat, oid::OP_CONCAT_LIST_ELEMENT_OID;
                 params!(ListElementAny, ListAny) => ElementListConcat, oid::OP_CONCAT_ELEMENY_LIST_OID;

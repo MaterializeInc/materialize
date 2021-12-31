@@ -1188,6 +1188,9 @@ pub enum EvalError {
         target_type: String,
         length: usize,
     },
+    IncompatibleArrayDimensions {
+        dims: Option<(usize, usize)>,
+    },
 }
 
 impl fmt::Display for EvalError {
@@ -1284,13 +1287,28 @@ impl fmt::Display for EvalError {
             } => {
                 write!(f, "value too long for type {}({})", target_type, length)
             }
+            EvalError::IncompatibleArrayDimensions { dims: _ } => {
+                write!(f, "cannot concatenate incompatible arrays")
+            }
         }
     }
 }
 
 impl EvalError {
     pub fn detail(&self) -> Option<String> {
-        None
+        match self {
+            EvalError::IncompatibleArrayDimensions { dims: None } => Some(
+                "Arrays with differing dimensions are not compatible for concatenation."
+                    .to_string(),
+            ),
+            EvalError::IncompatibleArrayDimensions {
+                dims: Some((a_dims, b_dims)),
+            } => Some(format!(
+                "Arrays of {} and {} dimensions are not compatible for concatenation.",
+                a_dims, b_dims
+            )),
+            _ => None,
+        }
     }
 
     pub fn hint(&self) -> Option<String> {
