@@ -553,6 +553,21 @@ single-threaded context, so will be serialized in the order they appear in the
 Pauses the test until the desired Postgres replication slot has become active or inactive on the Postgres side of the direct Postgres replication. This is used to prevent flakiness in Postgres-related tests.
 
 
+## Connecting to MySQL
+
+#### `$ mysql-connect name=... url=... password=...`
+
+Creates a named connection to MySQL. For example:
+
+```
+$ mysql-connect name=mysql_connection url=mysql://mysql_user@mysql_host password=1234
+
+```
+
+##### `$ mysql-execute name=...`
+
+Executes SQL queries over the specified named connection to MySQL. The ouput of the queries is not validated, but an error will cause the test to fail.
+
 ## Connecting to Microsoft SQL Server
 
 #### `$ sql-server-connect name=...`
