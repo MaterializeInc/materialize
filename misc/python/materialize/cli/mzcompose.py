@@ -316,7 +316,7 @@ class DescribeCommand(Command):
         name_width = min(max(len(name) for name, _ in workflows), 16)
 
         print("Services:")
-        for name in sorted(composition.services):
+        for name in sorted(composition.compose["services"]):
             print(f"    {name}")
 
         print()
@@ -347,7 +347,7 @@ class SqlCommand(Command):
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
 
-        service = composition.services.get(args.service)
+        service = composition.compose["services"].get(args.service)
         if not service:
             raise UIError(f"unknown service {args.service!r}")
 
