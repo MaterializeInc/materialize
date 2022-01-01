@@ -13,7 +13,6 @@ use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::ops::Add;
 use std::rc::Rc;
-use std::thread;
 use std::time::Duration;
 
 use anyhow::bail;
@@ -37,6 +36,7 @@ use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
 use ore::cast::CastFrom;
+use ore::retry::Retry;
 
 struct RandomAvroGenerator<'a> {
     // generators
@@ -706,20 +706,20 @@ async fn main() -> anyhow::Result<()> {
         if args.partitions_round_robin != 0 {
             rec = rec.partition((i % args.partitions_round_robin) as i32);
         }
+        let mut rec = Some(rec);
 
-        loop {
-            match producer.send(rec) {
-                Ok(()) => break,
-                Err((KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull), rec2)) => {
-                    rec = rec2;
-                    thread::sleep(Duration::from_secs(1));
+        Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .retry(|_| match producer.send(rec.take().unwrap()) {
+                Ok(()) => Ok(()),
+                Err((e @ KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull), r)) => {
+                    rec = Some(r);
+                    Err(e)
                 }
-                Err((e, _)) => {
-                    return Err(e.into());
-                }
-            }
-        }
+                Err((e, _)) => Err(e.into()),
+            })?;
     }
+
     producer.flush(Timeout::Never);
     Ok(())
 }
