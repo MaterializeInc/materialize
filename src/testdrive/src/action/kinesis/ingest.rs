@@ -59,7 +59,7 @@ impl Action for IngestAction {
             // be prepared to back off.
             Retry::default()
                 .max_duration(state.default_timeout)
-                .retry(|_| async {
+                .retry_async(|_| async {
                     match state
                         .kinesis_client
                         .put_record()

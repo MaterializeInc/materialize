@@ -330,7 +330,7 @@ impl SchemaCache {
                 let ccsr_client = &self.ccsr_client;
                 let response = Retry::default()
                     .max_duration(Duration::from_secs(30))
-                    .retry(|state| async move {
+                    .retry_async(|state| async move {
                         let res = ccsr_client.get_schema_by_id(id).await;
                         match res {
                             Err(e) => {

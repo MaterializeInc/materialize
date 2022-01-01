@@ -10,8 +10,10 @@ anyhow = "1.0.52"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = "2.34.0"
+crossbeam = "0.8.1"
 futures = "0.3.19"
 mz-avro = { path = "../avro" }
+num_cpus = "1.13.1"
 ore = { path = "../ore", features = ["network"] }
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }

@@ -25,7 +25,7 @@ const DUMMY_PASSWORD: &str = "dummydummy1";
 
 async fn connect_materialized() -> Result<tokio_postgres::Client, anyhow::Error> {
     Retry::default()
-        .retry(|_| async {
+        .retry_async(|_| async {
             let res = TcpStream::connect("materialized:6875").await;
             if let Err(e) = &res {
                 log::debug!("error connecting to materialized: {}", e);
@@ -52,7 +52,7 @@ async fn connect_metabase() -> Result<metabase::Client, anyhow::Error> {
         metabase::Client::new("http://metabase:3000").context("failed creating metabase client")?;
     let setup_token = Retry::default()
         .max_duration(Duration::from_secs(30))
-        .retry(|_| async {
+        .retry_async(|_| async {
             let res = client.session_properties().await;
             if let Err(e) = &res {
                 log::debug!("error connecting to metabase: {}", e);
@@ -157,7 +157,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // expose when it is complete, so just retry a few times waiting for the
     // metadata we expect.
     Retry::default()
-        .retry(|_| async {
+        .retry_async(|_| async {
             let mut metadata = metabase_client.database_metadata(mzdb.id).await?;
             metadata.tables.retain(|t| t.schema == "public");
             metadata.tables.sort_by(|a, b| a.name.cmp(&b.name));

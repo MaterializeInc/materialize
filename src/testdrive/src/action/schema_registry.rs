@@ -95,7 +95,7 @@ impl Action for WaitSchemaAction {
             .initial_backoff(Duration::from_millis(50))
             .factor(1.5)
             .max_duration(self.context.timeout)
-            .retry(|_| async {
+            .retry_async(|_| async {
                 state
                     .ccsr_client
                     .get_schema_by_subject(&self.schema)

@@ -133,7 +133,7 @@ impl Action for SqlAction {
                 .max_duration(self.context.timeout),
             false => Retry::default().max_tries(1),
         }
-        .retry(|retry_state| async move {
+        .retry_async(|retry_state| async move {
             match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
@@ -366,7 +366,7 @@ impl Action for FailSqlAction {
                 .factor(self.context.backoff_factor)
                 .max_duration(self.context.timeout),
             false => Retry::default().max_tries(1),
-        }.retry(|retry_state| async move {
+        }.retry_async(|retry_state| async move {
             match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {

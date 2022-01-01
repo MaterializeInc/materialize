@@ -3913,7 +3913,9 @@ where
                 for (conn, slot_names) in replication_slots_to_drop {
                     // Try to drop the replication slots, but give up after a while.
                     let _ = Retry::default()
-                        .retry(|_state| postgres_util::drop_replication_slots(&conn, &slot_names))
+                        .retry_async(|_state| {
+                            postgres_util::drop_replication_slots(&conn, &slot_names)
+                        })
                         .await;
                 }
             });

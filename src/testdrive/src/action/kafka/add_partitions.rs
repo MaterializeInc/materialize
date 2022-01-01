@@ -85,7 +85,7 @@ impl Action for AddPartitionsAction {
 
         Retry::default()
             .max_duration(state.default_timeout)
-            .retry(|_| async {
+            .retry_async(|_| async {
                 let metadata = state
                     .kafka_producer
                     .client()

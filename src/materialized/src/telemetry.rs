@@ -112,7 +112,7 @@ async fn report_one(config: &Config) -> Result<semver::Version, anyhow::Error> {
     let response: V1VersionResponse = Retry::default()
         .initial_backoff(Duration::from_secs(1))
         .max_duration(config.interval)
-        .retry(|_state| async {
+        .retry_async(|_state| async {
             let query_result = config
                 .coord_client
                 .system_execute_one(&make_telemetry_query(config))

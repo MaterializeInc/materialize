@@ -155,7 +155,7 @@ pub async fn validate_sink(
     let count_input_view_query = format!("SELECT count(*) from {}", input_view);
 
     Retry::default()
-        .retry(|_| async {
+        .retry_async(|_| async {
             let count_check_sink: i64 = mz_client
                 .query_one(&*count_check_sink_query, &[])
                 .await?

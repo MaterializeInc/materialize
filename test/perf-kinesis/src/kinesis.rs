@@ -39,7 +39,7 @@ pub async fn create_stream(
 
     let stream_arn = Retry::default()
         .max_duration(Duration::from_secs(120))
-        .retry(|_| async {
+        .retry_async(|_| async {
             let description = &kinesis_client
                 .describe_stream()
                 .stream_name(stream_name)

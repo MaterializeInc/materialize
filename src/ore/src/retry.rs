@@ -24,52 +24,45 @@
 //! Retry a contrived fallible operation until it succeeds:
 //!
 //! ```
-//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! use std::time::Duration;
 //! use ore::retry::Retry;
 //!
-//! let res = Retry::default().retry(|state| async move {
+//! let res = Retry::default().retry(|state| {
 //!    if state.i == 3 {
 //!        Ok(())
 //!    } else {
 //!        Err("contrived failure")
 //!    }
-//! }).await;
+//! });
 //! assert_eq!(res, Ok(()));
-//! # });
 //! ```
 //!
 //! Limit the number of retries such that success is never observed:
 //!
 //! ```
-//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! use std::time::Duration;
 //! use ore::retry::Retry;
 //!
-//! let res = Retry::default().max_tries(2).retry(|state| async move {
+//! let res = Retry::default().max_tries(2).retry(|state| {
 //!    if state.i == 3 {
 //!        Ok(())
 //!    } else {
 //!        Err("contrived failure")
 //!    }
-//! }).await;
+//! });
 //! assert_eq!(res, Err("contrived failure"));
-//! # });
+//! ```
 
 use std::cmp;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::thread;
 
 use futures::{ready, Stream, StreamExt};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, ReadBuf};
-use tokio::time::Duration;
-
-// TODO(benesch): remove this if the `duration_constants` feature stabilizes.
-// See: https://github.com/rust-lang/rust/issues/57391
-const MAX_DURATION: Duration = Duration::from_secs(u64::MAX);
+use tokio::time::{self, Duration, Instant, Sleep};
 
 /// The state of a retry operation constructed with [`Retry`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,12 +86,6 @@ pub struct Retry {
     factor: f64,
     clamp_backoff: Duration,
     limit: RetryLimit,
-
-    i: usize,
-    next_backoff: Option<Duration>,
-    #[pin]
-    sleep: tokio::time::Sleep,
-    start: Instant,
 }
 
 impl Retry {
@@ -162,18 +149,7 @@ impl Retry {
         self
     }
 
-    /// Resets the start time and try counters of this Retry instance to their initial values to
-    /// allow re-using it for another retryable operation
-    pub fn reset(self: Pin<&mut Self>) {
-        let mut this = self.project();
-        *this.i = 0;
-        *this.next_backoff = None;
-        *this.start = Instant::now();
-        this.sleep.set(tokio::time::sleep(Duration::default()));
-    }
-
-    /// Retries the asynchronous, fallible operation `f` according to the
-    /// configured policy.
+    /// Retries the fallible operation `f` according to the configured policy.
     ///
     /// The `retry` method invokes `f` repeatedly until it succeeds or until the
     /// maximum duration or tries have been reached, as configured via
@@ -191,21 +167,68 @@ impl Retry {
     /// The operation does not attempt to forcibly time out `f`, even if there
     /// is a maximum duration. If there is the possibility of `f` blocking
     /// forever, consider adding a timeout internally.
-    pub async fn retry<F, U, T, E>(self, mut f: F) -> Result<T, E>
+    pub fn retry<F, T, E>(self, mut f: F) -> Result<T, E>
+    where
+        F: FnMut(RetryState) -> Result<T, E>,
+    {
+        let start = Instant::now();
+        let mut i = 0;
+        let mut next_backoff = Some(cmp::min(self.initial_backoff, self.clamp_backoff));
+        loop {
+            match self.limit {
+                RetryLimit::Tries(max_tries) if i + 1 >= max_tries => next_backoff = None,
+                RetryLimit::Duration(max_duration) => {
+                    let elapsed = start.elapsed();
+                    if elapsed > max_duration {
+                        next_backoff = None;
+                    } else if elapsed + next_backoff.unwrap() > max_duration {
+                        next_backoff = Some(max_duration - elapsed);
+                    }
+                }
+                _ => (),
+            }
+            let state = RetryState { i, next_backoff };
+            match f(state) {
+                Ok(t) => return Ok(t),
+                Err(e) => match &mut next_backoff {
+                    None => return Err(e),
+                    Some(next_backoff) => {
+                        thread::sleep(*next_backoff);
+                        *next_backoff =
+                            cmp::min(next_backoff.mul_f64(self.factor), self.clamp_backoff);
+                    }
+                },
+            }
+            i += 1;
+        }
+    }
+
+    /// Like [`Retry::retry`] but for asynchronous operations.
+    pub async fn retry_async<F, U, T, E>(self, mut f: F) -> Result<T, E>
     where
         F: FnMut(RetryState) -> U,
         U: Future<Output = Result<T, E>>,
     {
-        let this = self;
-        tokio::pin!(this);
+        let stream = self.into_retry_stream();
+        tokio::pin!(stream);
         let mut err = None;
-        while let Some(state) = this.next().await {
+        while let Some(state) = stream.next().await {
             match f(state).await {
                 Ok(v) => return Ok(v),
                 Err(e) => err = Some(e),
             }
         }
         Err(err.expect("retry produces at least one element"))
+    }
+
+    fn into_retry_stream(self) -> RetryStream {
+        RetryStream {
+            retry: self,
+            start: Instant::now(),
+            i: 0,
+            next_backoff: None,
+            sleep: time::sleep(Duration::default()),
+        }
     }
 }
 
@@ -216,37 +239,51 @@ impl Default for Retry {
         Retry {
             initial_backoff: Duration::from_millis(125),
             factor: 2.0,
-            clamp_backoff: MAX_DURATION,
+            clamp_backoff: Duration::MAX,
             limit: RetryLimit::Duration(Duration::from_secs(30)),
-
-            i: 0,
-            next_backoff: None,
-            start: Instant::now(),
-            sleep: tokio::time::sleep(Duration::default()),
         }
     }
 }
 
-impl Stream for Retry {
+#[pin_project]
+#[derive(Debug)]
+struct RetryStream {
+    retry: Retry,
+    start: Instant,
+    i: usize,
+    next_backoff: Option<Duration>,
+    #[pin]
+    sleep: Sleep,
+}
+
+impl RetryStream {
+    fn reset(self: Pin<&mut Self>) {
+        let this = self.project();
+        *this.start = Instant::now();
+        *this.i = 0;
+        *this.next_backoff = None;
+    }
+}
+
+impl Stream for RetryStream {
     type Item = RetryState;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
-        if *this.i == 0 {
-            *this.start = Instant::now();
-            *this.next_backoff = Some(cmp::min(*this.initial_backoff, *this.clamp_backoff));
-        } else {
-            match this.next_backoff {
-                None => return Poll::Ready(None),
-                Some(next_backoff) => {
-                    ready!(Pin::new(&mut this.sleep).poll(cx));
-                    *next_backoff =
-                        cmp::min(next_backoff.mul_f64(*this.factor), *this.clamp_backoff);
-                }
+        let retry = this.retry;
+
+        match this.next_backoff {
+            None if *this.i == 0 => {
+                *this.next_backoff = Some(cmp::min(retry.initial_backoff, retry.clamp_backoff));
+            }
+            None => return Poll::Ready(None),
+            Some(next_backoff) => {
+                ready!(this.sleep.as_mut().poll(cx));
+                *next_backoff = cmp::min(next_backoff.mul_f64(retry.factor), retry.clamp_backoff);
             }
         }
 
-        match *this.limit {
+        match retry.limit {
             RetryLimit::Tries(max_tries) if *this.i + 1 >= max_tries => *this.next_backoff = None,
             RetryLimit::Duration(max_duration) => {
                 let elapsed = this.start.elapsed();
@@ -264,7 +301,7 @@ impl Stream for Retry {
             next_backoff: *this.next_backoff,
         };
         if let Some(d) = *this.next_backoff {
-            this.sleep.reset(tokio::time::Instant::now() + d);
+            this.sleep.reset(Instant::now() + d);
         }
         *this.i += 1;
         Poll::Ready(Some(state))
@@ -280,7 +317,7 @@ pub struct RetryReader<F, U, R> {
     offset: usize,
     error: Option<std::io::Error>,
     #[pin]
-    retry: Retry,
+    retry: RetryStream,
     #[pin]
     state: RetryReaderState<U, R>,
 }
@@ -316,7 +353,7 @@ where
             factory,
             offset: 0,
             error: None,
-            retry,
+            retry: retry.into_retry_stream(),
             state: RetryReaderState::Waiting,
         }
     }
@@ -389,12 +426,45 @@ enum RetryLimit {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_retry_success() {
+    #[test]
+    fn test_retry_success() {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
             .retry(|state| {
+                states.push(state);
+                if state.i == 2 {
+                    Ok(())
+                } else {
+                    Err::<(), _>("injected")
+                }
+            });
+        assert_eq!(res, Ok(()));
+        assert_eq!(
+            states,
+            &[
+                RetryState {
+                    i: 0,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 1,
+                    next_backoff: Some(Duration::from_millis(2))
+                },
+                RetryState {
+                    i: 2,
+                    next_backoff: Some(Duration::from_millis(4))
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_async_success() {
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .retry_async(|state| {
                 states.push(state);
                 async move {
                     if state.i == 2 {
@@ -433,6 +503,36 @@ mod tests {
             .max_tries(3)
             .retry(|state| {
                 states.push(state);
+                Err::<(), _>("injected")
+            });
+        assert_eq!(res, Err("injected"));
+        assert_eq!(
+            states,
+            &[
+                RetryState {
+                    i: 0,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 1,
+                    next_backoff: Some(Duration::from_millis(2))
+                },
+                RetryState {
+                    i: 2,
+                    next_backoff: None
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_async_fail_max_tries() {
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .max_tries(3)
+            .retry_async(|state| {
+                states.push(state);
                 async { Err::<(), _>("injected") }
             })
             .await;
@@ -456,13 +556,52 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_retry_fail_max_duration() {
+    #[test]
+    fn test_retry_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(5))
             .max_duration(Duration::from_millis(10))
             .retry(|state| {
+                states.push(state);
+                Err::<(), _>("injected")
+            });
+        assert_eq!(res, Err("injected"));
+
+        // The first try should indicate a next backoff of exactly 5ms.
+        assert_eq!(
+            states[0],
+            RetryState {
+                i: 0,
+                next_backoff: Some(Duration::from_millis(5))
+            },
+        );
+
+        // The next try should indicate a next backoff of between 0 and 5ms. The
+        // exact value depends on how long it took for the first try itself to
+        // execute.
+        assert_eq!(states[1].i, 1);
+        let backoff = states[1].next_backoff.unwrap();
+        assert!(backoff > Duration::from_millis(0) && backoff < Duration::from_millis(5));
+
+        // The final try should indicate that the operation is complete with
+        // a next backoff of None.
+        assert_eq!(
+            states[2],
+            RetryState {
+                i: 2,
+                next_backoff: None,
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_async_fail_max_duration() {
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(5))
+            .max_duration(Duration::from_millis(10))
+            .retry_async(|state| {
                 states.push(state);
                 async { Err::<(), _>("injected") }
             })
@@ -496,14 +635,49 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_retry_fail_clamp_backoff() {
+    #[test]
+    fn test_retry_fail_clamp_backoff() {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
             .clamp_backoff(Duration::from_millis(1))
             .max_tries(4)
             .retry(|state| {
+                states.push(state);
+                Err::<(), _>("injected")
+            });
+        assert_eq!(res, Err("injected"));
+        assert_eq!(
+            states,
+            &[
+                RetryState {
+                    i: 0,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 1,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 2,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 3,
+                    next_backoff: None
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_async_fail_clamp_backoff() {
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .clamp_backoff(Duration::from_millis(1))
+            .max_tries(4)
+            .retry_async(|state| {
                 states.push(state);
                 async { Err::<(), _>("injected") }
             })
