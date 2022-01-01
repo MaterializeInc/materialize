@@ -64,10 +64,6 @@ use pin_project::pin_project;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::time::{self, Duration, Instant, Sleep};
 
-// TODO(benesch): remove this if the `duration_constants` feature stabilizes.
-// See: https://github.com/rust-lang/rust/issues/57391
-const MAX_DURATION: Duration = Duration::from_secs(u64::MAX);
-
 /// The state of a retry operation constructed with [`Retry`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RetryState {
@@ -243,7 +239,7 @@ impl Default for Retry {
         Retry {
             initial_backoff: Duration::from_millis(125),
             factor: 2.0,
-            clamp_backoff: MAX_DURATION,
+            clamp_backoff: Duration::MAX,
             limit: RetryLimit::Duration(Duration::from_secs(30)),
         }
     }
