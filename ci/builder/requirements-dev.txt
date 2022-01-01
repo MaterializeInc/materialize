@@ -18,7 +18,7 @@ pandas==1.3.5
 pdoc3==0.10.0
 psutil==5.8.0
 # psycopg2 intentionally omitted. Use pg8000 from requirements-core.txt instead.
-pydantic==1.8.2
+pydantic==1.9.0
 pytest==6.2.5
 requests==2.26.0
 scipy==1.7.3
