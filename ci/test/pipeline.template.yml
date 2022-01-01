@@ -33,15 +33,13 @@ steps:
     agents:
       queue: builder-aarch64
 
-  - id: lint-fast
-    label: ":bath: lint and rustfmt"
+  - label: ":bath: lint and rustfmt"
     command: bin/ci-builder run stable ci/test/lint-fast.sh
     inputs:
       - "*"
     timeout_in_minutes: 10
 
-  - id: lint-slow
-    label: ":paperclip: clippy and doctests"
+  - label: ":paperclip: clippy and doctests"
     command: bin/ci-builder run stable ci/test/lint-slow.sh
     inputs:
       - Cargo.lock
@@ -51,8 +49,7 @@ steps:
     agents:
       queue: builder
 
-  - id: lint-macos
-    label: ":mac: clippy"
+  - label: ":mac: clippy"
     command: bin/check
     env:
       CARGO_INCREMENTAL: "0"
@@ -64,15 +61,13 @@ steps:
     agents:
       queue: mac
 
-  - id: lint-docs
-    label: ":briefcase: lint docs"
+  - label: ":briefcase: lint docs"
     command: bin/ci-builder run stable ci/www/lint.sh
     inputs:
       - doc/user
     timeout_in_minutes: 30
 
-  - id: cargo-test
-    label: ":cargo: test"
+  - label: ":cargo: test"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -81,16 +76,14 @@ steps:
           composition: cargo-test
           run: app
 
-  - id: miri-test
-    label: ":face_with_monocle: miri test"
+  - label: ":face_with_monocle: miri test"
     command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
     inputs: [src/repr, ci/builder/nightly.stamp]
     timeout_in_minutes: 30
     agents:
       queue: builder
 
-  - id: testdrive
-    label: ":racing_car: testdrive"
+  - label: ":racing_car: testdrive"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/testdrive]
@@ -100,8 +93,7 @@ steps:
           composition: testdrive
           run: testdrive-ci
 
-  - id: cluster-smoke
-    label: "Cluster smoke test"
+  - label: "Cluster smoke test"
     depends_on: build-x86_64
     inputs: [test/cluster]
     plugins:
@@ -109,8 +101,7 @@ steps:
           composition: cluster
           run: cluster-smoke
 
-  - id: kafka-ssl
-    label: ":lock: Kafka SSL smoke test"
+  - label: ":lock: Kafka SSL smoke test"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/kafka-ssl/smoketest.td]
@@ -119,8 +110,7 @@ steps:
           composition: kafka-ssl
           run: testdrive
 
-  - id: kafka-krb5
-    label: ":hotdog: Kafka Kerberos smoke test"
+  - label: ":hotdog: Kafka Kerberos smoke test"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/kafka-krb5/smoketest.td]
@@ -129,8 +119,7 @@ steps:
           composition: kafka-krb5
           run: testdrive
 
-  - id: kafka-sasl-plain
-    label: ":hotdog: Kafka SASL PLAIN smoke test"
+  - label: ":hotdog: Kafka SASL PLAIN smoke test"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/kafka-sasl-plain/smoketest.td]
@@ -139,8 +128,7 @@ steps:
           composition: kafka-sasl-plain
           run: testdrive
 
-  - id: sqllogictest-fast
-    label: ":bulb: Fast SQL logic tests"
+  - label: ":bulb: Fast SQL logic tests"
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/sqllogictest]
@@ -149,8 +137,7 @@ steps:
           composition: sqllogictest
           run: sqllogictest-fast
 
-  - id: streaming-demo
-    label: ":credit_card: billing demo"
+  - label: ":credit_card: billing demo"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -158,8 +145,7 @@ steps:
           composition: billing
           run: ci
 
-  - id: perf-kinesis
-    label: ":shower: kinesis streaming demo"
+  - label: ":shower: kinesis streaming demo"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -168,8 +154,7 @@ steps:
           composition: perf-kinesis
           run: ci
 
-  - id: chbench-demo
-    label: "chbench sanity check"
+  - label: "chbench sanity check"
     depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
@@ -177,8 +162,7 @@ steps:
           run: ci
     timeout_in_minutes: 30
 
-  - id: aggregations-benchmark
-    label: "aggregations benchmark sanity check"
+  - label: "aggregations benchmark sanity check"
     depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
@@ -186,8 +170,7 @@ steps:
           run: ci
     timeout_in_minutes: 10
 
-  - id: avro-upsert-benchmark
-    label: "avro upsert benchmark sanity check"
+  - label: "avro upsert benchmark sanity check"
     depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
@@ -195,8 +178,7 @@ steps:
           run: ci
     timeout_in_minutes: 10
 
-  - id: kafka-sink-avro-debezium-benchmark
-    label: "kafka sink (avro debezium) benchmark sanity check"
+  - label: "kafka sink (avro debezium) benchmark sanity check"
     depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
@@ -204,8 +186,7 @@ steps:
           run: ci
     timeout_in_minutes: 10
 
-  - id: catalog-compat
-    label: ":book: catalog compatibility check"
+  - label: ":book: catalog compatibility check"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -213,8 +194,7 @@ steps:
           composition: catalog-compat
           run: catalog-compat
 
-  - id: restarts
-    label: ":arrows_clockwise: restarts"
+  - label: ":arrows_clockwise: restarts"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
@@ -222,8 +202,7 @@ steps:
           composition: restart
           run: all-restart
 
-  - id: upgrade
-    label: "Upgrade testing"
+  - label: "Upgrade testing"
     depends_on: build-x86_64
     timeout_in_minutes: 60
     plugins:
@@ -232,8 +211,7 @@ steps:
           run: upgrade
           args: [--most-recent, "3"]
 
-  - id: metabase-demo
-    label: "metabase-demo"
+  - label: metabase-demo
     depends_on: build-x86_64
     timeout_in_minutes: 10
     plugins:
@@ -241,8 +219,7 @@ steps:
           composition: metabase
           run: smoketest
 
-  - id: dbt-materialize
-    label: "dbt-materialize"
+  - label: dbt-materialize
     depends_on: build-x86_64
     timeout_in_minutes: 10
     plugins:
@@ -250,8 +227,7 @@ steps:
           composition: dbt-materialize
           run: ci
 
-  - id: debezium-avro
-    label: "Debezium Avro test (Postgres)"
+  - label: "Debezium Avro test (Postgres)"
     depends_on: build-x86_64
     inputs: [test/debezium-avro]
     plugins:
@@ -259,8 +235,7 @@ steps:
           composition: debezium-avro
           run: debezium-avro
 
-  - id: debezium-sql-server
-    label: "Debezium test (SQL Server)"
+  - label: "Debezium test (SQL Server)"
     depends_on: build-x86_64
     inputs: [test/debezium-avro]
     plugins:
@@ -268,8 +243,7 @@ steps:
           composition: debezium-avro
           run: debezium-sql-server
 
-  - id: pg-cdc
-    label: "Postgres CDC test"
+  - label: "Postgres CDC test"
     depends_on: build-x86_64
     inputs: [test/pg-cdc]
     plugins:
@@ -277,8 +251,7 @@ steps:
           composition: pg-cdc
           run: pg-cdc
 
-  - id: pg-cdc-resumption
-    label: "Postgres CDC test (Resumption logic)"
+  - label: "Postgres CDC test (Resumption logic)"
     depends_on: build-x86_64
     inputs: [test/pg-cdc-resumption]
     plugins:
@@ -286,8 +259,7 @@ steps:
           composition: pg-cdc-resumption
           run: pg-cdc-resumption
 
-  - id: s3-resumption
-    label: "S3 Retry/Resumption test"
+  - label: "S3 Retry/Resumption test"
     depends_on: build-x86_64
     inputs: [test/s3-resumption]
     plugins:
@@ -295,24 +267,21 @@ steps:
           composition: s3-resumption
           run: s3-resumption
 
-  - id: kafka-exactly-once
-    label: "Test for the Kafka exactly-once sink"
+  - label: "Test for the Kafka exactly-once sink"
     depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-exactly-once
           run: kafka-exactly-once
 
-  - id: persistence
-    label: "Tests for persistence"
+  - label: "Tests for persistence"
     depends_on: build-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
           run: persistence
 
-  - id: lang-csharp
-    label: ":csharp: tests"
+  - label: ":csharp: tests"
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/csharp]
@@ -321,8 +290,7 @@ steps:
           composition: csharp
           run: csharp
 
-  - id: lang-js
-    label: ":javascript: tests"
+  - label: ":javascript: tests"
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/js]
@@ -331,8 +299,7 @@ steps:
           composition: js
           run: js
 
-  - id: lang-java
-    label: ":java: tests"
+  - label: ":java: tests"
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/java]
@@ -341,8 +308,7 @@ steps:
           composition: java
           run: java-smoketest
 
-  - id: lang-python
-    label: ":python: tests"
+  - label: ":python: tests"
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/lang/python]
