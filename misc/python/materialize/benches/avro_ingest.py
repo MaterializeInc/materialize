@@ -10,6 +10,7 @@
 """Ingest some Avro records, and report how long it takes"""
 
 import argparse
+import json
 import os
 import time
 from typing import IO, NamedTuple
@@ -87,13 +88,6 @@ def main() -> None:
         type=int,
         help="Number of Avro records to generate",
     )
-    parser.add_argument(
-        "-d",
-        "--distribution",
-        default="benchmark",
-        type=str,
-        help="Distribution to use in kafka-avro-generator",
-    )
     args = parser.parse_args()
 
     os.chdir(ROOT)
@@ -101,7 +95,7 @@ def main() -> None:
 
     wait_for_confluent(args.confluent_host)
 
-    images = ["kafka-avro-generator", "materialized"]
+    images = ["kgen", "materialized"]
     deps = repo.resolve_dependencies([repo.images[name] for name in images])
     deps.acquire()
 
@@ -114,18 +108,18 @@ def main() -> None:
     )
 
     docker_client.containers.run(
-        deps["kafka-avro-generator"].spec(),
+        deps["kgen"].spec(),
         [
-            "-n",
-            str(args.records),
-            "-b",
-            f"{args.confluent_host}:9092",
-            "-r",
-            f"http://{args.confluent_host}:8081",
-            "-t",
-            "bench_data",
-            "-d",
-            args.distribution,
+            f"--num-records={args.records}",
+            f"--bootstrap-server={args.confluent_host}:9092",
+            f"--schema-registry-url=http://{args.confluent_host}:8081",
+            "--topic=bench_data",
+            "--keys=avro",
+            "--values=avro",
+            f"--avro-schema={VALUE_SCHEMA}",
+            f"--avro-distribution={VALUE_DISTRIBUTION}",
+            f"--avro-key-schema={KEY_SCHEMA}",
+            f"--avro-key-distribution={KEY_DISTRIBUTION}",
         ],
         network_mode="host",
     )
@@ -156,6 +150,113 @@ def main() -> None:
                 pass
             time.sleep(1)
         prev = print_stats(mz_container, prev, results_file)
+
+
+KEY_SCHEMA = json.dumps(
+    {
+        "name": "testrecordkey",
+        "type": "record",
+        "namespace": "com.acme.avro",
+        "fields": [{"name": "Key1", "type": "long"}, {"name": "Key2", "type": "long"}],
+    }
+)
+
+KEY_DISTRIBUTION = json.dumps(
+    {
+        "com.acme.avro.testrecordkey::Key1": [0, 100],
+        "com.acme.avro.testrecordkey::Key2": [0, 250000],
+    }
+)
+
+VALUE_SCHEMA = json.dumps(
+    {
+        "name": "testrecord",
+        "type": "record",
+        "namespace": "com.acme.avro",
+        "fields": [
+            {"name": "Key1Unused", "type": "long"},
+            {"name": "Key2Unused", "type": "long"},
+            {
+                "name": "OuterRecord",
+                "type": {
+                    "name": "OuterRecord",
+                    "type": "record",
+                    "fields": [
+                        {
+                            "name": "Record1",
+                            "type": {
+                                "name": "Record1",
+                                "type": "record",
+                                "fields": [
+                                    {
+                                        "name": "InnerRecord1",
+                                        "type": {
+                                            "name": "InnerRecord1",
+                                            "type": "record",
+                                            "fields": [
+                                                {"name": "Point", "type": "long"}
+                                            ],
+                                        },
+                                    },
+                                    {
+                                        "name": "InnerRecord2",
+                                        "type": {
+                                            "name": "InnerRecord2",
+                                            "type": "record",
+                                            "fields": [
+                                                {"name": "Point", "type": "long"}
+                                            ],
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                        {
+                            "name": "Record2",
+                            "type": {
+                                "name": "Record2",
+                                "type": "record",
+                                "fields": [
+                                    {
+                                        "name": "InnerRecord3",
+                                        "type": {
+                                            "name": "InnerRecord3",
+                                            "type": "record",
+                                            "fields": [
+                                                {"name": "Point", "type": "long"}
+                                            ],
+                                        },
+                                    },
+                                    {
+                                        "name": "InnerRecord4",
+                                        "type": {
+                                            "name": "InnerRecord4",
+                                            "type": "record",
+                                            "fields": [
+                                                {"name": "Point", "type": "long"}
+                                            ],
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+)
+
+VALUE_DISTRIBUTION = json.dumps(
+    {
+        "com.acme.avro.testrecord::Key1Unused": [0, 100],
+        "com.acme.avro.testrecord::Key2Unused": [0, 250000],
+        "com.acme.avro.InnerRecord1::Point": [10000, 1000000000],
+        "com.acme.avro.InnerRecord2::Point": [10000, 1000000000],
+        "com.acme.avro.InnerRecord3::Point": [10000, 1000000000],
+        "com.acme.avro.InnerRecord4::Point": [10000, 10000000000],
+    }
+)
 
 
 if __name__ == "__main__":
