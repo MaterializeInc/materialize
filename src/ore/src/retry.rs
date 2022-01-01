@@ -24,42 +24,40 @@
 //! Retry a contrived fallible operation until it succeeds:
 //!
 //! ```
-//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! use std::time::Duration;
 //! use ore::retry::Retry;
 //!
-//! let res = Retry::default().retry_async(|state| async move {
+//! let res = Retry::default().retry(|state| {
 //!    if state.i == 3 {
 //!        Ok(())
 //!    } else {
 //!        Err("contrived failure")
 //!    }
-//! }).await;
+//! });
 //! assert_eq!(res, Ok(()));
-//! # });
 //! ```
 //!
 //! Limit the number of retries such that success is never observed:
 //!
 //! ```
-//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! use std::time::Duration;
 //! use ore::retry::Retry;
 //!
-//! let res = Retry::default().max_tries(2).retry_async(|state| async move {
+//! let res = Retry::default().max_tries(2).retry(|state| {
 //!    if state.i == 3 {
 //!        Ok(())
 //!    } else {
 //!        Err("contrived failure")
 //!    }
-//! }).await;
+//! });
 //! assert_eq!(res, Err("contrived failure"));
-//! # });
+//! ```
 
 use std::cmp;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::thread;
 
 use futures::{ready, Stream, StreamExt};
 use pin_project::pin_project;
@@ -155,8 +153,7 @@ impl Retry {
         self
     }
 
-    /// Retries the asynchronous, fallible operation `f` according to the
-    /// configured policy.
+    /// Retries the fallible operation `f` according to the configured policy.
     ///
     /// The `retry` method invokes `f` repeatedly until it succeeds or until the
     /// maximum duration or tries have been reached, as configured via
@@ -174,6 +171,43 @@ impl Retry {
     /// The operation does not attempt to forcibly time out `f`, even if there
     /// is a maximum duration. If there is the possibility of `f` blocking
     /// forever, consider adding a timeout internally.
+    pub fn retry<F, T, E>(self, mut f: F) -> Result<T, E>
+    where
+        F: FnMut(RetryState) -> Result<T, E>,
+    {
+        let start = Instant::now();
+        let mut i = 0;
+        let mut next_backoff = Some(cmp::min(self.initial_backoff, self.clamp_backoff));
+        loop {
+            match self.limit {
+                RetryLimit::Tries(max_tries) if i + 1 >= max_tries => next_backoff = None,
+                RetryLimit::Duration(max_duration) => {
+                    let elapsed = start.elapsed();
+                    if elapsed > max_duration {
+                        next_backoff = None;
+                    } else if elapsed + next_backoff.unwrap() > max_duration {
+                        next_backoff = Some(max_duration - elapsed);
+                    }
+                }
+                _ => (),
+            }
+            let state = RetryState { i, next_backoff };
+            match f(state) {
+                Ok(t) => return Ok(t),
+                Err(e) => match &mut next_backoff {
+                    None => return Err(e),
+                    Some(next_backoff) => {
+                        thread::sleep(*next_backoff);
+                        *next_backoff =
+                            cmp::min(next_backoff.mul_f64(self.factor), self.clamp_backoff);
+                    }
+                },
+            }
+            i += 1;
+        }
+    }
+
+    /// Like [`Retry::retry`] but for asynchronous operations.
     pub async fn retry_async<F, U, T, E>(self, mut f: F) -> Result<T, E>
     where
         F: FnMut(RetryState) -> U,
@@ -396,6 +430,39 @@ enum RetryLimit {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_retry_success() {
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .retry(|state| {
+                states.push(state);
+                if state.i == 2 {
+                    Ok(())
+                } else {
+                    Err::<(), _>("injected")
+                }
+            });
+        assert_eq!(res, Ok(()));
+        assert_eq!(
+            states,
+            &[
+                RetryState {
+                    i: 0,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 1,
+                    next_backoff: Some(Duration::from_millis(2))
+                },
+                RetryState {
+                    i: 2,
+                    next_backoff: Some(Duration::from_millis(4))
+                },
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn test_retry_async_success() {
         let mut states = vec![];
@@ -433,6 +500,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_retry_fail_max_tries() {
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .max_tries(3)
+            .retry(|state| {
+                states.push(state);
+                Err::<(), _>("injected")
+            });
+        assert_eq!(res, Err("injected"));
+        assert_eq!(
+            states,
+            &[
+                RetryState {
+                    i: 0,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 1,
+                    next_backoff: Some(Duration::from_millis(2))
+                },
+                RetryState {
+                    i: 2,
+                    next_backoff: None
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn test_retry_async_fail_max_tries() {
         let mut states = vec![];
         let res = Retry::default()
@@ -460,6 +557,45 @@ mod tests {
                     next_backoff: None
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn test_retry_fail_max_duration() {
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(5))
+            .max_duration(Duration::from_millis(10))
+            .retry(|state| {
+                states.push(state);
+                Err::<(), _>("injected")
+            });
+        assert_eq!(res, Err("injected"));
+
+        // The first try should indicate a next backoff of exactly 5ms.
+        assert_eq!(
+            states[0],
+            RetryState {
+                i: 0,
+                next_backoff: Some(Duration::from_millis(5))
+            },
+        );
+
+        // The next try should indicate a next backoff of between 0 and 5ms. The
+        // exact value depends on how long it took for the first try itself to
+        // execute.
+        assert_eq!(states[1].i, 1);
+        let backoff = states[1].next_backoff.unwrap();
+        assert!(backoff > Duration::from_millis(0) && backoff < Duration::from_millis(5));
+
+        // The final try should indicate that the operation is complete with
+        // a next backoff of None.
+        assert_eq!(
+            states[2],
+            RetryState {
+                i: 2,
+                next_backoff: None,
+            },
         );
     }
 
@@ -500,6 +636,41 @@ mod tests {
                 i: 2,
                 next_backoff: None,
             },
+        );
+    }
+
+    #[test]
+    fn test_retry_fail_clamp_backoff() {
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .clamp_backoff(Duration::from_millis(1))
+            .max_tries(4)
+            .retry(|state| {
+                states.push(state);
+                Err::<(), _>("injected")
+            });
+        assert_eq!(res, Err("injected"));
+        assert_eq!(
+            states,
+            &[
+                RetryState {
+                    i: 0,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 1,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 2,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 3,
+                    next_backoff: None
+                },
+            ]
         );
     }
 
