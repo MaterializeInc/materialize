@@ -60,7 +60,7 @@ where
     // created with the default number partitions, and not the number of
     // partitions requested in `new_topic`.
     Retry::default()
-        .retry(|_| async {
+        .retry_async(|_| async {
             let metadata = client
                 .inner()
                 // N.B. It is extremely important not to ask specifically

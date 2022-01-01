@@ -28,7 +28,7 @@
 //! use std::time::Duration;
 //! use ore::retry::Retry;
 //!
-//! let res = Retry::default().retry(|state| async move {
+//! let res = Retry::default().retry_async(|state| async move {
 //!    if state.i == 3 {
 //!        Ok(())
 //!    } else {
@@ -46,7 +46,7 @@
 //! use std::time::Duration;
 //! use ore::retry::Retry;
 //!
-//! let res = Retry::default().max_tries(2).retry(|state| async move {
+//! let res = Retry::default().max_tries(2).retry_async(|state| async move {
 //!    if state.i == 3 {
 //!        Ok(())
 //!    } else {
@@ -174,7 +174,7 @@ impl Retry {
     /// The operation does not attempt to forcibly time out `f`, even if there
     /// is a maximum duration. If there is the possibility of `f` blocking
     /// forever, consider adding a timeout internally.
-    pub async fn retry<F, U, T, E>(self, mut f: F) -> Result<T, E>
+    pub async fn retry_async<F, U, T, E>(self, mut f: F) -> Result<T, E>
     where
         F: FnMut(RetryState) -> U,
         U: Future<Output = Result<T, E>>,
@@ -397,11 +397,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_retry_success() {
+    async fn test_retry_async_success() {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
-            .retry(|state| {
+            .retry_async(|state| {
                 states.push(state);
                 async move {
                     if state.i == 2 {
@@ -433,12 +433,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_retry_fail_max_tries() {
+    async fn test_retry_async_fail_max_tries() {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
             .max_tries(3)
-            .retry(|state| {
+            .retry_async(|state| {
                 states.push(state);
                 async { Err::<(), _>("injected") }
             })
@@ -464,12 +464,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_retry_fail_max_duration() {
+    async fn test_retry_async_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(5))
             .max_duration(Duration::from_millis(10))
-            .retry(|state| {
+            .retry_async(|state| {
                 states.push(state);
                 async { Err::<(), _>("injected") }
             })
@@ -504,13 +504,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_retry_fail_clamp_backoff() {
+    async fn test_retry_async_fail_clamp_backoff() {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
             .clamp_backoff(Duration::from_millis(1))
             .max_tries(4)
-            .retry(|state| {
+            .retry_async(|state| {
                 states.push(state);
                 async { Err::<(), _>("injected") }
             })
