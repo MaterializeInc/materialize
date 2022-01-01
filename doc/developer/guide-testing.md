@@ -41,7 +41,7 @@ $ cargo test
 
 Some of the packages have tests that depend on ZooKeeper, Kafka, and the
 Confluent Schema Registry running locally on the default ports. See the
-[Developer guide](develop.md) for full details on setting this up, but
+[Developer guide](guide.md) for full details on setting this up, but
 the following will do the trick if you have the Confluent Platform 5.3+ CLI
 installed and configured:
 
