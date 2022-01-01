@@ -49,7 +49,6 @@ members = [
     "test/correctness",
     "test/metabase/smoketest",
     "test/perf-kinesis",
-    "test/performance/perf-upsert",
     "test/test-util",
 ]
 # Use Cargo's new feature resolver, which can handle target-specific features.
