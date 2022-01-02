@@ -96,14 +96,24 @@ license-files = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
-    "https://github.com/MaterializeInc/cloud-sdks.git",
+    # See the patch in Cargo.toml.
+    "https://github.com/MaterializeInc/headers.git",
+
+    # Waiting on several PRs to a mostly-abandoned upstream library.
+    "https://github.com/MaterializeInc/pubnub-headers.git",
     "https://github.com/MaterializeInc/pubnub-rust.git",
-    # Until https://github.com/sfackler/rust-postgres/pull/752 is merged and released
+
+    # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
     "https://github.com/MaterializeInc/rust-postgres.git",
     "https://github.com/MaterializeInc/rust-postgres-array.git",
     "https://github.com/MaterializeInc/rust-prometheus.git",
+
     # Waiting on https://github.com/stepancheg/rust-protobuf/pull/581.
     "https://github.com/MaterializeInc/rust-protobuf.git",
+
+    # Dependencies that we control upstream whose official releases we don't
+    # care about.
+    "https://github.com/MaterializeInc/cloud-sdks.git",
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",

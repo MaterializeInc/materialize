@@ -29,7 +29,7 @@ kafka-util = { path = "../kafka-util" }
 krb5-src = { version = "0.3.1", features = ["binaries"] }
 lazy_static = "1.4.0"
 maplit = "1.0.2"
-md-5 = "0.9.0"
+md-5 = "0.10.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["s3", "sqs", "sts"] }
 mz-protoc = { path = "../protoc" }
