@@ -12,7 +12,7 @@
 use dataflow_types::TailResponse;
 use ore::cast::CastFrom;
 use repr::adt::numeric;
-use repr::{Datum, Row};
+use repr::{Datum, Diff, Row, Timestamp};
 use tokio::sync::mpsc;
 
 /// A description of a pending tail from coord's perspective
@@ -25,6 +25,12 @@ pub(crate) struct PendingTail {
     emit_progress: bool,
     /// Number of columns in the output
     object_columns: usize,
+    /// Rows that can't be emitted yet, because their timestamps are not yet complete
+    unfinished_buf: Vec<(Row, Timestamp, Diff)>,
+    /// Buffer for sorting rows that we are about to emit.
+    /// (Logically, this doesn't need to be saved as part of `PendingTail`,
+    ///  but we do so to reuse the allocation)
+    output_buf: Vec<(Row, Timestamp, Diff)>,
 }
 
 impl PendingTail {
@@ -41,6 +47,8 @@ impl PendingTail {
             channel,
             emit_progress,
             object_columns,
+            unfinished_buf: vec![],
+            output_buf: vec![],
         }
     }
 
@@ -51,13 +59,42 @@ impl PendingTail {
         let mut packer = Row::default();
         match response {
             TailResponse::Progress(upper) => {
-                if self.emit_progress && !upper.is_empty() {
-                    assert_eq!(
-                        upper.len(),
-                        1,
-                        "TAIL only supports single-dimensional timestamps"
-                    );
-                    packer.push(Datum::from(numeric::Numeric::from(*&upper[0])));
+                assert!(
+                    upper.len() <= 1,
+                    "TAIL only supports single-dimensional timestamps"
+                );
+                let upper = upper.get(0).cloned();
+                let should_emit = |t| {
+                    if let Some(upper) = upper {
+                        t < upper
+                    } else {
+                        true
+                    }
+                };
+                // Remove the elements that we should emit from `unfinished_buf`,
+                // and collect them into `output_buf`
+                //
+                // TODO(brennan) - when `Vec::drain_filter` is [stabilized](https://github.com/rust-lang/rust/issues/43244),
+                // we can get rid of this code.
+                self.output_buf.truncate(0);
+                let mut del = 0;
+                for i in 0..self.unfinished_buf.len() {
+                    if should_emit(self.unfinished_buf[i].1) {
+                        del += 1;
+                        self.output_buf
+                            .push(std::mem::take(&mut self.unfinished_buf[i]))
+                    } else if del > 0 {
+                        let elt = std::mem::take(&mut self.unfinished_buf[i]);
+                        self.unfinished_buf[i - del] = elt;
+                    }
+                }
+                let old_len = self.unfinished_buf.len();
+                self.unfinished_buf.truncate(old_len - del);
+
+                self.send_rows(&mut packer);
+
+                if self.emit_progress && upper.is_some() {
+                    packer.push(Datum::from(numeric::Numeric::from(upper.unwrap())));
                     packer.push(Datum::True);
                     // Fill in the diff column and all table columns with NULL.
                     for _ in 0..(self.object_columns + 1) {
@@ -71,47 +108,58 @@ impl PendingTail {
                         // receiver has gone away. E.g. form a DROP SINK command?
                     }
                 }
-                upper.is_empty()
+                upper.is_none()
             }
-            TailResponse::Rows(mut rows) => {
-                // Sort results by time. We use stable sort here because it will produce deterministic
-                // results since the cursor will always produce rows in the same order.
-                // TODO: Is sorting necessary?
-                rows.sort_by_key(|(_, time, _)| *time);
-
-                let rows = rows
-                    .into_iter()
-                    .map(|(row, time, diff)| {
-                        packer.push(Datum::from(numeric::Numeric::from(time)));
-                        if self.emit_progress {
-                            // When sinking with PROGRESS, the output
-                            // includes an additional column that
-                            // indicates whether a timestamp is
-                            // complete. For regular "data" upates this
-                            // is always `false`.
-                            packer.push(Datum::False);
-                        }
-
-                        packer.push(Datum::Int64(i64::cast_from(diff)));
-
-                        packer.extend_by_row(&row);
-
-                        packer.finish_and_reuse()
-                    })
-                    .collect();
-                // TODO(benesch): the lack of backpressure here can result in
-                // unbounded memory usage.
-                let result = self.channel.send(rows);
-                if result.is_err() {
-                    // TODO(benesch): we should actually drop the sink if the
-                    // receiver has gone away. E.g. form a DROP SINK command?
-                }
+            TailResponse::Rows(rows) => {
+                self.unfinished_buf.extend_from_slice(&rows);
                 false
             }
-            TailResponse::Complete | TailResponse::Dropped => {
+            TailResponse::Complete => {
+                self.output_buf = std::mem::take(&mut self.unfinished_buf);
+                self.send_rows(&mut packer);
+                true
+            }
+            TailResponse::Dropped => {
                 // TODO: Could perhaps do this earlier, in response to DROP SINK.
                 true
             }
+        }
+    }
+    fn send_rows(&mut self, packer: &mut Row) {
+        // Sort results by time. We use stable sort here because it will produce deterministic
+        // results since the cursor will always produce rows in the same order.
+        // TODO: Is sorting necessary?
+        self.output_buf.sort_by_key(|(_, time, _)| *time);
+
+        let rows = self
+            .output_buf
+            .iter()
+            .map(|(row, time, diff)| {
+                packer.push(Datum::from(numeric::Numeric::from(*time)));
+                if self.emit_progress {
+                    // When sinking with PROGRESS, the output
+                    // includes an additional column that
+                    // indicates whether a timestamp is
+                    // complete. For regular "data" upates this
+                    // is always `false`.
+                    packer.push(Datum::False);
+                }
+
+                packer.push(Datum::Int64(i64::cast_from(*diff)));
+
+                packer.extend_by_row(row);
+
+                packer.finish_and_reuse()
+            })
+            .collect();
+
+        // TODO(benesch): the lack of backpressure here can result in
+        // unbounded memory usage.
+        let result = self.channel.send(rows);
+
+        if result.is_err() {
+            // TODO(benesch): we should actually drop the sink if the
+            // receiver has gone away. E.g. form a DROP SINK command?
         }
     }
 }

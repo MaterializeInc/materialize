@@ -11,8 +11,8 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::trace::cursor::Cursor;
+use differential_dataflow::operators::Consolidate;
+
 use differential_dataflow::trace::BatchReader;
 use differential_dataflow::Collection;
 
@@ -80,96 +80,62 @@ fn tail<G>(
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    // `active_worker` indicates the index of the worker that receives all data.
-    // This should line up with the exchange just below, but we test in the implementation
-    // just to be certain.
+    // `progress_sending_worker` indicates whether to send progress updates to the coordinator
+    // (It is unnecessary and wasteful to notify the worker more than once for each timestamp that goes by).
     let scope = sinked_collection.scope();
     use differential_dataflow::Hashable;
-    let active_worker = (sink_id.hashed() as usize) % scope.peers() == scope.index();
-    // make sure all data is routed to one worker by keying on the sink id
-    let batches = sinked_collection
-        .map(move |(k, v)| {
-            assert!(k.is_none(), "tail does not support keys");
-            let v = v.expect("tail must have values");
-            (sink_id, v)
-        })
-        .arrange_by_key()
-        .stream;
+    let progress_sending_worker = (sink_id.hashed() as usize) % scope.peers() == scope.index();
 
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
     // An encapsulation of the Tail response protocol.
     // Used to send rows and eventually mark complete.
-    // Set to `None` for instances that should not produce output.
-    let mut tail_protocol = if active_worker {
-        Some(TailProtocol {
-            sink_id,
-            tail_response_buffer: Some(tail_response_buffer),
-        })
-    } else {
-        None
-    };
+    let mut tail_protocol = Some(TailProtocol {
+        sink_id,
+        tail_response_buffer: Some(tail_response_buffer),
+    });
 
-    batches.sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
-        input.for_each(|_, batches| {
-            let mut results = vec![];
-            for batch in batches.iter() {
-                let mut cursor = batch.cursor();
-                while cursor.key_valid(&batch) {
-                    while cursor.val_valid(&batch) {
-                        let row = cursor.val(&batch);
-                        cursor.map_times(&batch, |time, diff| {
-                            let diff = *diff;
-                            let should_emit = if as_of.strict {
-                                as_of.frontier.less_than(time)
-                            } else {
-                                as_of.frontier.less_equal(time)
-                            };
-                            if should_emit {
-                                results.push((row.clone(), *time, diff));
-                            }
-                        });
-                        cursor.step_val(&batch);
+    sinked_collection.consolidate().inner.sink(
+        Pipeline,
+        &format!("tail-{}", sink_id),
+        move |input| {
+            input.for_each(|_, rows| {
+                let mut results = vec![];
+                for ((k, v), time, diff) in rows.iter() {
+                    assert!(k.is_none(), "tail does not support keys");
+                    let v = v.as_ref().expect("tail must have values");
+                    let should_emit = if as_of.strict {
+                        as_of.frontier.less_than(time)
+                    } else {
+                        as_of.frontier.less_equal(time)
+                    };
+                    if should_emit {
+                        results.push((v.clone(), *time, *diff));
                     }
-                    cursor.step_key(&batch);
+                }
+
+                if let Some(tail_protocol) = &mut tail_protocol {
+                    tail_protocol.send_rows(results);
+                }
+            });
+
+            let progress = update_progress(&mut input_frontier, input.frontier().frontier());
+
+            // Only emit updates if this operator/worker received actual data for emission.
+            if let (true, Some(progress), Some(tail_protocol)) =
+                (progress_sending_worker, progress, &mut tail_protocol)
+            {
+                tail_protocol.send_progress(progress);
+            }
+
+            // If the frontier is empty the tailing is complete. We should say so!
+            if progress_sending_worker && input.frontier().frontier().is_empty() {
+                if let Some(tail_protocol) = tail_protocol.take() {
+                    tail_protocol.complete();
                 }
             }
-
-            // Emit data if configured, otherwise it is an error to have data to send.
-            if let Some(tail_protocol) = &mut tail_protocol {
-                tail_protocol.send_rows(results);
-            } else {
-                assert!(
-                    results.is_empty(),
-                    "Observed data at inactive TAIL instance"
-                );
-            }
-
-            if let Some(batch) = batches.last() {
-                let progress = update_progress(&mut input_frontier, batch.desc.upper().borrow());
-                if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
-                    tail_protocol.send_progress(progress);
-                }
-            }
-        });
-
-        let progress = update_progress(&mut input_frontier, input.frontier().frontier());
-
-        // Only emit updates if this operator/worker received actual data for emission.
-        if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
-            tail_protocol.send_progress(progress);
-        }
-
-        // If the frontier is empty the tailing is complete. We should say so!
-        if input.frontier().frontier().is_empty() {
-            if let Some(tail_protocol) = tail_protocol.take() {
-                tail_protocol.complete();
-            } else {
-                // Not an error to notice the end of the stream at non-emitters,
-                // or to notice it a second time at a previous emitter.
-            }
-        }
-    })
+        },
+    )
 }
 
 /// A type that guides the transmission of rows back to the coordinator.
