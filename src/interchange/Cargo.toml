@@ -33,7 +33,7 @@ mz-protoc = { path = "../protoc" }
 regex = "1.5.4"
 repr = { path = "../repr" }
 serde = { version = "1.0.132", features = ["derive"] }
-serde_json = "1.0.73"
+serde_json = "1.0.74"
 sha2 = "0.10.0"
 smallvec = "1.7.0"
 sql-parser = { path = "../sql-parser" }
