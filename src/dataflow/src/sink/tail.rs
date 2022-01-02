@@ -159,16 +159,6 @@ fn tail<G>(
         if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
             tail_protocol.send_progress(progress);
         }
-
-        // If the frontier is empty the tailing is complete. We should say so!
-        if input.frontier().frontier().is_empty() {
-            if let Some(tail_protocol) = tail_protocol.take() {
-                tail_protocol.complete();
-            } else {
-                // Not an error to notice the end of the stream at non-emitters,
-                // or to notice it a second time at a previous emitter.
-            }
-        }
     })
 }
 
@@ -202,27 +192,6 @@ impl TailProtocol {
             buffer
                 .borrow_mut()
                 .push((self.sink_id, TailResponse::Rows(rows)));
-        }
-    }
-    /// Completes the channel, preventing further transmissions.
-    fn complete(mut self) {
-        if let Some(buffer) = &mut self.tail_response_buffer {
-            buffer
-                .borrow_mut()
-                .push((self.sink_id, TailResponse::Complete));
-            // Set to `None` to avoid `TailResponse::Dropped`.
-            self.tail_response_buffer = None;
-        }
-    }
-}
-
-impl Drop for TailProtocol {
-    fn drop(&mut self) {
-        if let Some(buffer) = &mut self.tail_response_buffer {
-            buffer
-                .borrow_mut()
-                .push((self.sink_id, TailResponse::Dropped));
-            self.tail_response_buffer = None;
         }
     }
 }
