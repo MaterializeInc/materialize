@@ -93,8 +93,8 @@ impl PendingTail {
 
                 self.send_rows(&mut packer);
 
-                if self.emit_progress && upper.is_some() {
-                    packer.push(Datum::from(numeric::Numeric::from(upper.unwrap())));
+                if let (true, Some(upper)) = (self.emit_progress, upper) {
+                    packer.push(Datum::from(numeric::Numeric::from(upper)));
                     packer.push(Datum::True);
                     // Fill in the diff column and all table columns with NULL.
                     for _ in 0..(self.object_columns + 1) {
