@@ -112,8 +112,11 @@ changes that have not yet been documented.
 - **Breaking change.** Disallow window functions outside of `SELECT`
   lists, `DISTINCT ON` clauses, and `ORDER BY` clauses.
 
-- Return an error when trying to extract date related fields from a Time data
-  type.
+- **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
+  is called with a [`time`] value but a date-related field (e.g., `YEAR`).
+
+  Previous versions of Materialize would incorrectly return `0` in these cases.
+  The new behavior matches PostgreSQL.
 
 {{< comment >}}
 Only add new release notes above this line.
