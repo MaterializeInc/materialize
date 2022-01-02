@@ -13,7 +13,6 @@ use std::rc::Rc;
 
 use differential_dataflow::operators::Consolidate;
 
-use differential_dataflow::trace::BatchReader;
 use differential_dataflow::Collection;
 
 use timely::dataflow::channels::pact::Pipeline;
