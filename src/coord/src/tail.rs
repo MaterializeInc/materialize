@@ -64,32 +64,29 @@ impl PendingTail {
                     "TAIL only supports single-dimensional timestamps"
                 );
                 let upper = upper.get(0).cloned();
-                let should_emit = |t| {
-                    if let Some(upper) = upper {
-                        t < upper
-                    } else {
-                        true
-                    }
-                };
                 // Remove the elements that we should emit from `unfinished_buf`,
                 // and collect them into `output_buf`
                 //
                 // TODO(brennan) - when `Vec::drain_filter` is [stabilized](https://github.com/rust-lang/rust/issues/43244),
                 // we can get rid of this code.
-                self.output_buf.truncate(0);
-                let mut del = 0;
-                for i in 0..self.unfinished_buf.len() {
-                    if should_emit(self.unfinished_buf[i].1) {
-                        del += 1;
-                        self.output_buf
-                            .push(std::mem::take(&mut self.unfinished_buf[i]))
-                    } else if del > 0 {
-                        let elt = std::mem::take(&mut self.unfinished_buf[i]);
-                        self.unfinished_buf[i - del] = elt;
+                if let Some(upper) = upper {
+                    self.output_buf.truncate(0);
+                    let mut del = 0;
+                    for i in 0..self.unfinished_buf.len() {
+                        if self.unfinished_buf[i].1 < upper {
+                            del += 1;
+                            self.output_buf
+                                .push(std::mem::take(&mut self.unfinished_buf[i]))
+                        } else if del > 0 {
+                            let elt = std::mem::take(&mut self.unfinished_buf[i]);
+                            self.unfinished_buf[i - del] = elt;
+                        }
                     }
+                    let old_len = self.unfinished_buf.len();
+                    self.unfinished_buf.truncate(old_len - del);
+                } else {
+                    self.output_buf = std::mem::take(&mut self.unfinished_buf);
                 }
-                let old_len = self.unfinished_buf.len();
-                self.unfinished_buf.truncate(old_len - del);
 
                 self.send_rows(&mut packer);
 
