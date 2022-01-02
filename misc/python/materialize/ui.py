@@ -194,5 +194,6 @@ def error_handler(prog: str) -> Any:
         print(f"{prog}: {fg('red')}error:{attr('reset')} {e}", file=sys.stderr)
         if e.hint:
             print(f"{attr('bold')}hint:{attr('reset')} {e.hint}")
+        sys.exit(1)
     except KeyboardInterrupt:
         sys.exit(1)
