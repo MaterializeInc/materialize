@@ -39,9 +39,8 @@ updates:
 - package-ecosystem: pip
   directory: /ci/builder
   schedule:
-    # These dependencies get baked into the CI builder image, which we don't
-    # want to rebuild more often than we need to.
-    interval: monthly
+    interval: weekly
+    day: sunday
     time: "22:00"
   open-pull-requests-limit: 10
   reviewers: [MaterializeInc/dependency-czars]

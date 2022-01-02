@@ -61,7 +61,7 @@ class ProbForMin(TerminationCondition):
         if len(self._data) > 5:
             mean = np.mean(self._data)
             stdev = np.std(self._data)
-            min_val = np.min(self._data)  # type: ignore
+            min_val = np.min(self._data)
             dist = stats.norm(loc=mean, scale=stdev)
             prob = dist.cdf(min_val)
             if prob < (1 - self._threshold):
