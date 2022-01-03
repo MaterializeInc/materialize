@@ -623,6 +623,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "chrono",
+ "clap",
  "csv",
  "env_logger",
  "futures",
@@ -635,7 +636,6 @@ dependencies = [
  "protobuf",
  "rand",
  "rand_distr",
- "structopt",
  "test-util",
  "tokio",
  "tokio-postgres",
@@ -808,18 +808,33 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "2.34.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0610544180c38b88101fecf2dd634b174a62eef6946f84dfc6a7127512b381c"
+checksum = "d17bf219fcd37199b9a29e00ba65dfb8cd5b2688b7297ec14ff829c40ac50ca9"
 dependencies = [
- "ansi_term",
  "atty",
  "bitflags",
- "strsim 0.8.0",
- "term_size",
+ "clap_derive",
+ "indexmap",
+ "lazy_static",
+ "os_str_bytes",
+ "strsim",
+ "termcolor",
+ "terminal_size",
  "textwrap",
- "unicode-width",
- "vec_map",
+]
+
+[[package]]
+name = "clap_derive"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1b9752c030a14235a0bd5ef3ad60a1dcac8468c30921327fc8af36b20c790b9"
+dependencies = [
+ "heck",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -935,6 +950,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "build-info",
+ "clap",
  "coord",
  "datadriven",
  "dataflow",
@@ -945,7 +961,6 @@ dependencies = [
  "repr",
  "serde_json",
  "sql-parser",
- "structopt",
  "tempfile",
  "timely",
  "tokio",
@@ -998,8 +1013,7 @@ dependencies = [
 [[package]]
 name = "criterion"
 version = "0.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1604dafd25fba2fe2d5895a9da139f8dc9b319a5fe5354ca137cbbce4e178d10"
+source = "git+https://github.com/MaterializeInc/criterion.rs.git#db5acaae4314d3cb194129233689541c15d3935d"
 dependencies = [
  "atty",
  "cast",
@@ -1024,8 +1038,7 @@ dependencies = [
 [[package]]
 name = "criterion-plot"
 version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d00996de9f2f7559f7f4dc286073197f83e92256a59ed395f9aac01fe717da57"
+source = "git+https://github.com/MaterializeInc/criterion.rs.git#db5acaae4314d3cb194129233689541c15d3935d"
 dependencies = [
  "cast",
  "itertools",
@@ -1160,7 +1173,7 @@ dependencies = [
  "ident_case",
  "proc-macro2",
  "quote",
- "strsim 0.10.0",
+ "strsim",
  "syn",
 ]
 
@@ -1245,8 +1258,8 @@ dependencies = [
 name = "dataflow-bin"
 version = "0.0.0"
 dependencies = [
+ "clap",
  "ore",
- "structopt",
  "timely",
 ]
 
@@ -1292,12 +1305,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "clap",
  "dataflow",
  "dataflow-types",
  "futures",
  "log",
  "ore",
- "structopt",
  "timely",
  "tokio",
  "tokio-serde",
@@ -2403,10 +2416,10 @@ name = "json-flattened-view-gen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "ore",
  "serde",
  "serde_json",
- "structopt",
 ]
 
 [[package]]
@@ -2426,7 +2439,6 @@ dependencies = [
  "rdkafka",
  "serde",
  "serde_json",
- "structopt",
  "tokio",
  "url",
 ]
@@ -2630,7 +2642,6 @@ dependencies = [
  "sha2",
  "shell-words",
  "sql",
- "structopt",
  "sysctl",
  "sysinfo",
  "tar",
@@ -2654,6 +2665,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "byteorder",
+ "clap",
  "futures",
  "json",
  "ordered-float",
@@ -2661,7 +2673,6 @@ dependencies = [
  "rdkafka",
  "repr",
  "serde_json",
- "structopt",
  "test-util",
  "tokio",
 ]
@@ -2852,11 +2863,11 @@ name = "mz-protoc"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "clap",
  "ore",
  "protobuf",
  "protobuf-codegen",
  "protobuf-parse",
- "structopt",
  "tempfile",
 ]
 
@@ -2877,11 +2888,12 @@ name = "mzcloud-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "mzcloud",
+ "ore",
  "reqwest",
  "serde",
  "serde_json",
- "structopt",
  "tempfile",
  "tokio",
  "zip",
@@ -3154,6 +3166,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "clap",
  "crossbeam-utils",
  "ctor",
  "either",
@@ -3164,7 +3177,6 @@ dependencies = [
  "prometheus",
  "smallvec",
  "stacker",
- "structopt",
  "tokio",
  "tokio-openssl",
  "tracing-subscriber",
@@ -3189,6 +3201,15 @@ checksum = "db4d06355a7090ce852965b2d08e11426c315438462638c6d721448d0b47aa22"
 dependencies = [
  "libc",
  "winapi",
+]
+
+[[package]]
+name = "os_str_bytes"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e22443d1643a904602595ba1cd8f7d896afe56d26712531c5ff73a15b2fbf64"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -3242,6 +3263,7 @@ name = "peeker"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "clap",
  "env_logger",
  "hyper",
  "lazy_static",
@@ -3253,7 +3275,6 @@ dependencies = [
  "regex",
  "repr",
  "serde",
- "structopt",
  "tokio",
  "toml",
 ]
@@ -3272,6 +3293,7 @@ dependencies = [
  "aws-sdk-kinesis",
  "bytes",
  "chrono",
+ "clap",
  "env_logger",
  "futures",
  "futures-channel",
@@ -3279,7 +3301,6 @@ dependencies = [
  "mz-aws-util",
  "ore",
  "rand",
- "structopt",
  "test-util",
  "tokio",
  "tokio-postgres",
@@ -3343,13 +3364,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "clap",
  "datadriven",
  "fallible-iterator",
  "ore",
  "postgres-protocol",
  "serde",
  "serde_json",
- "structopt",
 ]
 
 [[package]]
@@ -4167,11 +4188,11 @@ dependencies = [
  "anyhow",
  "aws-sdk-s3",
  "bytefmt",
+ "clap",
  "futures",
  "indicatif",
  "mz-aws-util",
  "ore",
- "structopt",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4485,6 +4506,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
+ "clap",
  "coord",
  "expr",
  "fallible-iterator",
@@ -4499,7 +4521,6 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
- "structopt",
  "tempfile",
  "timely",
  "tokio",
@@ -4545,39 +4566,9 @@ dependencies = [
 
 [[package]]
 name = "strsim"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
-
-[[package]]
-name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
-
-[[package]]
-name = "structopt"
-version = "0.3.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40b9788f4202aa75c240ecc9c15c65185e6a39ccdeb0fd5d008b98825464c87c"
-dependencies = [
- "clap",
- "lazy_static",
- "structopt-derive",
-]
-
-[[package]]
-name = "structopt-derive"
-version = "0.4.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcb5ae327f9cc13b68763b5749770cb9e048a99bd9dfdfa58d0cf05d5f64afe0"
-dependencies = [
- "heck",
- "proc-macro-error",
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "subtle"
@@ -4685,16 +4676,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "term_size"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e4129646ca0ed8f45d09b929036bafad5377103edd06e50bf574b353d2b08d9"
-dependencies = [
- "libc",
- "winapi",
-]
-
-[[package]]
 name = "termcolor"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4718,6 +4699,7 @@ name = "test-correctness"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "clap",
  "env_logger",
  "futures",
  "lazy_static",
@@ -4729,7 +4711,6 @@ dependencies = [
  "regex",
  "repr",
  "serde",
- "structopt",
  "tokio",
  "tokio-postgres",
  "toml",
@@ -4768,6 +4749,7 @@ dependencies = [
  "bytes",
  "ccsr",
  "chrono",
+ "clap",
  "coord",
  "flate2",
  "futures",
@@ -4797,7 +4779,6 @@ dependencies = [
  "similar",
  "sql",
  "sql-parser",
- "structopt",
  "tempfile",
  "termcolor",
  "tiberius",
@@ -4811,12 +4792,11 @@ dependencies = [
 
 [[package]]
 name = "textwrap"
-version = "0.11.0"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d326610f408c7a4eb6f51c37c330e496b08506c9457c9d34287ecc38809fb060"
+checksum = "0066c8d12af8b5acd21e00547c3797fde4e8677254a7ee429176ccebbe93dd80"
 dependencies = [
- "term_size",
- "unicode-width",
+ "terminal_size",
 ]
 
 [[package]]
@@ -5323,12 +5303,6 @@ name = "vcpkg"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fc439f2794e98976c88a2a2dafce96b930fe8010b0a256b3c2199a773933168"
-
-[[package]]
-name = "vec_map"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05c78687fb1a80548ae3250346c3db86a80a7cdd77bda190189f2d0a0987c81a"
 
 [[package]]
 name = "version_check"

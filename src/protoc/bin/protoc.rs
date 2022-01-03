@@ -10,21 +10,20 @@
 use std::path::PathBuf;
 
 use mz_protoc::Protoc;
-use structopt::StructOpt;
 
 /// Compile protocol buffers.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 // Use unusual underscores in option names to match Google's protoc.
-#[structopt(rename_all = "snake")]
+#[clap(rename_all = "snake")]
 struct Args {
     /// Import search directory.
-    #[structopt(short = "I", long, value_name = "PATH")]
+    #[clap(short = 'I', long, value_name = "PATH")]
     proto_path: Vec<String>,
     /// Generate Rust source code into OUT_DIR.
-    #[structopt(long, required = true, value_name = "OUT_DIR")]
+    #[clap(long, required = true, value_name = "OUT_DIR")]
     rust_out: PathBuf,
     /// Input protobuf schemas.
-    #[structopt(required = true, value_name = "PROTO_FILES")]
+    #[clap(required = true, value_name = "PROTO_FILES")]
     proto_files: Vec<String>,
 }
 

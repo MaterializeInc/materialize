@@ -44,7 +44,7 @@ url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde"] }
 
 [dev-dependencies]
-criterion = "0.3.5"
+criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 
 [build-dependencies]
 mz-protoc = { path = "../protoc" }

@@ -13,7 +13,6 @@ use std::process;
 use std::time::Duration;
 
 use log::info;
-use structopt::StructOpt;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tracing_subscriber::EnvFilter;
@@ -25,27 +24,22 @@ use ore::metrics::MetricsRegistry;
 use ore::now::SYSTEM_TIME;
 
 /// Independent coordinator server for Materialize.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct Args {
     /// The address on which to listen for SQL connections.
-    #[structopt(
+    #[clap(
         long,
         env = "COORDD_LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "0.0.0.0:6875"
     )]
     listen_addr: String,
-    /// The address of the dataflowd server to connect to.
-    #[structopt(
-        short,
-        long,
-        env = "COORDD_DATAFLOWD_ADDR",
-        default_value = "127.0.0.1:6876"
-    )]
+    /// The address of the dataflowd servers to connect to.
+    #[clap()]
     dataflowd_addr: Vec<String>,
     /// Number of dataflow worker threads. This must match the number of
     /// workers that the targeted dataflowd was started with.
-    #[structopt(
+    #[clap(
         short,
         long,
         env = "COORDD_DATAFLOWD_WORKERS",
@@ -54,8 +48,8 @@ struct Args {
     )]
     workers: usize,
     /// Where to store data.
-    #[structopt(
-        short = "D",
+    #[clap(
+        short = 'D',
         long,
         env = "COORDD_DATA_DIRECTORY",
         value_name = "PATH",

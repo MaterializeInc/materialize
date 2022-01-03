@@ -39,6 +39,6 @@ smallvec = { version = "1.7.0", features = ["serde", "union"] }
 uuid = "0.8.2"
 
 [dev-dependencies]
-criterion = "0.3.5"
+criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 rand = "0.8.4"

@@ -18,7 +18,6 @@ use aws_types::region::Region;
 use aws_types::Credentials;
 use http::Uri;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-use structopt::StructOpt;
 use url::Url;
 
 use mz_aws_util::config::AwsConfig;
@@ -26,92 +25,92 @@ use mz_aws_util::config::AwsConfig;
 use testdrive::Config;
 
 /// Integration test driver for Materialize.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct Args {
     // === Confluent options. ===
     /// Kafka bootstrap address.
-    #[structopt(
+    #[clap(
         long,
         value_name = "ENCRYPTION://HOST:PORT",
         default_value = "localhost:9092"
     )]
     kafka_addr: String,
     /// Kafka configuration option.
-    #[structopt(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
+    #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
     kafka_option: Vec<(String, String)>,
     /// Schema registry URL.
-    #[structopt(long, value_name = "URL", default_value = "http://localhost:8081")]
+    #[clap(long, value_name = "URL", default_value = "http://localhost:8081")]
     schema_registry_url: Url,
 
     // === TLS options. ===
     /// Path to TLS certificate keystore.
     ///
     /// The keystore must be in the PKCS#12 format.
-    #[structopt(long, value_name = "PATH")]
+    #[clap(long, value_name = "PATH")]
     cert: Option<String>,
     /// Password for the TLS certificate keystore.
-    #[structopt(long, value_name = "PASSWORD")]
+    #[clap(long, value_name = "PASSWORD")]
     cert_password: Option<String>,
 
     // === AWS options. ===
     /// Named AWS region to target for AWS API requests.
     ///
     /// Cannot be specified is --aws-endpoint is specified.
-    #[structopt(long, conflicts_with = "aws-endpoint")]
+    #[clap(long, conflicts_with = "aws-endpoint")]
     aws_region: Option<String>,
     /// Custom AWS endpoint.
     ///
     /// Defaults to http://localhost:4566 unless --aws-region is specified.
     /// Cannot be specified if --aws-region is specified.
-    #[structopt(long, conflicts_with = "aws-region")]
+    #[clap(long, conflicts_with = "aws-region")]
     aws_endpoint: Option<Uri>,
 
     // === Materialize options. ===
     /// materialized connection string.
-    #[structopt(long, default_value = "postgres://materialize@localhost:6875")]
+    #[clap(long, default_value = "postgres://materialize@localhost:6875")]
     materialized_url: tokio_postgres::Config,
     /// Validate the on-disk state of the materialized catalog.
-    #[structopt(long)]
+    #[clap(long)]
     validate_catalog: Option<PathBuf>,
     /// Don't reset materialized state before executing each script.
-    #[structopt(long)]
+    #[clap(long)]
     no_reset: bool,
 
     // === Testdrive options. ===
     /// Emit Buildkite-specific markup.
-    #[structopt(long)]
+    #[clap(long)]
     ci_output: bool,
 
     /// Default timeout in seconds.
-    #[structopt(long, parse(try_from_str = repr::util::parse_duration), default_value = "10s")]
+    #[clap(long, parse(try_from_str = repr::util::parse_duration), default_value = "10s")]
     default_timeout: Duration,
 
     /// Initial backoff interval. Set to 0 to retry immediately on failure
-    #[structopt(long, parse(try_from_str = repr::util::parse_duration), default_value = "50ms")]
+    #[clap(long, parse(try_from_str = repr::util::parse_duration), default_value = "50ms")]
     initial_backoff: Duration,
 
     /// Backoff factor when retrying. Set to 1 to retry at a steady pace
-    #[structopt(long, default_value = "1.5")]
+    #[clap(long, default_value = "1.5")]
     backoff_factor: f64,
 
     /// A random number to distinguish each TestDrive run.
-    #[structopt(long)]
+    #[clap(long)]
     seed: Option<u32>,
 
     /// Maximum number of errors before aborting
-    #[structopt(long, default_value = "10")]
+    #[clap(long, default_value = "10")]
     max_errors: usize,
 
     /// Max number of tests to run before terminating
-    #[structopt(long, default_value = "18446744073709551615")]
+    #[clap(long, default_value = "18446744073709551615")]
     max_tests: usize,
 
     /// Shuffle tests (using the value from --seed, if any)
-    #[structopt(long)]
+    #[clap(long)]
     shuffle_tests: bool,
 
     /// Force the use of the specfied temporary directory rather than creating one with a random name
-    #[structopt(long)]
+    #[clap(long)]
     temp_dir: Option<String>,
 
     // === Positional arguments. ===

@@ -7,16 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use structopt::StructOpt;
-
 /// Verifies the correctness of a PostgreSQL-like server.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct Args {
     /// Database address.
-    #[structopt(long, value_name = "HOSTNAME:PORT", default_value = "localhost:6875")]
+    #[clap(long, value_name = "HOSTNAME:PORT", default_value = "localhost:6875")]
     addr: String,
     /// Database user.
-    #[structopt(long, value_name = "USERNAME", default_value = "materialize")]
+    #[clap(long, value_name = "USERNAME", default_value = "materialize")]
     user: String,
     /// Directory containing test files.
     directory: String,
