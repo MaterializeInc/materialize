@@ -1263,9 +1263,9 @@ impl fmt::Display for EvalError {
             EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
             EvalError::InvalidRegexFlag(c) => write!(f, "invalid regular expression flag: {}", c),
             EvalError::InvalidParameterValue(s) => f.write_str(s),
-            EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
-            EvalError::UnsupportedUnits(typ, units) => {
-                write!(f, "{} units '{}' not supported", typ, units)
+            EvalError::UnknownUnits(units) => write!(f, "unit '{}' not recognized", units),
+            EvalError::UnsupportedUnits(units, typ) => {
+                write!(f, "unit '{}' not supported for type {}", units, typ)
             }
             EvalError::UnterminatedLikeEscapeSequence => {
                 f.write_str("unterminated escape sequence in LIKE")

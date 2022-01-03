@@ -1789,8 +1789,8 @@ where
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedUnits(
-            "time".to_string(),
             format!("{}", units),
+            "time".to_string(),
         )),
         DateTimeUnits::Timezone | DateTimeUnits::TimezoneHour | DateTimeUnits::TimezoneMinute => {
             Err(EvalError::Unsupported {
