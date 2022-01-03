@@ -1366,7 +1366,7 @@ fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 /// A timestamp with only a time component.
-pub trait TimeLike: Copy + chrono::Timelike + for<'a> Into<Datum<'a>> {
+pub trait TimeLike: chrono::Timelike {
     fn extract_hour(&self) -> f64 {
         f64::from(self.hour())
     }
@@ -1394,9 +1394,7 @@ pub trait TimeLike: Copy + chrono::Timelike + for<'a> Into<Datum<'a>> {
     }
 }
 
-impl TimeLike for chrono::NaiveTime {}
-impl TimeLike for chrono::NaiveDateTime {}
-impl TimeLike for chrono::DateTime<chrono::Utc> {}
+impl<T> TimeLike for T where T: chrono::Timelike {}
 
 /// A timestamp with both a date and a time component, but not necessarily a
 /// timezone component.
@@ -1791,7 +1789,7 @@ where
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedUnits(
-            time.into().type_name().to_string(),
+            "time".to_string(),
             format!("{}", units),
         )),
         DateTimeUnits::Timezone | DateTimeUnits::TimezoneHour | DateTimeUnits::TimezoneMinute => {
