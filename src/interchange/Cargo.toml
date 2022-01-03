@@ -32,7 +32,7 @@ protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 mz-protoc = { path = "../protoc" }
 regex = "1.5.4"
 repr = { path = "../repr" }
-serde = { version = "1.0.132", features = ["derive"] }
+serde = { version = "1.0.133", features = ["derive"] }
 serde_json = "1.0.74"
 sha2 = "0.10.0"
 smallvec = "1.7.0"
