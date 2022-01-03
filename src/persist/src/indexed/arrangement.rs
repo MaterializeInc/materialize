@@ -973,24 +973,30 @@ mod tests {
     }
 
     // Keys are randomly generated, so clear them before we do any comparisons.
-    fn cleared_unsealed_keys(batches: &[UnsealedBatchMeta]) -> Vec<UnsealedBatchMeta> {
+    // Also clear size_bytes so the tests don't have to be updated every time
+    // it changes.
+    fn cleared_unsealed(batches: &[UnsealedBatchMeta]) -> Vec<UnsealedBatchMeta> {
         batches
             .iter()
             .cloned()
             .map(|mut b| {
                 b.key = "KEY".to_string();
+                b.size_bytes = 0;
                 b
             })
             .collect()
     }
 
     // Keys are randomly generated, so clear them before we do any comparisons.
-    fn cleared_trace_keys(batches: &[TraceBatchMeta]) -> Vec<TraceBatchMeta> {
+    // Also clear size_bytes so the tests don't have to be updated every time
+    // it changes.
+    fn cleared_trace(batches: &[TraceBatchMeta]) -> Vec<TraceBatchMeta> {
         batches
             .iter()
             .cloned()
             .map(|mut b| {
                 b.key = "KEY".to_string();
+                b.size_bytes = 0;
                 b
             })
             .collect()
@@ -1088,11 +1094,11 @@ mod tests {
         let snapshot_updates = slurp_unsealed_from(&f, &blob, 0, None)?;
         assert_eq!(snapshot_updates, unsealed_updates(vec![0, 0, 1, 1]));
         assert_eq!(
-            cleared_unsealed_keys(&f.unsealed_batches),
+            cleared_unsealed(&f.unsealed_batches),
             vec![
-                unsealed_batch_meta("KEY", 0, 1, 0, 0, 130),
-                unsealed_batch_meta("KEY", 1, 2, 1, 1, 130),
-                unsealed_batch_meta("KEY", 2, 3, 0, 1, 164),
+                unsealed_batch_meta("KEY", 0, 1, 0, 0, 0),
+                unsealed_batch_meta("KEY", 1, 2, 1, 1, 0),
+                unsealed_batch_meta("KEY", 2, 3, 0, 1, 0),
             ],
         );
 
@@ -1118,10 +1124,10 @@ mod tests {
         let snapshot_updates = slurp_unsealed_from(&f, &blob, 0, None)?;
         assert_eq!(snapshot_updates, unsealed_updates(vec![0, 1, 1]));
         assert_eq!(
-            cleared_unsealed_keys(&f.unsealed_batches),
+            cleared_unsealed(&f.unsealed_batches),
             vec![
-                unsealed_batch_meta("KEY", 1, 2, 1, 1, 130),
-                unsealed_batch_meta("KEY", 2, 3, 0, 1, 164),
+                unsealed_batch_meta("KEY", 1, 2, 1, 1, 0),
+                unsealed_batch_meta("KEY", 2, 3, 0, 1, 0),
             ],
         );
 
@@ -1236,8 +1242,8 @@ mod tests {
         assert_eq!(snapshot_updates, updates[1..]);
 
         assert_eq!(
-            cleared_unsealed_keys(&f.unsealed_batches),
-            vec![unsealed_batch_meta("KEY", 0, 2, 1, 2, 164)],
+            cleared_unsealed(&f.unsealed_batches),
+            vec![unsealed_batch_meta("KEY", 0, 2, 1, 2, 0)],
         );
 
         Ok(())
@@ -1353,8 +1359,9 @@ mod tests {
         t.validate_allow_compaction(&Antichain::from_elem(3))?;
         t.allow_compaction(Antichain::from_elem(3));
         let (written_bytes, deleted_batches) = t.trace_step(&maintainer)?;
-        // Change this to a >0 check if it starts to be a maintenance burden.
-        assert_eq!(written_bytes, 162);
+        // NB: This intentionally doesn't assert any particular size so this
+        // test doesn't need to be updated if encoded batch size changes.
+        assert!(written_bytes > 0);
         assert_eq!(
             deleted_batches
                 .into_iter()
@@ -1369,19 +1376,19 @@ mod tests {
         assert_eq!(deleted_batches, vec![]);
 
         assert_eq!(
-            cleared_trace_keys(&t.trace_batches),
+            cleared_trace(&t.trace_batches),
             vec![
                 TraceBatchMeta {
                     key: "KEY".to_string(),
                     desc: desc_from(0, 3, 3),
                     level: 1,
-                    size_bytes: 162,
+                    size_bytes: 0,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
                     desc: desc_from(3, 9, 0),
                     level: 0,
-                    size_bytes: 90,
+                    size_bytes: 0,
                 },
             ]
         );
@@ -1412,7 +1419,9 @@ mod tests {
         t.validate_allow_compaction(&Antichain::from_elem(10))?;
         t.allow_compaction(Antichain::from_elem(10));
         let (written_bytes, deleted_batches) = t.trace_step(&maintainer)?;
-        assert_eq!(written_bytes, 90);
+        // NB: This intentionally doesn't assert any particular size so this
+        // test doesn't need to be updated if encoded batch size changes.
+        assert!(written_bytes > 0);
         assert_eq!(
             deleted_batches
                 .into_iter()
@@ -1424,19 +1433,19 @@ mod tests {
         // Check that compactions which do not result in a batch larger than both
         // parents do not increment the result batch's compaction level.
         assert_eq!(
-            cleared_trace_keys(&t.trace_batches),
+            cleared_trace(&t.trace_batches),
             vec![
                 TraceBatchMeta {
                     key: "KEY".to_string(),
                     desc: desc_from(0, 3, 3),
                     level: 1,
-                    size_bytes: 162,
+                    size_bytes: 0,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
                     desc: desc_from(3, 10, 10),
                     level: 0,
-                    size_bytes: 90,
+                    size_bytes: 0,
                 },
             ]
         );

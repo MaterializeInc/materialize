@@ -9,6 +9,7 @@
 
 //! Benchmarks for different persistent Write implementations.
 
+use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,17 +18,21 @@ use criterion::measurement::WallTime;
 use criterion::{
     criterion_group, criterion_main, Bencher, BenchmarkGroup, BenchmarkId, Criterion, Throughput,
 };
+use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
+use persist::indexed::columnar::ColumnarRecords;
+use persist_types::Codec;
 use rand::prelude::{SliceRandom, SmallRng};
 use rand::{Rng, SeedableRng};
+use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 
 use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
-use persist::indexed::encoding::{BlobUnsealedBatch, Id};
+use persist::indexed::encoding::{BlobTraceBatch, BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
 use persist::indexed::runtime::WriteReqBuilder;
 use persist::indexed::Indexed;
@@ -182,9 +187,10 @@ fn bench_write<L: Log, B: Blob>(
 
 // Benchmark the write throughput of BlobCache::set_unsealed_batch.
 fn bench_set_unsealed_batch<B: Blob>(
-    cache: &mut BlobCache<B>,
-    batch: BlobUnsealedBatch,
     b: &mut Bencher,
+    cache: &mut BlobCache<B>,
+    desc: &Range<SeqNo>,
+    batches: &Vec<ColumnarRecords>,
 ) {
     // We need to pick random keys because Criterion likes to run this function
     // many times as part of a warmup, and if we deterministically use the same
@@ -194,13 +200,14 @@ fn bench_set_unsealed_batch<B: Blob>(
     b.iter_custom(|iters| {
         // Pre-allocate all of the data we will be writing so that we don't measure
         // allocation time.
-        let mut data = Vec::with_capacity(iters as usize);
-        for _ in 0..iters {
-            data.push(batch.clone());
-        }
+        let bench_data = (0..iters).map(|_| batches.clone()).collect::<Vec<_>>();
 
         let start = Instant::now();
-        for batch in data {
+        for updates in bench_data {
+            let batch = BlobUnsealedBatch {
+                desc: desc.clone(),
+                updates,
+            };
             cache
                 .set_unsealed_batch(format!("{}", rng.gen::<usize>()), batch)
                 .expect("writing to blobcache failed");
@@ -266,6 +273,41 @@ pub fn bench_writes_indexed(c: &mut Criterion) {
     bench_writes_indexed_inner(file_indexed, "file", &mut group).expect("running benchmark failed");
 }
 
+pub fn bench_encode_batch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("encode_batch");
+
+    let data = DataGenerator::default();
+    group.throughput(Throughput::Bytes(data.goodput_bytes()));
+    let unsealed = BlobUnsealedBatch {
+        desc: SeqNo(0)..SeqNo(1),
+        updates: data.batches().collect::<Vec<_>>(),
+    };
+    let trace = BlobTraceBatch {
+        desc: Description::new(
+            Antichain::from_elem(0),
+            Antichain::from_elem(1),
+            Antichain::from_elem(0),
+        ),
+        updates: data.records().collect::<Vec<_>>(),
+    };
+
+    group.bench_function(BenchmarkId::new("unsealed", data.goodput_pretty()), |b| {
+        b.iter(|| {
+            // Intentionally alloc a new buf each iter.
+            let mut buf = Vec::new();
+            unsealed.encode(&mut buf);
+        })
+    });
+
+    group.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {
+        b.iter(|| {
+            // Intentionally alloc a new buf each iter.
+            let mut buf = Vec::new();
+            trace.encode(&mut buf);
+        })
+    });
+}
+
 pub fn bench_writes_blob_cache(c: &mut Criterion) {
     let mut group = c.benchmark_group("blob_cache_set_unsealed_batch");
 
@@ -296,33 +338,32 @@ pub fn bench_writes_blob_cache(c: &mut Criterion) {
     let mut file_blob_cache = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics, file_blob);
 
     let data = DataGenerator::default();
-    let updates = data.batches().collect::<Vec<_>>();
+    let batches = data.batches().collect::<Vec<_>>();
     group.throughput(Throughput::Bytes(data.goodput_bytes()));
-    let batch = BlobUnsealedBatch {
-        desc: SeqNo(0)..SeqNo(1),
-        updates,
-    };
+    let desc = SeqNo(0)..SeqNo(1);
 
     group.bench_with_input(
         BenchmarkId::new("file_unsorted", data.goodput_pretty()),
-        &batch,
-        |b, batch| {
-            bench_set_unsealed_batch(&mut file_blob_cache, batch.clone(), b);
+        &(desc.clone(), batches.clone()),
+        |b, (desc, batches)| {
+            bench_set_unsealed_batch(b, &mut file_blob_cache, desc, batches);
         },
     );
 
     group.bench_with_input(
         BenchmarkId::new("mem_unsorted", data.goodput_pretty()),
-        &batch,
-        |b, batch| {
-            bench_set_unsealed_batch(&mut mem_blob_cache, batch.clone(), b);
+        &(desc, batches),
+        |b, (desc, batches)| {
+            bench_set_unsealed_batch(b, &mut mem_blob_cache, desc, batches);
         },
     );
 }
+
 criterion_group!(
     benches,
     bench_writes_log,
     bench_writes_blob,
+    bench_encode_batch,
     bench_writes_blob_cache,
     bench_writes_indexed
 );

@@ -20,6 +20,7 @@ use std::{fmt, io};
 
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
+use persist_types::Codec;
 use protobuf::MessageField;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -552,6 +553,26 @@ impl BlobUnsealedBatch {
     }
 }
 
+// BlobUnsealedBatch doesn't really need to implement Codec (it's never stored
+// as a key or value in a persisted record) but it's nice to have a common
+// interface for this.
+impl Codec for BlobUnsealedBatch {
+    fn codec_name() -> String {
+        "bincode[BlobUnsealedBatch]".into()
+    }
+
+    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+        // See https://github.com/bincode-org/bincode/issues/293 for why this is
+        // infallible.
+        bincode::serialize_into(&mut ExtendWriteAdapter(buf), self)
+            .expect("infallible for BlobUnsealedBatch");
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        bincode::deserialize(buf).map_err(|err| err.to_string())
+    }
+}
+
 impl BlobTraceBatch {
     /// Asserts the documented invariants, returning an error if any are
     /// violated.
@@ -610,6 +631,26 @@ impl BlobTraceBatch {
             }
         }
         Ok(())
+    }
+}
+
+// BlobTraceBatch doesn't really need to implement Codec (it's never stored as a
+// key or value in a persisted record) but it's nice to have a common interface
+// for this.
+impl Codec for BlobTraceBatch {
+    fn codec_name() -> String {
+        "bincode[BlobTraceBatch]".into()
+    }
+
+    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+        // See https://github.com/bincode-org/bincode/issues/293 for why this is
+        // infallible.
+        bincode::serialize_into(&mut ExtendWriteAdapter(buf), self)
+            .expect("infallible for BlobTraceBatch");
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        bincode::deserialize(buf).map_err(|err| err.to_string())
     }
 }
 
@@ -828,6 +869,7 @@ impl From<&Description<u64>> for ProtoU64Description {
 #[cfg(test)]
 mod tests {
     use crate::error::Error;
+    use crate::workload::DataGenerator;
 
     use super::*;
 
@@ -1494,6 +1536,42 @@ mod tests {
         assert_eq!(
             b.validate(),
             Err(Error::from("duplicate batch key found in trace: "))
+        );
+    }
+
+    #[test]
+    fn encoded_batch_sizes() {
+        fn sizes(data: DataGenerator) -> (usize, usize) {
+            let unsealed = BlobUnsealedBatch {
+                desc: SeqNo(0)..SeqNo(1),
+                updates: data.batches().collect(),
+            };
+            let trace = BlobTraceBatch {
+                desc: Description::new(
+                    Antichain::from_elem(0),
+                    Antichain::from_elem(1),
+                    Antichain::from_elem(0),
+                ),
+                updates: data.records().collect(),
+            };
+            let (mut unsealed_buf, mut trace_buf) = (Vec::new(), Vec::new());
+            unsealed.encode(&mut unsealed_buf);
+            trace.encode(&mut trace_buf);
+            (unsealed_buf.len(), trace_buf.len())
+        }
+
+        let record_size_bytes = DataGenerator::default().record_size_bytes;
+        // Print all the sizes into one assert so we only have to update one
+        // place if sizes change.
+        assert_eq!(
+            format!(
+                "1/1={:?} 25/1={:?} 1000/1={:?} 1000/100={:?}",
+                sizes(DataGenerator::new(1, record_size_bytes, 1)),
+                sizes(DataGenerator::new(25, record_size_bytes, 25)),
+                sizes(DataGenerator::new(1_000, record_size_bytes, 1_000)),
+                sizes(DataGenerator::new(1_000, record_size_bytes, 1_000 / 100)),
+            ),
+            "1/1=(176, 136) 25/1=(2096, 2056) 1000/1=(80096, 80056) 1000/100=(87224, 80056)"
         );
     }
 }
