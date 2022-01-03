@@ -64,8 +64,8 @@ impl Codec for Row {
 impl<'a> From<Datum<'a>> for ProtoDatum {
     fn from(x: Datum<'a>) -> Self {
         let datum_type = match x {
-            Datum::False => Datum_type::bool(false),
-            Datum::True => Datum_type::bool(true),
+            Datum::False => Datum_type::other(ProtoDatumOther::False.into()),
+            Datum::True => Datum_type::other(ProtoDatumOther::True.into()),
             Datum::Int16(x) => Datum_type::int16(x.into()),
             Datum::Int32(x) => Datum_type::int32(x),
             Datum::Int64(x) => Datum_type::int64(x),
@@ -171,7 +171,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::JsonNull => Datum_type::other(ProtoDatumOther::JsonNull.into()),
             Datum::Uuid(x) => Datum_type::uuid(x.as_bytes().to_vec()),
             Datum::Dummy => Datum_type::other(ProtoDatumOther::Dummy.into()),
-            Datum::Null => Datum_type::null(true),
+            Datum::Null => Datum_type::other(ProtoDatumOther::Null.into()),
         };
         ProtoDatum {
             datum_type: Some(datum_type),
@@ -197,14 +197,13 @@ impl Row {
         match &x.datum_type {
             Some(Datum_type::other(o)) => match o.enum_value() {
                 Ok(ProtoDatumOther::Unknown) => return Err("unknown datum type".into()),
+                Ok(ProtoDatumOther::Null) => self.push(Datum::Null),
+                Ok(ProtoDatumOther::False) => self.push(Datum::False),
+                Ok(ProtoDatumOther::True) => self.push(Datum::True),
                 Ok(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
                 Ok(ProtoDatumOther::Dummy) => self.push(Datum::Dummy),
                 Err(id) => return Err(format!("unknown datum type: {}", id)),
             },
-            Some(Datum_type::null(true)) => self.push(Datum::Null),
-            Some(Datum_type::null(false)) => return Err(format!("unknown datum null=false")),
-            Some(Datum_type::bool(true)) => self.push(Datum::True),
-            Some(Datum_type::bool(false)) => self.push(Datum::False),
             Some(Datum_type::int16(x)) => {
                 let x = i16::try_from(*x)
                     .map_err(|_| format!("int16 field stored with out of range value: {}", *x))?;
