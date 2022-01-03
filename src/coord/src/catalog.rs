@@ -230,10 +230,6 @@ impl CatalogState {
         &self.by_id[id]
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.by_id.values()
-    }
-
     pub fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
         if !id.is_system() && !item.is_placeholder() {
             info!("create {} {} ({})", item.typ(), name, id);

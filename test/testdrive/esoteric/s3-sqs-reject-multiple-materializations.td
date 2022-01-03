@@ -34,7 +34,7 @@ $ s3-add-notifications bucket=${buk} queue=${buk} sqs-validation-timeout=5m
 
 ! CREATE MATERIALIZED VIEW s3_double_mat_error AS
   SELECT * FROM s3_double_mat
-Cannot create second materialization on s3_double_mat, already materialized by s3_double_mat_initial_view
+Cannot re-materialize source s3_double_mat
 
 # check that going through multiple unmaterialized views doesn't allow hiding from the error
 > CREATE VIEW s3_double_mat_unmaterialized AS
@@ -45,7 +45,7 @@ Cannot create second materialization on s3_double_mat, already materialized by s
 
 ! CREATE MATERIALIZED VIEW s3_double_mat_unmaterialized_final AS
   SELECT * FROM s3_double_mat_unmaterialized_extra
-Cannot create second materialization on s3_double_mat, already materialized by s3_double_mat_initial_view
+Cannot re-materialize source s3_double_mat
 
 # check that dropping and recreating a view succeeds
 
@@ -73,7 +73,7 @@ Cannot create second materialization on s3_double_mat, already materialized by s
 
 ! CREATE MATERIALIZED VIEW s3_double_mat_error AS
   SELECT * FROM s3_double_mat
-Cannot create second materialization on s3_double_mat, already materialized by s3_double_mat_final_2
+Cannot re-materialize source s3_double_mat
 
 > CREATE VIEW s3_double_mat_unmaterialized_3 AS
   SELECT * FROM s3_double_mat
@@ -83,10 +83,10 @@ Cannot create second materialization on s3_double_mat, already materialized by s
 
 ! CREATE MATERIALIZED VIEW s3_double_mat_error_3 AS
   SELECT * FROM s3_double_mat_unmaterialized_extra_3
-Cannot create second materialization on s3_double_mat, already materialized by s3_double_mat_final_2
+Cannot re-materialize source s3_double_mat
 
 ! CREATE INDEX s3_double_mat_custom_idx ON s3_double_mat (text)
-Cannot create second materialization on s3_double_mat, already materialized by s3_double_mat_final_2
+Cannot re-materialize source s3_double_mat
 
 ! CREATE DEFAULT INDEX ON s3_double_mat
-Cannot create second materialization on s3_double_mat, already materialized by s3_double_mat_final_2
+Cannot re-materialize source s3_double_mat

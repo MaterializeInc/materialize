@@ -15,6 +15,7 @@
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
 use super::*;
+use crate::error::RematerializedSourceType;
 use ore::stack::maybe_grow;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -120,23 +121,30 @@ impl<'a> DataflowBuilder<'a> {
                     }
                     CatalogItem::Source(source) => {
                         if source.connector.requires_single_materialization() {
+                            let source_type = match &source.connector {
+                                SourceConnector::External { connector, .. } => match connector {
+                                    ExternalSourceConnector::S3(_) => RematerializedSourceType::S3,
+                                    ExternalSourceConnector::Postgres(_) => {
+                                        RematerializedSourceType::Postgres
+                                    }
+                                    _ => unreachable!(),
+                                },
+                                _ => unreachable!(),
+                            };
                             let dependent_indexes = self.catalog.dependent_indexes(*id);
                             // If this source relies on any pre-existing indexes (i.e., indexes
                             // that we're not building as part of this `DataflowBuilder`), we're
                             // attempting to reinstantiate a single-use source.
                             let intersection = self.indexes.intersection(dependent_indexes);
                             if !intersection.is_empty() {
-                                eprintln!("intersection {:?}", intersection);
-                                for i in &intersection {
-                                    eprintln!("    {:?}", self.catalog.get_by_id(i));
-                                }
-                                let existing_index = self.catalog.get_by_id(&intersection[0]);
-
-                                //let base = catalog.get_by_id(intersection[0]).name().item.clone();
-                                return Err(CoordError::InvalidMultipleMaterialization {
+                                let existing_indexes = intersection
+                                    .iter()
+                                    .map(|id| self.catalog.get_by_id(id).name().item.clone())
+                                    .collect();
+                                return Err(CoordError::InvalidRematerialization {
                                     base_source: entry.name().item.clone(),
-                                    existing_index: existing_index.name().item.clone(),
-                                    count: intersection.len(),
+                                    existing_indexes,
+                                    source_type,
                                 });
                             }
                         }

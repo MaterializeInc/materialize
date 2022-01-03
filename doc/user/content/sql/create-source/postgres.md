@@ -50,7 +50,7 @@ Before creating the source in Materialize, you must:
 
      As a heads-up, you should expect a performance hit in the database from increased CPU usage. For more information, see the [PostgreSQL documentation](https://www.postgresql.org/docs/current/logical-replication-publication.html).
 
-1. Create a Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html), or replication data set, containing the tables to be streamed to Materialize. Since Postgres sources are materialized (kept in memory) in their entirety, we strongly recommend that you limit publications only to the data you need to query.
+1. Create a Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html), or replication data set, containing the tables to be streamed to Materialize.
 
 Once you create a materialized source from the publication, the source will contain the raw data stream of replication updates. You can then break the stream out into views that represent the publication's original tables with [`CREATE VIEWS`](/sql/create-views/). You can treat these tables as you would any other source and create other views or materialized views from them.
 
@@ -77,6 +77,8 @@ Make sure to delete any replication slots if you stop using Materialize or if ei
 
 If you stop or delete Materialize without first dropping the Postgres source, the Postgres replication slot isn't deleted and will continue to accumulate data. In such cases, you should manually delete the Materialize replication slot to recover memory and avoid degraded performance in the upstream database. Materialize replication slot names always begin with `materialize_` for easy identification.
 
+Each Materialize replication slot can be used to source data for at most one set of materialized views. You can create multiple unmaterialized views for the same replication slot using the [`CREATE VIEWS`](/sql/create-views) statement.
+
 ### Restrictions on Postgres sources
 
 - **Schema changes:** Materialize does not support changes to schemas for existing publications. You need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
@@ -84,7 +86,6 @@ If you stop or delete Materialize without first dropping the Postgres source, th
 - **Truncation:** Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is re-created.
 - **Resource usage:**
     - During the initial table sync, **disk space** consumption may increase proportionally to the size of the upstream database before returning to a steady state. To profile disk usage, see [Troubleshooting](/ops/troubleshooting/#how-much-disk-space-is-materialize-using).
-    - Since Postgres sources are materialized by default, the replicated Postgres source tables must fit into **available memory**.
 
 ### Supported Postgres versions
 

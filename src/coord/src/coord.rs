@@ -2391,7 +2391,6 @@ where
                         Self::prepare_index_build(&builder.catalog, &index_id)
                     {
                         let df = builder.build_index_dataflow(name, index_id, description)?;
-                        //single_materialization::validate(&previous_catalog, &view.depends_on)?;
                         return Ok(Some(df));
                     }
                 }
@@ -2437,9 +2436,6 @@ where
                     if let Some((name, description)) =
                         Self::prepare_index_build(builder.catalog, &index_id)
                     {
-                        // for (_name, view) in &views {
-                        //     single_materialization::validate(previous_catalog, &view.depends_on)?;
-                        // }
                         let df = builder.build_index_dataflow(name, index_id, description)?;
                         dfs.push(df);
                     }

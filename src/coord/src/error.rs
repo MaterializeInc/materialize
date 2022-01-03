@@ -44,11 +44,11 @@ pub enum CoordError {
     IncompleteTimestamp(Vec<expr::GlobalId>),
     /// Specified index is disabled, but received non-enabling update request
     InvalidAlterOnDisabledIndex(String),
-    /// Attempted to build a materialization on a source that does not allow multiple materializatons
-    InvalidMultipleMaterialization {
+    /// Attempted to build a materialization on a source that does not allow multiple materializations
+    InvalidRematerialization {
         base_source: String,
-        existing_index: String,
-        count: usize,
+        existing_indexes: Vec<String>,
+        source_type: RematerializedSourceType,
     },
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
@@ -170,6 +170,19 @@ impl CoordError {
                  safe mode, which limits the features that are available."
                     .into(),
             ),
+            CoordError::InvalidRematerialization {
+                existing_indexes, source_type, ..
+            } => {
+                let source_name = match source_type {
+                    RematerializedSourceType::Postgres => "Postgres",
+                    RematerializedSourceType::S3 => "S3 with SQS notification ",
+                };
+                Some(format!(
+                    "{} sources can be materialized by only one set of indexes at a time.\
+                     The following indexes have already materialized this source:\n    {}",
+                    source_name,
+                    existing_indexes.join("\n    ")))
+            }
             _ => None,
         }
     }
@@ -221,6 +234,16 @@ impl CoordError {
                 // because that leaks information to unauthenticated clients.)
                 Some("Try connecting as the \"materialize\" user.".into())
             }
+            CoordError::InvalidRematerialization { source_type, .. } => {
+                let doc_page = match source_type {
+                    RematerializedSourceType::Postgres => "postgres",
+                    RematerializedSourceType::S3 => "text-s3",
+                };
+                Some(format!(
+                    "See the documentation at https://materialize.com/docs/sql/create-source/{}",
+                    doc_page
+                ))
+            }
             _ => None,
         }
     }
@@ -253,16 +276,12 @@ impl fmt::Display for CoordError {
             CoordError::InvalidAlterOnDisabledIndex(name) => {
                 write!(f, "invalid ALTER on disabled index {}", name.quoted())
             }
-            CoordError::InvalidMultipleMaterialization {
+            CoordError::InvalidRematerialization {
                 base_source,
-                existing_index,
-                count,
+                existing_indexes: _,
+                source_type: _,
             } => {
-                write!(
-                    f,
-                    "Cannot create second materialization on {}, already materialized by {} (and {} other items)",
-                    base_source, existing_index, count - 1
-                )
+                write!(f, "Cannot re-materialize source {}", base_source)
             }
             CoordError::InvalidParameterType(p) => write!(
                 f,
@@ -378,3 +397,9 @@ impl From<RecursionLimitError> for CoordError {
 }
 
 impl Error for CoordError {}
+
+#[derive(Debug)]
+pub enum RematerializedSourceType {
+    Postgres,
+    S3,
+}

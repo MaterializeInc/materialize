@@ -81,9 +81,8 @@ multiple SQS queues subscribed to it, one SQS queue per source. Note that SQS qu
 SNS topics intended for Materialize must be configured to use [raw message delivery][raw-delivery].
 
 Since Materialize treats unmaterialized sources with multiple downstream views as separate sources,
-`SQS NOTIFICATIONS` should not be used with unmaterialized sources. This behavior of unmaterialized
-sources is considered a bug ([#7423](https://github.com/MaterializeInc/materialize/issues/7423)),
-and will be improved in a future release.
+`SQS NOTIFICATIONS` can not be shared across multiple materializations of the same source. You must
+create separate SQS queues for each S3 notification source.
 
 [notification-aws]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
 [notification-tutorial]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ways-to-add-notification-config-to-bucket.html
