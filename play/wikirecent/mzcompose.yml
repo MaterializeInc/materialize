@@ -7,79 +7,26 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-x-port-mappings:
-  - &app ${APP_PORT:-8875}
-  - &materialized ${MZ_PORT:-6875}
-
 version: '3.7'
+
 services:
-  app:
-    mzbuild: wikirecent-app
-    command: >-
-      --dbport ${MZ_PORT:-6875}
-      top10
-      counter
-    ports:
-      - *app
-  create-views:
-    mzbuild: wikirecent-create-views
   materialized:
     mzbuild: materialized
     command: --disable-telemetry
     environment:
       - MZ_DEV=1
-    ports:
-      - *materialized
-    volumes:
-      - type: volume
-        source: wikidata
-        target: /tmp/wikidata
-        read_only: true
+    ports: [6875]
+    volumes: ["wikidata:/tmp/wikidata"]
+    depends_on: [stream]
+
+  server:
+    mzbuild: wikirecent-server
+    ports: [8875]
+    depends_on: [materialized]
+
   stream:
     mzbuild: wikirecent-stream
-    volumes:
-      - type: volume
-        source: wikidata
-        target: /tmp/wikidata
+    volumes: ["wikidata:/tmp/wikidata"]
 
 volumes:
   wikidata:
-
-mzworkflows:
-  demo:
-    steps:
-    - step: start-services
-      services: [materialized, stream]
-    - step: wait-for-tcp
-      host: materialized
-      port: ${MZ_PORT:-6875}
-    - step: run
-      service: create-views
-    - step: start-services
-      services: [app]
-    - step: wait-for-tcp
-      host: app
-      port: ${APP_PORT:-8875}
-
-  stream-top10:
-    steps:
-      - step: run
-        service: app
-        entrypoint: /usr/local/bin/async_stream.py top10
-
-  tail-top10:
-    steps:
-      - step: workflow
-        workflow: psycopg3-tail-top10
-
-  asyncpg-tail-top10:
-    steps:
-      - step: run
-        service: app
-        entrypoint: /usr/local/bin/asyncpg_tail.py top10
-
-  psycopg3-tail-top10:
-    steps:
-      - step: run
-        service: app
-        entrypoint: /usr/local/bin/psycopg3_tail.py top10

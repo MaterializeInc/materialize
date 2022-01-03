@@ -7,5 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: wikirecent-create-views
-publish: false
+from pathlib import Path
+
+from materialize.mzcompose import Workflow
+
+
+def workflow_demo(w: Workflow):
+    """Streams data from Wikipedia to a browser visualzation."""
+    w.start_services(services=["server"])
+    w.wait_for_mz()
+    w.run_sql((Path(__file__).parent / "views.sql").read_text())
