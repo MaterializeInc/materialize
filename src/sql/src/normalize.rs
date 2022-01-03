@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 
 use dataflow_types::{AwsConfig, AwsCredentials};
 use repr::ColumnName;
@@ -480,34 +480,60 @@ pub fn aws_config(
         _ => Ok(None),
     };
 
-    let region = match region {
-        Some(region) => region,
-        None => extract("region")?.ok_or_else(|| anyhow!("region is required"))?,
+    let credentials = match extract("profile")? {
+        Some(profile_name) => {
+            for name in &["access_key_id", "secret_access_key", "token"] {
+                let extracted = extract(name);
+                if matches!(extracted, Ok(Some(_)) | Err(_)) {
+                    bail!(
+                        "AWS profile cannot be set in combination with '{0}', \
+                         configure '{0}' inside the profile file",
+                        name
+                    );
+                }
+            }
+
+            AwsCredentials::Profile { profile_name }
+        }
+        None => {
+            let access_key_id = extract("access_key_id")?;
+            let secret_access_key = extract("secret_access_key")?;
+            let session_token = extract("token")?;
+            let credentials = match (access_key_id, secret_access_key, session_token) {
+                (None, None, None) => AwsCredentials::Default,
+                (Some(access_key_id), Some(secret_access_key), session_token) => {
+                    AwsCredentials::Static {
+                        access_key_id,
+                        secret_access_key,
+                        session_token,
+                    }
+                }
+                (Some(_), None, _) => {
+                    bail!("secret_acccess_key must be specified if access_key_id is specified")
+                }
+                (None, Some(_), _) => {
+                    bail!("secret_acccess_key cannot be specified without access_key_id")
+                }
+                (None, None, Some(_)) => bail!("token cannot be specified without access_key_id"),
+            };
+
+            credentials
+        }
     };
 
-    let endpoint = extract("endpoint")?;
-
-    let access_key_id = extract("access_key_id")?;
-    let secret_access_key = extract("secret_access_key")?;
-    let session_token = extract("token")?;
-    let credentials = match (access_key_id, secret_access_key, session_token) {
-        (None, None, None) => None,
-        (Some(access_key_id), Some(secret_access_key), session_token) => Some(AwsCredentials {
-            access_key_id,
-            secret_access_key,
-            session_token,
-        }),
-        (Some(_), None, _) => {
-            bail!("secret_acccess_key must be specified if access_key_id is specified")
-        }
-        (None, Some(_), _) => bail!("secret_acccess_key cannot be specified without access_key_id"),
-        (None, None, Some(_)) => bail!("token cannot be specified without access_key_id"),
+    let region = match region {
+        Some(region) => Some(region),
+        None => extract("region")?,
     };
 
     Ok(AwsConfig {
         credentials,
         region,
-        endpoint,
+        endpoint: extract("endpoint")?,
+        role_arn: extract("role_arn")?,
+        // TODO: should this also come from an env var? It should be unique per customer, not per
+        // role.
+        external_id: extract("external_id")?,
     })
 }
 

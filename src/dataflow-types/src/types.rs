@@ -20,6 +20,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use aws_config::default_provider::credentials::DefaultCredentialsChain;
+use aws_config::meta::region::RegionProviderChain;
+use aws_config::sts::AssumeRoleProvider;
+use aws_smithy_http::endpoint::Endpoint;
+use aws_types::credentials::SharedCredentialsProvider;
+use aws_types::region::Region;
 use globset::Glob;
 use http::Uri;
 use regex::Regex;
@@ -1192,42 +1198,94 @@ pub struct IncludedColumnPos {
 /// AWS SDK so that we can implement `Serialize` and `Deserialize`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AwsConfig {
-    /// The optional static credentials to use.
+    /// The source of credentials to use.
     ///
-    /// If unset, credentials should instead be obtained from the environment.
-    pub credentials: Option<AwsCredentials>,
+    /// * Default uses the standard AWS credentials provider chain
+    /// * Static uses the explicitly provided credentials
+    /// * Profile uses the credentials provided in the specific profile
+    pub credentials: AwsCredentials,
+    /// The AWS role to assume
+    pub role_arn: Option<String>,
+    /// The external_id for this customer for role assumption
+    ///
+    /// <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+    pub external_id: Option<String>,
     /// The AWS region to use.
-    pub region: String,
+    ///
+    /// Uses the default region (looking at env vars, config files, etc) if not provideed.
+    pub region: Option<String>,
     /// The custom AWS endpoint to use, if any.
     pub endpoint: Option<String>,
 }
 
 /// Static AWS credentials for a source or sink.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct AwsCredentials {
-    pub access_key_id: String,
-    pub secret_access_key: String,
-    pub session_token: Option<String>,
+pub enum AwsCredentials {
+    Default,
+    Profile {
+        profile_name: String,
+    },
+    Static {
+        access_key_id: String,
+        secret_access_key: String,
+        session_token: Option<String>,
+    },
 }
 
 impl AwsConfig {
     /// Loads the AWS SDK configuration object from the environment, then
     /// applies the overrides from this object.
     pub async fn load(&self) -> Result<mz_aws_util::config::AwsConfig, anyhow::Error> {
-        use aws_smithy_http::endpoint::Endpoint;
-        use aws_types::credentials::SharedCredentialsProvider;
-        use aws_types::region::Region;
+        let mut loader: aws_config::ConfigLoader = aws_config::from_env();
+        loader = if let Some(region) = &self.region {
+            loader.region(Region::new(region.clone()))
+        } else {
+            loader.region(RegionProviderChain::default_provider())
+        };
 
-        let mut loader = aws_config::from_env().region(Region::new(self.region.clone()));
-        if let Some(credentials) = &self.credentials {
-            loader = loader.credentials_provider(SharedCredentialsProvider::new(
-                aws_types::Credentials::from_keys(
-                    &credentials.access_key_id,
-                    &credentials.secret_access_key,
-                    credentials.session_token.clone(),
-                ),
-            ));
-        }
+        let role = self.role_arn.as_ref().map(|role_arn| {
+            let mut role = AssumeRoleProvider::builder(role_arn);
+
+            // this affects which region to perform STS on, not where anything else happens
+            if let Some(region) = &self.region {
+                role = role.region(Region::new(region.clone()));
+            }
+            if let Some(external_id) = &self.external_id {
+                role = role.external_id(external_id);
+            }
+
+            role = role.session_name("materialized");
+
+            role
+        });
+
+        let provider = match &self.credentials {
+            AwsCredentials::Default => {
+                SharedCredentialsProvider::new(DefaultCredentialsChain::builder().build().await)
+            }
+            AwsCredentials::Profile { profile_name } => SharedCredentialsProvider::new(
+                DefaultCredentialsChain::builder()
+                    .profile_name(profile_name)
+                    .build()
+                    .await,
+            ),
+            AwsCredentials::Static {
+                access_key_id,
+                secret_access_key,
+                session_token,
+            } => SharedCredentialsProvider::new(aws_types::Credentials::from_keys(
+                access_key_id,
+                secret_access_key,
+                session_token.clone(),
+            )),
+        };
+
+        loader = if let Some(role) = role {
+            loader.credentials_provider(role.build(provider))
+        } else {
+            loader.credentials_provider(provider)
+        };
+
         let mut config = mz_aws_util::config::AwsConfig::from_loader(loader).await;
         if let Some(endpoint) = &self.endpoint {
             let endpoint: Uri = endpoint.parse().context("parsing AWS endpoint")?;
