@@ -29,7 +29,7 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = t1.f2
 ----
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter (#0 = #1), (#0 = 123)
+| Filter (#0 = 123), (#0 = #1)
 
 EOF
 

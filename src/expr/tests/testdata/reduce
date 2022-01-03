@@ -746,3 +746,86 @@ canonicalize
 [int64]
 ----
 false
+
+canonicalize
+[
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #1))
+        (call_binary eq #0 #1))
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #2))
+        (call_binary eq #0 #2))
+    (call_unary not (call_unary is_null #0))
+    (call_unary not (call_unary is_null #1))
+    (call_unary not (call_unary is_null #0))
+    (call_unary not (call_unary is_null #2))
+]
+[int64 int64 int64]
+----
+(#0 = #1)
+(#0 = #2)
+
+canonicalize
+[
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #1))
+        (call_binary eq #0 #1))
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #0)
+            (call_unary is_null #2))
+        (call_binary eq #0 #2))
+    (call_unary not (call_unary is_null #0))
+    (call_unary not (call_unary is_null #1))
+    (call_unary not (call_unary is_null #1))
+    (call_unary not (call_unary is_null #2))
+]
+[int64 int64 int64]
+----
+(#0 = #1)
+(#0 = #2)
+
+canonicalize
+[
+    (call_binary or
+        (call_binary and
+            (call_unary is_null #1)
+            (call_unary is_null #2))
+        (call_binary eq #1 #2))
+    (call_binary eq #0 #1)
+    (call_binary eq #0 #2)
+]
+[int64 int64 int64]
+----
+(#0 = #1)
+(#0 = #2)
+(#1 = #2)
+
+# check that predicates are sorted by their complexity
+canonicalize
+[
+    (call_binary eq (call_binary add_int32 #0 (1 int32)) #1)
+    (call_binary lt #0 (2147483647 int32))
+]
+[int32 int32]
+----
+(#0 < 2147483647)
+(#1 = (#0 + 1))
+
+canonicalize
+[
+    (call_binary lt (call_binary add_int32 #0 (1 int32)) #2)
+    (call_binary lt (call_binary add_int32 #0 (1 int32)) (2147483647 int32))
+    (call_binary eq #0 #1)
+]
+[int32 int32 int32]
+----
+(#0 = #1)
+((#0 + 1) < 2147483647)
+((#0 + 1) < #2)
