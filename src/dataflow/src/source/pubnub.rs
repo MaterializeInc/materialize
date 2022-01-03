@@ -45,7 +45,7 @@ impl SimpleSource for PubNubSourceReader {
             .build()
             .map_err(|e| SourceError {
                 source_name: self.source_name.clone(),
-                error: SourceErrorDetails::FileIO(e),
+                error: SourceErrorDetails::FileIO(e.to_string()),
             })?;
 
         let mut pubnub = Builder::new()
