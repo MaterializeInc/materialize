@@ -760,13 +760,13 @@ SELECT EXTRACT(hour from TIME '11:12:42.666'),
 ----
 11 12 42.666 42666 42666000
 
-query error
+query error time units 'year' not supported
 SELECT EXTRACT(year from TIME '11:12:42.666')
 
-query error
+query error time units 'month' not supported
 SELECT EXTRACT(month from TIME '11:12:42.666')
 
-query error
+query error time units 'day' not supported
 SELECT EXTRACT(day from TIME '11:12:42.666')
 
 query RR

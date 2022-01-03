@@ -606,6 +606,34 @@ impl<'a> Datum<'a> {
         }
         is_instance_of_scalar(self, &column_type.scalar_type)
     }
+
+    /// Returns the name of the type
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Datum::False
+            | Datum::True => "boolean",
+            Datum::Int16(_) => "int16",
+            Datum::Int32(_) => "int32",
+            Datum::Int64(_) => "int64",
+            Datum::Float32(_) => "float32",
+            Datum::Float64(_) => "float64",
+            Datum::Date(_) => "date",
+            Datum::Time(_) => "time",
+            Datum::Timestamp(_) => "timestamp",
+            Datum::TimestampTz(_) => "timestamptz",
+            Datum::Interval(_) => "interval",
+            Datum::Bytes(_) => "bytes",
+            Datum::String(_) => "string",
+            Datum::Array(_) => "array",
+            Datum::List(_) => "list",
+            Datum::Map(_) => "map",
+            Datum::Numeric(_) => "numeric",
+            Datum::JsonNull => "json",
+            Datum::Uuid(_) => "uuid",
+            Datum::Dummy => "dummy",
+            Datum::Null => "null"
+        }
+    }
 }
 
 impl<'a> From<bool> for Datum<'a> {
