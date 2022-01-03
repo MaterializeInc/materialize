@@ -610,8 +610,7 @@ impl<'a> Datum<'a> {
     /// Returns the name of the type
     pub fn type_name(&self) -> &'static str {
         match self {
-            Datum::False
-            | Datum::True => "boolean",
+            Datum::False | Datum::True => "boolean",
             Datum::Int16(_) => "int16",
             Datum::Int32(_) => "int32",
             Datum::Int64(_) => "int64",
@@ -631,7 +630,7 @@ impl<'a> Datum<'a> {
             Datum::JsonNull => "json",
             Datum::Uuid(_) => "uuid",
             Datum::Dummy => "dummy",
-            Datum::Null => "null"
+            Datum::Null => "null",
         }
     }
 }

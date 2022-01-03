@@ -1366,11 +1366,7 @@ fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 /// A timestamp with only a time component.
-pub trait TimeLike:
-    Copy
-    + chrono::Timelike
-    + for<'a> Into<Datum<'a>>
-{
+pub trait TimeLike: Copy + chrono::Timelike + for<'a> Into<Datum<'a>> {
     fn extract_hour(&self) -> f64 {
         f64::from(self.hour())
     }
@@ -1763,7 +1759,7 @@ fn date_part_interval_inner(
 
 fn date_part_time<'a, T>(a: Datum<'a>, time: T) -> Result<Datum<'a>, EvalError>
 where
-    T: TimeLike
+    T: TimeLike,
 {
     let units = a.unwrap_str();
     match units.parse() {
@@ -1774,7 +1770,7 @@ where
 
 fn date_part_time_inner<'a, T>(units: DateTimeUnits, time: T) -> Result<Datum<'a>, EvalError>
 where
-    T: TimeLike
+    T: TimeLike,
 {
     match units {
         DateTimeUnits::Hour => Ok(time.extract_hour().into()),
@@ -1795,13 +1791,15 @@ where
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedUnits(
-            time.into().type_name().to_string(), format!("{}", units))),
-        DateTimeUnits::Timezone
-        | DateTimeUnits::TimezoneHour
-        | DateTimeUnits::TimezoneMinute => Err(EvalError::Unsupported {
-            feature: format!("'{}' timestamp units", units),
-            issue_no: None,
-        }),
+            time.into().type_name().to_string(),
+            format!("{}", units),
+        )),
+        DateTimeUnits::Timezone | DateTimeUnits::TimezoneHour | DateTimeUnits::TimezoneMinute => {
+            Err(EvalError::Unsupported {
+                feature: format!("'{}' timestamp units", units),
+                issue_no: None,
+            })
+        }
     }
 }
 
@@ -3847,9 +3845,10 @@ impl UnaryFunc {
                 return_ty.default_embedded_value().nullable(false)
             }
 
-            DatePartInterval(_) | DatePartTime(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
-                ScalarType::Float64.nullable(nullable)
-            }
+            DatePartInterval(_)
+            | DatePartTime(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_) => ScalarType::Float64.nullable(nullable),
 
             DateTruncTimestamp(_) => ScalarType::Timestamp.nullable(nullable),
             DateTruncTimestampTz(_) => ScalarType::TimestampTz.nullable(nullable),
@@ -4068,7 +4067,10 @@ impl UnaryFunc {
             TimezoneTimestamp(_) => false,
             CastList1ToList2 { .. } | CastInPlace { .. } => false,
             JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
-            DatePartInterval(_) | DatePartTime(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
+            DatePartInterval(_)
+            | DatePartTime(_)
+            | DatePartTimestamp(_)
+            | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
             RescaleNumeric(_) => false,
         }
