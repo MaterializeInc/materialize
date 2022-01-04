@@ -726,7 +726,7 @@ class Materialized(PythonService):
         memory: Optional[str] = None,
         data_directory: str = "/share/mzdata",
         timestamp_frequency: str = "100ms",
-        options: Union[str, List[str]] = "",
+        options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
@@ -769,10 +769,11 @@ class Materialized(PythonService):
             "--retain-prometheus-metrics 1s",
         ]
 
-        if isinstance(options, str):
-            command_list.append(options)
-        else:
-            command_list.extend(options)
+        if options:
+            if isinstance(options, str):
+                command_list.append(options)
+            else:
+                command_list.extend(options)
 
         if workers:
             command_list.append(f"--workers {workers}")
