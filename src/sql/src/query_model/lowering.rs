@@ -204,7 +204,7 @@ impl<'a> Lowerer<'a> {
                         grouping
                             .key
                             .iter()
-                            .position(|k| c.expr == **k)
+                            .position(|k| c.expr == *k)
                             .expect("expression in the projection of a Grouping box not included in the grouping key")
                     }
                 }).collect_vec();
