@@ -28,7 +28,8 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use log::error;
-use persist_types::Codec;
+use persist_types::{Codec, ExtendWriteAdapter};
+use protobuf::Message;
 use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::{ChangeBatch, Timestamp as TimelyTimestamp};
@@ -37,6 +38,10 @@ use dataflow_types::MzOffset;
 use expr::PartitionId;
 use ore::now::NowFn;
 use repr::Timestamp;
+
+use crate::source::gen::source::{
+    proto_source_timestamp, ProtoAssignedTimestamp, ProtoSourceTimestamp,
+};
 
 /// This struct holds state for proposed timestamps and
 /// proposed bindings from offsets to timestamps.
@@ -702,64 +707,89 @@ impl Ord for SourceTimestamp {
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Default)]
 pub struct AssignedTimestamp(pub(crate) u64);
 
-// TODO: This `Codec` impl and the one for `AssignedTimestamp` are alpha-quality at best. They
-// don't reflect what we will use for production-grade persistence but are here to allow us to get
-// a first version of the persistent Kafka source up and running.
-//
-// These implementations:
-//  - are not defensive about checking expected data lengths
-//  - don't use a future-proof encoding format
-const SOURCE_TIMESTAMP_PARTITION_KAFKA: u8 = 0;
-const SOURCE_TIMESTAMP_PARTITION_NONE: u8 = 1;
-impl Codec for SourceTimestamp {
-    fn codec_name() -> String {
-        "SourceTimestamp".into()
-    }
-
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-        match self.partition {
-            PartitionId::Kafka(pid) => {
-                buf.extend(&[SOURCE_TIMESTAMP_PARTITION_KAFKA]);
-                buf.extend(&pid.to_le_bytes());
-            }
-            PartitionId::None => buf.extend(&[SOURCE_TIMESTAMP_PARTITION_NONE]),
+impl From<&SourceTimestamp> for ProtoSourceTimestamp {
+    fn from(x: &SourceTimestamp) -> Self {
+        ProtoSourceTimestamp {
+            partition_id: Some(match &x.partition {
+                PartitionId::Kafka(x) => proto_source_timestamp::Partition_id::kafka(*x),
+                PartitionId::None => proto_source_timestamp::Partition_id::none(true),
+            }),
+            mz_offset: x.offset.offset,
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
         }
-        buf.extend(&self.offset.offset.to_le_bytes());
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let typ = buf[0];
-        let (partition, offset_start) = match typ {
-            SOURCE_TIMESTAMP_PARTITION_KAFKA => {
-                let slice = &buf[1..(1 + 4)];
-                let pid =
-                    i32::from_le_bytes(<[u8; 4]>::try_from(slice).map_err(|err| err.to_string())?);
-                (PartitionId::Kafka(pid), 1 + 4)
-            }
-            SOURCE_TIMESTAMP_PARTITION_NONE => (PartitionId::None, 1),
-            partition_typ => return Err(format!("Unexpected partition type: {}.", partition_typ)),
-        };
-        let slice = &buf[offset_start..(offset_start + 8)];
-        let offset = i64::from_le_bytes(<[u8; 8]>::try_from(slice).map_err(|err| err.to_string())?);
-        let offset = MzOffset { offset };
-        Ok(SourceTimestamp { partition, offset })
     }
 }
 
-// TODO: see comment on Codec for SourceTimestamp
-impl Codec for AssignedTimestamp {
+impl TryFrom<ProtoSourceTimestamp> for SourceTimestamp {
+    type Error = String;
+
+    fn try_from(x: ProtoSourceTimestamp) -> Result<Self, Self::Error> {
+        let partition = match x.partition_id {
+            Some(proto_source_timestamp::Partition_id::kafka(x)) => PartitionId::Kafka(x),
+            Some(proto_source_timestamp::Partition_id::none(_)) => PartitionId::None,
+            None => return Err("unknown partition_id".into()),
+        };
+        Ok(SourceTimestamp {
+            partition,
+            offset: MzOffset {
+                offset: x.mz_offset,
+            },
+        })
+    }
+}
+
+impl Codec for SourceTimestamp {
     fn codec_name() -> String {
-        "AssignedTimestamp".into()
+        "protobuf[SourceTimestamp]".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-        buf.extend(&self.0.to_le_bytes())
+        ProtoSourceTimestamp::from(self)
+            .write_to_writer(&mut ExtendWriteAdapter(buf))
+            .expect("infallible for ExtendWriteAdapter")
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        Ok(AssignedTimestamp(u64::from_le_bytes(
-            <[u8; 8]>::try_from(buf).map_err(|err| err.to_string())?,
-        )))
+        ProtoSourceTimestamp::parse_from_bytes(buf)
+            .map_err(|err| err.to_string())?
+            .try_into()
+    }
+}
+
+impl From<&AssignedTimestamp> for ProtoAssignedTimestamp {
+    fn from(x: &AssignedTimestamp) -> Self {
+        ProtoAssignedTimestamp {
+            ts: x.0,
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        }
+    }
+}
+
+impl TryFrom<ProtoAssignedTimestamp> for AssignedTimestamp {
+    type Error = String;
+
+    fn try_from(x: ProtoAssignedTimestamp) -> Result<Self, Self::Error> {
+        Ok(AssignedTimestamp(x.ts))
+    }
+}
+
+impl Codec for AssignedTimestamp {
+    fn codec_name() -> String {
+        "protobuf[AssignedTimestamp]".into()
+    }
+
+    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+        ProtoAssignedTimestamp::from(self)
+            .write_to_writer(&mut ExtendWriteAdapter(buf))
+            .expect("infallible for ExtendWriteAdapter")
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        ProtoAssignedTimestamp::parse_from_bytes(buf)
+            .map_err(|err| err.to_string())?
+            .try_into()
     }
 }
 

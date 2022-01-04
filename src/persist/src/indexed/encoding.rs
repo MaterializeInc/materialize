@@ -15,12 +15,12 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::ops::Range;
-use std::{fmt, io};
 
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
-use persist_types::Codec;
+use persist_types::{Codec, ExtendWriteAdapter};
 use protobuf::MessageField;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -255,19 +255,6 @@ impl Default for BlobMeta {
             graveyard: Vec::new(),
             arrangements: Vec::new(),
         }
-    }
-}
-
-struct ExtendWriteAdapter<'e, E>(&'e mut E);
-
-impl<'e, E: for<'a> Extend<&'a u8>> io::Write for ExtendWriteAdapter<'e, E> {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
-        self.0.extend(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> Result<(), io::Error> {
-        Ok(())
     }
 }
 

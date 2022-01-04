@@ -42,6 +42,7 @@ persist-types = { path = "../persist-types" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
+protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false }
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
@@ -56,3 +57,6 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 tokio-util = { version = "0.6.9", features = ["codec", "io"] }
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
+
+[build-dependencies]
+mz-protoc = { path = "../protoc" }
