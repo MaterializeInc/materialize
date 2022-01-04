@@ -1308,6 +1308,31 @@ class PrometheusSQLExporter(PythonService):
         )
 
 
+class Kgen(PythonService):
+    def __init__(
+        self,
+        name: str = "kgen",
+        mzbuild: str = "kgen",
+        depends_on: List[str] = ["kafka"],
+    ) -> None:
+        entrypoint = [
+            "kgen",
+            "--bootstrap-server=kafka:9092",
+        ]
+
+        if "schema-registry" in depends_on:
+            entrypoint.append("--schema-registry-url=http://schema-registry:8081")
+
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": mzbuild,
+                "depends_on": depends_on,
+                "entrypoint": entrypoint,
+            },
+        )
+
+
 class PythonWorkflow(Workflow):
     """
     A PythonWorkflow is a workflow that has been specified as a Python function in a mzworkflows.py file
