@@ -934,7 +934,7 @@ where
                     // bit on the sink.
                     self.handle_sink_connector_ready(id, oid, connector)
                         .await
-                        .expect("marking sink ready should never fail");
+                        .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were
                     // creating the connector. Report to the client that
@@ -2356,7 +2356,35 @@ where
                 depends_on: sink.depends_on,
             }),
         };
-        match self.catalog_transact(vec![op], |_builder| Ok(())).await {
+
+        match self
+            .catalog_transact(vec![op], |mut builder| -> Result<(), CoordError> {
+                // Insert a dummy dataflow to trigger validation before we try to actually create
+                // the external sink resources (e.g. Kafka Topics)
+                builder
+                    .build_sink_dataflow(
+                        "dummy".into(),
+                        id,
+                        dataflow_types::SinkDesc {
+                            from: sink.from,
+                            from_desc: builder
+                                .catalog
+                                .get_by_id(&sink.from)
+                                .desc()
+                                .unwrap()
+                                .clone(),
+                            connector: SinkConnector::Tail(TailSinkConnector {}),
+                            envelope: Some(sink.envelope),
+                            as_of: SinkAsOf {
+                                frontier: Antichain::new(),
+                                strict: false,
+                            },
+                        },
+                    )
+                    .map(|_ok| ())
+            })
+            .await
+        {
             Ok(()) => (),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
