@@ -386,6 +386,18 @@ impl MirScalarExpr {
                                     e.typ(&relation_type).scalar_type,
                                 ),
                             }
+                        } else if *func == BinaryFunc::DatePartTime && expr1.is_literal() {
+                            let units = expr1.as_literal_str().unwrap();
+                            *e = match units.parse::<DateTimeUnits>() {
+                                Ok(units) => MirScalarExpr::CallUnary {
+                                    func: UnaryFunc::DatePartTime(units),
+                                    expr: Box::new(expr2.take()),
+                                },
+                                Err(_) => MirScalarExpr::literal(
+                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    e.typ(&relation_type).scalar_type,
+                                ),
+                            }
                         } else if *func == BinaryFunc::DatePartTimestamp && expr1.is_literal() {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
@@ -1173,6 +1185,7 @@ pub enum EvalError {
     InvalidParameterValue(String),
     NegSqrt,
     UnknownUnits(String),
+    UnsupportedUnits(String, String),
     UnterminatedLikeEscapeSequence,
     Parse(ParseError),
     ParseHex(ParseHexError),
@@ -1250,7 +1263,10 @@ impl fmt::Display for EvalError {
             EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
             EvalError::InvalidRegexFlag(c) => write!(f, "invalid regular expression flag: {}", c),
             EvalError::InvalidParameterValue(s) => f.write_str(s),
-            EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
+            EvalError::UnknownUnits(units) => write!(f, "unit '{}' not recognized", units),
+            EvalError::UnsupportedUnits(units, typ) => {
+                write!(f, "unit '{}' not supported for type {}", units, typ)
+            }
             EvalError::UnterminatedLikeEscapeSequence => {
                 f.write_str("unterminated escape sequence in LIKE")
             }

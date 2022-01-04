@@ -12,9 +12,9 @@ menu:
 
 {{< diagram "func-extract.svg" >}}
 
-Parameter | Type | Description
-----------|------|------------
-_val_ | [`date`](../../types/date), [`timestamp`](../../types/timestamp), [`timestamp with time zone`](../../types/timestamptz) | The value from which you want to extract a component.
+Parameter | Type                                                                                                                                                | Description
+----------|-----------------------------------------------------------------------------------------------------------------------------------------------------|------------
+_val_ | [`date`](../../types/date), [`time`](../../types/time), [`timestamp`](../../types/timestamp), [`timestamp with time zone`](../../types/timestamptz) | The value from which you want to extract a component.
 
 ### Arguments
 
