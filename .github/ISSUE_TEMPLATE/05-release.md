@@ -32,7 +32,18 @@ production readiness.
 
 - [ ] Choose the commit for the release. The commit should *always* be the
   last commit before noon EST on Monday, even if you start the release process
-  late.
+  late. From an updated `main` branch, use this command to find the release commit:
+
+  **Note:** If you're on macOS you need to use `gdate` instead of `date` which
+  you can install with `brew install coreutils`.
+
+  ```shell
+  # If you run the release on Monday
+  git log -n1 --before $(date -Iminutes -d 'this monday 12:00 EST') main
+
+  # If you run the release on Tuesday
+  git log -n1 --before $(date -Iminutes -d 'last monday 12:00 EST') main
+  ```
 
   If there are open release blockers, what to do depends on the scope of the
   fix. If the fix lands soon and is small, cherry-pick the fix onto the chosen
