@@ -483,7 +483,7 @@ async fn read_sqs_task(
 
                 let mut msgs_iter = messages.into_iter();
                 while let Some(message) = msgs_iter.next() {
-                    let cancelled = process_message(
+                    let canceled = process_message(
                         message,
                         glob,
                         base_metrics.clone(),
@@ -494,10 +494,10 @@ async fn read_sqs_task(
                         &queue_url,
                     )
                     .await;
-                    if let Some((cancelled_message, key)) = cancelled {
+                    if let Some((canceled_message, key)) = canceled {
                         release_messages(
                             &client,
-                            Some(cancelled_message),
+                            Some(canceled_message),
                             msgs_iter,
                             queue_url.clone(),
                             &source_id,
