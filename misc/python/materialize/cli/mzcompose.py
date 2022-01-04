@@ -343,9 +343,11 @@ class WebCommand(Command):
         if not ports:
             raise UIError(
                 f"no ports discovered for service {args.service!r}",
-                hint="if the service name is valid, is it running?",
+                hint="is the service running?",
             )
-        webbrowser.open(f"http://localhost:{ports[0]}")
+        url = f"http://localhost:{ports[0]}"
+        print(f"Opening {url} in a web browser...")
+        webbrowser.open(url)
 
 
 class DockerComposeCommand(Command):

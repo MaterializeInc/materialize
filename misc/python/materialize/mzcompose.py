@@ -463,6 +463,8 @@ class Composition:
         # output depends on terminal width (!). Using the `-q` flag is safe,
         # however, and we can pipe the container IDs into `docker inspect`,
         # which supports machine-readable output.
+        if service not in self.services:
+            raise UIError(f"unknown service {service!r}")
         ports = []
         for info in self.inspect_service_containers(service):
             for (name, port_entry) in info["NetworkSettings"]["Ports"].items():
