@@ -18,17 +18,13 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-prerequisites = [
+services = [
     Zookeeper(),
     Kafka(name="kafka1", broker_id=1, offsets_topic_replication_factor=2),
     Kafka(name="kafka2", broker_id=2, offsets_topic_replication_factor=2),
     Kafka(name="kafka3", broker_id=3, offsets_topic_replication_factor=2),
     SchemaRegistry(kafka_servers=["kafka1", "kafka2", "kafka3"]),
     Materialized(),
-]
-
-services = [
-    *prerequisites,
     Testdrive(
         entrypoint=[
             "testdrive",
@@ -42,7 +38,16 @@ services = [
 
 
 def workflow_kafka_multi_broker(w: Workflow):
-    w.start_and_wait_for_tcp(services=prerequisites)
+    w.start_and_wait_for_tcp(
+        services=[
+            "zookeeper",
+            "kafka1",
+            "kafka2",
+            "kafka3",
+            "schema-registry",
+            "materialized",
+        ]
+    )
     w.run_service(
         service="testdrive-svc",
         command="--kafka-addr=kafka2 01-init.td",
