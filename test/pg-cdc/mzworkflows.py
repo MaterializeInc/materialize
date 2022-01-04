@@ -32,7 +32,7 @@ def workflow_pg_cdc(w: Workflow, args: List[str]):
     parser.add_argument(
         "filter",
         nargs="*",
-        default="*.td",
+        default=["*.td"],
         help="limit to only the files matching filter",
     )
     args = parser.parse_args(args)
