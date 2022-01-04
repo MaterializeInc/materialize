@@ -390,6 +390,8 @@ where
                                         Some(value) => value.and_then(|row| {
                                             let mut datums = Vec::with_capacity(source_arity);
 
+                                            // The datums we send to `evaluate` contain the keys
+                                            // and the values in order, so indexing works
                                             let key_columns = decoded_key.iter().count();
                                             datums.extend(decoded_key.iter());
 
@@ -417,8 +419,9 @@ where
                                         current_values.remove(&decoded_key)
                                     };
 
-                                    // This closure re-uses `row_packer` to re-assemble rows with
-                                    // the keys that were replaced with `Datum::Dummy`
+                                    // This closure re-uses a `Row` to 
+                                    // rebuild the full `Row` with both keys and values, before we
+                                    // send them off to sql-land
                                     let mut repack_value = |row: Row| {
                                         row_packer.clear();
 
