@@ -805,7 +805,7 @@ impl AppliedState {
 
 impl<L: Log, B: Blob> Indexed<L, B> {
     fn update_listeners(
-        &self,
+        &mut self,
         updates: HashMap<Id, Vec<ColumnarRecords>>,
         seals: HashMap<Id, u64>,
     ) {
@@ -829,35 +829,54 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
 
         for (id, updates) in updates {
-            if let Some(listeners) = self.listeners.get(&id) {
+            if let Some(listeners) = self.listeners.get_mut(&id) {
                 if listeners.is_empty() {
                     continue;
                 }
 
+                let mut dropped_listeners = vec![];
                 let updates = updates
                     .iter()
                     .flat_map(|u| u.iter())
                     .map(|((k, v), ts, diff)| ((k.to_vec(), v.to_vec()), ts, diff))
                     .collect();
 
-                // TODO: remove the listener if it hangs up.
                 if listeners.len() == 1 {
                     let events = ListenEvent::Records(updates);
-                    if let Err(crossbeam_channel::SendError(_)) = listeners[0].send(events) {}
-                } else {
-                    for listener in listeners.iter() {
-                        let events = ListenEvent::Records(updates.clone());
-                        if let Err(crossbeam_channel::SendError(_)) = listener.send(events) {}
+                    if let Err(crossbeam_channel::SendError(_)) = listeners[0].send(events) {
+                        dropped_listeners.push(0);
                     }
+                } else {
+                    for (idx, listener) in listeners.iter().enumerate() {
+                        let events = ListenEvent::Records(updates.clone());
+                        if let Err(crossbeam_channel::SendError(_)) = listener.send(events) {
+                            dropped_listeners.push(idx);
+                        }
+                    }
+                }
+
+                // Drain listeners in reverse index orders so that removing listeners at a
+                // given position doesn't affect other removals.
+                for listener_idx in dropped_listeners.into_iter().rev() {
+                    listeners.swap_remove(listener_idx);
                 }
             }
         }
 
         for (id, seal) in seals {
-            if let Some(listeners) = self.listeners.get(&id) {
-                for listener in listeners.iter() {
+            if let Some(listeners) = self.listeners.get_mut(&id) {
+                let mut dropped_listeners = vec![];
+                for (idx, listener) in listeners.iter().enumerate() {
                     let seal_event = ListenEvent::Sealed(seal);
-                    if let Err(crossbeam_channel::SendError(_)) = listener.send(seal_event) {}
+                    if let Err(crossbeam_channel::SendError(_)) = listener.send(seal_event) {
+                        dropped_listeners.push(idx);
+                    }
+                }
+
+                // Drain listeners in reverse index orders so that removing listeners at a
+                // given position doesn't affect other removals.
+                for listener_idx in dropped_listeners.into_iter().rev() {
+                    listeners.swap_remove(listener_idx);
                 }
             }
         }
@@ -1583,6 +1602,45 @@ mod tests {
             (("2".into(), "".into()), 3, 1),
         ];
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dropped_listener() -> Result<(), Error> {
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
+        let id = block_on(|res| i.register("0", "()", "()", res))?;
+
+        let mut listen_rxs = vec![];
+
+        for _ in 0..5 {
+            // Register a listener for writes.
+            let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
+            block_on(|res| i.listen(id, listen_tx, res))?;
+            listen_rxs.push(listen_rx);
+        }
+
+        let mut expected = vec![];
+        for t in 0..5 {
+            // Write data at even times and seal at odd times, to exercise dropping listeners
+            // while notifying them of writes and notifying them of seals.
+            if t % 2 == 0 {
+                let updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)> =
+                    vec![((format!("{}", t).into(), "".into()), t, 1)];
+                block_on_drain(&mut i, |i, res| {
+                    i.write(vec![(id, updates.iter().collect::<ColumnarRecords>())], res)
+                })?;
+                expected.push(ListenEvent::Records(updates));
+            } else {
+                block_on_drain(&mut i, |i, res| i.seal(vec![id], t, res))?;
+                expected.push(ListenEvent::Sealed(t));
+            }
+
+            let listen_rx = listen_rxs.pop().expect("known to have 5 listeners");
+            let actual: Vec<_> = listen_rx.try_iter().collect();
+
+            assert_eq!(actual, expected);
+        }
 
         Ok(())
     }
