@@ -1,16 +1,20 @@
 # dbt-materialize Changelog
 
+## 1.0.0 - 2021-01-03
+
+* Upgrade to `dbt-postgres` v1.0.1.
+
 ## 1.0.0 - 2021-12-11
 
-* Upgrade to `dbt` and `dbt-postgres` v1.0.0.
+* Upgrade to `dbt-postgres` v1.0.0.
 
 ## 0.21.0 - 2021-10-05
 
-* Upgrade to `dbt` and `dbt-postgres` v0.21.0.
+* Upgrade to `dbt-postgres` v0.21.0.
 
 ## 0.20.2 - 2021-09-08
 
-* Upgrade to `dbt` and `dbt-postgres` v0.20.2.
+* Upgrade to `dbt-postgres` v0.20.2.
 
 ## 0.20.1.post1 - 2021-08-18
 
@@ -25,11 +29,11 @@
 
 ## 0.20.1 - 2021-08-12
 
-* Upgrade to `dbt` and `dbt-postgres` v0.20.1.
+* Upgrade to `dbt-postgres` v0.20.1.
 
 ## 0.20.0 - 2021-08-06
 
-* Upgrade to `dbt` and `dbt-postgres` v0.20.0.
+* Upgrade to `dbt-postgres` v0.20.0.
 
 * Add the `mz_create_index` and `mz_drop_index` macros to manage the creation
   and deletion of indexes.
