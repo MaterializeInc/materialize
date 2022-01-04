@@ -31,7 +31,7 @@ use crate::session::{EndTransactionAction, RowBatchStream, Session};
 pub enum Command {
     Startup {
         session: Session,
-        cancel_tx: Arc<watch::Sender<Cancelled>>,
+        cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     },
 
@@ -164,8 +164,8 @@ pub enum ExecuteResponse {
     AlteredObject(ObjectType),
     // The index was altered.
     AlteredIndexLogicalCompaction,
-    // The query was cancelled.
-    Cancelled,
+    // The query was canceled.
+    Canceled,
     /// The requested cursor was closed.
     ClosedCursor,
     CopyTo {
@@ -289,10 +289,10 @@ pub struct SimpleResult {
 
 /// The state of a cancellation request.
 #[derive(Debug, Clone, Copy)]
-pub enum Cancelled {
+pub enum Canceled {
     /// A cancellation request has occurred.
-    Cancelled,
+    Canceled,
     /// No cancellation request has yet occurred, or a previous request has been
     /// cleared.
-    NotCancelled,
+    NotCanceled,
 }

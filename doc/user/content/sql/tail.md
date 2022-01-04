@@ -108,7 +108,7 @@ the nature of the update:
 </tbody>
 </table>
 
-`TAIL` will continue to run until cancelled, or until all updates the tailed
+`TAIL` will continue to run until canceled, or until all updates the tailed
 item could undergo have been presented. The latter case typically occurs when
 tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
 [file sources](/sql/create-source/text-file) that were created in non-tailing

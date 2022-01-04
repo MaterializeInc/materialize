@@ -22,7 +22,7 @@ use repr::{Datum, Row};
 use sql::ast::{Raw, Statement};
 
 use crate::command::{
-    Cancelled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
+    Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
     StartupResponse,
 };
 use crate::error::CoordError;
@@ -149,11 +149,11 @@ impl ConnClient {
     ) -> Result<(SessionClient, StartupResponse), CoordError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
-        // connection. The coordinator will send a cancelled message on it if a
+        // connection. The coordinator will send a canceled message on it if a
         // cancellation request comes. The connection will reset that on every message
         // it receives and then check for it where we want to add the ability to cancel
         // an in-progress statement.
-        let (cancel_tx, cancel_rx) = watch::channel(Cancelled::NotCancelled);
+        let (cancel_tx, cancel_rx) = watch::channel(Canceled::NotCanceled);
         let cancel_tx = Arc::new(cancel_tx);
         let mut client = SessionClient {
             inner: self,
@@ -221,8 +221,8 @@ pub struct SessionClient {
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
-    cancel_tx: Arc<watch::Sender<Cancelled>>,
-    cancel_rx: watch::Receiver<Cancelled>,
+    cancel_tx: Arc<watch::Sender<Canceled>>,
+    cancel_rx: watch::Receiver<Canceled>,
 }
 
 impl SessionClient {
@@ -231,7 +231,7 @@ impl SessionClient {
         async move {
             loop {
                 let _ = cancel_rx.changed().await;
-                if let Cancelled::Cancelled = *cancel_rx.borrow() {
+                if let Canceled::Canceled = *cancel_rx.borrow() {
                     return;
                 }
             }
@@ -241,10 +241,10 @@ impl SessionClient {
     pub fn reset_canceled(&mut self) {
         // Clear any cancellation message.
         // TODO(mjibson): This makes the use of .changed annoying since it will
-        // generally always have a NotCancelled message first that needs to be ignored,
+        // generally always have a NotCanceled message first that needs to be ignored,
         // and thus run in a loop. Figure out a way to have the future only resolve on
-        // a Cancelled message.
-        let _ = self.cancel_tx.send(Cancelled::NotCancelled);
+        // a Canceled message.
+        let _ = self.cancel_tx.send(Canceled::NotCanceled);
     }
 
     // Verify and return the named prepared statement. We need to verify each use

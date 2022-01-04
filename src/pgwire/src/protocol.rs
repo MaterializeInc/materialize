@@ -946,7 +946,7 @@ where
         }
 
         match response {
-            ExecuteResponse::Cancelled => {
+            ExecuteResponse::Canceled => {
                 return self
                     .error(ErrorResponse::error(
                         SqlState::QUERY_CANCELED,
@@ -1239,13 +1239,13 @@ where
             // Fetch next batch of rows, waiting for a possible requested timeout or
             // cancellation.
             let batch = if self.coord_client.canceled().now_or_never().is_some() {
-                FetchResult::Cancelled
+                FetchResult::Canceled
             } else if rows.current.is_some() {
                 FetchResult::Rows(rows.current.take())
             } else {
                 tokio::select! {
                     _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
-                    _ = self.coord_client.canceled() => FetchResult::Cancelled,
+                    _ = self.coord_client.canceled() => FetchResult::Canceled,
                     batch = rows.remaining.recv() => FetchResult::Rows(batch),
                 }
             };
@@ -1314,7 +1314,7 @@ where
                     }
                     self.conn.flush().await?;
                 }
-                FetchResult::Cancelled => {
+                FetchResult::Canceled => {
                     return self
                         .error(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
@@ -1712,5 +1712,5 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 #[derive(Debug)]
 enum FetchResult {
     Rows(Option<Vec<Row>>),
-    Cancelled,
+    Canceled,
 }

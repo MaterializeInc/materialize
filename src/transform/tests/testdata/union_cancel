@@ -15,7 +15,7 @@ cat
 ----
 ok
 
-# equivalent branches can't be cancelled
+# equivalent branches can't be canceled
 
 build apply=UnionBranchCancellation
 (union [(negate (get x)) (negate (get x))])
@@ -305,7 +305,7 @@ build apply=UnionBranchCancellation
 ----
 ----
 
-# map -> filter in different order, branches can't be cancelled
+# map -> filter in different order, branches can't be canceled
 build apply=UnionBranchCancellation
 (union [(filter (map (get x) [#0]) [#0]) (map (filter (negate (get x)) [#0]) [#0])])
 ----

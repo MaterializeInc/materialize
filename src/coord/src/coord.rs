@@ -152,7 +152,7 @@ use crate::catalog::{
 };
 use crate::client::{Client, Handle};
 use crate::command::{
-    Cancelled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
+    Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::antichain::AntichainToken;
 use crate::coord::dataflow_builder::DataflowBuilder;
@@ -348,11 +348,11 @@ where
 struct ConnMeta {
     /// A watch channel shared with the client to inform the client of
     /// cancellation requests. The coordinator sets the contained value to
-    /// `Cancelled::Cancelled` whenever it receives a cancellation request that
+    /// `Canceled::Canceled` whenever it receives a cancellation request that
     /// targets this connection. It is the client's responsibility to check this
     /// value when appropriate and to reset the value to
-    /// `Cancelled::NotCancelled` before starting a new operation.
-    cancel_tx: Arc<watch::Sender<Cancelled>>,
+    /// `Canceled::NotCanceled` before starting a new operation.
+    cancel_tx: Arc<watch::Sender<Canceled>>,
     /// Pgwire specifies that every connection have a 32-bit secret associated
     /// with it, that is known to both the client and the server. Cancellation
     /// requests are required to authenticate with the secret of the connection
@@ -770,7 +770,7 @@ where
                     .expect("Peek endpoint terminated prematurely");
             }
             dataflow_types::client::Response::TailResponse(sink_id, response) => {
-                // We use an `if let` here because the peek could have been cancelled already.
+                // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
                 if let Some(pending_tail) = self.pending_tails.get_mut(&sink_id) {
@@ -1575,11 +1575,11 @@ where
                 .position(|ready| ready.session.conn_id() == conn_id)
             {
                 let ready = self.write_lock_wait_group.remove(idx).unwrap();
-                ready.tx.send(Ok(ExecuteResponse::Cancelled), ready.session);
+                ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
             }
 
             // Inform the target session (if it asks) about the cancellation.
-            let _ = conn_meta.cancel_tx.send(Cancelled::Cancelled);
+            let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
             // Allow dataflow to cancel any pending peeks.
             self.broadcast(dataflow_types::client::Command::CancelPeek { conn_id })
