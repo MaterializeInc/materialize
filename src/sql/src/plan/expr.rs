@@ -1313,7 +1313,7 @@ impl HirScalarExpr {
     /// Column references in parameters will be corrected to account for the
     /// depth at which they are spliced.
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
-        let _ = self.visit_recursively_mut(depth, &mut |_: usize,
+        let _ = self.visit_recursively_mut(depth, &mut |depth: usize,
                                                         e: &mut HirScalarExpr|
          -> Result<(), ()> {
             if let HirScalarExpr::Parameter(i) = e {
