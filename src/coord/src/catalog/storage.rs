@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
+use ore::soft_assert_eq;
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
@@ -438,6 +440,37 @@ impl Transaction<'_> {
         }
     }
 
+    fn validate_timestamp_bindings(&self, source_id: &GlobalId) -> Result<(), String> {
+        let bindings_vec = self
+            .load_timestamp_bindings(*source_id)
+            .map_err(|e| format!("{}", e))?;
+
+        let bindings_by_pid = bindings_vec.iter().group_by(|(pid, _ts, _offset)| pid);
+
+        for (pid, bindings) in &bindings_by_pid {
+            let mut latest_offset = 0;
+            let mut latest_ts = 0;
+            for (_pid, ts, offset) in bindings {
+                if offset.offset < latest_offset {
+                    return Err(format!(
+                        "Unexpected offset {} for pid {}. All bindings: {:?}",
+                        offset, pid, bindings_vec
+                    ));
+                }
+                if *ts < latest_ts {
+                    return Err(format!(
+                        "Timestamps should not be decreasing but got {} for pid {}. All bindings: {:?}",
+                        ts, pid, bindings_vec
+                    ));
+                }
+                latest_offset = offset.offset;
+                latest_ts = *ts;
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn load_timestamp_bindings(
         &self,
         source_id: GlobalId,
@@ -528,24 +561,28 @@ impl Transaction<'_> {
         timestamp: Timestamp,
         offset: i64,
     ) -> Result<(), Error> {
-        match self
+        let result = self
             .inner
             .prepare_cached(
                 "INSERT OR IGNORE INTO timestamps (sid, pid, timestamp, offset) VALUES (?, ?, ?, ?)",
             )?
-            .execute(params![SqlVal(source_id), partition_id, timestamp, offset])
-        {
+              .execute(params![SqlVal(source_id), partition_id, timestamp, offset]);
+
+        soft_assert_eq!(self.validate_timestamp_bindings(source_id), Ok(()));
+
+        match result {
             Ok(_) => Ok(()),
             Err(err) => Err(err.into()),
         }
     }
 
     pub fn delete_timestamp_bindings(&self, source_id: GlobalId) -> Result<(), Error> {
-        match self
+        let result = self
             .inner
             .prepare_cached("DELETE FROM timestamps WHERE sid = ?")?
-            .execute(params![SqlVal(&source_id)])
-        {
+            .execute(params![SqlVal(&source_id)]);
+
+        match result {
             Ok(_) => Ok(()),
             Err(err) => Err(err.into()),
         }
