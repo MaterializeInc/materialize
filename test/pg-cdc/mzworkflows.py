@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 from typing import List
 
 from materialize.mzcompose import (
@@ -36,9 +37,14 @@ def workflow_pg_cdc(w: Workflow, args: List[str]):
     )
     args = parser.parse_args(args)
 
+    if os.getenv("BUILDKITE"):
+        command = ["--ci-output", *args.filter]
+    else:
+        command = args.filter
+
     w.start_services(
         services=["materialized", "test-certs", "testdrive-svc", "postgres"]
     )
     w.wait_for_mz()
     w.wait_for_postgres()
-    w.run_service(service="testdrive-svc", command=args.filter)
+    w.run_service(service="testdrive-svc", command=command)
