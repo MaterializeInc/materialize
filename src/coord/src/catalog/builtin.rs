@@ -895,7 +895,9 @@ lazy_static! {
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("arg_ids", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
-            .with_column("variadic_id", ScalarType::String.nullable(true)),
+            .with_column("variadic_id", ScalarType::String.nullable(true))
+            .with_column("ret_id", ScalarType::String.nullable(true))
+            .with_column("ret_set", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4041),
         index_id: GlobalId::System(4042),
         persistent: false,
@@ -1884,7 +1886,6 @@ mod tests {
         // - if they have a postgres counterpart (same oid) then they have matching name
         // Note: Use Postgres 13 when testing because older version don't have all
         // functions.
-
         let (client, connection) =
             tokio_postgres::connect("host=localhost user=postgres", NoTls).await?;
 
@@ -1895,12 +1896,18 @@ mod tests {
         });
 
         let rows = client
-            .query("SELECT oid, proname, proargtypes FROM pg_proc", &[])
+            .query(
+                "SELECT oid, proname, proargtypes, prorettype, proretset FROM pg_proc",
+                &[],
+            )
             .await?;
+        println!("got rows");
 
         struct PgProc {
             name: String,
             arg_oids: Vec<u32>,
+            ret_oid: Option<u32>,
+            ret_set: bool,
         }
 
         let mut pg_proc = HashMap::new();
@@ -1911,6 +1918,8 @@ mod tests {
                 PgProc {
                     name: row.get("proname"),
                     arg_oids: row.get("proargtypes"),
+                    ret_oid: row.get("prorettype"),
+                    ret_set: row.get("proretset"),
                 },
             );
         }
@@ -1945,6 +1954,20 @@ mod tests {
                         println!(
                             "funcs with oid {} ({}) don't match arguments: {:?} in mz, {:?} in pg",
                             imp.oid, func.name, imp.arg_oids, pg_fn.arg_oids
+                        );
+                    }
+
+                    if imp.return_oid != pg_fn.ret_oid {
+                        println!(
+                            "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
+                            imp.oid, func.name, imp.return_oid, pg_fn.ret_oid
+                        );
+                    }
+
+                    if imp.return_is_set != pg_fn.ret_set {
+                        println!(
+                            "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
+                            imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
                         );
                     }
                 }
