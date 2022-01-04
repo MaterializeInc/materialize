@@ -42,7 +42,6 @@ tests = os.getenv("TD_TEST", "*.td esoteric/*.td")
 tests_ci = tests + " esoteric/pubnub/pubnub.td"
 aws_localstack = "--aws-endpoint http://localstack:4566"
 aws_amazon = "--aws-region=us-east-2"
-ci_output = "--ci-output" if os.getenv("BUILDKITE") else ""
 
 
 def workflow_testdrive(w: Workflow):
@@ -73,5 +72,5 @@ def test_testdrive(w: Workflow, mz: Materialized, aws: str, tests: str):
         services=["zookeeper", "kafka", "schema-registry", mz.name]
     )
     w.wait_for_mz(service=mz.name)
-    w.run_service(service="testdrive-svc", command=f"{ci_output} {aws} {tests}")
+    w.run_service(service="testdrive-svc", command=f"{aws} {tests}")
     w.kill_services(services=[mz.name])

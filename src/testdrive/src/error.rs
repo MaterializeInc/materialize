@@ -82,16 +82,14 @@ impl Error {
     }
 
     /// Prints the error to `stderr`, with coloring if the terminal supports it.
-    pub fn print_stderr(&self, ci_output: bool) -> io::Result<()> {
+    pub fn print_stderr(&self) -> io::Result<()> {
         let color_choice = if atty::is(Stream::Stderr) {
             ColorChoice::Auto
         } else {
             ColorChoice::Never
         };
         let mut stderr = StandardStream::stderr(color_choice);
-        if ci_output {
-            println!("^^^ +++");
-        }
+        println!("^^^ +++");
         match self {
             Error::Input {
                 err,

@@ -77,10 +77,6 @@ struct Args {
     no_reset: bool,
 
     // === Testdrive options. ===
-    /// Emit Buildkite-specific markup.
-    #[clap(long)]
-    ci_output: bool,
-
     /// Default timeout in seconds.
     #[clap(long, parse(try_from_str = repr::util::parse_duration), default_value = "10s")]
     default_timeout: Duration,
@@ -194,7 +190,6 @@ async fn main() {
         materialized_pgconfig: args.materialized_url,
         materialized_catalog_path: args.validate_catalog,
         reset: !args.no_reset,
-        ci_output: args.ci_output,
         default_timeout: args.default_timeout,
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
@@ -221,7 +216,7 @@ async fn main() {
             "-" => testdrive::run_stdin(&config).await,
             _ => testdrive::run_file(&config, &file).await,
         } {
-            let _ = error.print_stderr(args.ci_output);
+            let _ = error.print_stderr();
             error_files.push(file.clone());
 
             errors.push(error);
@@ -231,9 +226,7 @@ async fn main() {
         }
     }
 
-    if config.ci_output {
-        print!("+++ ")
-    }
+    print!("+++ ");
     if errors.is_empty() {
         println!("testdrive completed successfully.");
     } else {
