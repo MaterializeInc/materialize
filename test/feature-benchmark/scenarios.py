@@ -623,12 +623,12 @@ $ set schema={
         ]
     }
 
-$ kafka-create-topic topic=topic
+$ kafka-create-topic topic=kafka-upsert
 
-$ kafka-ingest format=avro topic=topic key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count}
 {"f1": 1} {"f2": ${kafka-ingest.iteration}}
 
-$ kafka-ingest format=avro topic=topic key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
 {"f1": 2} {"f2": 2}
 """
     )
@@ -638,13 +638,41 @@ $ kafka-ingest format=avro topic=topic key-format=avro key-schema=${keyschema} s
 > DROP SOURCE IF EXISTS s1;
 
 > /* A */ CREATE MATERIALIZED SOURCE s1
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-topic-${testdrive.seed}'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-upsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT;
 
 > /* B */ SELECT f1 FROM s1;
 1
 2
+"""
+    )
+
+
+class KafkaUpsertUnique(KafkaBenchmark):
+    SHARED = Td(
+        """
+$ set keyschema={"type": "record", "name": "Key", "fields": [ {"name": "f1", "type": "long"} ] }
+
+$ set schema={"type" : "record", "name" : "test", "fields": [ {"name": "f2", "type": "long"} ] }
+
+$ kafka-create-topic topic=upsert-unique partitions=16
+
+$ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=1000000
+{"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
+"""
+    )
+    BENCHMARK = Td(
+        """
+> DROP SOURCE IF EXISTS s1;
+
+> /* A */ CREATE MATERIALIZED SOURCE s1
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-upsert-unique-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT;
+
+> /* B */ SELECT COUNT(*) FROM s1;
+1000000
 """
     )
 

@@ -56,7 +56,7 @@ this_options = os.getenv("THIS_OPTIONS", None)
 other_image = os.getenv("OTHER_IMAGE", None)
 other_options = os.getenv("OTHER_OPTIONS", None)
 
-default_timeout = 120
+default_timeout = "5m"
 
 mzs = {
     "this": Materialized(
@@ -73,13 +73,13 @@ tds = {
         name="testdrive_this",
         materialized_url=f"postgres://materialize@materialized_this:6875",
         validate_catalog=False,
-        default_timeout=120,
+        default_timeout=default_timeout,
     ),
     "other": Testdrive(
         name="testdrive_other",
         materialized_url=f"postgres://materialize@materialized_other:6875",
         validate_catalog=False,
-        default_timeout=120,
+        default_timeout=default_timeout,
     ),
 }
 
