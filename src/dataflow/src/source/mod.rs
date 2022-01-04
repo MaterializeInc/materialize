@@ -36,8 +36,9 @@ use async_trait::async_trait;
 use dataflow_types::{
     Consistency, ExternalSourceConnector, MzOffset, SourceDataEncoding, SourceError,
 };
-use expr::{PartitionId, SourceInstanceId};
+use expr::{GlobalId, PartitionId, SourceInstanceId};
 use log::error;
+use ore::cast::CastFrom;
 use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use ore::now::NowFn;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -576,8 +577,6 @@ pub struct ConsistencyInfo {
     source_metrics: SourceMetrics,
     /// source global id
     source_id: SourceInstanceId,
-    /// True if this worker is the active reader
-    active: bool,
     /// id of worker
     worker_id: usize,
     /// total number of workers
@@ -586,7 +585,6 @@ pub struct ConsistencyInfo {
 
 impl ConsistencyInfo {
     fn new(
-        active: bool,
         metrics_name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
@@ -610,7 +608,6 @@ impl ConsistencyInfo {
                 logger,
             ),
             source_id,
-            active,
             worker_id,
             worker_count,
         }
@@ -618,23 +615,12 @@ impl ConsistencyInfo {
 
     /// Returns true if this worker is responsible for handling this partition
     fn responsible_for(&self, pid: &PartitionId) -> bool {
-        match pid {
-            PartitionId::None => self.active,
-            PartitionId::Kafka(p) => {
-                // We want to distribute partitions across workers evenly, such that
-                // - different partitions for the same source are uniformly distributed across workers
-                // - the same partition id across different sources are uniformly distributed across workers
-                // - the same partition id across different instances of the same source is sent to
-                //   the same worker.
-                // We achieve this by taking a hash of the `source_id` (not the source instance id) and using
-                // that to offset distributing partitions round robin across workers.
-
-                // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
-                // overflow.
-                let hash = (self.source_id.source_id.hashed() >> 32) + *p as u64;
-                (hash % self.worker_count as u64) == self.worker_id as u64
-            }
-        }
+        responsible_for(
+            &self.source_id.source_id,
+            self.worker_id,
+            self.worker_count,
+            pid,
+        )
     }
 
     /// Returns true if we currently know of particular partition. We know (and have updated the
@@ -806,6 +792,39 @@ impl ConsistencyInfo {
             Some(timestamp)
         } else {
             None
+        }
+    }
+}
+
+/// Returns true if the given source id/worker id is responsible for handling the given
+/// partition.
+pub fn responsible_for(
+    source_id: &GlobalId,
+    worker_id: usize,
+    worker_count: usize,
+    pid: &PartitionId,
+) -> bool {
+    match pid {
+        PartitionId::None => {
+            // All workers are responsible for reading in Kafka sources. Other sources
+            // support single-threaded ingestion only. Note that in all cases we want all
+            // readers of the same source or same partition to reside on the same worker,
+            // and only load-balance responsibility across distinct sources.
+            (usize::cast_from(source_id.hashed()) % worker_count) == worker_id
+        }
+        PartitionId::Kafka(p) => {
+            // We want to distribute partitions across workers evenly, such that
+            // - different partitions for the same source are uniformly distributed across workers
+            // - the same partition id across different sources are uniformly distributed across workers
+            // - the same partition id across different instances of the same source is sent to
+            //   the same worker.
+            // We achieve this by taking a hash of the `source_id` (not the source instance id) and using
+            // that to offset distributing partitions round robin across workers.
+
+            // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
+            // overflow.
+            let hash = (source_id.hashed() >> 32) + *p as u64;
+            (hash % worker_count as u64) == worker_id as u64
         }
     }
 }
@@ -1382,7 +1401,6 @@ where
 
         // Create control plane information (Consistency-related information)
         let mut consistency_info = ConsistencyInfo::new(
-            active,
             upstream_name.unwrap_or_else(|| name.clone()),
             id,
             worker_id,

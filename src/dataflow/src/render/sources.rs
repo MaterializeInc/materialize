@@ -25,8 +25,7 @@ use persist::operators::stream::{AwaitFrontier, Seal};
 use persist::operators::upsert::PersistentUpsertConfig;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, SourceInstanceId};
-use ore::cast::CastFrom;
+use expr::{GlobalId, Id, PartitionId, SourceInstanceId};
 use ore::now::NowFn;
 use ore::result::ResultExt;
 use repr::{RelationDesc, Row, ScalarType, Timestamp};
@@ -207,7 +206,14 @@ where
                 let active_read_worker = if let ExternalSourceConnector::Kafka(_) = connector {
                     true
                 } else {
-                    (usize::cast_from(src_id.hashed()) % scope.peers()) == scope.index()
+                    // TODO: This feels icky, but getting rid of hardcoding this difference between
+                    // Kafka and all other sources seems harder.
+                    crate::source::responsible_for(
+                        &src_id,
+                        scope.index(),
+                        scope.peers(),
+                        &PartitionId::None,
+                    )
                 };
 
                 let timestamp_histories = render_state

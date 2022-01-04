@@ -908,8 +908,30 @@ where
                 // Add any timestamp bindings that we were already aware of on restart.
                 if let Some(data) = source_timestamp_data {
                     for (pid, timestamp, offset) in bindings {
-                        data.add_partition(pid.clone(), None);
-                        data.add_binding(pid, timestamp, offset, false);
+                        if crate::source::responsible_for(
+                            &id,
+                            self.timely_worker.index(),
+                            self.timely_worker.peers(),
+                            &pid,
+                        ) {
+                            log::trace!(
+                                "Adding partition/binding on worker {}: ({}, {}, {})",
+                                self.timely_worker.index(),
+                                pid,
+                                timestamp,
+                                offset
+                            );
+                            data.add_partition(pid.clone(), None);
+                            data.add_binding(pid, timestamp, offset, false);
+                        } else {
+                            log::trace!(
+                                "NOT adding partition/binding on worker {}: ({}, {}, {})",
+                                self.timely_worker.index(),
+                                pid,
+                                timestamp,
+                                offset
+                            );
+                        }
                     }
 
                     let prev = self.render_state.ts_histories.insert(id, data);
