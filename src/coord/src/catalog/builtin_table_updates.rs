@@ -418,10 +418,13 @@ impl CatalogState {
             .unwrap();
             let arg_ids = row.unpack_first();
 
-            let variadic_id = match func_impl_details.variadic_oid {
-                Some(oid) => Some(self.get_by_oid(&oid).id().to_string()),
-                None => None,
-            };
+            let variadic_id = func_impl_details
+                .variadic_oid
+                .map(|oid| self.get_by_oid(&oid).id().to_string());
+
+            let ret_id = func_impl_details
+                .return_oid
+                .map(|oid| self.get_by_oid(&oid).id().to_string());
 
             updates.push(BuiltinTableUpdate {
                 id: MZ_FUNCTIONS.id,
@@ -432,6 +435,8 @@ impl CatalogState {
                     Datum::String(name),
                     arg_ids,
                     Datum::from(variadic_id.as_deref()),
+                    Datum::from(ret_id.as_deref()),
+                    func_impl_details.return_is_set.into(),
                 ]),
                 diff,
             });
