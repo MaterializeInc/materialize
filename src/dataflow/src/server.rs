@@ -631,6 +631,14 @@ where
                 );
                 prev_frontier.clone_from(&new_frontier);
             }
+            if !bindings.is_empty() {
+                log::trace!(
+                    "Reporting bindings: {:?}, prev_frontier: {:?}, new_frontier: {:?}",
+                    bindings,
+                    prev_frontier,
+                    new_frontier
+                );
+            }
         }
 
         if !changes.is_empty() || !bindings.is_empty() {
