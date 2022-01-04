@@ -90,3 +90,9 @@ Cannot re-materialize source s3_double_mat
 
 ! CREATE DEFAULT INDEX ON s3_double_mat
 Cannot re-materialize source s3_double_mat
+
+! CREATE SINK invalid_double_mat_sink FROM s3_double_mat
+  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Cannot re-materialize source s3_double_mat
