@@ -66,7 +66,8 @@ where
         // `active_worker` indicates the index of the worker that receives all data.
         let active_worker = (sink_id.hashed() as usize) % scope.peers() == scope.index();
         // An encapsulation of the Tail response protocol.
-        // Used to send rows and eventually mark complete.
+        // Used to send rows and progress messages,
+        // and alert if the dataflow was dropped before completing.
         // Set to `None` for instances that should not produce output.
         let tail_protocol_handle = Rc::new(RefCell::new(if active_worker {
             Some(TailProtocol {
@@ -174,16 +175,6 @@ fn tail<G>(
         {
             tail_protocol.send_progress(progress);
         }
-
-        // If the frontier is empty the tailing is complete. We should say so!
-        if input.frontier().frontier().is_empty() {
-            if let Some(tail_protocol) = tail_protocol_handle.borrow_mut().take() {
-                tail_protocol.complete();
-            } else {
-                // Not an error to notice the end of the stream at non-emitters,
-                // or to notice it a second time at a previous emitter.
-            }
-        }
     })
 }
 
@@ -200,6 +191,7 @@ struct TailProtocol {
 impl TailProtocol {
     /// Send the current upper frontier of the tail.
     fn send_progress(&mut self, upper: Antichain<Timestamp>) {
+        let input_exhausted = upper.is_empty();
         let buffer = self
             .tail_response_buffer
             .as_mut()
@@ -207,6 +199,11 @@ impl TailProtocol {
         buffer
             .borrow_mut()
             .push((self.sink_id, TailResponse::Progress(upper)));
+        if input_exhausted {
+            // The dataflow's input has been exhausted; clear the channel,
+            // to avoid sending `TailResponse::Dropped`.
+            self.tail_response_buffer = None;
+        }
     }
 
     /// Send further rows as responses.
@@ -214,23 +211,10 @@ impl TailProtocol {
         let buffer = self
             .tail_response_buffer
             .as_mut()
-            .expect("The tail response buffer is only cleared on drop.");
+            .expect("Unexpectedly saw more rows! The tail response buffer should only have been cleared when either the dataflow was dropped or the input was exhausted.");
         buffer
             .borrow_mut()
             .push((self.sink_id, TailResponse::Rows(rows)));
-    }
-
-    /// Completes the channel, preventing further transmissions.
-    fn complete(mut self) {
-        let buffer = self
-            .tail_response_buffer
-            .as_mut()
-            .expect("The tail response buffer is only cleared on drop.");
-        buffer
-            .borrow_mut()
-            .push((self.sink_id, TailResponse::Complete));
-        // Set to `None` to avoid `TailResponse::Dropped`.
-        self.tail_response_buffer = None;
     }
 }
 
