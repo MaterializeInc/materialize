@@ -50,10 +50,7 @@ pub async fn run_stdin(config: &Config) -> Result<(), Error> {
 /// only as output in error messages and such. No attempt is made to read
 /// `filename`.
 pub async fn run_string(config: &Config, filename: &str, contents: &str) -> Result<(), Error> {
-    if config.ci_output {
-        print!("--- ");
-    }
-    println!("==> {}", filename);
+    println!("--- {}", filename);
 
     let mut line_reader = LineReader::new(contents);
     run_line_reader(config, &mut line_reader)

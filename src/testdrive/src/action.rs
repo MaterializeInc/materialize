@@ -82,8 +82,6 @@ pub struct Config {
     pub materialized_catalog_path: Option<PathBuf>,
     /// Whether to reset Materialized and AWS's state at the start of each script.
     pub reset: bool,
-    /// Emit Buildkite-specific markup.
-    pub ci_output: bool,
     /// The default timeout to use for any operation that is retried.
     pub default_timeout: Duration,
 

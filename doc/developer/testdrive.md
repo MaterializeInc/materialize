@@ -251,10 +251,6 @@ Shuffle the list of tests before running them (using the value from --seed, if a
 
 ## Other options
 
-#### `--ci-output`
-
-Emit Buildkite-specific markup
-
 #### `--validate-catalog /path/to/catalog`
 
 After executing a DDL statement, validate that the on-disk representation of the catalog is identical to the in-memory one.
