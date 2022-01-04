@@ -156,7 +156,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: billing
-          run: ci
+          run: demo
+          args: [--message-count=100, --partitions=10, --check-sink]
 
   - id: perf-kinesis
     label: ":shower: kinesis streaming demo"

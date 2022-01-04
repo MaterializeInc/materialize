@@ -48,7 +48,7 @@ aggregation_class = MinAggregation
 
 comparator_class = {"class": RelativeThresholdComparator, "threshold": 0.10}
 
-confluents = [Zookeeper(), Kafka(), SchemaRegistry()]
+confluents = []
 
 this_image = os.getenv("THIS_IMAGE", None)
 this_options = os.getenv("THIS_OPTIONS", None)
@@ -83,7 +83,13 @@ tds = {
     ),
 }
 
-services = confluents + list(mzs.values()) + list(tds.values())
+services = [
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
+    *mzs.values(),
+    *tds.values(),
+]
 
 
 def run_one_scenario(w: Workflow, scenario: Scenario):
@@ -99,7 +105,7 @@ def run_one_scenario(w: Workflow, scenario: Scenario):
         mz_service_name = mzs[revision].name
         td_service_name = tds[revision].name
 
-        w.start_and_wait_for_tcp(services=[mzs[revision]])
+        w.start_and_wait_for_tcp(services=[mzs[revision].name])
         w.wait_for_mz(service=mz_service_name)
 
         executor = Docker(
@@ -131,7 +137,7 @@ def run_one_scenario(w: Workflow, scenario: Scenario):
 
 
 def workflow_feature_benchmark(w: Workflow):
-    w.start_and_wait_for_tcp(services=confluents)
+    w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     report = Report()
     has_regressions = False

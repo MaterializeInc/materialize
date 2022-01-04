@@ -53,11 +53,16 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-daemons = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized()]
-services = [*daemons, Testdrive()]
+services = [
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
+    Materialized(),
+    Testdrive()
+]
 
 def workflow_test(w: Workflow):
-    w.start_and_wait_for_tcp(services=daemons)
+    w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry", "materialized"])
     w.wait_for_mz()
 
     w.run_service(service="testdrive-svc", command="*.td")

@@ -18,8 +18,7 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-localstack = Localstack()
-prerequisites = [Zookeeper(), Kafka(), SchemaRegistry(), Squid()]
+prerequisites = ["zookeeper", "kafka", "schema-registry", "squid", "localstack"]
 
 # Run certain testdrive tests for each combination of env variables under test
 tests = [
@@ -54,15 +53,18 @@ for t in tests:
 mzs = [t["mz"] for t in tests]
 
 services = [
-    *prerequisites,
-    localstack,
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
+    Squid(),
+    Localstack(),
     *mzs,
     Testdrive(volumes_extra=["../testdrive:/workdir/testdrive"]),
 ]
 
 
 def workflow_proxy(w: Workflow):
-    w.start_and_wait_for_tcp(services=prerequisites + [localstack])
+    w.start_and_wait_for_tcp(services=prerequisites)
     test_proxy(w, "--aws-endpoint http://localstack:4566")
 
 

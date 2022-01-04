@@ -463,6 +463,8 @@ class Composition:
         # output depends on terminal width (!). Using the `-q` flag is safe,
         # however, and we can pipe the container IDs into `docker inspect`,
         # which supports machine-readable output.
+        if service not in self.services:
+            raise UIError(f"unknown service {service!r}")
         ports = []
         for info in self.inspect_service_containers(service):
             for (name, port_entry) in info["NetworkSettings"]["Ports"].items():
@@ -676,6 +678,16 @@ class Workflow:
         for statement in sqlparse.split(sql):
             cursor.execute(statement)
 
+    def start_and_wait_for_tcp(self, services: List[str]) -> None:
+        """Sequentially start the named services, waiting for eaach to become
+        available via TCP before moving on to the next."""
+        # TODO(benesch): once the workflow API is a proper Python API,
+        # remove the `type: ignore` comments below.
+        for service in services:
+            self.start_services(services=[service])  # type: ignore
+            for port in self.composition.services[service].get("ports", []):
+                self.wait_for_tcp(host=service, port=port)  # type: ignore
+
 
 class PythonServiceConfig(TypedDict, total=False):
     mzbuild: str
@@ -701,9 +713,6 @@ class PythonService:
     def __init__(self, name: str, config: PythonServiceConfig) -> None:
         self.name = name
         self.config = config
-
-    def ports(self) -> Sequence[Union[int, str]]:
-        return self.config["ports"]
 
 
 class Materialized(PythonService):
@@ -1458,36 +1467,6 @@ class StartServicesStep(WorkflowStep):
             raise UIError(f"services didn't come up cleanly: {services}")
 
 
-@Steps.register("start-and-wait-for-tcp")
-class StartAndWaitForTcp(WorkflowStep):
-    """
-    Params:
-      services: A list of PythonService objects to start and wait until their TCP ports are open
-    """
-
-    def __init__(self, *, services: List[PythonService], **kwargs: Any) -> None:
-        if not isinstance(services, list):
-            raise UIError(
-                f"services for start-and-wait-for-tcp should be a list, got: {services}"
-            )
-
-        for service in services:
-            if not isinstance(service, PythonService):
-                raise UIError(
-                    f"services for start-and-wait-for-tcp should be a list of PythonService, got: {service}"
-                )
-
-        self._services = services
-        self._kwargs = kwargs
-
-    def run(self, workflow: Workflow) -> None:
-        for service in self._services:
-            # Those two methods are loaded dynamically, so silence any mypi warnings about them
-            workflow.start_services(services=[service.name])  # type: ignore
-            for port in service.ports():
-                workflow.wait_for_tcp(host=service.name, port=port, **self._kwargs)  # type: ignore
-
-
 @Steps.register("kill-services")
 class KillServicesStep(WorkflowStep):
     """
@@ -1817,7 +1796,7 @@ class WaitForTcpStep(WorkflowStep):
         *,
         host: str = "localhost",
         port: int,
-        timeout_secs: int = 120,
+        timeout_secs: int = 240,
         dependencies: Optional[List[WaitDependency]] = None,
     ) -> None:
         self._host = host

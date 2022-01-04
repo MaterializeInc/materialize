@@ -7,167 +7,46 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-x-port-mappings:
-  - &grafana 3000:3000
-  - &kafka ${KAFKA_PORT:-9092:9092}
-  - &materialized ${MZ_PORT:-6875:6875}
-  - &schema-registry ${SR_PORT:-8081:8081}
-
 version: '3.7'
+
 services:
   materialized:
     mzbuild: materialized
     volumes:
-      - db-data:/share/billing-demo/data
-    ports:
-     - *materialized
-    command: --workers ${MZ_WORKERS:-1} --differential-idle-merge-effort=1000 --disable-telemetry
+    - db-data:/share/billing-demo/data
+    ports: [6875]
+    command: --disable-telemetry
     environment:
-      - MZ_LOG_FILTER=dataflow=error,info
       - MZ_DEV=1
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
     - ZOOKEEPER_CLIENT_PORT=2181
+
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.4
-    ports:
-      - *kafka
+    ports: [9092]
     depends_on: [zookeeper]
     environment:
     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
     - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
-    - KAFKA_BROKER_ID=1
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
-    - KAFKA_JMX_PORT=9991
-    - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
+
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
-    ports:
-     - *schema-registry
+    ports: [8081]
     environment:
     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka, zookeeper]
+
   billing-demo:
     mzbuild: billing-demo
     volumes:
-      - db-data:/share/billing-demo/data
+    - db-data:/share/billing-demo/data
     environment:
-      - RUST_LOG=billing-demo=debug,info
-    command: >-
-      --message-count ${BILLING_MESSAGE_COUNT:-1000}
-      --materialized-host materialized
-      --kafka-host kafka
-      --schema-registry-url http://schema-registry:8081
-      --csv-file-name /share/billing-demo/data/prices.csv
-      --create-topic
-      --replication-factor 1
-      --partitions 1
+    - RUST_LOG=billing-demo=debug,info
     depends_on: [kafka, schema-registry, materialized]
-  dashboard:
-    mzbuild: dashboard
-    propagate_uid_gid: true
-    environment:
-      - 'MATERIALIZED_URL=materialized:6875'
-    ports:
-      - *grafana
-    volumes:
-      # ensure that data doesn't get lost across restarts
-      - ./data/prometheus:/prometheus
-      - ./data/grafana:/var/lib/grafana
-  prometheus_sql_exporter_mz:
-    mzbuild: ci-mz-sql-exporter
-    ports:
-      - ${MZ_SQL_EXPORTER_PORT:-9399}
 
 volumes:
   db-data:
-
-mzworkflows:
-  local:
-    steps:
-    - step: workflow
-      workflow: start-everything
-    - step: run
-      service: billing-demo
-      daemon: false
-  ci:
-    env:
-      MZ_PORT: 6875
-      KAFKA_PORT: 9092
-      SR_PORT: 8081
-    steps:
-    - step: workflow
-      workflow: start-everything
-    - step: run
-      service: billing-demo
-      daemon: false
-      command: >-
-        --message-count 100
-        --materialized-host materialized
-        --kafka-host kafka
-        --schema-registry-url http://schema-registry:8081
-        --csv-file-name /share/billing-demo/data/prices.csv
-        --create-topic
-        --replication-factor 1
-        --partitions 10
-        --check-sink
-    - step: down
-      destroy_volumes: true
-
-  cloud-load-test:
-    env:
-      MZ_SQL_EXPORTER_PORT: "9400:9399"
-    steps:
-    - step: workflow
-      workflow: start-everything
-    - step: start-services
-      services: [prometheus_sql_exporter_mz]
-    - step: run
-      service: billing-demo
-      daemon: true
-      command: >-
-        --message-count ${BILLING_MESSAGE_COUNT:-10000000}
-        --materialized-host materialized
-        --kafka-host kafka
-        --schema-registry-url http://schema-registry:8081
-        --csv-file-name /share/billing-demo/data/prices.csv
-        --create-topic
-        --replication-factor 1
-        --partitions 10
-
-  load-test:
-    steps:
-    - step: workflow
-      workflow: start-everything
-    - step: start-services
-      services: [dashboard]
-    - step: run
-      service: billing-demo
-      daemon: true
-      command: >-
-        --message-count ${BILLING_MESSAGE_COUNT:-10000}
-        --materialized-host materialized
-        --kafka-host kafka
-        --schema-registry-url http://schema-registry:8081
-        --csv-file-name /share/billing-demo/data/prices.csv
-        --create-topic
-        --replication-factor 1
-        --partitions 10
-
-  # Helper workflows
-
-  start-everything:
-    steps:
-    - step: start-services
-      services: [materialized, kafka, schema-registry, dashboard]
-    - step: wait-for-tcp
-      host: kafka
-      port: 9092
-    - step: wait-for-tcp
-      host: schema-registry
-      port: 8081
-    - step: wait-for-tcp
-      host: materialized
-      port: 6875

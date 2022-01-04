@@ -9,9 +9,6 @@
 
 MZFROM ubuntu-base
 
-COPY billing-demo /usr/local/bin
+RUN apt-get update && apt-get install -y postgresql-client
 
-RUN mkdir -p /share/billing-demo/data && chmod 777 /share/billing-demo/data
-VOLUME /share/billing-demo/data
-
-ENTRYPOINT ["billing-demo"]
+ENTRYPOINT ["psql"]

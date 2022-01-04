@@ -111,6 +111,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     ScaleCommand.register(parser, subparsers)
     StartCommand.register(parser, subparsers)
     StopCommand.register(parser, subparsers)
+    SqlCommand().register(parser, subparsers)
     TopCommand.register(parser, subparsers)
     UnpauseCommand.register(parser, subparsers)
     UpCommand.register(parser, subparsers)
@@ -275,7 +276,13 @@ class ListPortsCommand(Command):
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
-        for port in composition.find_host_ports(args.service):
+        ports = composition.find_host_ports(args.service)
+        if not ports:
+            raise UIError(
+                f"no ports for service {args.service!r} found",
+                hint="is the service running?",
+            )
+        for port in ports:
             print(port)
 
 
@@ -330,6 +337,45 @@ class DescribeCommand(Command):
         )
 
 
+class SqlCommand(Command):
+    name = "sql"
+    help = "connect a SQL shell to a running materialized service"
+
+    def configure(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("service", metavar="SERVICE", help="the service to target")
+
+    def run(self, args: argparse.Namespace) -> None:
+        composition = load_composition(args)
+
+        service = composition.services.get(args.service)
+        if not service:
+            raise UIError(f"unknown service {args.service!r}")
+
+        image = service["image"].split(":")[0]
+        if image != "materialize/materialized":
+            raise UIError(
+                f"cannot connect SQL shell to non-materialized service {args.service!r}"
+            )
+
+        if not composition.find_host_ports(args.service):
+            raise UIError(f"service {args.service!r} is not running")
+
+        deps = composition.repo.resolve_dependencies([composition.repo.images["psql"]])
+        deps.acquire()
+        deps["psql"].run(
+            [
+                "-h",
+                service.get("hostname", args.service),
+                "-p",
+                "6875",
+                "-U",
+                "materialize",
+                "materialize",
+            ],
+            docker_args=["--interactive", f"--network={composition.name}_default"],
+        )
+
+
 class WebCommand(Command):
     name = "web"
     help = "open a service's URL in a web browser"
@@ -343,9 +389,11 @@ class WebCommand(Command):
         if not ports:
             raise UIError(
                 f"no ports discovered for service {args.service!r}",
-                hint="if the service name is valid, is it running?",
+                hint="is the service running?",
             )
-        webbrowser.open(f"http://localhost:{ports[0]}")
+        url = f"http://localhost:{ports[0]}"
+        print(f"Opening {url} in a web browser...")
+        webbrowser.open(url)
 
 
 class DockerComposeCommand(Command):

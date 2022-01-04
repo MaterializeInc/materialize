@@ -16,8 +16,6 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-confluents = [Zookeeper(), Kafka(), SchemaRegistry()]
-
 versioned_mz = [
     Materialized(
         name=f"materialized_{version}",
@@ -40,7 +38,9 @@ mz_with_options = [
 ]
 
 services = [
-    *confluents,
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
     *versioned_mz,
     *multiple_mz,
     *mz_with_options,
@@ -49,7 +49,7 @@ services = [
 
 
 def workflow_start_confluents(w: Workflow):
-    w.start_and_wait_for_tcp(services=confluents)
+    w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
 
 def workflow_versioned_mz(w: Workflow):

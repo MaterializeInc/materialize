@@ -24,32 +24,27 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-prerequisites = [
+prerequisites = ["zookeeper", "kafka", "schema-registry", "debezium", "materialized"]
+
+sa_password = "AAbb!@" + "".join(
+    random.choices(string.ascii_uppercase + string.digits, k=10)
+)
+
+services = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Debezium(),
     Materialized(),
-]
-
-postgres = Postgres()
-
-
-sa_password = "AAbb!@" + "".join(
-    random.choices(string.ascii_uppercase + string.digits, k=10)
-)
-sql_server = SqlServer(sa_password=sa_password)
-
-services = prerequisites + [
-    postgres,
-    sql_server,
+    Postgres(),
+    SqlServer(sa_password=sa_password),
     Testdrive(no_reset=True, default_timeout=300),
 ]
 
 
 def workflow_debezium_avro(w: Workflow):
     w.start_and_wait_for_tcp(services=prerequisites)
-    w.start_and_wait_for_tcp(services=[postgres])
+    w.start_and_wait_for_tcp(services=["postgres"])
 
     w.wait_for_postgres(service="postgres")
     w.wait_for_mz(service="materialized")
@@ -61,6 +56,6 @@ def workflow_debezium_avro(w: Workflow):
 @patch.dict(os.environ, {"SA_PASSWORD": sa_password})
 def workflow_debezium_sql_server(w: Workflow):
     w.start_and_wait_for_tcp(services=prerequisites)
-    w.start_and_wait_for_tcp(services=[sql_server])
+    w.start_and_wait_for_tcp(services=["sql-server"])
 
     w.run_service(service="testdrive-svc", command="sql-server/*.td")

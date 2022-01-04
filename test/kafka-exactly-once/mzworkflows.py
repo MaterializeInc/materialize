@@ -19,14 +19,10 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-prerequisites = [
+services = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-]
-
-services = [
-    *prerequisites,
     Materialized(),
     Testdrive(),
 ]
@@ -42,10 +38,9 @@ def workflow_kafka_exactly_once(w: Workflow, args: List[str]):
     )
     args = parser.parse_args(args)
 
-    w.start_services(services=["kafka", "schema-registry", "materialized"])
-    w.start_and_wait_for_tcp(services=prerequisites)
-    w.start_services(services=["materialized"])
-    w.wait_for_mz()
+    w.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "materialized"]
+    )
     w.run_service(
         service="testdrive-svc",
         command=f"--seed {args.seed} --kafka-option=group.id=group1 before-restart.td",

@@ -532,13 +532,24 @@ class ResolvedImage:
         self.build()
         return AcquiredFrom.LOCAL_BUILD
 
-    def run(self, args: List[str] = []) -> None:
+    def run(self, args: List[str] = [], docker_args: List[str] = []) -> None:
         """Run a command in the image.
 
         Creates a container from the image and runs the command described by
         `args` in the image.
         """
-        spawn.runv(["docker", "run", "--tty", "--rm", "--init", self.spec(), *args])
+        spawn.runv(
+            [
+                "docker",
+                "run",
+                "--tty",
+                "--rm",
+                "--init",
+                *docker_args,
+                self.spec(),
+                *args,
+            ]
+        )
 
     def list_dependencies(self, transitive: bool = False) -> Set[str]:
         out = set()
