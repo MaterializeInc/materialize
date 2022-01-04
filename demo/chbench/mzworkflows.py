@@ -11,7 +11,11 @@ from typing import List
 
 import requests
 
-from materialize.mzcompose import Workflow, WorkflowArgumentParser
+from materialize.mzcompose import (
+    PrometheusSQLExporter,
+    Workflow,
+    WorkflowArgumentParser,
+)
 
 
 def workflow_demo(w: Workflow, args: List[str]):
@@ -19,8 +23,10 @@ def workflow_demo(w: Workflow, args: List[str]):
 
     # Parse arguments.
     parser = WorkflowArgumentParser(w)
-    parser.add_argument("--wait", action="store_true", help="wait for the load generator to exit")
-    args, unknown_args = parser.parse_known_args()
+    parser.add_argument(
+        "--wait", action="store_true", help="wait for the load generator to exit"
+    )
+    args, unknown_args = parser.parse_known_args(args)
 
     # Start Materialize.
     w.start_services(services=["materialized"])
@@ -62,7 +68,6 @@ def workflow_demo(w: Workflow, args: List[str]):
     if response.status_code != requests.codes.conflict:
         response.raise_for_status()
 
-
     # Run load generator.
     w.run_service(
         service="chbench",
@@ -83,6 +88,7 @@ def workflow_demo(w: Workflow, args: List[str]):
 
 def workflow_load_test(w: Workflow):
     """Run CH-benCHmark with a selected amount of load against Materialize."""
+    w.start_services(services=["prometheus-sql-exporter"])
     workflow_demo(
         w,
         [
@@ -91,3 +97,8 @@ def workflow_load_test(w: Workflow):
             "--transactional-threads=2",
         ],
     )
+
+
+services = [
+    PrometheusSQLExporter(),
+]

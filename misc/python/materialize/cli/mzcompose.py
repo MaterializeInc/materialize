@@ -69,6 +69,11 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
         metavar="DIR",
         help="use the mzcompose.yml file from DIR, rather than the current directory",
     )
+    parser.add_argument(
+        "--preserve-ports",
+        action="store_true",
+        help="bind container ports to the same host ports rather than choosing random host ports",
+    )
     mzbuild.Repository.install_arguments(parser)
 
     # Docker Compose arguments that we explicitly ban. Since we don't support
@@ -132,7 +137,9 @@ def load_composition(args: argparse.Namespace) -> mzcompose.Composition:
     """Loads the composition specified by the command-line arguments."""
     repo = mzbuild.Repository.from_arguments(ROOT, args)
     try:
-        return mzcompose.Composition(repo, args.find or Path.cwd().name)
+        return mzcompose.Composition(
+            repo, name=args.find or Path.cwd().name, preserve_ports=args.preserve_ports
+        )
     except mzcompose.UnknownCompositionError as e:
         if args.find:
             hint = "available compositions:\n"

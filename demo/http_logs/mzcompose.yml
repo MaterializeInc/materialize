@@ -8,21 +8,11 @@
 # by the Apache License, Version 2.0.
 
 
-# Map from host-port:internal port
-#
-# This mostly just shows all the ports that are available to the host system, if you want
-# to change these you must restart the docker-compose cluster.
-x-port-mappings:
-  - &server 5000:5000
-  - &materialized 6875:6875
-  - &grafana 3000:3000
-
 version: '3.7'
 services:
   materialized:
     mzbuild: materialized
-    ports:
-      - *materialized
+    ports: [6875]
     command: -w4 --disable-telemetry
     environment:
       - MZ_DEV=1
@@ -32,8 +22,7 @@ services:
   server:
     mzbuild: http-demo
     init: true
-    ports:
-      - *server
+    ports: [5000]
     volumes:
       - logfile:/log
     command: /bin/sh -c "./server.py 2> /log/requests"
@@ -57,8 +46,7 @@ services:
     mzbuild: dashboard
     environment:
       - 'MATERIALIZED_URL=materialized:6875'
-    ports:
-      - *grafana
+    ports: [3000]
 
   setup:
     mzbuild: cli

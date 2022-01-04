@@ -197,7 +197,9 @@ def lint_materialized_service(
 class Composition:
     """A parsed mzcompose.yml with a loaded mzworkflows.py file."""
 
-    def __init__(self, repo: mzbuild.Repository, name: str):
+    def __init__(
+        self, repo: mzbuild.Repository, name: str, preserve_ports: bool = False
+    ):
         self.name = name
         self.repo = repo
         self.images: List[mzbuild.Image] = []
@@ -275,6 +277,17 @@ class Composition:
                 if "propagate_uid_gid" in config:
                     config["user"] = f"{os.getuid()}:{os.getgid()}"
                     del config["propagate_uid_gid"]
+
+            ports = config.setdefault("ports", [])
+            for i, port in enumerate(ports):
+                if ":" in str(port):
+                    raise UIError(
+                        "programming error: disallowed host port in service {name!r}"
+                    )
+                if preserve_ports:
+                    # If preserving ports, bind the container port to the same
+                    # host port.
+                    ports[i] = f"{port}:{port}"
 
             if self.repo.rd.coverage:
                 # Emit coverage information to a file in a directory that is
@@ -1303,7 +1316,7 @@ class PrometheusSQLExporter(PythonService):
             name="prometheus-sql-exporter",
             config={
                 "mzbuild": "ci-mz-sql-exporter",
-                "ports": ["9400:9399"],
+                "ports": ["9400"],
             },
         )
 
