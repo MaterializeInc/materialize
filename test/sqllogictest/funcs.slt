@@ -125,7 +125,7 @@ SELECT date_trunc('millennium', TIMESTAMP '0001-01-01 00:00:00.000000' - INTERVA
 ----
 1000-01-01 00:00:00 BC
 
-query error unknown units 'bad'
+query error unit 'bad' not recognized
 SELECT date_trunc('bad', TIMESTAMP '2019-11-26 15:56:46.241150')
 
 query T
@@ -138,7 +138,7 @@ SELECT date_trunc('day', TIMESTAMPTZ '1999-12-31 16:16:01+02:30')
 ----
 1999-12-31 00:00:00+00
 
-query error unknown units 'bad'
+query error unit 'bad' not recognized
 SELECT date_trunc('bad', TIMESTAMPTZ '1999-12-31 16:16:01+02:30')
 
 statement ok
@@ -160,7 +160,7 @@ SELECT date_trunc(field, TIMESTAMP '2019-11-26 15:56:46.241150') FROM date_trunc
 statement ok
 INSERT INTO date_trunc_fields VALUES ('bad')
 
-query error unknown units 'bad'
+query error unit 'bad' not recognized
 SELECT date_trunc(field, TIMESTAMP '2019-11-26 15:56:46.241150') FROM date_trunc_fields
 
 mode standard
