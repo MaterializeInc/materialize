@@ -890,10 +890,9 @@ impl AppliedState {
         }
 
         let batch = BlobUnsealedBatch {
-            desc: desc.clone(),
             updates,
         };
-        self.append_unsealed(id, batch, blob)?;
+        self.append_unsealed(id, batch, desc.clone(), blob)?;
 
         Ok(())
     }
@@ -1045,13 +1044,14 @@ impl AppliedState {
         &mut self,
         id: Id,
         batch: BlobUnsealedBatch,
+        desc: Range<SeqNo>,
         blob: &mut BlobCache<B>,
     ) -> Result<(), Error> {
         let arrangement = self
             .arrangements
             .get_mut(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        arrangement.unsealed_append(batch, blob)
+        arrangement.unsealed_append(batch, desc, blob)
     }
 
     fn serialize_meta(&self) -> BlobMeta {

@@ -12,6 +12,7 @@
 
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
+use std::ops::Range;
 use std::sync::Arc;
 use std::{fmt, mem};
 
@@ -209,10 +210,10 @@ impl Arrangement {
     fn unsealed_write_batch<L: Blob>(
         &mut self,
         batch: BlobUnsealedBatch,
+        desc: Range<SeqNo>,
         blob: &mut BlobCache<L>,
     ) -> Result<UnsealedBatchMeta, Error> {
         let key = Self::new_blob_key();
-        let desc = batch.desc.clone();
 
         let (ts_upper, ts_lower) = {
             let mut upper_lower = None;
@@ -247,14 +248,18 @@ impl Arrangement {
         };
 
         debug_assert!(ts_upper >= ts_lower);
-        let size_bytes = blob.set_unsealed_batch(key.clone(), batch)?;
-        Ok(UnsealedBatchMeta {
+        let mut meta = UnsealedBatchMeta {
             key,
             desc,
             ts_upper,
             ts_lower,
-            size_bytes,
-        })
+            size_bytes: 0,
+        };
+
+        let size_bytes = blob.set_unsealed_batch(&meta, batch)?;
+        meta.size_bytes = size_bytes;
+
+        Ok(meta)
     }
 
     /// Writes the given batch to [Blob] storage and logically adds the contained
@@ -262,13 +267,14 @@ impl Arrangement {
     pub fn unsealed_append<L: Blob>(
         &mut self,
         batch: BlobUnsealedBatch,
+        desc: Range<SeqNo>,
         blob: &mut BlobCache<L>,
     ) -> Result<(), Error> {
-        if batch.desc.start != self.unsealed_seqno_upper() {
+        if desc.start != self.unsealed_seqno_upper() {
             return Err(Error::from(format!(
                 "batch lower doesn't match seqno_upper {:?}: {:?}",
                 self.unsealed_seqno_upper(),
-                batch.desc
+                desc
             )));
         }
         if cfg!(any(debug_assertions, test)) {
@@ -305,7 +311,7 @@ impl Arrangement {
             }
         }
 
-        let meta = self.unsealed_write_batch(batch, blob)?;
+        let meta = self.unsealed_write_batch(batch, desc, blob)?;
         self.unsealed_batches.push(meta);
         Ok(())
     }
@@ -333,7 +339,7 @@ impl Arrangement {
             // - ts_lower <= hi
             // - ts_upper > lo
             if ts_lower.less_equal(&meta.ts_upper) && !ts_upper.less_equal(&meta.ts_lower) {
-                batches.push(blob.get_unsealed_batch_async(&meta.key));
+                batches.push(blob.get_unsealed_batch_async(&meta));
             }
         }
 
@@ -421,7 +427,7 @@ impl Arrangement {
         // Sanity check that batch cannot be evicted
         debug_assert!(self.trace_ts_upper().less_equal(&batch.ts_upper));
         let updates = ColumnarRecords::from_iter(
-            blob.get_unsealed_batch_async(&batch.key)
+            blob.get_unsealed_batch_async(&batch)
                 .recv()?
                 .updates
                 .iter()
@@ -430,11 +436,10 @@ impl Arrangement {
         );
         debug_assert!(updates.len() != 0);
         let new_batch = BlobUnsealedBatch {
-            desc: batch.desc,
             updates: vec![updates],
         };
 
-        self.unsealed_write_batch(new_batch, blob)
+        self.unsealed_write_batch(new_batch, batch.desc, blob)
     }
 
     /// Take one step towards shrinking the representation of this unsealed.

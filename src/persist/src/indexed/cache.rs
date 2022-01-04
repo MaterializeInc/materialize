@@ -91,28 +91,29 @@ impl<B: Blob> BlobCache<B> {
     }
 
     /// Synchronously fetches the batch for the given key.
-    fn fetch_unsealed_batch_sync(&self, key: &str) -> Result<Arc<BlobUnsealedBatch>, Error> {
-        let bytes = block_on(self.blob.lock()?.get(key))?
-            .ok_or_else(|| Error::from(format!("no blob for unsealed batch at key: {}", key)))?;
+    fn fetch_unsealed_batch_sync(&self, meta: &UnsealedBatchMeta) -> Result<Arc<BlobUnsealedBatch>, Error> {
+        let bytes = block_on(self.blob.lock()?.get(&meta.key))?
+            .ok_or_else(|| Error::from(format!("no blob for unsealed batch at key: {}", meta.key)))?;
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
         let batch: BlobUnsealedBatch = BlobUnsealedBatch::decode(&bytes).map_err(|err| {
-            Error::from(format!("invalid unsealed batch at key {}: {}", key, err))
+            Error::from(format!("invalid unsealed batch at key {}: {}", meta.key, err))
         })?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
         let mut cache = self.unsealed.lock()?;
-        debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
-        cache.insert(key.to_owned(), Arc::new(batch));
-        Ok(cache.get(key).unwrap().clone())
+        debug_assert_eq!(batch.validate(meta), Ok(()), "{:?}", &batch);
+        cache.insert(meta.key.to_owned(), Arc::new(batch));
+        Ok(cache.get(&meta.key).unwrap().clone())
     }
 
     /// Asynchronously returns the batch for the given key, fetching in another
     /// thread if it's not already in the cache.
-    pub fn get_unsealed_batch_async(&self, key: &str) -> PFuture<Arc<BlobUnsealedBatch>> {
+    pub fn get_unsealed_batch_async(&self, meta: &UnsealedBatchMeta) -> PFuture<Arc<BlobUnsealedBatch>> {
         let (tx, rx) = PFuture::new();
+        let key = &meta.key;
         {
             // New scope to ensure the cache lock is dropped during the
             // (expensive) get.
@@ -134,10 +135,10 @@ impl<B: Blob> BlobCache<B> {
         // TODO: If a fetch for this key is already in progress join that one
         // instead of starting another.
         let cache = self.clone();
-        let key = key.to_owned();
+        let meta = meta.to_owned();
         // TODO: IO thread pool for persist instead of spawning one here.
         let _ = thread::spawn(move || {
-            let res = cache.fetch_unsealed_batch_sync(&key);
+            let res = cache.fetch_unsealed_batch_sync(&meta);
             tx.fill(res);
         });
         rx
@@ -148,9 +149,10 @@ impl<B: Blob> BlobCache<B> {
     /// Returns the size of the encoded blob value in bytes.
     pub fn set_unsealed_batch(
         &mut self,
-        key: String,
+        meta: &UnsealedBatchMeta,
         batch: BlobUnsealedBatch,
     ) -> Result<u64, Error> {
+        let key = meta.key.to_owned();
         if key == Self::META_KEY {
             return Err(format!(
                 "cannot write unsealed batch to meta key: {}",
@@ -158,7 +160,7 @@ impl<B: Blob> BlobCache<B> {
             )
             .into());
         }
-        debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
+        debug_assert_eq!(batch.validate(meta), Ok(()), "{:?}", &batch);
 
         let mut val = Vec::new();
         batch.encode(&mut val);

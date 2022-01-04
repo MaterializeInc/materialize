@@ -187,8 +187,6 @@ pub struct TraceBatchMeta {
 /// - The updates field is non-empty.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BlobUnsealedBatch {
-    /// Which updates are included in this batch.
-    pub desc: Range<SeqNo>,
     /// The updates themselves.
     ///
     /// TODO: ideally, these would be a single ColumnarRecords instead of multiple.
@@ -536,12 +534,12 @@ impl TraceBatchMeta {
 impl BlobUnsealedBatch {
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
-    pub fn validate(&self) -> Result<(), Error> {
+    pub fn validate(&self, meta: &UnsealedBatchMeta) -> Result<(), Error> {
         // TODO: It's unclear if the equal case (an empty desc) is
         // useful/harmful. Feel free to make this a less_than if empty descs end
         // up making sense.
-        if self.desc.end <= self.desc.start {
-            return Err(format!("invalid desc: {:?}", &self.desc).into());
+        if meta.desc.end <= meta.desc.start {
+            return Err(format!("invalid desc: {:?}", &meta.desc).into());
         }
         // TODO: It's unclear if this invariant is useful/harmful. Feel free to
         // remove it if it ends up not making sense.
