@@ -81,10 +81,10 @@ mz::PeekResults mz::peekView(pqxx::connection &c, const std::string &name, const
         } catch (const pqxx::sql_error &e) {
             // 03000 is the SQLSTATE code for SQL_STATEMENT_NOT_YET_COMPLETE
             if (e.sqlstate() == "03000") {
-                throw;
-            } else {
                 fprintf(stderr, "WARNING: ignoring \"no complete timestamps\" error.");
                 return pqxx::result {};
+            } else {
+                throw;
             }
         }
     });
