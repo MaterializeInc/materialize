@@ -19,7 +19,6 @@ use std::time::Duration;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use interchange::json::JsonEncoder;
 use itertools::Itertools;
-use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
@@ -45,6 +44,7 @@ use interchange::avro::{self, AvroEncoder, AvroSchemaGenerator};
 use interchange::encode::Encode;
 use kafka_util::client::MzClientContext;
 use ore::cast::CastFrom;
+use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 
 use super::{KafkaBaseMetrics, SinkBaseMetrics};
