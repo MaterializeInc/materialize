@@ -500,7 +500,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                 // The user explicitly directed logs to stderr. Log only to
                 // stderr with the user-specified `filter`.
                 tracing_subscriber::registry()
-                    .with(MetricsRecorderLayer::new(log_message_counter))
+                    .with(
+                        MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()),
+                    )
                     .with(
                         fmt::layer()
                             .with_writer(io::stderr)
@@ -517,7 +519,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     None => LevelFilter::WARN,
                 };
                 tracing_subscriber::registry()
-                    .with(MetricsRecorderLayer::new(log_message_counter))
+                    .with(
+                        MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()),
+                    )
                     .with({
                         let path = match log_file {
                             Some(log_file) => PathBuf::from(log_file),
