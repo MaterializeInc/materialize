@@ -22,7 +22,7 @@ use itertools::Itertools;
 use log::{debug, error, info};
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
-use rdkafka::error::{KafkaError, RDKafkaErrorCode};
+use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
 use rdkafka::message::{Message, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
@@ -47,6 +47,7 @@ use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeV
 use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 use timely_util::async_op;
 use timely_util::operators_async_ext::OperatorBuilderExt;
+use tokio::task;
 
 use super::{KafkaBaseMetrics, SinkBaseMetrics};
 use crate::render::sinks::SinkRender;
@@ -248,7 +249,7 @@ struct KafkaSinkState {
     topic_prefix: String,
     shutdown_flag: Arc<AtomicBool>,
     metrics: Arc<SinkMetrics>,
-    producer: ThreadedProducer<SinkProducerContext>,
+    producer: Arc<ThreadedProducer<SinkProducerContext>>,
     activator: timely::scheduling::Activator,
     txn_timeout: Duration,
     transactional: bool,
@@ -293,12 +294,14 @@ impl KafkaSinkState {
             &worker_id,
         ));
 
-        let producer = config
-            .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
-                Arc::clone(&metrics),
-                Arc::clone(&shutdown_flag),
-            ))
-            .expect("creating kafka producer for Kafka sink failed");
+        let producer = Arc::new(
+            config
+                .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
+                    Arc::clone(&metrics),
+                    Arc::clone(&shutdown_flag),
+                ))
+                .expect("creating kafka producer for Kafka sink failed"),
+        );
 
         KafkaSinkState {
             name: sink_name,
@@ -394,10 +397,40 @@ impl KafkaSinkState {
         }
     }
 
-    fn send<K, P>(&self, record: BaseRecord<K, P>) -> Result<(), bool>
+    async fn init_transactions(&self, timeout: Duration) -> KafkaResult<()> {
+        let self_producer = self.producer.clone();
+        task::spawn_blocking(move || self_producer.init_transactions(timeout))
+            .await
+            .unwrap_or(Err(KafkaError::Canceled))
+    }
+
+    async fn begin_transaction(&self) -> KafkaResult<()> {
+        let self_producer = self.producer.clone();
+        task::spawn_blocking(move || self_producer.begin_transaction())
+            .await
+            .unwrap_or(Err(KafkaError::Canceled))
+    }
+
+    async fn commit_transaction(&self, timeout: Duration) -> KafkaResult<()> {
+        let self_producer = self.producer.clone();
+        task::spawn_blocking(move || self_producer.commit_transaction(timeout))
+            .await
+            .unwrap_or(Err(KafkaError::Canceled))
+    }
+
+    async fn abort_transaction(&self, timeout: Duration) -> KafkaResult<()> {
+        let self_producer = self.producer.clone();
+        task::spawn_blocking(move || self_producer.abort_transaction(timeout))
+            .await
+            .unwrap_or(Err(KafkaError::Canceled))
+    }
+
+    // TODO: make calls to ThreadedProducer::send on a backgroundthread.  Currently BaseRecord
+    // cannot be passed because its lifetime is not static.
+    async fn send<'a, K, P>(&self, record: BaseRecord<'a, K, P>) -> Result<(), bool>
     where
-        K: ToBytes + ?Sized,
-        P: ToBytes + ?Sized,
+        K: ToBytes + ?Sized + Sync,
+        P: ToBytes + ?Sized + Sync,
     {
         if let Err((e, _)) = self.producer.send(record) {
             self.metrics.message_send_errors_counter.inc();
@@ -421,7 +454,7 @@ impl KafkaSinkState {
         }
     }
 
-    fn send_consistency_record(
+    async fn send_consistency_record(
         &self,
         transaction_id: &str,
         status: &str,
@@ -444,7 +477,7 @@ impl KafkaSinkState {
             .payload(&encoded)
             .key(&self.topic_prefix);
 
-        self.send(record)
+        self.send(record).await
     }
 
     /// Asserts that the write frontier has not yet advanced beyond `t`.
@@ -476,9 +509,9 @@ impl KafkaSinkState {
     /// *NOTE*: `END` records will only be emitted when
     /// `KafkaSinkConnector.consistency` points to a consistency topic. The
     /// write frontier will be advanced regardless.
-    fn maybe_emit_progress(
+    async fn maybe_emit_progress<'a>(
         &mut self,
-        input_frontier: AntichainRef<Timestamp>,
+        input_frontier: AntichainRef<'a, Timestamp>,
     ) -> Result<(), anyhow::Error> {
         // This only looks at the first entry of the antichain.
         // If we ever have multi-dimensional time, this is not correct
@@ -504,14 +537,15 @@ impl KafkaSinkState {
                 // record the write frontier in the consistency topic.
                 if self.consistency.is_some() {
                     if self.transactional {
-                        self.producer.begin_transaction()?
+                        self.begin_transaction().await?
                     }
 
                     self.send_consistency_record(&min_frontier.to_string(), "END", None)
+                        .await
                         .map_err(|_e| anyhow::anyhow!("Error sending write frontier update."))?;
 
                     if self.transactional {
-                        self.producer.commit_transaction(self.txn_timeout)?
+                        self.commit_transaction(self.txn_timeout).await?
                     }
                 }
                 self.latest_progress_ts = min_frontier;
@@ -786,7 +820,7 @@ where
                     s.send_state = match s.send_state {
                         SendState::Init => {
                             let result = if s.transactional {
-                                s.producer.init_transactions(s.txn_timeout)
+                                s.init_transactions(s.txn_timeout).await
                             } else {
                                 Ok(())
                             };
@@ -798,7 +832,7 @@ where
                         }
                         SendState::BeginTxn => {
                             let result = if s.transactional {
-                                s.producer.begin_transaction()
+                                s.begin_transaction().await
                             } else {
                                 Ok(())
                             };
@@ -810,8 +844,9 @@ where
                         }
                         SendState::Begin => {
                             if s.consistency.is_some() {
-                                let result =
-                                    s.send_consistency_record(&ts.to_string(), "BEGIN", None);
+                                let result = s
+                                    .send_consistency_record(&ts.to_string(), "BEGIN", None)
+                                    .await;
 
                                 if let Err(retry) = result {
                                     return retry;
@@ -840,7 +875,7 @@ where
                             } else {
                                 record
                             };
-                            if let Err(retry) = s.send(record) {
+                            if let Err(retry) = s.send(record).await {
                                 return retry;
                             }
 
@@ -867,11 +902,13 @@ where
                         }
                         SendState::End(total_count) => {
                             if s.consistency.is_some() {
-                                let result = s.send_consistency_record(
-                                    &ts.to_string(),
-                                    "END",
-                                    Some(total_count),
-                                );
+                                let result = s
+                                    .send_consistency_record(
+                                        &ts.to_string(),
+                                        "END",
+                                        Some(total_count),
+                                    )
+                                    .await;
 
                                 if let Err(retry) = result {
                                     return retry;
@@ -881,7 +918,7 @@ where
                         }
                         SendState::CommitTxn => {
                             let result = if s.transactional {
-                                s.producer.commit_transaction(s.txn_timeout)
+                                s.commit_transaction(s.txn_timeout).await
                             } else {
                                 Ok(())
                             };
@@ -902,7 +939,7 @@ where
                         }
                         SendState::AbortTxn => {
                             let result = if s.transactional {
-                                s.producer.abort_transaction(s.txn_timeout)
+                                s.abort_transaction(s.txn_timeout).await
                             } else {
                                 Ok(())
                             };
@@ -939,7 +976,7 @@ where
             // updates. Only on worker receives all the updates and we don't want
             // the other workers to also emit END records.
             if s.ready_rows.is_empty() && is_active_worker {
-                if let Err(e) = s.maybe_emit_progress(frontier) {
+                if let Err(e) = s.maybe_emit_progress(frontier).await {
                     // This can happen when the producer has not been
                     // initialized yet. This also means, that we only start
                     // emitting continuous updates once some real data
