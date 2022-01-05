@@ -53,7 +53,7 @@ use crate::plan::expr::{
 /// subquery, especially when the original conjunction contains join keys.
 pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
     fn walk_relation(expr: &mut HirRelationExpr) {
-        expr.visit_mut(&mut |expr| match expr {
+        expr.visit_mut(0, &mut |expr, _| match expr {
             HirRelationExpr::Map { scalars, .. } => {
                 for scalar in scalars {
                     walk_scalar(scalar);
@@ -80,7 +80,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
                 }
             }
             _ => (),
-        })
+        });
     }
 
     fn walk_scalar(expr: &mut HirScalarExpr) {
@@ -190,7 +190,12 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
                 outers.insert(0, left.typ(&outers, &NO_PARAMS));
                 walk_relation(right, &outers);
             }
-            expr => expr.visit1_mut(&mut |expr| walk_relation(expr, outers)),
+            expr => {
+                let _ = expr.visit1_mut(0, &mut |expr, _| -> Result<(), ()> {
+                    walk_relation(expr, outers);
+                    Ok(())
+                });
+            }
         }
     }
 

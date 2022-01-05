@@ -174,41 +174,32 @@ pub struct WindowExpr {
 }
 
 impl WindowExpr {
-    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
-        self.func.bind_parameters(params)?;
-        for p in self.partition.iter_mut() {
-            p.bind_parameters(params)?;
+    pub fn visit_expressions<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
+    {
+        self.func.visit_expressions(f)?;
+        for expr in self.partition.iter() {
+            f(expr)?;
         }
-        for p in self.order_by.iter_mut() {
-            p.bind_parameters(params)?;
+        for expr in self.order_by.iter() {
+            f(expr)?;
         }
         Ok(())
     }
 
-    pub fn visit_expressions<'a, F>(&'a self, f: &mut F)
+    pub fn visit_expressions_mut<'a, F, E>(&'a mut self, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&'a HirScalarExpr),
+        F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
     {
-        self.func.visit_expressions(f);
-        for expr in self.partition.iter() {
-            f(expr)
-        }
-        for expr in self.order_by.iter() {
-            f(expr)
-        }
-    }
-
-    pub fn visit_expressions_mut<'a, F>(&'a mut self, f: &mut F)
-    where
-        F: FnMut(&'a mut HirScalarExpr),
-    {
-        self.func.visit_expressions_mut(f);
+        self.func.visit_expressions_mut(f)?;
         for expr in self.partition.iter_mut() {
-            f(expr)
+            f(expr)?;
         }
         for expr in self.order_by.iter_mut() {
-            f(expr)
+            f(expr)?;
         }
+        Ok(())
     }
 }
 
@@ -227,24 +218,18 @@ pub enum WindowExprType {
 }
 
 impl WindowExprType {
-    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
-        match self {
-            Self::Scalar(expr) => expr.bind_parameters(params),
-        }
-    }
-
-    pub fn visit_expressions<'a, F>(&'a self, f: &mut F)
+    pub fn visit_expressions<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&'a HirScalarExpr),
+        F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
     {
         match self {
             Self::Scalar(expr) => expr.visit_expressions(f),
         }
     }
 
-    pub fn visit_expressions_mut<'a, F>(&'a mut self, f: &mut F)
+    pub fn visit_expressions_mut<'a, F, E>(&'a mut self, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&'a mut HirScalarExpr),
+        F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
     {
         match self {
             Self::Scalar(expr) => expr.visit_expressions_mut(f),
@@ -270,29 +255,24 @@ pub struct ScalarWindowExpr {
 }
 
 impl ScalarWindowExpr {
-    pub fn bind_parameters(&mut self, _params: &Params) -> Result<(), anyhow::Error> {
+    pub fn visit_expressions<'a, F, E>(&'a self, _f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
+    {
         match self.func {
             ScalarWindowFunc::RowNumber => {}
         }
         Ok(())
     }
 
-    pub fn visit_expressions<'a, F>(&'a self, _f: &mut F)
+    pub fn visit_expressions_mut<'a, F, E>(&'a mut self, _f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&'a HirScalarExpr),
+        F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
     {
         match self.func {
             ScalarWindowFunc::RowNumber => {}
         }
-    }
-
-    pub fn visit_expressions_mut<'a, F>(&'a mut self, _f: &mut F)
-    where
-        F: FnMut(&'a mut HirScalarExpr),
-    {
-        match self.func {
-            ScalarWindowFunc::RowNumber => {}
-        }
+        Ok(())
     }
 
     fn typ(
@@ -976,192 +956,269 @@ impl HirRelationExpr {
         )
     }
 
-    // TODO(benesch): these visit methods are too duplicative. Figure out how
-    // to deduplicate.
-
-    pub fn visit<'a, F>(&'a self, f: &mut F)
+    pub fn visit<'a, F>(&'a self, depth: usize, f: &mut F)
     where
-        F: FnMut(&'a Self),
+        F: FnMut(&'a Self, usize),
     {
-        self.visit1(|e: &HirRelationExpr| e.visit(f));
-        f(self);
+        let _ = self.visit_fallible(depth, &mut |e: &HirRelationExpr,
+                                                 depth: usize|
+         -> Result<(), ()> {
+            f(e, depth);
+            Ok(())
+        });
     }
 
-    pub fn visit1<'a, F>(&'a self, mut f: F)
+    pub fn visit_fallible<'a, F, E>(&'a self, depth: usize, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&'a Self),
+        F: FnMut(&'a Self, usize) -> Result<(), E>,
+    {
+        self.visit1(depth, |e: &HirRelationExpr, depth: usize| {
+            e.visit_fallible(depth, f)
+        })?;
+        f(self, depth)
+    }
+
+    pub fn visit1<'a, F, E>(&'a self, depth: usize, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&'a Self, usize) -> Result<(), E>,
     {
         match self {
             HirRelationExpr::Constant { .. }
             | HirRelationExpr::Get { .. }
             | HirRelationExpr::CallTable { .. } => (),
             HirRelationExpr::Let { body, value, .. } => {
-                f(value);
-                f(body);
+                f(value, depth)?;
+                f(body, depth)?;
             }
             HirRelationExpr::Project { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Map { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Filter { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Join { left, right, .. } => {
-                f(left);
-                f(right);
+                f(left, depth)?;
+                f(right, depth + 1)?;
             }
             HirRelationExpr::Reduce { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Distinct { input } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::TopK { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Negate { input } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Threshold { input } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::DeclareKeys { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Union { base, inputs } => {
-                f(base);
+                f(base, depth)?;
                 for input in inputs {
-                    f(input);
+                    f(input, depth)?;
                 }
             }
         }
+        Ok(())
     }
 
-    pub fn visit_mut<F>(&mut self, f: &mut F)
+    pub fn visit_mut<F>(&mut self, depth: usize, f: &mut F)
     where
-        F: FnMut(&mut Self),
+        F: FnMut(&mut Self, usize),
     {
-        self.visit1_mut(|e: &mut HirRelationExpr| e.visit_mut(f));
-        f(self);
+        let _ = self.visit_mut_fallible(depth, &mut |e: &mut HirRelationExpr,
+                                                     depth: usize|
+         -> Result<(), ()> {
+            f(e, depth);
+            Ok(())
+        });
     }
 
-    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
+    pub fn visit_mut_fallible<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&'a mut Self),
+        F: FnMut(&mut Self, usize) -> Result<(), E>,
+    {
+        self.visit1_mut(depth, |e: &mut HirRelationExpr, depth: usize| {
+            e.visit_mut_fallible(depth, f)
+        })?;
+        f(self, depth)
+    }
+
+    pub fn visit1_mut<'a, F, E>(&'a mut self, depth: usize, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&'a mut Self, usize) -> Result<(), E>,
     {
         match self {
             HirRelationExpr::Constant { .. }
             | HirRelationExpr::Get { .. }
             | HirRelationExpr::CallTable { .. } => (),
             HirRelationExpr::Let { body, value, .. } => {
-                f(value);
-                f(body);
+                f(value, depth)?;
+                f(body, depth)?;
             }
             HirRelationExpr::Project { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Map { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Filter { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Join { left, right, .. } => {
-                f(left);
-                f(right);
+                f(left, depth)?;
+                f(right, depth + 1)?;
             }
             HirRelationExpr::Reduce { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Distinct { input } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::TopK { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Negate { input } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Threshold { input } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::DeclareKeys { input, .. } => {
-                f(input);
+                f(input, depth)?;
             }
             HirRelationExpr::Union { base, inputs } => {
-                f(base);
+                f(base, depth)?;
                 for input in inputs {
-                    f(input);
+                    f(input, depth)?;
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Visits all scalar expressions within the sub-tree of the given relation.
+    ///
+    /// The `depth` argument should indicate the subquery nesting depth of the expression,
+    /// which will be incremented when entering the RHS of a join or a subquery and
+    /// presented to the supplied function `f`.
+    pub fn visit_scalar_expressions<F, E>(&self, depth: usize, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&HirScalarExpr, usize) -> Result<(), E>,
+    {
+        self.visit_fallible(depth, &mut |e: &HirRelationExpr,
+                                         depth: usize|
+         -> Result<(), E> {
+            match e {
+                HirRelationExpr::Join { on, .. } => {
+                    f(on, depth)?;
+                }
+                HirRelationExpr::Map { scalars, .. } => {
+                    for scalar in scalars {
+                        f(scalar, depth)?;
+                    }
+                }
+                HirRelationExpr::CallTable { exprs, .. } => {
+                    for expr in exprs {
+                        f(expr, depth)?;
+                    }
+                }
+                HirRelationExpr::Filter { predicates, .. } => {
+                    for predicate in predicates {
+                        f(predicate, depth)?;
+                    }
+                }
+                HirRelationExpr::Reduce { aggregates, .. } => {
+                    for aggregate in aggregates {
+                        f(&aggregate.expr, depth)?;
+                    }
+                }
+                HirRelationExpr::Union { .. }
+                | HirRelationExpr::Let { .. }
+                | HirRelationExpr::Project { .. }
+                | HirRelationExpr::Distinct { .. }
+                | HirRelationExpr::TopK { .. }
+                | HirRelationExpr::Negate { .. }
+                | HirRelationExpr::DeclareKeys { .. }
+                | HirRelationExpr::Threshold { .. }
+                | HirRelationExpr::Constant { .. }
+                | HirRelationExpr::Get { .. } => (),
+            }
+            Ok(())
+        })
+    }
+
+    /// Like `visit_scalar_expressions`, but permits mutating the expressions.
+    pub fn visit_scalar_expressions_mut<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut HirScalarExpr, usize) -> Result<(), E>,
+    {
+        self.visit_mut_fallible(depth, &mut |e: &mut HirRelationExpr,
+                                             depth: usize|
+         -> Result<(), E> {
+            match e {
+                HirRelationExpr::Join { on, .. } => {
+                    f(on, depth)?;
+                }
+                HirRelationExpr::Map { scalars, .. } => {
+                    for scalar in scalars.iter_mut() {
+                        f(scalar, depth)?;
+                    }
+                }
+                HirRelationExpr::CallTable { exprs, .. } => {
+                    for expr in exprs.iter_mut() {
+                        f(expr, depth)?;
+                    }
+                }
+                HirRelationExpr::Filter { predicates, .. } => {
+                    for predicate in predicates.iter_mut() {
+                        f(predicate, depth)?;
+                    }
+                }
+                HirRelationExpr::Reduce { aggregates, .. } => {
+                    for aggregate in aggregates.iter_mut() {
+                        f(&mut aggregate.expr, depth)?;
+                    }
+                }
+                HirRelationExpr::Union { .. }
+                | HirRelationExpr::Let { .. }
+                | HirRelationExpr::Project { .. }
+                | HirRelationExpr::Distinct { .. }
+                | HirRelationExpr::TopK { .. }
+                | HirRelationExpr::Negate { .. }
+                | HirRelationExpr::DeclareKeys { .. }
+                | HirRelationExpr::Threshold { .. }
+                | HirRelationExpr::Constant { .. }
+                | HirRelationExpr::Get { .. } => (),
+            }
+            Ok(())
+        })
     }
 
     /// Visits the column references in this relation expression.
     ///
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
-    /// which will be incremented with each subquery entered and presented to the supplied
-    /// function `f`.
+    /// which will be incremented when entering the RHS of a join or a subquery and
+    /// presented to the supplied function `f`.
     pub fn visit_columns<F>(&self, depth: usize, f: &mut F)
     where
         F: FnMut(usize, &ColumnRef),
     {
-        match self {
-            HirRelationExpr::Let { body, value, .. } => {
-                value.visit_columns(depth, f);
-                body.visit_columns(depth, f);
-            }
-            HirRelationExpr::Join {
-                on, left, right, ..
-            } => {
-                left.visit_columns(depth, f);
-                right.visit_columns(depth + 1, f);
-                // The ON clause doesn't belong in the lateral context
-                on.visit_columns(depth, f);
-            }
-            HirRelationExpr::Map { scalars, input } => {
-                for scalar in scalars {
-                    scalar.visit_columns(depth, f);
-                }
-                input.visit_columns(depth, f);
-            }
-            HirRelationExpr::CallTable { exprs, .. } => {
-                for expr in exprs {
-                    expr.visit_columns(depth, f);
-                }
-            }
-            HirRelationExpr::Filter { predicates, input } => {
-                for predicate in predicates {
-                    predicate.visit_columns(depth, f);
-                }
-                input.visit_columns(depth, f);
-            }
-            HirRelationExpr::Reduce {
-                aggregates, input, ..
-            } => {
-                for aggregate in aggregates {
-                    aggregate.visit_columns(depth, f);
-                }
-                input.visit_columns(depth, f);
-            }
-            HirRelationExpr::Union { base, inputs } => {
-                base.visit_columns(depth, f);
-                for input in inputs {
-                    input.visit_columns(depth, f);
-                }
-            }
-            HirRelationExpr::Project { input, .. }
-            | HirRelationExpr::Distinct { input }
-            | HirRelationExpr::TopK { input, .. }
-            | HirRelationExpr::Negate { input }
-            | HirRelationExpr::DeclareKeys { input, .. }
-            | HirRelationExpr::Threshold { input } => {
-                input.visit_columns(depth, f);
-            }
-            HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => (),
-        }
+        let _ = self.visit_scalar_expressions(depth, &mut |e: &HirScalarExpr,
+                                                           depth: usize|
+         -> Result<(), ()> {
+            e.visit_columns(depth, f);
+            Ok(())
+        });
     }
 
     /// Like `visit_columns`, but permits mutating the column references.
@@ -1169,175 +1226,30 @@ impl HirRelationExpr {
     where
         F: FnMut(usize, &mut ColumnRef),
     {
-        match self {
-            HirRelationExpr::Let { body, value, .. } => {
-                value.visit_columns_mut(depth, f);
-                body.visit_columns_mut(depth, f);
-            }
-            HirRelationExpr::Join {
-                on, left, right, ..
-            } => {
-                left.visit_columns_mut(depth, f);
-                right.visit_columns_mut(depth + 1, f);
-                // The ON clause doesn't belong in the lateral context
-                on.visit_columns_mut(depth, f);
-            }
-            HirRelationExpr::Map { scalars, input } => {
-                for scalar in scalars {
-                    scalar.visit_columns_mut(depth, f);
-                }
-                input.visit_columns_mut(depth, f);
-            }
-            HirRelationExpr::CallTable { exprs, .. } => {
-                for expr in exprs {
-                    expr.visit_columns_mut(depth, f);
-                }
-            }
-            HirRelationExpr::Filter { predicates, input } => {
-                for predicate in predicates {
-                    predicate.visit_columns_mut(depth, f);
-                }
-                input.visit_columns_mut(depth, f);
-            }
-            HirRelationExpr::Reduce {
-                aggregates, input, ..
-            } => {
-                for aggregate in aggregates {
-                    aggregate.visit_columns_mut(depth, f);
-                }
-                input.visit_columns_mut(depth, f);
-            }
-            HirRelationExpr::Union { base, inputs } => {
-                base.visit_columns_mut(depth, f);
-                for input in inputs {
-                    input.visit_columns_mut(depth, f);
-                }
-            }
-            HirRelationExpr::Project { input, .. }
-            | HirRelationExpr::Distinct { input }
-            | HirRelationExpr::TopK { input, .. }
-            | HirRelationExpr::Negate { input }
-            | HirRelationExpr::DeclareKeys { input, .. }
-            | HirRelationExpr::Threshold { input } => {
-                input.visit_columns_mut(depth, f);
-            }
-            HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => (),
-        }
+        let _ = self.visit_scalar_expressions_mut(depth, &mut |e: &mut HirScalarExpr,
+                                                               depth: usize|
+         -> Result<(), ()> {
+            e.visit_columns_mut(depth, f);
+            Ok(())
+        });
     }
 
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
-        match self {
-            HirRelationExpr::Let { body, value, .. } => {
-                value.bind_parameters(params)?;
-                body.bind_parameters(params)
-            }
-            HirRelationExpr::Join {
-                on, left, right, ..
-            } => {
-                on.bind_parameters(params)?;
-                left.bind_parameters(params)?;
-                right.bind_parameters(params)
-            }
-            HirRelationExpr::Map { scalars, input } => {
-                for scalar in scalars {
-                    scalar.bind_parameters(params)?;
-                }
-                input.bind_parameters(params)
-            }
-            HirRelationExpr::CallTable { exprs, .. } => {
-                for expr in exprs {
-                    expr.bind_parameters(params)?;
-                }
-                Ok(())
-            }
-            HirRelationExpr::Filter { predicates, input } => {
-                for predicate in predicates {
-                    predicate.bind_parameters(params)?;
-                }
-                input.bind_parameters(params)
-            }
-            HirRelationExpr::Reduce {
-                aggregates, input, ..
-            } => {
-                for aggregate in aggregates {
-                    aggregate.bind_parameters(params)?;
-                }
-                input.bind_parameters(params)
-            }
-            HirRelationExpr::Union { base, inputs } => {
-                for input in inputs {
-                    input.bind_parameters(params)?;
-                }
-                base.bind_parameters(params)
-            }
-            HirRelationExpr::Project { input, .. }
-            | HirRelationExpr::Distinct { input, .. }
-            | HirRelationExpr::TopK { input, .. }
-            | HirRelationExpr::Negate { input, .. }
-            | HirRelationExpr::DeclareKeys { input, .. }
-            | HirRelationExpr::Threshold { input, .. } => input.bind_parameters(params),
-            HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => Ok(()),
-        }
+        self.visit_scalar_expressions_mut(0, &mut |e: &mut HirScalarExpr, _: usize| {
+            e.bind_parameters(params)
+        })
     }
 
     /// See the documentation for [`HirScalarExpr::splice_parameters`].
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
-        match self {
-            HirRelationExpr::Let { body, value, .. } => {
-                value.splice_parameters(params, depth);
-                body.splice_parameters(params, depth);
-            }
-            HirRelationExpr::Join {
-                on, left, right, ..
-            } => {
-                left.splice_parameters(params, depth);
-                right.splice_parameters(params, depth + 1);
-                // The ON clause doesn't belong in the lateral context
-                on.splice_parameters(params, depth);
-            }
-            HirRelationExpr::Map { scalars, input } => {
-                for scalar in scalars {
-                    scalar.splice_parameters(params, depth);
-                }
-                input.splice_parameters(params, depth);
-            }
-            HirRelationExpr::CallTable { exprs, .. } => {
-                for expr in exprs {
-                    expr.splice_parameters(params, depth);
-                }
-            }
-            HirRelationExpr::Filter { predicates, input } => {
-                for predicate in predicates {
-                    predicate.splice_parameters(params, depth);
-                }
-                input.splice_parameters(params, depth);
-            }
-            HirRelationExpr::Reduce {
-                aggregates, input, ..
-            } => {
-                for aggregate in aggregates {
-                    aggregate.expr.splice_parameters(params, depth);
-                }
-                input.splice_parameters(params, depth);
-            }
-            HirRelationExpr::Union { base, inputs } => {
-                base.splice_parameters(params, depth);
-                for input in inputs {
-                    input.splice_parameters(params, depth);
-                }
-            }
-            HirRelationExpr::Project { input, .. }
-            | HirRelationExpr::Distinct { input }
-            | HirRelationExpr::TopK { input, .. }
-            | HirRelationExpr::Negate { input }
-            | HirRelationExpr::DeclareKeys { input, .. }
-            | HirRelationExpr::Threshold { input } => {
-                input.splice_parameters(params, depth);
-            }
-            HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => (),
-        }
+        let _ = self.visit_scalar_expressions_mut(depth, &mut |e: &mut HirScalarExpr,
+                                                               depth: usize|
+         -> Result<(), ()> {
+            e.splice_parameters(params, depth);
+            Ok(())
+        });
     }
 
     /// Constructs a constant collection from specific rows and schema.
@@ -1375,11 +1287,8 @@ impl HirScalarExpr {
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
-        match self {
-            HirScalarExpr::Literal(_, _)
-            | HirScalarExpr::Column(_)
-            | HirScalarExpr::CallNullary(_) => Ok(()),
-            HirScalarExpr::Parameter(n) => {
+        self.visit_recursively_mut(0, &mut |_: usize, e: &mut HirScalarExpr| {
+            if let HirScalarExpr::Parameter(n) = e {
                 let datum = match params.datums.iter().nth(*n - 1) {
                     None => bail!("there is no parameter ${}", n),
                     Some(datum) => datum,
@@ -1387,30 +1296,10 @@ impl HirScalarExpr {
                 let scalar_type = &params.types[*n - 1];
                 let row = Row::pack(&[datum]);
                 let column_type = scalar_type.clone().nullable(datum.is_null());
-                *self = HirScalarExpr::Literal(row, column_type);
-                Ok(())
+                *e = HirScalarExpr::Literal(row, column_type);
             }
-            HirScalarExpr::CallUnary { expr, .. } => expr.bind_parameters(params),
-            HirScalarExpr::CallBinary { expr1, expr2, .. } => {
-                expr1.bind_parameters(params)?;
-                expr2.bind_parameters(params)
-            }
-            HirScalarExpr::CallVariadic { exprs, .. } => {
-                for expr in exprs {
-                    expr.bind_parameters(params)?;
-                }
-                Ok(())
-            }
-            HirScalarExpr::If { cond, then, els } => {
-                cond.bind_parameters(params)?;
-                then.bind_parameters(params)?;
-                els.bind_parameters(params)
-            }
-            HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
-                expr.bind_parameters(params)
-            }
-            HirScalarExpr::Windowing(expr) => expr.bind_parameters(params),
-        }
+            Ok(())
+        })
     }
 
     /// Like [`HirScalarExpr::bind_parameters`], except that parameters are
@@ -1424,22 +1313,21 @@ impl HirScalarExpr {
     /// Column references in parameters will be corrected to account for the
     /// depth at which they are spliced.
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
-        self.visit_mut(&mut |e| match e {
-            HirScalarExpr::Parameter(i) => {
+        let _ = self.visit_recursively_mut(depth, &mut |depth: usize,
+                                                        e: &mut HirScalarExpr|
+         -> Result<(), ()> {
+            if let HirScalarExpr::Parameter(i) = e {
                 *e = params[*i - 1].clone();
                 // Correct any column references in the parameter expression for
                 // its new depth.
-                e.visit_columns_mut(0, &mut |d, col| {
+                e.visit_columns_mut(0, &mut |d: usize, col: &mut ColumnRef| {
                     if col.level >= d {
                         col.level += depth
                     }
                 });
             }
-            HirScalarExpr::Exists(e) | HirScalarExpr::Select(e) => {
-                e.splice_parameters(params, depth + 1)
-            }
-            _ => (),
-        })
+            Ok(())
+        });
     }
 
     /// Constructs a column reference in the current scope.
@@ -1537,7 +1425,10 @@ impl HirScalarExpr {
             }
             Exists(..) | Select(..) => (),
             Windowing(expr) => {
-                expr.visit_expressions(&mut f);
+                let _ = expr.visit_expressions(&mut |e| -> Result<(), ()> {
+                    f(e);
+                    Ok(())
+                });
             }
         }
     }
@@ -1582,7 +1473,10 @@ impl HirScalarExpr {
             }
             Exists(..) | Select(..) => (),
             Windowing(expr) => {
-                expr.visit_expressions_mut(&mut f);
+                let _ = expr.visit_expressions_mut(&mut |e| -> Result<(), ()> {
+                    f(e);
+                    Ok(())
+                });
             }
         }
     }
@@ -1617,35 +1511,14 @@ impl HirScalarExpr {
     where
         F: FnMut(usize, &ColumnRef),
     {
-        match self {
-            HirScalarExpr::Literal(_, _)
-            | HirScalarExpr::Parameter(_)
-            | HirScalarExpr::CallNullary(_) => (),
-            HirScalarExpr::Column(col_ref) => f(depth, col_ref),
-            HirScalarExpr::CallUnary { expr, .. } => expr.visit_columns(depth, f),
-            HirScalarExpr::CallBinary { expr1, expr2, .. } => {
-                expr1.visit_columns(depth, f);
-                expr2.visit_columns(depth, f);
+        let _ = self.visit_recursively(depth, &mut |depth: usize,
+                                                    e: &HirScalarExpr|
+         -> Result<(), ()> {
+            if let HirScalarExpr::Column(col) = e {
+                f(depth, col)
             }
-            HirScalarExpr::CallVariadic { exprs, .. } => {
-                for expr in exprs {
-                    expr.visit_columns(depth, f);
-                }
-            }
-            HirScalarExpr::If { cond, then, els } => {
-                cond.visit_columns(depth, f);
-                then.visit_columns(depth, f);
-                els.visit_columns(depth, f);
-            }
-            HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
-                expr.visit_columns(depth + 1, f);
-            }
-            HirScalarExpr::Windowing(expr) => {
-                expr.visit_expressions(&mut |e| {
-                    e.visit_columns(depth, f);
-                });
-            }
-        }
+            Ok(())
+        });
     }
 
     /// Like `visit_columns`, but permits mutating the column references.
@@ -1653,35 +1526,90 @@ impl HirScalarExpr {
     where
         F: FnMut(usize, &mut ColumnRef),
     {
+        let _ = self.visit_recursively_mut(depth, &mut |depth: usize,
+                                                        e: &mut HirScalarExpr|
+         -> Result<(), ()> {
+            if let HirScalarExpr::Column(col) = e {
+                f(depth, col)
+            }
+            Ok(())
+        });
+    }
+
+    /// Like `visit` but it enters the subqueries visiting the scalar expressions contained
+    /// in them. It takes the current depth of the expression and increases it when
+    /// entering a subquery.
+    pub fn visit_recursively<F, E>(&self, depth: usize, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(usize, &HirScalarExpr) -> Result<(), E>,
+    {
         match self {
             HirScalarExpr::Literal(_, _)
             | HirScalarExpr::Parameter(_)
-            | HirScalarExpr::CallNullary(_) => (),
-            HirScalarExpr::Column(col_ref) => f(depth, col_ref),
-            HirScalarExpr::CallUnary { expr, .. } => expr.visit_columns_mut(depth, f),
+            | HirScalarExpr::CallNullary(_)
+            | HirScalarExpr::Column(_) => (),
+            HirScalarExpr::CallUnary { expr, .. } => expr.visit_recursively(depth, f)?,
             HirScalarExpr::CallBinary { expr1, expr2, .. } => {
-                expr1.visit_columns_mut(depth, f);
-                expr2.visit_columns_mut(depth, f);
+                expr1.visit_recursively(depth, f)?;
+                expr2.visit_recursively(depth, f)?;
             }
             HirScalarExpr::CallVariadic { exprs, .. } => {
                 for expr in exprs {
-                    expr.visit_columns_mut(depth, f);
+                    expr.visit_recursively(depth, f)?;
                 }
             }
             HirScalarExpr::If { cond, then, els } => {
-                cond.visit_columns_mut(depth, f);
-                then.visit_columns_mut(depth, f);
-                els.visit_columns_mut(depth, f);
+                cond.visit_recursively(depth, f)?;
+                then.visit_recursively(depth, f)?;
+                els.visit_recursively(depth, f)?;
             }
             HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
-                expr.visit_columns_mut(depth + 1, f);
+                expr.visit_scalar_expressions(depth + 1, &mut |e, depth| {
+                    e.visit_recursively(depth, f)
+                })?;
             }
             HirScalarExpr::Windowing(expr) => {
-                expr.visit_expressions_mut(&mut |e| {
-                    e.visit_columns_mut(depth, f);
-                });
+                expr.visit_expressions(&mut |e| e.visit_recursively(depth, f))?;
             }
         }
+        f(depth, self)
+    }
+
+    /// Like `visit_recursively`, but permits mutating the scalar expressions.
+    pub fn visit_recursively_mut<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(usize, &mut HirScalarExpr) -> Result<(), E>,
+    {
+        match self {
+            HirScalarExpr::Literal(_, _)
+            | HirScalarExpr::Parameter(_)
+            | HirScalarExpr::CallNullary(_)
+            | HirScalarExpr::Column(_) => (),
+            HirScalarExpr::CallUnary { expr, .. } => expr.visit_recursively_mut(depth, f)?,
+            HirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.visit_recursively_mut(depth, f)?;
+                expr2.visit_recursively_mut(depth, f)?;
+            }
+            HirScalarExpr::CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    expr.visit_recursively_mut(depth, f)?;
+                }
+            }
+            HirScalarExpr::If { cond, then, els } => {
+                cond.visit_recursively_mut(depth, f)?;
+                then.visit_recursively_mut(depth, f)?;
+                els.visit_recursively_mut(depth, f)?;
+            }
+            HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
+                expr.visit_scalar_expressions_mut(depth + 1, &mut |e, depth| {
+                    e.visit_recursively_mut(depth, f)
+                })?;
+            }
+            HirScalarExpr::Windowing(expr) => {
+                expr.visit_expressions_mut(&mut |e| e.visit_recursively_mut(depth, f))?;
+            }
+        }
+        f(depth, self)
     }
 
     fn simplify_to_literal(self) -> Option<Row> {
@@ -1795,25 +1723,5 @@ impl AggregateExpr {
         params: &BTreeMap<usize, ScalarType>,
     ) -> ColumnType {
         self.func.output_type(self.expr.typ(outers, inner, params))
-    }
-
-    /// Visits the column references in this aggregate expression.
-    ///
-    /// The `depth` argument should indicate the subquery nesting depth of the expression,
-    /// which will be incremented with each subquery entered and presented to the supplied
-    /// function `f`.
-    pub fn visit_columns<F>(&self, depth: usize, f: &mut F)
-    where
-        F: FnMut(usize, &ColumnRef),
-    {
-        self.expr.visit_columns(depth, f);
-    }
-
-    /// Like `visit_columns`, but permits mutating the column reference.
-    pub fn visit_columns_mut<F>(&mut self, depth: usize, f: &mut F)
-    where
-        F: FnMut(usize, &mut ColumnRef),
-    {
-        self.expr.visit_columns_mut(depth, f);
     }
 }
