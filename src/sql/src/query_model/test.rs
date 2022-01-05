@@ -351,8 +351,13 @@ fn test_hir_generator() {
                     let mut output = String::new();
 
                     if dot_graph {
-                        output += &match query_model::dot::DotGenerator::new()
-                            .generate(&model, &s.input)
+                        let typed = if let Some(format) = s.args.get("format") {
+                            format.contains(&"types".to_string())
+                        } else {
+                            false
+                        };
+                        output += &match query_model::dot::DotGenerator::new(&catalog)
+                            .generate(&model, &s.input, typed)
                         {
                             Ok(graph) => graph,
                             Err(e) => return format!("graph generation error: {}", e),

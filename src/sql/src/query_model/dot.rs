@@ -10,6 +10,7 @@
 //! Generates a graphviz graph from a Query Graph Model.
 
 use crate::query_model::{BoxId, BoxType, Model, Quantifier, QuantifierId, QueryBox};
+use expr::ExprHumanizer;
 use itertools::Itertools;
 use ore::str::separated;
 use std::collections::BTreeMap;
@@ -18,7 +19,8 @@ use std::fmt::{self, Write};
 /// Generates a graphviz graph from a Query Graph Model, defined in the DOT language.
 /// See <https://graphviz.org/doc/info/lang.html>.
 #[derive(Debug)]
-pub struct DotGenerator {
+pub struct DotGenerator<'a> {
+    expr_humanizer: &'a dyn ExprHumanizer,
     output: String,
     indent: u32,
 }
@@ -37,17 +39,23 @@ pub enum DotLabel<'a> {
 /// The set of escaped characters is "|{}.
 struct DotLabelEscapedString<'a>(&'a str);
 
-impl DotGenerator {
-    pub fn new() -> Self {
+impl<'a> DotGenerator<'a> {
+    pub fn new(expr_humanizer: &'a dyn ExprHumanizer) -> Self {
         Self {
+            expr_humanizer,
             output: String::new(),
             indent: 0,
         }
     }
 
     /// Generates a graphviz graph for the given model, labeled with `label`.
-    pub fn generate(self, model: &Model, label: &str) -> Result<String, anyhow::Error> {
-        self.generate_subgraph(model, model.top_box, label)
+    pub fn generate(
+        self,
+        model: &Model,
+        label: &str,
+        with_types: bool,
+    ) -> Result<String, anyhow::Error> {
+        self.generate_subgraph(model, model.top_box, label, with_types)
     }
 
     /// Generates a graphviz graph for the given subgraph of the model, labeled with `label`.
@@ -56,6 +64,7 @@ impl DotGenerator {
         model: &Model,
         start_box: BoxId,
         label: &str,
+        with_types: bool,
     ) -> Result<String, anyhow::Error> {
         self.new_line("digraph G {");
         self.inc();
@@ -82,7 +91,7 @@ impl DotGenerator {
                     self.new_line(&format!(
                         "boxhead{} [ shape = record, {} ]",
                         box_id,
-                        Self::get_box_head(&b)
+                        self.get_box_head(model, &b, with_types)
                     ));
 
                     self.new_line("{");
@@ -143,17 +152,31 @@ impl DotGenerator {
         b.box_type.get_box_type_str()
     }
 
-    fn get_box_head(b: &QueryBox) -> String {
+    fn get_box_head(&self, model: &Model, b: &QueryBox, with_types: bool) -> String {
         let mut rows = Vec::new();
 
         rows.push(format!("Distinct: {:?}", b.distinct));
 
+        let typed_column = |position: usize| -> String {
+            let e = &b.columns[position].expr;
+            if with_types {
+                format!(
+                    "{} ({})",
+                    e,
+                    self.expr_humanizer
+                        .humanize_column_type(&b.column_type(model, position))
+                )
+            } else {
+                format!("{}", e)
+            }
+        };
+
         // The projection of the box
         for (i, c) in b.columns.iter().enumerate() {
             if let Some(alias) = &c.alias {
-                rows.push(format!("{}: {} as {}", i, c.expr, alias.as_str()));
+                rows.push(format!("{}: {} as {}", i, typed_column(i), alias.as_str()));
             } else {
-                rows.push(format!("{}: {}", i, c.expr));
+                rows.push(format!("{}: {}", i, typed_column(i)));
             }
         }
 

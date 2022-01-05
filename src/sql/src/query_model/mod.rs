@@ -12,7 +12,9 @@ use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
+use expr::BinaryFunc;
 use ore::id_gen::Gen;
+use repr::ColumnType;
 
 pub mod dot;
 mod hir;
@@ -396,6 +398,72 @@ impl QueryBox {
         } else {
             self.add_column(expr)
         }
+    }
+
+    /// Returns the type of a given column projected by this box.
+    fn column_type(&self, model: &Model, column: usize) -> ColumnType {
+        let the_expr = &self.columns[column].expr;
+        let mut column_type = the_expr.typ(model);
+        match &self.box_type {
+            BoxType::Select(select) => {
+                if column_type.nullable {
+                    // Check whether the box contains predicates that reject
+                    // nulls for all the non null requeriments of the expression.
+                    let mut non_null_requirements = HashSet::new();
+                    the_expr.non_null_requirements(&mut non_null_requirements);
+                    let mut non_null_columns = HashSet::new();
+                    for predicate in select.predicates.iter() {
+                        // Deal with unnormalized Select boxes where conjunctive
+                        // predicates are not represented as different predicates.
+                        if let BoxScalarExpr::CallBinary {
+                            func: BinaryFunc::And,
+                            expr1,
+                            expr2,
+                        } = predicate
+                        {
+                            // AND is not a null propagating operation in SQL since
+                            // NULL AND FALSE is FALSE, not NULL. However, in order
+                            // for the AND operation to be TRUE, both sides must be
+                            // non-null.
+                            expr1.non_null_requirements(&mut non_null_columns);
+                            expr2.non_null_requirements(&mut non_null_columns);
+                        } else {
+                            predicate.non_null_requirements(&mut non_null_columns);
+                        }
+                    }
+                    // If all the non-null requirements are met, either because
+                    // there is a null rejecting predicate on the input column or
+                    // the input column itself is non-nullable, then the projected
+                    // expression is non-nullable.
+                    if non_null_requirements
+                        .iter()
+                        .all(|col| non_null_columns.contains(col) || !col.typ(model).nullable)
+                    {
+                        column_type.nullable = false;
+                    }
+                }
+            }
+            BoxType::OuterJoin(_) => {
+                if !column_type.nullable {
+                    // The expression becomes nullable if it references any column
+                    // from the non-preserving side of the outer join
+                    let mut non_null_requirements = HashSet::new();
+                    the_expr.non_null_requirements(&mut non_null_requirements);
+                    column_type.nullable = non_null_requirements.iter().any(|col| {
+                        model.get_quantifier(col.quantifier_id).quantifier_type
+                            == QuantifierType::Foreach
+                    });
+                }
+            }
+            BoxType::Union => {
+                // TODO columns in the projection of a Union box always refer to
+                // the first input quantifier, but the projected column is nullable
+                // if any of the inputs has a nullable column in that position
+                unreachable!()
+            }
+            _ => (),
+        }
+        column_type
     }
 
     /// Visit all the expressions in this query box.

@@ -14,7 +14,7 @@ use ore::str::separated;
 use repr::*;
 
 use crate::plan::expr::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
-use crate::query_model::{QuantifierId, QuantifierSet};
+use crate::query_model::{Model, QuantifierId, QuantifierSet, QuantifierType};
 use expr::AggregateFunc;
 
 /// Representation for scalar expressions within a query graph model.
@@ -133,6 +133,68 @@ impl fmt::Display for BoxScalarExpr {
 }
 
 impl BoxScalarExpr {
+    /// Returns the type of the given scalar expression.
+    pub fn typ(&self, model: &Model) -> ColumnType {
+        use BoxScalarExpr::*;
+        match self {
+            BaseColumn(c) => c.column_type.clone(),
+            ColumnReference(c) => c.typ(model),
+            Literal(_, typ) => typ.clone(),
+            CallNullary(func) => func.output_type(),
+            CallUnary { expr, func } => func.output_type(expr.typ(model)),
+            CallBinary { expr1, expr2, func } => {
+                func.output_type(expr1.typ(model), expr2.typ(model))
+            }
+            CallVariadic { exprs, func } => {
+                func.output_type(exprs.iter().map(|e| e.typ(model)).collect())
+            }
+            If { then, els, .. } => {
+                let then_type = then.typ(model);
+                let else_type = els.typ(model);
+                debug_assert!(then_type.scalar_type.base_eq(&else_type.scalar_type));
+                ColumnType {
+                    nullable: then_type.nullable || else_type.nullable,
+                    scalar_type: then_type.scalar_type,
+                }
+            }
+            Aggregate { expr, func, .. } => func.output_type(expr.typ(model)),
+        }
+    }
+
+    /// Adds any columns that *must* be non-Null for `self` to be non-Null.
+    pub fn non_null_requirements(&self, columns: &mut HashSet<ColumnReference>) {
+        use BoxScalarExpr::*;
+        match self {
+            ColumnReference(col) => {
+                columns.insert(col.clone());
+            }
+            BaseColumn(..) | Literal(..) | CallNullary(_) => (),
+            CallUnary { func, expr } => {
+                if func.propagates_nulls() {
+                    expr.non_null_requirements(columns);
+                }
+            }
+            CallBinary { func, expr1, expr2 } => {
+                if func.propagates_nulls() {
+                    expr1.non_null_requirements(columns);
+                    expr2.non_null_requirements(columns);
+                }
+            }
+            CallVariadic { func, exprs } => {
+                if func.propagates_nulls() {
+                    for expr in exprs {
+                        expr.non_null_requirements(columns);
+                    }
+                }
+            }
+            If { .. } => (),
+            // TODO the non-null requeriments of an aggregate expression can
+            // be pused down to, for example, convert an outer join into an
+            // inner join
+            Aggregate { .. } => (),
+        }
+    }
+
     pub fn visit1<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),
@@ -194,5 +256,23 @@ impl BoxScalarExpr {
                 }
             }
         })
+    }
+}
+
+impl ColumnReference {
+    /// Returns the type of the underlying expression behind the column
+    /// reference.
+    pub fn typ(&self, model: &Model) -> ColumnType {
+        let input_box = model.get_quantifier(self.quantifier_id).input_box;
+        let mut column_type = model.get_box(input_box).column_type(model, self.position);
+        if !column_type.nullable {
+            // Column references from a scalar subqueries are always nullable unless
+            // the exactly-one-row comdition is satisfied by the input box
+            let q = model.get_quantifier(self.quantifier_id);
+            if q.quantifier_type == QuantifierType::Scalar {
+                column_type.nullable = true;
+            }
+        }
+        column_type
     }
 }
