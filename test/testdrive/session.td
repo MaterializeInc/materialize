@@ -32,7 +32,14 @@ UTF8
 UTF8
 
 ! SET client_encoding = UTF9
-parameter "client_encoding" cannot be changed
+parameter "client_encoding" can only be set to "UTF8"
+
+# if its utf8 we let it through
+> SET NAMES 'UTF8';
+
+# match the behavior of postgres as specified here: https://www.postgresql.org/docs/9.1/sql-set.html
+! SET NAMES = "something";
+unrecognized configuration parameter "names"
 
 > SET sql_safe_updates = on
 > SHOW sql_safe_updates

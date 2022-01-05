@@ -287,7 +287,13 @@ impl Vars {
         if name == APPLICATION_NAME.name {
             self.application_name.set(value, local)
         } else if name == CLIENT_ENCODING.name {
-            Err(CoordError::ReadOnlyParameter(&CLIENT_ENCODING))
+            // Unfortunately, some orm's like Prisma set NAMES to UTF8, thats the only
+            // value we support, so we let is through
+            if UncasedStr::new(value) != CLIENT_ENCODING.value {
+                return Err(CoordError::ConstrainedParameter(&CLIENT_ENCODING));
+            } else {
+                Ok(())
+            }
         } else if name == DATABASE.name {
             self.database.set(value, local)
         } else if name == DATE_STYLE.name {

@@ -3623,10 +3623,19 @@ impl<'a> Parser<'a> {
         let modifier = self.parse_one_of_keywords(&[SESSION, LOCAL]);
         let mut variable = self.parse_identifier()?;
         let mut normal = self.consume_token(&Token::Eq) || self.parse_keyword(TO);
-        if !normal && variable.as_str().parse() == Ok(TIME) {
-            self.expect_keyword(ZONE)?;
-            variable = Ident::new("timezone");
-            normal = true;
+        if !normal {
+            match variable.as_str().parse() {
+                Ok(TIME) => {
+                    self.expect_keyword(ZONE)?;
+                    variable = Ident::new("timezone");
+                    normal = true;
+                }
+                Ok(NAMES) => {
+                    variable = Ident::new("client_encoding");
+                    normal = true;
+                }
+                _ => {}
+            }
         }
         if normal {
             let token = self.peek_token();
