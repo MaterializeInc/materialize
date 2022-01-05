@@ -379,6 +379,14 @@ impl QueryBox {
         }
     }
 
+    /// Append the given expression as a new column without an explicit alias in
+    /// the projection of the box.
+    fn add_column(&mut self, expr: BoxScalarExpr) -> usize {
+        let position = self.columns.len();
+        self.columns.push(Column { expr, alias: None });
+        position
+    }
+
     /// Append the given expression as a new column in the projection of the box
     /// if there isn't already a column with the same expression. Returns the
     /// position of the first column in the projection with the same expression.
@@ -386,9 +394,7 @@ impl QueryBox {
         if let Some(position) = self.columns.iter().position(|c| c.expr == expr) {
             position
         } else {
-            let position = self.columns.len();
-            self.columns.push(Column { expr, alias: None });
-            position
+            self.add_column(expr)
         }
     }
 
