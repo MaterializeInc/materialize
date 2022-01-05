@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
+use ore::soft_assert_eq;
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
@@ -438,31 +440,27 @@ impl Transaction<'_> {
         }
     }
 
-    fn assert_timestamp_bindings(&self, source_id: &GlobalId) {
-        let bindings: Vec<(PartitionId, Timestamp, MzOffset)> = self.inner
-            .prepare_cached(
-                "SELECT pid, timestamp, offset from timestamps where sid = ? order by pid, timestamp").unwrap()
-            .query_and_then(params![SqlVal(source_id)], |row| -> Result<_, Error> {
-                let partition: PartitionId = row.get::<_, String>(0)?.parse().expect("parsing partition id from string cannot fail");
-                let timestamp: Timestamp = row.get(1)?;
-                let offset = MzOffset {
-                    offset: row.get(2)?,
-                };
+    fn validate_timestamp_bindings(&self, source_id: &GlobalId) -> Result<(), String> {
+        let bindings_vec = self
+            .load_timestamp_bindings(*source_id)
+            .map_err(|e| format!("{}", e))?;
 
-                Ok((partition, timestamp, offset))
-            }).unwrap()
-            .collect::<Result<Vec<(PartitionId, Timestamp, MzOffset)>, _>>().unwrap();
+        let bindings_by_pid = bindings_vec.iter().group_by(|(pid, _ts, _offset)| pid);
 
-        let mut latest_offset = 0;
-        for (_pid, _ts, offset) in bindings.iter() {
-            if offset.offset < latest_offset {
-                panic!(
-                    "Unexpected offset: {}, all bindings: {:?}",
-                    offset, bindings
-                );
+        for (pid, bindings) in &bindings_by_pid {
+            let mut latest_offset = 0;
+            for (_pid, _ts, offset) in bindings {
+                if offset.offset < latest_offset {
+                    return Err(format!(
+                        "Unexpected offset {} for pid {}. All bindings: {:?}",
+                        offset, pid, bindings_vec
+                    ));
+                }
+                latest_offset = offset.offset;
             }
-            latest_offset = offset.offset;
         }
+
+        Ok(())
     }
 
     pub fn load_timestamp_bindings(
@@ -562,7 +560,7 @@ impl Transaction<'_> {
             )?
               .execute(params![SqlVal(source_id), partition_id, timestamp, offset]);
 
-        self.assert_timestamp_bindings(source_id);
+        soft_assert_eq!(self.validate_timestamp_bindings(source_id), Ok(()));
 
         match result {
             Ok(_) => Ok(()),
@@ -576,7 +574,7 @@ impl Transaction<'_> {
             .prepare_cached("DELETE FROM timestamps WHERE sid = ?")?
             .execute(params![SqlVal(&source_id)]);
 
-        self.assert_timestamp_bindings(&source_id);
+        soft_assert_eq!(self.validate_timestamp_bindings(&source_id), Ok(()));
 
         match result {
             Ok(_) => Ok(()),
@@ -589,7 +587,8 @@ impl Transaction<'_> {
         source_id: GlobalId,
         frontier: Timestamp,
     ) -> Result<(), Error> {
-        self.assert_timestamp_bindings(&source_id);
+        soft_assert_eq!(self.validate_timestamp_bindings(&source_id), Ok(()));
+
         // we need to keep one binding that is not beyond the frontier, so that
         // on restart we don't emit timestamps that are beyond the previously
         // written consistency frontier. Otherwise, data with those timestamps
@@ -611,7 +610,7 @@ impl Transaction<'_> {
                 Err(err) => Err(err.into()),
             };
 
-            self.assert_timestamp_bindings(&source_id);
+            soft_assert_eq!(self.validate_timestamp_bindings(&source_id), Ok(()));
 
             result
         } else {
