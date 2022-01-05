@@ -107,11 +107,6 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
-- Fix a problem when connecting with Npgsql 6 {{% gh 9751 %}}.
-
-- **Breaking change.** Disallow window functions outside of `SELECT`
-  lists, `DISTINCT ON` clauses, and `ORDER BY` clauses.
-
 - **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
   is called with a [`time`] value but a date-related field (e.g., `YEAR`).
 
@@ -124,6 +119,23 @@ Only add new release notes above this line.
 The presence of this comment ensures that PRs that are alive across a release
 boundary don't silently merge their release notes into the wrong place.
 {{</ comment >}}
+
+{{% version-header v0.15.0 %}}
+
+- **Breaking change.** Disallow window functions outside of `SELECT`
+  lists, `DISTINCT ON` clauses, and `ORDER BY` clauses {{% gh 9749 %}}.
+
+  Window functions in other positions were never meant to be allowed and do not
+  have sensible semantics, so there is no replacement for the old behavior.
+
+- Improve timestamp selection when the first statement in a transaction does not
+  reference any sources {{% gh 9751 %}}.
+
+  This facilitates using [Npgsql](https://www.npgsql.org) v6 to connect to
+  Materialize.
+
+- Permit passing the `fetch_message_max_bytes` librdkafka option to
+  [Kafka sources](/sql/create-source/avro-kafka#with-options).
 
 {{% version-header v0.14.0 %}}
 
