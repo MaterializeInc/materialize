@@ -115,6 +115,12 @@ changes that have not yet been documented.
 
 - Add the `array_remove` and `list_remove` functions.
 
+- Allow `SET NAMES ____` special case as per: https://www.postgresql.org/docs/9.1/sql-set.html.
+  Errors if the value is not `"UTF8"`.
+
+- Correctly parse `SET SCHEMA ____` special case as per: https://www.postgresql.org/docs/9.1/sql-set.html,
+  but it remains unsettable.
+
 {{< comment >}}
 Only add new release notes above this line.
 
