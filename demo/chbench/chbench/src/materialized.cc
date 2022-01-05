@@ -48,7 +48,7 @@ mz::createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::st
         fprintf(stderr, "Deleting source %s: %s\n", source.c_str(), e.what());
     }
     try {
-        std::string mat = materialized? "" : "MATERIALIZED";
+        std::string mat = materialized? "MATERIALIZED" : "";
         std::string consistency = consistencySource.empty()? " " : " with (consistency= '" + consistencySource + "') ";
         std::string source_creation = "CREATE " + mat + " SOURCE IF NOT EXISTS " + source + " FROM KAFKA BROKER '" + kafkaUrl + "' TOPIC '" + topic + "' " + consistency + " FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '" + registry + "' ENVELOPE DEBEZIUM";
         w.exec0(source_creation);
