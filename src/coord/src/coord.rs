@@ -1410,8 +1410,15 @@ where
     ///
     /// TODO: In the future the coordinator should perhaps track a table's upper and
     /// since frontiers directly as it currently does for sources.
-    fn persisted_table_allow_compaction(&self, since_updates: &[(GlobalId, Antichain<Timestamp>)]) {
+    fn persisted_table_allow_compaction(
+        &mut self,
+        since_updates: &[(GlobalId, Antichain<Timestamp>)],
+    ) {
         let mut table_since_updates = vec![];
+
+        // Updates for the persistence source that is backing a table.
+        let mut table_source_since_updates = vec![];
+
         for (id, frontier) in since_updates.iter() {
             // HACK: Avoid the "failed to compact persisted tables" error log at
             // restart, by not trying to allow compaction on the minimum
@@ -1436,9 +1443,22 @@ where
                 {
                     if self.catalog.default_index_for(*on) == Some(*id) {
                         table_since_updates.push((persist.stream_id, frontier.clone()));
+                        table_source_since_updates.push((*on, frontier.clone()));
                     }
                 }
             }
+        }
+
+        // The persistence source that is backing a table on workers does not send frontier updates
+        // back to the coordinator. We update our internal bookkeeping here, because we also
+        // forward the compaction frontier here and therefore know that the since advances.
+        for (id, frontier) in table_source_since_updates {
+            let since_handle = self
+                .since_handles
+                .get_mut(&id)
+                .expect("missing since handle");
+
+            since_handle.maybe_advance(frontier);
         }
 
         if !table_since_updates.is_empty() {
