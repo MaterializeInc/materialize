@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Extensions for `OperatorBuilder` to create async operators.
+
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::future::Future;
@@ -24,6 +26,7 @@ use timely::PartialOrder;
 
 /// A type that is not inhabited by any value. Should be redefined as the
 /// [never](https://doc.rust-lang.org/std/primitive.never.html) type once it stabilizes
+#[derive(Debug)]
 pub enum Never {}
 
 /// A helper type to integrate timely notifications with async futures. Its intended to be used
@@ -84,6 +87,7 @@ impl Future for Notified<'_> {
     }
 }
 
+/// Extension trait for `OperatorBuilder`.
 pub trait OperatorBuilderExt<G: Scope> {
     /// Creates an operator implementation from supplied async logic constructor.
     ///
@@ -91,7 +95,7 @@ pub trait OperatorBuilderExt<G: Scope> {
     /// follows the following pattern:
     ///
     /// ```ignore
-    /// op.build_async(scope, move |capabilities, frontier, scheduler| async move {
+    /// op.build_async(scope, move |capabilities, frontier, scheduler, reschedule_flag| async move {
     ///     while scheduler.yield_now().await {
     ///         // async operator logic here
     ///     }
@@ -102,12 +106,16 @@ pub trait OperatorBuilderExt<G: Scope> {
     /// ecosystem the only way to yield control back to timely is by awaiting on
     /// `scheduler.yield_now()`. The operator will ensure that this call resolves when there is
     /// more work to do.
+    ///
+    /// The `reschedule_flag` argument to the `constructor` is used to communicate whether the
+    /// operator is complete.  It corresponds to the `bool` return value of `build_reschedule`.
     fn build_async<B, Fut>(self, scope: G, constructor: B)
     where
         B: FnOnce(
             Vec<Capability<G::Timestamp>>,
             Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
             Scheduler,
+            Rc<RefCell<bool>>,
         ) -> Fut,
         Fut: Future<Output = Never> + 'static;
 }
@@ -119,6 +127,7 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
             Vec<Capability<G::Timestamp>>,
             Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
             Scheduler,
+            Rc<RefCell<bool>>,
         ) -> Fut,
         Fut: Future<Output = Never> + 'static,
     {
@@ -128,13 +137,15 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
             Antichain::from_elem(Timestamp::minimum());
             self.shape().inputs()
         ]));
+        let reschedule_flag = Rc::new(RefCell::new(false));
 
-        self.build(move |capabilities| {
+        self.build_reschedule(move |capabilities| {
             let scheduler = Scheduler::default();
             let mut logic_fut = Box::pin(constructor(
                 capabilities,
                 Rc::clone(&shared_frontiers),
                 scheduler.clone(),
+                Rc::clone(&reschedule_flag),
             ));
             move |frontiers| {
                 // Attempt to update the shared frontier before polling the future.  This operation
@@ -166,15 +177,18 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
                 if had_pending_notify && !scheduler.is_notified() {
                     waker.wake_by_ref();
                 }
+
+                *reschedule_flag.borrow()
             }
         });
     }
 }
 
-#[allow(unused_macros)]
+/// Convenience macro used to wrap what might otherwise be the argument to `build_reschedule`.
+#[macro_export]
 macro_rules! async_op {
     (|$capabilities:ident, $frontiers:ident| $body:block) => {
-        move |mut capabilities, mut frontiers, scheduler| async move {
+        move |mut capabilities, mut frontiers, scheduler, reschedule_flag| async move {
             loop {
                 scheduler.notified().await;
                 // rebind to mutable references to make sure they can't be accidentally dropped
@@ -182,7 +196,16 @@ macro_rules! async_op {
                 let mut $capabilities = &mut capabilities;
                 #[allow(unused_mut)]
                 let mut $frontiers = &mut frontiers;
-                let _: () = async { $body }.await;
+
+                {
+                    // If this async block is `poll`ed and returns while `$body` is executing, it
+                    // should always be rescheduled.
+                    *reschedule_flag.borrow_mut() = true
+                }
+                let result: bool = async { $body }.await;
+                {
+                    *reschedule_flag.borrow_mut() = result;
+                }
             }
         }
     };
@@ -224,6 +247,7 @@ mod test {
                                 session.give(item);
                             }
                         }
+                        false
                     }),
                 );
 

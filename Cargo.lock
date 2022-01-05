@@ -1247,6 +1247,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "timely",
+ "timely-util",
  "tokio",
  "tokio-postgres",
  "tokio-util",
@@ -3171,6 +3172,7 @@ dependencies = [
  "ctor",
  "either",
  "futures",
+ "futures-util",
  "lazy_static",
  "openssl",
  "pin-project",
@@ -4912,6 +4914,16 @@ dependencies = [
  "timely_bytes",
  "timely_communication",
  "timely_logging",
+]
+
+[[package]]
+name = "timely-util"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "futures-util",
+ "timely",
+ "tokio",
 ]
 
 [[package]]
