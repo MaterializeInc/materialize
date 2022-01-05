@@ -516,19 +516,15 @@ class ResolvedImage:
             acquired_from: How the image was acquired.
         """
         if self.image.publish:
-            while True:
-                try:
-                    spawn.runv(
-                        ["docker", "pull", self.spec()],
-                        print_to=sys.stderr,
-                        stdout=sys.stderr,
-                    )
-                    return AcquiredFrom.REGISTRY
-                except subprocess.CalledProcessError:
-                    if not ui.env_is_truthy("MZBUILD_WAIT_FOR_IMAGE"):
-                        break
-                    print(f"waiting for mzimage to become available", file=sys.stderr)
-                    time.sleep(10)
+            try:
+                spawn.runv(
+                    ["docker", "pull", self.spec()],
+                    print_to=sys.stderr,
+                    stdout=sys.stderr,
+                )
+                return AcquiredFrom.REGISTRY
+            except subprocess.CalledProcessError:
+                pass
         self.build()
         return AcquiredFrom.LOCAL_BUILD
 
