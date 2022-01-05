@@ -396,9 +396,21 @@ where
         &self,
         key: Option<&[MirScalarExpr]>,
     ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
+        // Any operator that uses this method was told to use a particular
+        // collection during LIR planning, where we should have made
+        // sure that that collection exists.
+        //
+        // If it doesn't, we panic.
         match key {
-            None => self.collection.clone().unwrap(),
-            Some(key) => self.arranged[key].as_collection(),
+            None => self
+                .collection
+                .clone()
+                .expect("The unarranged collection doesn't exist."),
+            Some(key) => self
+                .arranged
+                .get(key)
+                .unwrap_or_else(|| panic!("The collection arranged by {:?} doesn't exist.", key))
+                .as_collection(),
         }
     }
 

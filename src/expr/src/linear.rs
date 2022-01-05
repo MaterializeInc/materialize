@@ -1215,7 +1215,7 @@ pub mod util {
     }
 
     /// Return the map associating columns in the logical,
-    /// unthinned representation of the output of a joijn to columns in the
+    /// unthinned representation of the output of a join to columns in the
     /// physical representation of the arrangement (where both of the inputs
     /// are stored thinned in an arrangement).
     pub fn permutation_for_joined_arrangements<B: FromIterator<(usize, usize)>>(
