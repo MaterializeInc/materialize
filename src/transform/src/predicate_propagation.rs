@@ -33,7 +33,8 @@ use ore::stack::{CheckedRecursion, RecursionGuard};
 use repr::Datum;
 use repr::ScalarType;
 
-/// Harvest and act upon per-column information.
+/// Collect constraints that are satisfied at each point in the dataflow graph in a bottom
+/// up manner and optimize scalar expressions based on those.
 #[derive(Debug)]
 pub struct PredicateKnowledge {
     recursion_guard: RecursionGuard,
@@ -65,7 +66,8 @@ impl crate::Transform for PredicateKnowledge {
 }
 
 impl PredicateKnowledge {
-    /// Harvest predicates known to be true of the columns in scope.
+    /// Collect constraints that are satisfied at each point in the dataflow graph in a
+    /// bottom up manner and optimize scalar expressions based on those.
     ///
     /// The `let_knowledge` argument contains predicates known to be true for a let binding.
     ///
@@ -730,7 +732,8 @@ fn normalize_predicates(predicates: &mut Vec<Constraint>, input_type: &repr::Rel
     }
 }
 
-/// Attempts to perform substitutions via `map` and returns `false` if an unreplaced column reference is reached.
+/// Attempts to perform substitutions via `map` and returns `false` if an
+/// unreplaced column reference is reached.
 fn substitute(expression: &mut MirScalarExpr, map: &HashMap<MirScalarExpr, MirScalarExpr>) -> bool {
     if let Some(expr) = map.get(expression) {
         *expression = expr.clone();
@@ -754,7 +757,8 @@ fn substitute(expression: &mut MirScalarExpr, map: &HashMap<MirScalarExpr, MirSc
     }
 }
 
-/// Replaces subexpressions of `expr` that have a value in `map` with the value, not including
+/// Replaces subexpressions of `expr` that are either known to be true or false
+/// values or have a known replacement according to predicates, not including
 /// the `If { cond, .. }` field.
 ///
 /// Returns whether any replacement was performed.
