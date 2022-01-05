@@ -17,9 +17,7 @@ from materialize.mzcompose import (
 )
 
 services = [
-    # TODO(benesch): only expose on host port 6875 when running the `load-test`
-    # workflow.
-    Materialized(port="6875:6875"),
+    Materialized(),
     PrometheusSQLExporter(),
     PythonService(
         name="perf-kinesis",

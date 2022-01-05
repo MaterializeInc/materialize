@@ -1,6 +1,6 @@
 {
     "name": "chbench",
-    "launch_script": "MZ_WORKERS=4 bin/mzcompose --find chbench run cloud-load-test",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --preserve-ports --find chbench run load-test",
     "instance_type": "r5a.4xlarge",
     "ami": "ami-0b29b6e62f2343b46",
     "size_gb": 200,
@@ -8,7 +8,7 @@
         "scrape_benchmark_numbers": "true",
         "lt_name": "release-chbench",
         "purpose": "load_test",
-        "mzconduct_workflow": "cloud-load-test",
+        "mzconduct_workflow": "load-test",
         "test": "chbench",
         "environment": "scratch"
     }
@@ -16,7 +16,7 @@
 
 {
     "name": "kinesis",
-    "launch_script": "MZ_WORKERS=4 bin/mzcompose --find perf-kinesis run load-test",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --preserve-ports --find perf-kinesis run load-test",
     "instance_type": "r5a.4xlarge",
     "ami": "ami-0b29b6e62f2343b46",
     "size_gb": 64,

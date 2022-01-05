@@ -16,8 +16,7 @@ services:
       - MZ_DEV=1
   metabase:
     image: metabase/metabase:v0.41.4
-    ports:
-    - 3000:3000
+    ports: [3000]
   smoketest:
     mzbuild: ci-metabase-smoketest
     depends_on: [materialized, metabase]
