@@ -36,24 +36,7 @@ services = [
     Kafka(),
     SchemaRegistry(),
     Postgres(),
-    *(
-        Materialized(
-            name=f"materialized_v{version}",
-            image=f"materialize/materialized:v{version}",
-            hostname="materialized",
-            options=" ".join(
-                option
-                for starting_version, option in mz_options.items()
-                if version >= starting_version
-            ),
-        )
-        for version in all_versions
-    ),
-    Materialized(
-        name="materialized_current_source",
-        hostname="materialized",
-        options=" ".join(mz_options.values()),
-    ),
+    Materialized(options=" ".join(mz_options.values())),
     # N.B.: we need to use `validate_catalog=False` because testdrive uses HEAD
     # to load the catalog from disk but does *not* run migrations. There is no
     # guarantee that HEAD can load an old catalog without running migrations.
@@ -114,9 +97,21 @@ def test_upgrade_from_version(
     version_glob = "|".join(["any_version", *priors, from_version])
     print(">>> Version glob pattern: " + version_glob)
 
-    mz_from = f"materialized_{from_version}"
-    w.start_services(services=[mz_from])
-    w.wait_for_mz(service=mz_from)
+    if from_version != "current_source":
+        mz_from = Materialized(
+            image=f"materialize/materialized:{from_version}",
+            options=" ".join(
+                opt
+                for start_version, opt in mz_options.items()
+                if from_version[1:] >= start_version
+            ),
+        )
+        with w.with_services(services=[mz_from]):
+            w.start_services(services=["materialized"])
+    else:
+        w.start_services(services=["materialized"])
+
+    w.wait_for_mz(service="materialized")
 
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
@@ -125,12 +120,11 @@ def test_upgrade_from_version(
             command=f"--seed=1 --no-reset {temp_dir} create-in-@({version_glob})-{filter}.td",
         )
 
-    w.kill_services(services=[mz_from])
-    w.remove_services(services=[mz_from, "testdrive-svc"])
+    w.kill_services(services=["materialized"])
+    w.remove_services(services=["materialized", "testdrive-svc"])
 
-    mz_to = "materialized_current_source"
-    w.start_services(services=[mz_to])
-    w.wait_for_mz(service=mz_to)
+    w.start_services(services=["materialized"])
+    w.wait_for_mz(service="materialized")
 
     with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
         w.run_service(
@@ -138,6 +132,6 @@ def test_upgrade_from_version(
             command=f"--seed=1 --no-reset {temp_dir} --validate-catalog=/share/mzdata/catalog check-from-@({version_glob})-{filter}.td",
         )
 
-    w.kill_services(services=[mz_to])
-    w.remove_services(services=[mz_to, "testdrive-svc"])
+    w.kill_services(services=["materialized"])
+    w.remove_services(services=["materialized", "testdrive-svc"])
     w.remove_volumes(volumes=["mzdata", "tmp"])

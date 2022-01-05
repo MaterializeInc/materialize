@@ -16,6 +16,7 @@ documentation][user-docs].
 """
 
 import argparse
+import copy
 import functools
 import importlib
 import importlib.abc
@@ -30,6 +31,7 @@ import shlex
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from inspect import getmembers, isfunction
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -39,6 +41,7 @@ from typing import (
     Collection,
     Dict,
     Iterable,
+    Iterator,
     List,
     Literal,
     Match,
@@ -315,15 +318,19 @@ class Composition:
                 config["image"] = deps[config["mzbuild"]].spec()
                 del config["mzbuild"]
 
-        self.services = compose["services"]
+        self.compose = compose
 
         # Emit the munged configuration to a temporary file so that we can later
         # pass it to Docker Compose.
-        tempfile = TemporaryFile()
-        os.set_inheritable(tempfile.fileno(), True)
-        yaml.dump(compose, tempfile, encoding="utf-8")  # type: ignore
-        tempfile.flush()
-        self.file = tempfile
+        self.file = TemporaryFile()
+        os.set_inheritable(self.file.fileno(), True)
+        self._write_compose()
+
+    def _write_compose(self) -> None:
+        self.file.seek(0)
+        self.file.truncate()
+        yaml.dump(self.compose, self.file, encoding="utf-8")  # type: ignore
+        self.file.flush()
 
     def get_env(self, workflow_name: str, parent_env: Dict[str, str]) -> Dict[str, str]:
         """Return the desired environment for a workflow."""
@@ -476,7 +483,7 @@ class Composition:
         # output depends on terminal width (!). Using the `-q` flag is safe,
         # however, and we can pipe the container IDs into `docker inspect`,
         # which supports machine-readable output.
-        if service not in self.services:
+        if service not in self.compose["services"]:
             raise UIError(f"unknown service {service!r}")
         ports = []
         for info in self.inspect_service_containers(service):
@@ -677,6 +684,42 @@ class Workflow:
         for step in self._steps:
             step.run(self)
 
+    @contextmanager
+    def with_services(self, services: List["PythonService"]) -> Iterator[None]:
+        """Temporarily update the composition with the specified services.
+
+        The services must already exist in the composition. They restored to
+        their old definitions when the `with` block ends. Note that the service
+        definition is written in its entirety; i.e., the configuration is not
+        deep merged but replaced wholesale.
+
+        Lest you are tempted to change this function to allow dynamically
+        injecting new services: do not do this! These services will not be
+        visible to other commands, like `mzcompose run`, `mzcompose logs`, or
+        `mzcompose down`, which makes debugging or inspecting the composition
+        challenging.
+        """
+        # Remember the old composition.
+        old_compose = copy.deepcopy(self.composition.compose)
+
+        # Update the composition with the new service definitions.
+        for service in services:
+            if service.name not in self.composition.compose["services"]:
+                raise RuntimeError(
+                    "programming error in call to Workflow.with_services: "
+                    f"{service.name!r} does not exist"
+                )
+            self.composition.compose["services"][service.name] = service.config
+        self.composition._write_compose()
+
+        try:
+            # Run the next composition.
+            yield
+        finally:
+            # Restore the old composition.
+            self.composition.compose = old_compose
+            self.composition._write_compose()
+
     def run_compose(
         self, args: List[str], capture: bool = False
     ) -> subprocess.CompletedProcess:
@@ -698,7 +741,7 @@ class Workflow:
         # remove the `type: ignore` comments below.
         for service in services:
             self.start_services(services=[service])  # type: ignore
-            for port in self.composition.services[service].get("ports", []):
+            for port in self.composition.compose["services"][service].get("ports", []):
                 self.wait_for_tcp(host=service, port=port)  # type: ignore
 
 
@@ -920,13 +963,18 @@ class Zookeeper(PythonService):
     def __init__(
         self,
         name: str = "zookeeper",
-        image: str = f"confluentinc/cp-zookeeper:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        image: str = "confluentinc/cp-zookeeper",
+        tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 2181,
         environment: List[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
     ) -> None:
         super().__init__(
             name="zookeeper",
-            config={"image": image, "ports": [port], "environment": environment},
+            config={
+                "image": f"{image}:{tag}",
+                "ports": [port],
+                "environment": environment,
+            },
         )
 
 
@@ -934,7 +982,8 @@ class Kafka(PythonService):
     def __init__(
         self,
         name: str = "kafka",
-        image: str = f"confluentinc/cp-kafka:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        image: str = "confluentinc/cp-kafka",
+        tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 9092,
         auto_create_topics: bool = False,
         broker_id: int = 1,
@@ -956,7 +1005,7 @@ class Kafka(PythonService):
             f"KAFKA_BROKER_ID={broker_id}",
         ]
         config: PythonServiceConfig = {
-            "image": image,
+            "image": f"{image}:{tag}",
             "ports": [port],
             "environment": [
                 *environment,
@@ -1022,7 +1071,8 @@ class SchemaRegistry(PythonService):
     def __init__(
         self,
         name: str = "schema-registry",
-        image: str = f"confluentinc/cp-schema-registry:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        image: str = "confluentinc/cp-schema-registry",
+        tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 8081,
         kafka_servers: List[str] = ["kafka"],
         environment: List[str] = [
@@ -1043,7 +1093,7 @@ class SchemaRegistry(PythonService):
         super().__init__(
             name=name,
             config={
-                "image": image,
+                "image": f"{image}:{tag}",
                 "ports": [port],
                 "environment": environment,
                 "depends_on": depends_on or [*kafka_servers, "zookeeper"],
