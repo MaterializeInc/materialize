@@ -40,6 +40,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)\.(docker|git|vscode)ignore$' \
     -e '(^|/)\.gitattributes$' \
     -e '(^|/)\.github/dependabot.yml$' \
+    -e '^\.github/workflows/slack_notify_p1\.yml$' \
     -e '(^|/)\.gitmodules$' \
     -e '(^|/)go\.sum$' \
     -e '(^|/)(Cargo|askama|rust-toolchain)\.toml$' \
