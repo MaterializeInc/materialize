@@ -14,7 +14,7 @@ use ore::str::separated;
 use repr::*;
 
 use crate::plan::expr::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
-use crate::query_model::{QuantifierId, QuantifierSet};
+use crate::query_model::{Model, QuantifierId, QuantifierSet};
 use expr::AggregateFunc;
 
 /// Representation for scalar expressions within a query graph model.
@@ -133,6 +133,41 @@ impl fmt::Display for BoxScalarExpr {
 }
 
 impl BoxScalarExpr {
+    /// Returns the type of the given scalar expression.
+    pub fn typ(&self, model: &Model) -> ColumnType {
+        use BoxScalarExpr::*;
+        match self {
+            BaseColumn(c) => c.column_type.clone(),
+            ColumnReference(c) => {
+                let input_box = model.get_quantifier(c.quantifier_id).input_box;
+                let column_type = model.get_box(input_box).columns[c.position].expr.typ(model);
+                if column_type.nullable {
+                    // TODO update nullability information
+                }
+                column_type
+            }
+            Literal(_, typ) => typ.clone(),
+            CallNullary(func) => func.output_type(),
+            CallUnary { expr, func } => func.output_type(expr.typ(model)),
+            CallBinary { expr1, expr2, func } => {
+                func.output_type(expr1.typ(model), expr2.typ(model))
+            }
+            CallVariadic { exprs, func } => {
+                func.output_type(exprs.iter().map(|e| e.typ(model)).collect())
+            }
+            If { then, els, .. } => {
+                let then_type = then.typ(model);
+                let else_type = els.typ(model);
+                debug_assert!(then_type.scalar_type.base_eq(&else_type.scalar_type));
+                ColumnType {
+                    nullable: then_type.nullable || else_type.nullable,
+                    scalar_type: then_type.scalar_type,
+                }
+            }
+            Aggregate { expr, func, .. } => func.output_type(expr.typ(model)),
+        }
+    }
+
     pub fn visit1<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),
