@@ -20,7 +20,6 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use interchange::json::JsonEncoder;
 use itertools::Itertools;
 use log::{debug, error, info};
-use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
@@ -30,7 +29,7 @@ use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedPro
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::{FrontieredInputHandle, InputHandle, OutputHandle};
+use timely::dataflow::operators::generic::{InputHandle, OutputHandle};
 use timely::dataflow::operators::{Capability, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
@@ -43,7 +42,10 @@ use dataflow_types::{
 use expr::GlobalId;
 use interchange::avro::{self, AvroEncoder, AvroSchemaGenerator};
 use interchange::encode::Encode;
+use ore::async_op;
 use ore::cast::CastFrom;
+use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use ore::operators_async_ext::OperatorBuilderExt;
 use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 
 use super::{KafkaBaseMetrics, SinkBaseMetrics};
@@ -697,290 +699,284 @@ where
     // our internal state after the send loop
     let mut progress_update = None;
 
-    let mut sink_logic = move |input: &mut FrontieredInputHandle<
-        _,
-        ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff),
-        _,
-    >| {
-        if s.shutdown_flag.load(Ordering::SeqCst) {
-            debug!("shutting down sink: {}", &s.name);
-            // Indicate that the sink is closed to everyone else who
-            // might be tracking its write frontier.
-            s.write_frontier.borrow_mut().clear();
-            return false;
-        }
-
-        // Queue all pending rows waiting to be sent to kafka
-        input.for_each(|_, rows| {
-            is_active_worker = true;
-            rows.swap(&mut vector);
-            for ((key, value), time, diff) in vector.drain(..) {
-                let should_emit = if as_of.strict {
-                    as_of.frontier.less_than(&time)
-                } else {
-                    as_of.frontier.less_equal(&time)
-                };
-
-                let previously_published = match &s.consistency {
-                    Some(consistency) => match consistency.gate_ts {
-                        Some(gate_ts) => time <= gate_ts,
-                        None => false,
-                    },
-                    None => false,
-                };
-
-                if !should_emit || previously_published {
-                    // Skip stale data for already published timestamps
-                    continue;
-                }
-
-                assert!(diff >= 0, "can't sink negative multiplicities");
-                if diff == 0 {
-                    // Explicitly refuse to send no-op records
-                    continue;
-                };
-                let diff = diff as usize;
-
-                let rows = s.pending_rows.entry(time).or_default();
-                rows.push(EncodedRow {
-                    key,
-                    value,
-                    count: diff,
-                });
-                s.metrics.rows_queued.inc();
-            }
-        });
-
-        // Figure out the durablity frontier for all sources we depent on
-        let mut durability_frontier = Antichain::new();
-
-        for history in source_timestamp_histories.iter() {
-            use differential_dataflow::lattice::Lattice;
-            durability_frontier.meet_assign(&history.durability_frontier());
-        }
-        // Move any newly closed timestamps from pending to ready
-        let mut closed_ts: Vec<u64> = s
-            .pending_rows
-            .iter()
-            .filter(|(ts, _)| {
-                !input.frontier.less_equal(*ts) && !durability_frontier.less_equal(*ts)
-            })
-            .map(|(&ts, _)| ts)
-            .collect();
-        closed_ts.sort_unstable();
-        closed_ts.into_iter().for_each(|ts| {
-            let rows = s.pending_rows.remove(&ts).unwrap();
-            s.ready_rows.push_back((ts, rows));
-        });
-
-        // Send a bounded number of records to Kafka from the ready queue.
-        // This loop has explicitly been designed so that each iteration sends
-        // at most one record to Kafka
-        for _ in 0..s.fuel {
-            if let Some((ts, rows)) = s.ready_rows.front() {
-                s.send_state = match s.send_state {
-                    SendState::Init => {
-                        let result = if s.transactional {
-                            s.producer.init_transactions(s.txn_timeout)
-                        } else {
-                            Ok(())
-                        };
-
-                        match result {
-                            Ok(()) => SendState::BeginTxn,
-                            Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
-                        }
-                    }
-                    SendState::BeginTxn => {
-                        let result = if s.transactional {
-                            s.producer.begin_transaction()
-                        } else {
-                            Ok(())
-                        };
-
-                        match result {
-                            Ok(()) => SendState::Begin,
-                            Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
-                        }
-                    }
-                    SendState::Begin => {
-                        if s.consistency.is_some() {
-                            let result = s.send_consistency_record(&ts.to_string(), "BEGIN", None);
-
-                            if let Err(retry) = result {
-                                return retry;
-                            }
-                        }
-                        SendState::Draining {
-                            row_index: 0,
-                            repeat_counter: 0,
-                            total_sent: 0,
-                        }
-                    }
-                    SendState::Draining {
-                        mut row_index,
-                        mut repeat_counter,
-                        mut total_sent,
-                    } => {
-                        let encoded_row = &rows[row_index];
-                        let record = BaseRecord::to(&s.topic);
-                        let record = if encoded_row.value.is_some() {
-                            record.payload(encoded_row.value.as_ref().unwrap())
-                        } else {
-                            record
-                        };
-                        let record = if encoded_row.key.is_some() {
-                            record.key(encoded_row.key.as_ref().unwrap())
-                        } else {
-                            record
-                        };
-                        if let Err(retry) = s.send(record) {
-                            return retry;
-                        }
-
-                        // advance to the next repetition of this row, or the next row if all
-                        // reptitions are exhausted
-                        total_sent += 1;
-                        repeat_counter += 1;
-                        if repeat_counter == encoded_row.count {
-                            repeat_counter = 0;
-                            row_index += 1;
-                            s.metrics.rows_queued.dec();
-                        }
-
-                        // move to the end state if we've finished all rows in this timestamp
-                        if row_index == rows.len() {
-                            SendState::End(total_sent)
-                        } else {
-                            SendState::Draining {
-                                row_index,
-                                repeat_counter,
-                                total_sent,
-                            }
-                        }
-                    }
-                    SendState::End(total_count) => {
-                        if s.consistency.is_some() {
-                            let result = s.send_consistency_record(
-                                &ts.to_string(),
-                                "END",
-                                Some(total_count),
-                            );
-
-                            if let Err(retry) = result {
-                                return retry;
-                            }
-                        }
-                        SendState::CommitTxn
-                    }
-                    SendState::CommitTxn => {
-                        let result = if s.transactional {
-                            s.producer.commit_transaction(s.txn_timeout)
-                        } else {
-                            Ok(())
-                        };
-
-                        match result {
-                            Ok(()) => {
-                                // sanity check for the continuous updating
-                                // of the write frontier below
-
-                                s.assert_progress(ts);
-                                progress_update.replace(ts.clone());
-
-                                s.ready_rows.pop_front();
-                                SendState::BeginTxn
-                            }
-                            Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
-                        }
-                    }
-                    SendState::AbortTxn => {
-                        let result = if s.transactional {
-                            s.producer.abort_transaction(s.txn_timeout)
-                        } else {
-                            Ok(())
-                        };
-
-                        match result {
-                            Ok(()) => SendState::BeginTxn,
-                            Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
-                        }
-                    }
-                    SendState::Shutdown => {
-                        s.shutdown_flag.store(true, Ordering::SeqCst);
-                        // Indicate that the sink is closed to everyone else who
-                        // might be tracking its write frontier.
-                        info!("shutting down kafka sink: {}", &s.name);
-                        break;
-                    }
-                };
-            } else {
-                break;
-            }
-        }
-
-        // update our state based on any END records we might have sent
-        if let Some(ts) = progress_update.take() {
-            s.maybe_update_progress(&ts);
-        }
-
-        // If we don't have ready rows, our write frontier equals the minimum
-        // of the input frontier and any stashed timestamps.
-        // While we still have ready rows that we're emitting, hold the write
-        // frontier at the previous time.
-        //
-        // Only ever emit progress records if this operator/worker received
-        // updates. Only on worker receives all the updates and we don't want
-        // the other workers to also emit END records.
-        if s.ready_rows.is_empty() && is_active_worker {
-            if let Err(e) = s.maybe_emit_progress(input.frontier.frontier()) {
-                // This can happen when the producer has not been
-                // initialized yet. This also means, that we only start
-                // emitting continuous updates once some real data
-                // has been emitted.
-                debug!("Error writing out progress update: {}", e);
-            }
-        }
-
-        let in_flight = s.producer.in_flight_count();
-        s.metrics.messages_in_flight.set(in_flight as u64);
-
-        if !s.ready_rows.is_empty() {
-            // We need timely to reschedule this operator as we have pending
-            // items that we need to send to Kafka
-            s.activator.activate();
-            return true;
-        }
-
-        if !s.pending_rows.is_empty() {
-            // We have some more rows that we need to wait for frontiers to advance before we
-            // can write them out. Let's make sure to reschedule with a small delay to give the
-            // system time to advance.
-            s.activator.activate_after(Duration::from_millis(100));
-            return true;
-        }
-
-        if in_flight > 0 {
-            // We still have messages that need to be flushed out to Kafka
-            // Let's make sure to keep the sink operator around until
-            // we flush them out
-            s.activator.activate_after(Duration::from_secs(5));
-            return true;
-        }
-
-        false
-    };
-
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = id.hashed();
     let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
 
-    builder.build_reschedule(|_capabilities| {
-        move |frontiers| {
-            let mut input_handle = FrontieredInputHandle::new(&mut input, &frontiers[0]);
-            sink_logic(&mut input_handle)
-        }
-    });
+    builder.build_async(
+        stream.scope(),
+        async_op!(|_initial_capabilities, frontiers| {
+            let frontiers_refcell = frontiers.borrow();
+            let frontier = frontiers_refcell[0].borrow();
+
+            if s.shutdown_flag.load(Ordering::SeqCst) {
+                debug!("shutting down sink: {}", &s.name);
+                // Indicate that the sink is closed to everyone else who
+                // might be tracking its write frontier.
+                s.write_frontier.borrow_mut().clear();
+                return false;
+            }
+
+            // Queue all pending rows waiting to be sent to kafka
+            input.for_each(|_, rows| {
+                is_active_worker = true;
+                rows.swap(&mut vector);
+                for ((key, value), time, diff) in vector.drain(..) {
+                    let should_emit = if as_of.strict {
+                        as_of.frontier.less_than(&time)
+                    } else {
+                        as_of.frontier.less_equal(&time)
+                    };
+
+                    let previously_published = match &s.consistency {
+                        Some(consistency) => match consistency.gate_ts {
+                            Some(gate_ts) => time <= gate_ts,
+                            None => false,
+                        },
+                        None => false,
+                    };
+
+                    if !should_emit || previously_published {
+                        // Skip stale data for already published timestamps
+                        continue;
+                    }
+
+                    assert!(diff >= 0, "can't sink negative multiplicities");
+                    if diff == 0 {
+                        // Explicitly refuse to send no-op records
+                        continue;
+                    };
+                    let diff = diff as usize;
+
+                    let rows = s.pending_rows.entry(time).or_default();
+                    rows.push(EncodedRow {
+                        key,
+                        value,
+                        count: diff,
+                    });
+                    s.metrics.rows_queued.inc();
+                }
+            });
+
+            // Figure out the durablity frontier for all sources we depent on
+            let mut durability_frontier = Antichain::new();
+
+            for history in source_timestamp_histories.iter() {
+                use differential_dataflow::lattice::Lattice;
+                durability_frontier.meet_assign(&history.durability_frontier());
+            }
+            // Move any newly closed timestamps from pending to ready
+            let mut closed_ts: Vec<u64> = s
+                .pending_rows
+                .iter()
+                .filter(|(ts, _)| !frontier.less_equal(*ts) && !durability_frontier.less_equal(*ts))
+                .map(|(&ts, _)| ts)
+                .collect();
+            closed_ts.sort_unstable();
+            closed_ts.into_iter().for_each(|ts| {
+                let rows = s.pending_rows.remove(&ts).unwrap();
+                s.ready_rows.push_back((ts, rows));
+            });
+
+            // Send a bounded number of records to Kafka from the ready queue.
+            // This loop has explicitly been designed so that each iteration sends
+            // at most one record to Kafka
+            for _ in 0..s.fuel {
+                if let Some((ts, rows)) = s.ready_rows.front() {
+                    s.send_state = match s.send_state {
+                        SendState::Init => {
+                            let result = if s.transactional {
+                                s.producer.init_transactions(s.txn_timeout)
+                            } else {
+                                Ok(())
+                            };
+
+                            match result {
+                                Ok(()) => SendState::BeginTxn,
+                                Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
+                            }
+                        }
+                        SendState::BeginTxn => {
+                            let result = if s.transactional {
+                                s.producer.begin_transaction()
+                            } else {
+                                Ok(())
+                            };
+
+                            match result {
+                                Ok(()) => SendState::Begin,
+                                Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
+                            }
+                        }
+                        SendState::Begin => {
+                            if s.consistency.is_some() {
+                                let result =
+                                    s.send_consistency_record(&ts.to_string(), "BEGIN", None);
+
+                                if let Err(retry) = result {
+                                    return retry;
+                                }
+                            }
+                            SendState::Draining {
+                                row_index: 0,
+                                repeat_counter: 0,
+                                total_sent: 0,
+                            }
+                        }
+                        SendState::Draining {
+                            mut row_index,
+                            mut repeat_counter,
+                            mut total_sent,
+                        } => {
+                            let encoded_row = &rows[row_index];
+                            let record = BaseRecord::to(&s.topic);
+                            let record = if encoded_row.value.is_some() {
+                                record.payload(encoded_row.value.as_ref().unwrap())
+                            } else {
+                                record
+                            };
+                            let record = if encoded_row.key.is_some() {
+                                record.key(encoded_row.key.as_ref().unwrap())
+                            } else {
+                                record
+                            };
+                            if let Err(retry) = s.send(record) {
+                                return retry;
+                            }
+
+                            // advance to the next repetition of this row, or the next row if all
+                            // reptitions are exhausted
+                            total_sent += 1;
+                            repeat_counter += 1;
+                            if repeat_counter == encoded_row.count {
+                                repeat_counter = 0;
+                                row_index += 1;
+                                s.metrics.rows_queued.dec();
+                            }
+
+                            // move to the end state if we've finished all rows in this timestamp
+                            if row_index == rows.len() {
+                                SendState::End(total_sent)
+                            } else {
+                                SendState::Draining {
+                                    row_index,
+                                    repeat_counter,
+                                    total_sent,
+                                }
+                            }
+                        }
+                        SendState::End(total_count) => {
+                            if s.consistency.is_some() {
+                                let result = s.send_consistency_record(
+                                    &ts.to_string(),
+                                    "END",
+                                    Some(total_count),
+                                );
+
+                                if let Err(retry) = result {
+                                    return retry;
+                                }
+                            }
+                            SendState::CommitTxn
+                        }
+                        SendState::CommitTxn => {
+                            let result = if s.transactional {
+                                s.producer.commit_transaction(s.txn_timeout)
+                            } else {
+                                Ok(())
+                            };
+
+                            match result {
+                                Ok(()) => {
+                                    // sanity check for the continuous updating
+                                    // of the write frontier below
+
+                                    s.assert_progress(ts);
+                                    progress_update.replace(ts.clone());
+
+                                    s.ready_rows.pop_front();
+                                    SendState::BeginTxn
+                                }
+                                Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
+                            }
+                        }
+                        SendState::AbortTxn => {
+                            let result = if s.transactional {
+                                s.producer.abort_transaction(s.txn_timeout)
+                            } else {
+                                Ok(())
+                            };
+
+                            match result {
+                                Ok(()) => SendState::BeginTxn,
+                                Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
+                            }
+                        }
+                        SendState::Shutdown => {
+                            s.shutdown_flag.store(true, Ordering::SeqCst);
+                            // Indicate that the sink is closed to everyone else who
+                            // might be tracking its write frontier.
+                            info!("shutting down kafka sink: {}", &s.name);
+                            break;
+                        }
+                    };
+                } else {
+                    break;
+                }
+            }
+
+            // update our state based on any END records we might have sent
+            if let Some(ts) = progress_update.take() {
+                s.maybe_update_progress(&ts);
+            }
+
+            // If we don't have ready rows, our write frontier equals the minimum
+            // of the input frontier and any stashed timestamps.
+            // While we still have ready rows that we're emitting, hold the write
+            // frontier at the previous time.
+            //
+            // Only ever emit progress records if this operator/worker received
+            // updates. Only on worker receives all the updates and we don't want
+            // the other workers to also emit END records.
+            if s.ready_rows.is_empty() && is_active_worker {
+                if let Err(e) = s.maybe_emit_progress(frontier) {
+                    // This can happen when the producer has not been
+                    // initialized yet. This also means, that we only start
+                    // emitting continuous updates once some real data
+                    // has been emitted.
+                    debug!("Error writing out progress update: {}", e);
+                }
+            }
+
+            let in_flight = s.producer.in_flight_count();
+            s.metrics.messages_in_flight.set(in_flight as u64);
+
+            if !s.ready_rows.is_empty() {
+                // We need timely to reschedule this operator as we have pending
+                // items that we need to send to Kafka
+                s.activator.activate();
+                return true;
+            }
+
+            if !s.pending_rows.is_empty() {
+                // We have some more rows that we need to wait for frontiers to advance before we
+                // can write them out. Let's make sure to reschedule with a small delay to give the
+                // system time to advance.
+                s.activator.activate_after(Duration::from_millis(100));
+                return true;
+            }
+
+            if in_flight > 0 {
+                // We still have messages that need to be flushed out to Kafka
+                // Let's make sure to keep the sink operator around until
+                // we flush them out
+                s.activator.activate_after(Duration::from_secs(5));
+                return true;
+            }
+
+            false
+        }),
+    );
 
     Box::new(KafkaSinkToken { shutdown_flag })
 }
