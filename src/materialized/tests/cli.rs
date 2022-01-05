@@ -22,6 +22,19 @@ fn cmd() -> Command {
     cmd
 }
 
+/// This test seems a bit tautological, but it protects against Clap defaults
+/// changing and overwriting our custom version output.
+#[test]
+fn test_version() {
+    let expected_version = materialized::BUILD_INFO.human_version();
+    assert!(!expected_version.is_empty() && expected_version.starts_with('v'));
+    cmd()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(format!("materialized {}\n", expected_version));
+}
+
 #[test]
 fn test_threads() {
     let assert_fail = |cmd: &mut Command| {
