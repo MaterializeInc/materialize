@@ -50,6 +50,8 @@ pub(crate) fn upsert<G>(
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
     operators: &mut Option<LinearOperator>,
+    key_arity: usize,
+    // Full arity, including the key(s)
     source_arity: usize,
     persist_config: Option<
         PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
@@ -143,6 +145,7 @@ where
         None => {
             let upsert_output = upsert_core(
                 stream,
+                key_arity,
                 source_arity,
                 predicates,
                 position_or,
@@ -265,11 +268,11 @@ fn evaluate(
     predicates: &[MirScalarExpr],
     position_or: &[Option<usize>],
     row_packer: &mut repr::Row,
-    // key_columns is the number of columns in the front of `Datum`'s
+    // key_arity is the number of columns in the front of `Datum`'s
     // that are dedicated to the key. This is used to avoid
     // repacking key values in so many places, and it relies on the fact that
     // `position_or` never re-orders inputs.
-    key_columns: usize,
+    key_arity: usize,
 ) -> Result<Option<Row>, EvalError> {
     let arena = RowArena::new();
     // Each predicate is tested in order.
@@ -283,7 +286,7 @@ fn evaluate(
     // specific columns.
     row_packer.clear();
     row_packer.extend(position_or.iter().map(|x| match x {
-        Some(column) if column < &key_columns => Datum::Dummy,
+        Some(column) if column < &key_arity => Datum::Dummy,
         Some(column) => datums[*column],
         None => Datum::Dummy,
     }));
@@ -293,6 +296,7 @@ fn evaluate(
 /// Internal core upsert logic.
 fn upsert_core<G>(
     stream: &Stream<G, DecodeResult>,
+    key_arity: usize,
     source_arity: usize,
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
@@ -392,7 +396,6 @@ where
 
                                             // The datums we send to `evaluate` contain the keys
                                             // and the values in order, so indexing works
-                                            let key_columns = decoded_key.iter().count();
                                             datums.extend(decoded_key.iter());
 
                                             datums.extend(row.iter());
@@ -402,7 +405,7 @@ where
                                                 &predicates,
                                                 &position_or,
                                                 &mut row_packer,
-                                                key_columns,
+                                                key_arity,
                                             )
                                             .map_err(DataflowError::from)
                                         }),
@@ -419,7 +422,7 @@ where
                                         current_values.remove(&decoded_key)
                                     };
 
-                                    // This closure re-uses a `Row` to 
+                                    // This closure re-uses a `Row` to
                                     // rebuild the full `Row` with both keys and values, before we
                                     // send them off to sql-land
                                     let mut repack_value = |row: Row| {
@@ -427,8 +430,7 @@ where
 
                                         row_packer.extend(decoded_key.iter());
                                         // always skip all the keys
-                                        row_packer
-                                            .extend(row.iter().skip(decoded_key.iter().count()));
+                                        row_packer.extend(row.iter().skip(key_arity));
 
                                         let r = row_packer.finish_and_reuse();
                                         r
