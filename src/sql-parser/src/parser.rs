@@ -3634,6 +3634,10 @@ impl<'a> Parser<'a> {
                     variable = Ident::new("client_encoding");
                     normal = true;
                 }
+                Ok(SCHEMA) => {
+                    variable = Ident::new("search_path");
+                    normal = true;
+                }
                 _ => {}
             }
         }

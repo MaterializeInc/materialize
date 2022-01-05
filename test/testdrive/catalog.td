@@ -274,6 +274,8 @@ unacceptable schema name 'pg_bar'
 "mz_catalog, pg_catalog, public, mz_temp"
 ! SET search_path = foo
 parameter "search_path" cannot be changed
+! SET SCHEMA foo
+parameter "search_path" cannot be changed
 
 # Creating views in non-existent databases should fail.
 ! CREATE VIEW noexist.ignored AS SELECT 1
