@@ -50,6 +50,7 @@ pub mod metrics;
 #[cfg(feature = "network")]
 pub mod netio;
 pub mod now;
+pub mod operators_async_ext;
 pub mod option;
 pub mod panic;
 pub mod result;
