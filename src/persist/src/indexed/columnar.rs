@@ -34,13 +34,18 @@ pub mod parquet;
 /// - key_offsets.len() == len + 1
 /// - key_offsets are non-decreasing
 /// - Each key_offset is <= key_data.len()
+/// - key_offsets.first().unwrap() == 0
 /// - key_offsets.last().unwrap() == key_data.len()
 /// - val_offsets.len() == len + 1
 /// - val_offsets are non-decreasing
-/// - Each val_offset is < val_data.len()
+/// - Each val_offset is <= val_data.len()
+/// - val_offsets.first().unwrap() == 0
 /// - val_offsets.last().unwrap() == val_data.len()
 /// - timestamps.len() == len
 /// - diffs.len() == len
+///
+/// NB: The `first().unwrap() == 0` could be `>= 0` if necessary. Ditto for
+/// `last().unwrap()` and `<= key_data.len()`.
 #[derive(Clone, PartialEq)]
 pub struct ColumnarRecords {
     len: usize,
@@ -166,8 +171,16 @@ impl<'a> ColumnarRecordsRef<'a> {
                 self.key_offsets.len()
             ));
         }
+        if let Some(first_key_offset) = self.key_offsets.first() {
+            if first_key_offset.to_usize() != 0 {
+                return Err(format!(
+                    "expected first key offset to be 0 got {}",
+                    first_key_offset.to_usize()
+                ));
+            }
+        }
         if let Some(last_key_offset) = self.key_offsets.last() {
-            if self.key_data.len() != last_key_offset.to_usize() {
+            if last_key_offset.to_usize() != self.key_data.len() {
                 return Err(format!(
                     "expected {} bytes of key data got {}",
                     last_key_offset,
@@ -182,8 +195,16 @@ impl<'a> ColumnarRecordsRef<'a> {
                 self.val_offsets.len()
             ));
         }
+        if let Some(first_val_offset) = self.val_offsets.first() {
+            if first_val_offset.to_usize() != 0 {
+                return Err(format!(
+                    "expected first val offset to be 0 got {}",
+                    first_val_offset.to_usize()
+                ));
+            }
+        }
         if let Some(last_val_offset) = self.val_offsets.last() {
-            if self.val_data.len() != last_val_offset.to_usize() {
+            if last_val_offset.to_usize() != self.val_data.len() {
                 return Err(format!(
                     "expected {} bytes of val data got {}",
                     last_val_offset,

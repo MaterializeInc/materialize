@@ -114,7 +114,7 @@ pub fn decode_unsealed_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBa
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
         ProtoBatchFormat::ArrowKVTD => decode_arrow_kvtd(r, file_meta)?,
         ProtoBatchFormat::ParquetKVTD => {
-            return Err("ParquetKVTD format not supported in parquet".into())
+            return Err("ParquetKVTD format not supported in arrow".into())
         }
     };
 
@@ -136,7 +136,7 @@ pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, E
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
         ProtoBatchFormat::ArrowKVTD => decode_arrow_kvtd(r, file_meta)?,
         ProtoBatchFormat::ParquetKVTD => {
-            return Err("ParquetKVTD format not supported in parquet".into())
+            return Err("ParquetKVTD format not supported in arrow".into())
         }
     };
 
@@ -190,6 +190,10 @@ fn decode_arrow_kvtd<R: Read + Seek>(
     Ok(ret)
 }
 
+// This only makes sense as a From impl because we currently have one mapping
+// between ColumnarRecords and arrow schema: `[(K, V, T, D)]`. If we add
+// something like `[(K, [(V, [(T, D)])])])]`, then we should probably make this
+// a descriptively named method.
 impl From<&ColumnarRecords> for RecordBatch {
     fn from(x: &ColumnarRecords) -> Self {
         RecordBatch::try_new(
@@ -223,6 +227,10 @@ impl From<&ColumnarRecords> for RecordBatch {
     }
 }
 
+// This only makes sense as a TryFrom impl because we currently have one mapping
+// between ColumnarRecords and arrow schema: `[(K, V, T, D)]`. If we add
+// something like `[(K, [(V, [(T, D)])])])]`, then we should probably make this
+// a descriptively named method.
 impl TryFrom<RecordBatch> for ColumnarRecords {
     type Error = String;
 

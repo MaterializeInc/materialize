@@ -563,7 +563,7 @@ impl BlobUnsealedBatch {
 // interface for this.
 impl Codec for BlobUnsealedBatch {
     fn codec_name() -> String {
-        "UnsealedBatch".into()
+        "parquet[UnsealedBatch]".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
@@ -642,7 +642,7 @@ impl BlobTraceBatch {
 // for this.
 impl Codec for BlobTraceBatch {
     fn codec_name() -> String {
-        "TraceBatch".into()
+        "parquet[TraceBatch]".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
