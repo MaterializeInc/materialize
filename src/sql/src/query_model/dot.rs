@@ -9,8 +9,6 @@
 
 //! Generates a graphviz graph from a Query Graph Model.
 
-#![cfg(test)]
-
 use crate::query_model::{BoxId, BoxType, Model, Quantifier, QuantifierId, QueryBox};
 use itertools::Itertools;
 use ore::str::separated;
@@ -19,7 +17,8 @@ use std::fmt::{self, Write};
 
 /// Generates a graphviz graph from a Query Graph Model, defined in the DOT language.
 /// See <https://graphviz.org/doc/info/lang.html>.
-pub(crate) struct DotGenerator {
+#[derive(Debug)]
+pub struct DotGenerator {
     output: String,
     indent: u32,
 }

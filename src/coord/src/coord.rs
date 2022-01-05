@@ -3376,6 +3376,11 @@ where
                 }
                 explanation.to_string()
             }
+            ExplainStage::QueryGraph => {
+                // TODO add type information to the output graph
+                let model = sql::query_model::Model::from(raw_plan);
+                sql::query_model::dot::DotGenerator::new().generate(&model, "")?
+            }
             ExplainStage::DecorrelatedPlan => {
                 let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(
                     &mut timings,

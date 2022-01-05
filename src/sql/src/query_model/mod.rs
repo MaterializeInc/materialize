@@ -14,7 +14,7 @@ use std::fmt;
 
 use ore::id_gen::Gen;
 
-mod dot;
+pub mod dot;
 mod hir;
 mod lowering;
 mod scalar_expr;

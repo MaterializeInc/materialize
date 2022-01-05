@@ -114,6 +114,7 @@ Format
 Forward
 From
 Full
+Graph
 Group
 Groups
 Gzip
@@ -200,6 +201,7 @@ Primary
 Protobuf
 Publication
 Pubnub
+Query
 Range
 Raw
 Read
