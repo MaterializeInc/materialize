@@ -10,7 +10,6 @@
 # Portions of this file are derived from
 # https://github.com/Pierrotws/kafka-ssl-compose/blob/master/docker-compose.yml
 
-version: "3.7"
 services:
   test-certs:
     mzbuild: test-certs

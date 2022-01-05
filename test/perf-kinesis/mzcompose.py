@@ -9,17 +9,13 @@
 
 from typing import List
 
-from materialize.mzcompose import (
-    Materialized,
-    PrometheusSQLExporter,
-    PythonService,
-    Workflow,
-)
+from materialize.mzcompose import Composition, Service
+from materialize.mzcompose.services import Materialized, PrometheusSQLExporter
 
-services = [
+SERVICES = [
     Materialized(),
     PrometheusSQLExporter(),
-    PythonService(
+    Service(
         name="perf-kinesis",
         config={
             "mzbuild": "perf-kinesis",
@@ -30,24 +26,22 @@ services = [
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
             ],
+            "depends_on": ["materialized"],
         },
     ),
 ]
 
 
-def workflow_ci(w: Workflow):
+def workflow_ci(c: Composition) -> None:
     """Run the load generator for one minute as a smoke test."""
-    args = ["--total-records=6000", "--records-per-second=100", "--shard-count=2"]
-    run(w, args, daemon=False)
+    c.run(
+        "perf-kinesis",
+        "--total-records=6000",
+        "--records-per-second=100",
+        "--shard-count=2",
+    )
 
 
-def workflow_load_test(w: Workflow):
+def workflow_load_test(c: Composition) -> None:
     """Run the load generator with a hefty load in the background."""
-    w.start_services(services=["prometheus-sql-exporter"])
-    run(w, args=[], daemon=True)
-
-
-def run(w: Workflow, args: List[str], daemon: bool):
-    w.start_services(services=["materialized"])
-    w.wait_for_mz()
-    w.run_service(service="perf-kinesis", command=args, daemon=daemon)
+    c.up("prometheus-sql-exporter", "perf-kinesis")

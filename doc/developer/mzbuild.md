@@ -27,20 +27,21 @@ also have a convenience script alongside it, which you can invoke as
   * [Tutorial](#tutorial)
     * [`mzimage`](#mzimage)
     * [`mzcompose`](#mzcompose)
+    * [Workflows](#workflows)
   * [Input addressability](#input-addressability)
   * [Development](#development)
   * [Reference](#reference)
+    * [`mzimage(1)`](#mzbuild1)
+    * [`mzcompose(1)`](#mzbuild1)
     * [`mzbuild.yml`](#mzbuildyml)
     * [`mzcompose.yml`](#mzcomposeyml)
+    * [`mzcompose.py`](#mzcomposepy)
     * [mzbuild `Dockerfile`](#mzbuild-Dockerfile)
   * [Motivation](#motivation)
     * [Why a new build system?](#why-a-new-build-system)
     * [Why Docker?](#why-docker)
 
 ## Tutorial
-
-*Warning: mzbuild does not yet return particularly friendly error messages. This
-is under active improvement.*
 
 ### `mzimage`
 
@@ -175,19 +176,26 @@ Docker Hub! Seamless.
 ### `mzcompose`
 
 To create an mzcompose configuration that uses the `fancy-loadgen` image we
-built in the previous tutorial, just drop an `mzcompose.yml` file into a
-directory:
+built in the previous tutorial, just drop an `mzcompose.py` file into a
+directory with an exported `SERVICES` list:
 
-```yml
-version: "3.7"
+```py
+from materialize.mzcompose import Service
 
-services:
-  fancy:
-    mzbuild: fancy-loadgen
+SERVICES = {
+    Service(
+        name="fancy-loadgen",
+        config={
+            "mzbuild": "fancy-loadgen",
+        }
+    ),
+}
 ```
 
 If you're unfamiliar with Compose, you may want to take a look at the
-[Compose file reference][compose-ref] for details.
+[Compose file reference][compose-ref] for details. We use Python to provide
+type safety, but any service properties that are available in YAML are available
+for use in the `config` dict above.
 
 Now bring the configuration up with `bin/mzcompose`:
 
@@ -234,15 +242,23 @@ fancy_fancy_1   python3 fancy-loadgen.py   Exit 0
 
 Let's add another mzbuild dependency, this time on `materialized`:
 
-```yml
-version: "3.7"
+```python
+from materialize.mzcompose import Service
+from materialize.mzcompose.services import Materialized
 
-services:
-  fancy:
-    mzbuild: fancy-loadgen
-  materialized:
-    mzbuild: materialized
+SERVICES = {
+    Service(
+        name="fancy-loadgen",
+        config={
+            "mzbuild": "fancy-loadgen",
+        }
+    ),
+    Materialized(),
+}
 ```
+
+Here we're using the pre-built `Materialized` service definition from the
+[`materialize.mzcompose.services`] package.
 
 `mzcompose` will automatically acquire the new dependency on the next
 invocation. Note that if you have local changes to any Rust code, you'll likely
@@ -276,63 +292,85 @@ fancy_materialized_1 exited with code 1
 ```
 
 And that's it. Pretty simple. Note that you can add normal `image` services to
-your `mzcompose.yml`, too. That works just as it would in vanilla Docker
+your `mzcompose.py`, too. That works just as it would in vanilla Docker
 Compose.
 
-```yml
-version: "3.7"
+```python
+from materialize.mzcompose import Service
+from materialize.mzcompose.services import Materialized
 
-services:
-  fancy:
-    mzbuild: fancy-loadgen
-  materialized:
-    mzbuild: materialized
-  zookeeper:
-    image: zookeeper:3.4.13
+SERVICES = {
+    # ...
+    Service(name="stock", config={
+        "image": "ubuntu:focal",
+    })
+}
 ```
 
-A common complaint with Docker Compose is the lack of proper service
-orchestration. It is not possible to express, for exaple, that the `fancy`
-service cannot be started until `materialized` has booted successfully.
+Generally, though, you'll be using the stock services available in the
+[`mzcompose.services`] module.
 
-`mzcompose` therefore provides a feature called "workflows" that orchestrate
-interacting with the defined services. The following `load-test` workflow waits
-for `materialized` to start listening on port 6875 before launching the `fancy`
-service.
+### Workflows
 
+Once you've declared your services, you'll commonly want to interact with them,
+either to demonstrate Materialize's capabilities to end users or to test its
+features. mzcompose provides *workflows* to satisfy this need.
+
+A workflow is simply a Python function whose name starts with `workflow_`. The
+function is passed an [`mzcompose.Composition`], which provides a suite of API methods to
+interact with the services you've defined in the composition.
+
+Here is a complete example that runs a SQL query against `materialized`:
+
+```python
+from materialize.mzcompose import Composition
+from materialize.mzcompose.services import Materialized
+
+SERVICES = [
+    Materialized()
+]
+
+def workflow_meaning_of_life(c: Composition, parser: WorkflowArgumentParser):
+    # See if the meaning of life has changed.
+    parser.add_argument(
+        "--change-meaning",
+        dest="meaning",
+        default="42",
+        help="change the meaning of life"
+    )
+    args = parser.parse_args()
+
+    # Start Materialize and wait for it to be ready.
+    c.up("materialized")
+
+    # Install a materialized view that computes the meaning of life.
+    c.run_sql(f"CREATE OR REPLACE MATERIALIZED VIEW meaning_of_life AS SELECT {args.meaning}")
 ```
-version: "3.7"
 
-services:
-  fancy:
-    mzbuild: fancy-loadgen
-  materialized:
-    mzbuild: materialized
-
-mzworkflows:
-  load-test:
-    steps:
-    - step: start-services
-      services: [materialized]
-    - step: wait-for-tcp
-      host: materialized
-      port: 6875
-    - step: start-services
-      services: [fancy-loadgen]
-```
-
-To run the workflow, run `./mzcompose run load-test`, just like you would if
-`load-test` were a normal service.
-
-#### Release vs development builds
-
-Via `mzbuild`, `mzcompose` supports building binaries in either release or
-development mode. By default, binaries are built using release mode. You can
-choose dev mode instead by passing the `--dev` flag to `mzcompose`:
+To run this workflow, execute:
 
 ```shell
-$ bin/mzcompose --dev --find fancy up
+./mzcompose run meaning-of-life
 ```
+
+You'll then be able to access the meaning of life via SQL:
+
+```shell
+./mzcompose sql materialized
+materialize=> SELECT * FROM meaning_of_life;
+42
+```
+
+As shown above, workflows integrate with [`argparse`] to accept command-line
+arguments. We can pass a new meaning of life to the workflow like so:
+
+```shell
+./mzcompose run meaning-of-life --change-meaning=13
+```
+
+Additional advice on writing workflow-based test can be found in the
+[Orchestration tests](./guide-testing#orchestration-tests) chapter of the
+developer guide.
 
 ## Input addressability
 
@@ -357,18 +395,30 @@ any non-alphanumeric characters.)
 mzbuild and associated tools are written in Python 3 and live in
 [misc/python/materialize](/misc/python/materialize).
 
-Their only dependency is Python 3.5+, which is easy to find or pre-installed on
+Their only dependency is Python 3.8+, which is easy to find or pre-installed on
 most Linux distributions, and pre-installed on recent versions of macOS, too.
 Python dependencies are automatically installed into a virtualenv by the
 [pyactivate wrapper script](/bin/pyactivate).
 
-Using Python 3.6 would be a good bit more convenient, but our CI image runs on
-Ubuntu 16.04, which is still shipping Python 3.5. Supporting the oldest Ubuntu
-LTS release seems like a decent baseline, anyway.
-
-Integration tests for `mzcompose` are in [`test/mzcompose`](/test/mzcompose).
-
 ## Reference
+
+### `mzimage(1)`
+
+The authoritative reference for the `mzimage` program is its help text. Refer
+to:
+
+```shell
+bin/mzimage --help
+```
+
+### `mzcompose(1)`
+
+The authoritative reference for the `mzcompose` program is its help text. Refer
+to:
+
+```shell
+bin/mzcompose --help
+```
 
 ### mzbuild.yml
 
@@ -458,8 +508,6 @@ publish: true
     VERSION: '1.0'
   ```
 
-[buildarg]: https://docs.docker.com/engine/reference/commandline/build/#set-build-time-variables---build-arg
-
 #### Build artifacts
 
 When using a `pre-image` plugin, arbitrary build artifacts will be copied into
@@ -477,20 +525,10 @@ top-level map.
 #### Example
 
 ```yaml
-version: "3.7"
-
 services:
   materialized:
     mzbuild: materialized
     propagate_uid_gid: true
-
-mzworkflows:
-  NAME:
-    env:
-      KEY: VALUE
-    steps:
-    - step: STEP-NAME
-      STEP-OPTION: STEP-OPTION-VALUE
 ```
 
 #### Fields
@@ -506,91 +544,59 @@ mzworkflows:
   ID and group ID of the host user. It is equivalent to passing `--user $(id
   -u):$(id -g)` to `docker run`. The default is `false`.
 
-* `mzworkflows` (dict) specifies a named set of workflows. A workflow consists
-  of a series of steps that are executed in sequence and a set of environment
-  variables that are set during the execution of the workflow. The available
-  steps and their options are only documented by way of the developer docs.
-  See <https://dev.materialize.com/api/python/materialize/mzcompose.html>.
 
-  Also see the [chbench demo mzcompose](../../demo/chbench/mzcompose.yml) for
-  a detailed example.
+### mzcompose.py
 
-#### Bash-like Environment Substitution
+An mzcompose.py file combines the service-definition features of mzcompose.yml
+with Python workflow definitions.
 
-`mzcompose` performs "bash-like" variable substitution within workflows (for `services` the block,
-docker-compose is responsible for [variable
-substitution](https://docs.docker.com/compose/compose-file/compose-file-v3/#variable-substitution)).
-For example, you can define the following workflow, and it will pull `MZ_WORKERS` from your
-environment:
+The only mandatory field of an mzcompose.py file is a `SERVICES` constant,
+which declares a list of services:
 
-```yaml
-mzworkflows:
-  example_workflow:
-    env:
-      # Use MZ_WORKERS from the environment. If not set, default to empty string
-      MZ_WORKERS: ${MZ_WORKERS}
-    steps:
-    - step: STEP-NAME
-      STEP-OPTION: STEP-OPTION-VALUE
+```py
+from materialize.mzcompose import Service
+
+SERVICES: List[Service] = ...
 ```
 
-The variable substitution can occur anywhere with the workflow specification:
+If both an mzcompose.yml and mzcompose.py file are present in the same
+directory, their service definitions are combined. In case of a naming conflict,
+the Python service takes precedence.
 
-```yaml
-mzworkflows:
-  example_workflow:
-    env:
-      # Use MZ_WORKERS from the environment. If not set, default to empty string
-      MZ_WORKERS: ${MZ_WORKERS}
-    steps:
-    - step: STEP-NAME
-      STEP-OPTION: ${MZ_WORKERS}
+Functions whose name begins with `workflow_` are workflows. A workflow function
+must have one of the following signatures:
+
+```py
+from materialize.mzcompose import Composition, WorkflowArgumentParser
+
+def workflow_no_args(c: Composition):
+    """This workflow does not take command-line arguments."""
+    ...
+
+def workflow_with_args(c: Composition, parser: WorkflowArgumentParser):
+    """This workflow does take command-line arguments."""
+    ...
 ```
 
-Support for default values similarly as it does in bash, but the full syntax is not supported. At
-the moment, `mzcompose` only supports default replacement via the `:-` operator and only for
-variables using the `${VARIABLE}` syntax:
+The name of the workflow is the name of the function with the `workflow_` prefix
+stripped and any remaining underscores replaced with hyphens. For example, the
+name of the workflow defined by the `workflow_no_args` function is `no-args`.
+The workflow name is the reference by which users will invoke the workflow via
+`mzcompose run WORKFLOW-name`.
 
-```yaml
-mzworkflows:
-  example_workflow:
-    env:
-      # If MZ_WORKERS is set, use the value from the environment. Otherwise use 16
-      MZ_WORKERS: ${MZ_WORKERS:-16}
-    steps:
-    - step: STEP-NAME
-      STEP-OPTION: STEP-OPTION-VALUE
-```
+If the workflow has a docstring attached, that docstring is used as the workflow
+description in `mzcompose describe` and in the help message of `mzcompose run
+workflow --help`.
 
-For workflows triggered by another workflow, variables substitution occurs at the time the
-workflow is triggered (as opposed to when the composition is loaded). This means that you can set
-an environment variable in one workflow and it will be picked up by the second workflow:
+There are no other restrictions on the items in the module. Variables and
+functions may be freely defined as long as their name is not `SERVICES` and does
+not start with `workflow_`.
 
-```yaml
-mzworkflows:
-  workflow1:
-    env:
-      # Explicitly set the value to 16, ignoring the parent environment
-      MZ_WORKERS: 16
-    steps:
-    - step: workflow
-      workflow: workflow2
-  workflow2:
-    env:
-      # MZ_WORKERS will be 16 if called from workflow1
-      # If not called from workflow1, it pull the value from the environment or default
-      MZ_WORKERS: ${MZ_WORKERS:-32}
-    steps:
-    - step: STEP-NAME
-      STEP-OPTION: STEP-OPTION-VALUE
-```
+See also these key types in the Python API documentation:
 
-The preference order for variable subsitution is:
-
-1. The value specified by the mzworkflow.
-2. The value specified by the environment.
-3. The default value specified where the variable is being used.
-4. Empty string.
+  * [`mzcompose.Composition`]
+  * [`mzcompose.ServiceConfig`]
+  * [`mzcompose.services`]
 
 ### mzbuild Dockerfile
 
@@ -697,3 +703,8 @@ the enterprise-grade production deployment scenario.
 [dockerfile-ref]: https://docs.docker.com/engine/reference/builder/
 [Kubernetes]: https://kubernetes.io
 [Helm]: https://helm.sh
+[`argparse`]: https://docs.python.org/3/library/argparse.html
+[buildarg]: https://docs.docker.com/engine/reference/commandline/build/#set-build-time-variables---build-arg
+[`mzcompose.Composition`]: https://dev.materialize.com/api/python/materialize/mzcompose/#materialize.mzcompose.Composition
+[`mzcompose.ServiceConfig`]: https://dev.materialize.com/api/python/materialize/mzcompose/#materialize.mzcompose.ServiceConfig
+[`mzcompose.services`]: https://dev.materialize.com/api/python/materialize/mzcompose/services

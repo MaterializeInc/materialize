@@ -16,17 +16,19 @@ There are broadly three test suites:
      testdrive, at the moment) that essentially specify SQL commands to run and
      their expected output.
 
-  3. The long-running **performance and stability test suite**. This test suite
-     has yet to be automated. At the moment it consists of engineers manually
-     running the demo in [demo/chbench/](/demo/chbench).
+  3. The **orchestration test suite**. This test suite uses
+     [`mzcompose`](./mzbuild.md) to orchestrate Materialize's interactions with
+     other services via Docker Compose. These tests focus on performance,
+     stability, and interactions with other systems.
 
 The unit/integration and system test suites are run on every PR and can easily
 be run locally. The goal is for these test suites to be quite fast, ideally
 under 10m, while still catching 95% of bugs.
 
-The long-running tests will simulate actual production runs of Materialize on
-gigabytes to terabytes of data over several hours to days, and will therefore
-report their results asynchronously (perhaps nightly or weekly).
+Tests in the **orchestration test suite** are the most varied. Some run on
+every PR build, some run only nightly, and some run for 24 hours on cloud
+instances. In many cases, the size of the test is configurable, so we can run
+a small smoke test in CI on every PR but a large load test on cloud hardware.
 
 Details about each of the test suites follow.
 
@@ -236,11 +238,9 @@ provide most of the coverage, but it's worth adding some (*very*) basic
 testdrive tests (e.g., `> SELECT DATE '1999-01-01'`) to ensure that our pgwire
 implementation is properly serializing dates.
 
-## Long-running tests
+## Orchestration tests
 
-These are still a work in progress. The beginning of the orchestration has
-begun, though; see the Docker Compose demo in [demo/chbench](/demo/chbench) if
-you're curious.
+
 
 ## What kind of tests should I write?
 
@@ -276,5 +276,18 @@ boot), never mind that they're quite slow, so they're best limited to a small
 set of tests that exercise core business metrics. A long-running test should, in
 general, be scheduled as a separate work item, so that it can receive the
 nurturing required to be stable enough to be useful.
+
+## Where should I put my test?
+
+Depending on the test or the workflow that you intend to create, a suitable place should be chosen:
+
+| Test | Suggested Location |
+| ----------- | ----------- |
+| SQL-level features | no new workflow needed; best written as a sqllogic test that can live in `test/sqllogictest` |
+| Testdrive test against a standard Kafka + Schema Registry + Materialize   | no new workflow needed, place `.td` file in `test/testdrive` |
+| Postgres direct replication | `test/pg-cdc` |
+| Debezium | `test/debezium-avro` |
+| Any test that uses non-standard services or non-standard command-line options | a new directory under `test/` |
+
 
 [CDC]: https://en.wikipedia.org/wiki/Change_data_capture

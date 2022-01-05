@@ -1,4 +1,4 @@
-# Inroduction
+# Introduction
 
 The Feature Benchmark provides facilities and ready-made benchmarks that measure the execution time of individual operations and
 SQL statements in Materialize. It is meant to sit somewhere between a microbenchmark one would write in Rust and database benchmarks
@@ -15,7 +15,7 @@ bin/pyactivate --dev
 To run all benchmarks:
 ```
 cd test/feature-benchmark
-OTHER_IMAGE=materialize/materialized:unstable ./mzcompose run feature-benchmark
+./mzcompose run feature-benchmark --other-version=unstable
 ```
 
 This is going to benchmark the current source against the `materialize/materialized:unstable` container from DockerHub.
@@ -23,24 +23,24 @@ This is going to benchmark the current source against the `materialize/materiali
 To run one benchmark or a subset:
 
 ```
-FB_SCENARIO=FastPath ./mzcompose run feature-benchmark
+./mzcompose run feature-benchmark FastPath
 ```
 
 To use specific Mz command-line options:
 
 ```
-THIS_OPTIONS="--workers 16" OTHER_OPTIONS="--workers 1" ./mzcompose run feature-benchmark
+./mzcompose run feature-benchmark --this-options="--workers 16" --other-options="--workers 1"
 ```
 
 To compare specific Mz versions:
 
 ```
-THIS_IMAGE=materialize/materialized:v1.2.3 OTHER_IMAGE=materialize/materialized:v2.3.4 ./mzcompose ...
+./mzcompose run feature-benchmark --this=v1.2.3 --other=v2.3.4
 ```
 
 To compare specific Mz git revisions:
 ```
-THIS_IMAGE=materialize/materialized:unstable-42ad7432657d3e5c1a3492fa76985cd6b79fcab6 OTHER_IMAGE=... ./mzcompose ...
+./mzcompose run feature-benchmark --this-version=unstable-42ad7432657d3e5c1a3492fa76985cd6b79fcab6
 ```
 
 # Output

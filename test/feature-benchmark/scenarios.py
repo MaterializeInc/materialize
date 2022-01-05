@@ -10,7 +10,6 @@
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.measurement_source import Lambda, Td
 from materialize.feature_benchmark.scenario import Scenario
-from materialize.mzcompose import Workflow
 
 
 class Sleep(Scenario):

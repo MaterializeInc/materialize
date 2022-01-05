@@ -7,22 +7,23 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-version: '3.7'
-
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
     - ZOOKEEPER_CLIENT_PORT=2181
+    healthcheck: { test: nc -z localhost 2181, interval: 1s, start_period: 120s }
 
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.4
     ports: [9092]
-    depends_on: [zookeeper]
     environment:
     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
     - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    depends_on:
+      zookeeper: { condition: service_healthy }
+    healthcheck: { test: nc -z localhost 9092, interval: 1s, start_period: 120s }
 
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
@@ -30,6 +31,9 @@ services:
     environment:
      - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
      - SCHEMA_REGISTRY_HOST_NAME=localhost
+    depends_on:
+      kafka: { condition: service_healthy }
+    healthcheck: { test: curl -f localhost:8081, interval: 1s, start_period: 120s }
 
   connect:
     image: debezium/connect:1.4
@@ -43,7 +47,9 @@ services:
     - VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter
     - CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
     - CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
-    depends_on: [kafka, schema-registry]
+    depends_on:
+      kafka: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
 
   mysql:
     build: mysql
@@ -57,6 +63,9 @@ services:
 
   chbench:
     init: true
+    depends_on:
+      mysql: { condition: service_healthy }
+      materialized: { condition: service_healthy }
     mzbuild: chbenchmark
     volumes: [chbench-gen:/gen]
 
@@ -66,6 +75,7 @@ services:
     command: [--disable-telemetry]
     environment:
       - MZ_DEV=1
+    healthcheck: { test: curl -f localhost:6875, interval: 1s }
 
   metabase:
     image: metabase/metabase:v0.41.4

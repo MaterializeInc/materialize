@@ -22,4 +22,9 @@ py_folders=(ci misc/python)
 try bin/pyactivate --dev -m mypy "${py_folders[@]}"
 try bin/pyactivate --dev -m flake8 --select F --ignore F541 --extend-exclude venv "${py_folders[@]}"
 try bin/pyactivate --dev -m pytest -qq --doctest-modules misc/python
+# mzcompose.py files need to be passed to mypy individually to avoid duplicate
+# module warnings.
+for file in $(git_files "**/mzcompose.py"); do
+    try bin/pyactivate --dev -m mypy "$file"
+done
 try_finish

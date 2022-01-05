@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# a test that failes because the ALL_PROXY env var is incorrect
+# A test that expects a failure because the ALL_PROXY env var is incorrect.
 
 ! CREATE SOURCE invalid_proxy
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-doesntmatter-${testdrive.seed}'

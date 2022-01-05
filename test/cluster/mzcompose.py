@@ -7,17 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Composition
+from materialize.mzcompose.services import (
     Coordd,
     Dataflowd,
     Kafka,
     SchemaRegistry,
     Testdrive,
-    Workflow,
     Zookeeper,
 )
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
@@ -49,20 +49,18 @@ services = [
 ]
 
 
-def workflow_cluster_smoke(w: Workflow):
-    test_cluster(w, "ls -1 smoke/*.td")
+def workflow_cluster_smoke(c: Composition) -> None:
+    test_cluster(c, "ls -1 smoke/*.td")
 
 
-def workflow_cluster_testdrive(w: Workflow):
-    w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+def workflow_cluster_testdrive(c: Composition) -> None:
+    c.up("zookeeper", "kafka", "schema-registry")
     # Skip tests that use features that are not supported yet
     test_cluster(
-        w, "grep -L -E 'mz_catalog|mz_kafka_|mz_records_|mz_metrics' testdrive/*.td"
+        c, "grep -L -E 'mz_catalog|mz_kafka_|mz_records_|mz_metrics' testdrive/*.td"
     )
 
 
-def test_cluster(w: Workflow, glob: str):
-    w.start_services(services=["dataflowd_1", "dataflowd_2"])
-    w.start_services(services=["materialized"])
-    w.wait_for_mz()
-    w.run_service(service="testdrive-svc", command=glob)
+def test_cluster(c: Composition, glob: str) -> None:
+    c.up("dataflowd_1", "dataflowd_2", "materialized")
+    c.run("testdrive-svc", glob)

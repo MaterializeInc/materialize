@@ -98,7 +98,8 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive-ci
+          run: testdrive
+          args: [--aws-region=us-east-2, "*.td", esoteric/*.td]
 
   - id: cluster-smoke
     label: "Cluster smoke test"
@@ -188,14 +189,14 @@ steps:
           composition: catalog-compat
           run: catalog-compat
 
-  - id: restarts
-    label: ":arrows_clockwise: restarts"
+  - id: restart
+    label: ":arrows_clockwise: restart"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
-          run: all-restart
+          run: all
 
   - id: upgrade
     label: "Upgrade testing"
@@ -284,7 +285,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
-          run: persistence
+          run: all
 
   - id: lang-csharp
     label: ":csharp: tests"

@@ -8,17 +8,16 @@
 # by the Apache License, Version 2.0.
 
 import contextlib
-import inspect
-import os
 import sys
 import tempfile
+from pathlib import Path
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Composition
+from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     SchemaRegistry,
     Testdrive,
-    Workflow,
     Zookeeper,
 )
 
@@ -36,81 +35,82 @@ class Generator:
     COUNT = 1000
 
     @classmethod
-    def header(cls):
+    def header(cls) -> None:
         print(f"\n#\n# {cls}\n#\n")
         print("> DROP SCHEMA IF EXISTS public CASCADE;")
         print(f"> CREATE SCHEMA public /* {cls} */;")
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         assert False, "body() must be overriden"
 
     @classmethod
-    def footer(cls):
+    def footer(cls) -> None:
         print()
 
     @classmethod
-    def generate(cls):
+    def generate(cls) -> None:
         cls.header()
         cls.body()
         cls.footer()
 
     @classmethod
-    def all(cls):
+    def all(cls) -> range:
         return range(1, cls.COUNT + 1)
 
     @classmethod
-    def no_first(cls):
+    def no_first(cls) -> range:
         return range(2, cls.COUNT + 1)
 
     @classmethod
-    def no_last(cls):
+    def no_last(cls) -> range:
         return range(1, cls.COUNT)
 
 
 class Connections(Generator):
     @classmethod
-    def body(cls):
-        [
+    def body(cls) -> None:
+        for i in cls.all():
             print(
                 f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialized-addr}}"
             )
-            for i in cls.all()
-        ]
-        [
+        for i in cls.all():
             print(f"$ postgres-execute connection=conn{i}\nSELECT 1;\n")
-            for i in cls.all()
-        ]
 
 
 class Tables(Generator):
     @classmethod
-    def body(cls):
-        [print(f"> CREATE TABLE t{i} (f1 INTEGER);") for i in cls.all()]
-        [print(f"> INSERT INTO t{i} VALUES ({i});") for i in cls.all()]
+    def body(cls) -> None:
+        for i in cls.all():
+            print(f"> CREATE TABLE t{i} (f1 INTEGER);")
+        for i in cls.all():
+            print(f"> INSERT INTO t{i} VALUES ({i});")
         print("> BEGIN")
-        [print(f"> SELECT * FROM t{i};\n{i}") for i in cls.all()]
+        for i in cls.all():
+            print(f"> SELECT * FROM t{i};\n{i}")
         print("> COMMIT")
 
 
 class Indexes(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
         )
 
         print("> INSERT INTO t VALUES (" + ", ".join(str(i) for i in cls.all()) + ");")
 
-        [print(f"> CREATE INDEX i{i} ON t(f{i})") for i in cls.all()]
-        [print(f"> SELECT f{i} FROM t;\n{i}") for i in cls.all()]
+        for i in cls.all():
+            print(f"> CREATE INDEX i{i} ON t(f{i})")
+        for i in cls.all():
+            print(f"> SELECT f{i} FROM t;\n{i}")
 
 
 class KafkaTopics(Generator):
     COUNT = min(Generator.COUNT, 20)  # CREATE MATERIALIZED SOURCE is slow
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print('$ set key-schema={"type": "string"}')
         print(
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
@@ -132,14 +132,15 @@ class KafkaTopics(Generator):
                   """
             )
 
-        [print(f"> SELECT * FROM s{i};\n{i}") for i in cls.all()]
+        for i in cls.all():
+            print(f"> SELECT * FROM s{i};\n{i}")
 
 
 class KafkaSourcesSameTopic(Generator):
     COUNT = min(Generator.COUNT, 50)  # 400% CPU usage in librdkafka
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print('$ set key-schema={"type": "string"}')
         print(
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
@@ -150,7 +151,7 @@ class KafkaSourcesSameTopic(Generator):
         )
         print('"123" {"f1": "123"}')
 
-        [
+        for i in cls.all():
             print(
                 f"""> CREATE MATERIALIZED SOURCE s{i}
               FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-topic-${{testdrive.seed}}'
@@ -158,17 +159,16 @@ class KafkaSourcesSameTopic(Generator):
               ENVELOPE NONE;
               """
             )
-            for i in cls.all()
-        ]
 
-        [print(f"> SELECT * FROM s{i};\n123") for i in cls.all()]
+        for i in cls.all():
+            print(f"> SELECT * FROM s{i};\n123")
 
 
 class KafkaPartitions(Generator):
     COUNT = min(Generator.COUNT, 100)  # It takes 5+min to process 1K partitions
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("$ set-sql-timeout duration=120s")
         print('$ set key-schema={"type": "string"}')
         print(
@@ -180,7 +180,8 @@ class KafkaPartitions(Generator):
         print(
             "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true partition=-1"
         )
-        [print(f'"{i}" {{"f1": "{i}"}}') for i in cls.all()]
+        for i in cls.all():
+            print(f'"{i}" {{"f1": "{i}"}}')
 
         print(
             """> CREATE MATERIALIZED SOURCE s1
@@ -197,7 +198,8 @@ class KafkaPartitions(Generator):
         print(
             "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true partition=-1"
         )
-        [print(f'"{i}" {{"f1": "{i}"}}') for i in cls.all()]
+        for i in cls.all():
+            print(f'"{i}" {{"f1": "{i}"}}')
 
         print(f"> SELECT COUNT(*) FROM s1;\n{cls.COUNT * 2}")
 
@@ -206,7 +208,7 @@ class KafkaRecordsEnvelopeNone(Generator):
     COUNT = Generator.COUNT * 10_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             '$ set kafka-records-envelope-none={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
         )
@@ -231,7 +233,7 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
     COUNT = Generator.COUNT * 10_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             '$ set kafka-records-envelope-upsert-same-key={"type": "record", "name": "Key", "fields": [ {"name": "key", "type": "string"} ] }'
         )
@@ -260,7 +262,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
     COUNT = Generator.COUNT * 1_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             '$ set kafka-records-envelope-upsert-distinct-key={"type": "record", "name": "Key", "fields": [ {"name": "key", "type": "string"} ] }'
         )
@@ -301,53 +303,46 @@ class KafkaSinks(Generator):
     COUNT = min(Generator.COUNT, 50)  # $ kafka-verify is slow
 
     @classmethod
-    def body(cls):
-        [print(f"> CREATE VIEW v{i} (f1) AS VALUES ({i})") for i in cls.all()]
-        [
+    def body(cls) -> None:
+        for i in cls.all():
+            print(f"> CREATE VIEW v{i} (f1) AS VALUES ({i})")
+        for i in cls.all():
             print(
                 f"""> CREATE SINK s{i} FROM v{i}
               INTO KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'kafka-sink-same-source-{i}'
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}';
         """
             )
-            for i in cls.all()
-        ]
 
-        [
+        for i in cls.all():
             print(
                 f'$ kafka-verify format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": {i}}}}}}}\n'
             )
-            for i in cls.all()
-        ]
 
 
 class KafkaSinksSameSource(Generator):
     COUNT = min(Generator.COUNT, 50)  # $ kafka-verify is slow
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE VIEW v1 (f1) AS VALUES (123)")
-        [
+        for i in cls.all():
             print(
                 f"""> CREATE SINK s{i} FROM v1
               INTO KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'kafka-sink-same-source-{i}'
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}';
         """
             )
-            for i in cls.all()
-        ]
 
-        [
+        for i in cls.all():
             print(
                 f'$ kafka-verify format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": 123}}}}}}\n'
             )
-            for i in cls.all()
-        ]
 
 
 class Columns(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
         )
@@ -358,7 +353,7 @@ class Columns(Generator):
 
 class TablesCommaJoinNoCondition(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         table_list = ", ".join(f"t1 as a{i}" for i in cls.all())
@@ -370,7 +365,7 @@ class TablesCommaJoinWithJoinCondition(Generator):
     COUNT = 20  # Otherwise is very slow
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         table_list = ", ".join(f"t1 as a{i}" for i in cls.all())
@@ -383,7 +378,7 @@ class TablesCommaJoinWithCondition(Generator):
     COUNT = min(Generator.COUNT, 100)  # Otherwise is very slow
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         table_list = ", ".join(f"t1 as a{i}" for i in cls.all())
@@ -396,7 +391,7 @@ class TablesOuterJoinUsing(Generator):
     COUNT = min(Generator.COUNT, 100)  # Otherwise is very slow
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         table_list = " LEFT JOIN ".join(
@@ -410,7 +405,7 @@ class TablesOuterJoinOn(Generator):
     COUNT = min(Generator.COUNT, 100)  # Otherwise is very slow
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         table_list = " LEFT JOIN ".join(
@@ -426,7 +421,7 @@ class SubqueriesScalarSelectListWithCondition(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8598
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         select_list = ", ".join(
@@ -443,7 +438,7 @@ class SubqueriesScalarWhereClauseAnd(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8598
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         where_clause = " AND ".join(
@@ -459,7 +454,7 @@ class SubqueriesExistWhereClause(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8598
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         where_clause = " AND ".join(
@@ -475,7 +470,7 @@ class SubqueriesInWhereClauseCorrelated(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8605
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         where_clause = " AND ".join(
@@ -492,7 +487,7 @@ class SubqueriesInWhereClauseUncorrelated(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8605
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         where_clause = " AND ".join(
@@ -508,7 +503,7 @@ class SubqueriesWhereClauseOr(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8602
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         where_clause = " OR ".join(
@@ -524,7 +519,7 @@ class SubqueriesNested(Generator):
     )  # Otherwise we exceed the 128 limit to nested expressions
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         print(f"> SELECT 1 WHERE 1 = ")
@@ -539,7 +534,7 @@ class ViewsNested(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8598
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t (f1 INTEGER);")
         print("> INSERT INTO t VALUES (0);")
         print("> CREATE VIEW v0 (f1) AS SELECT f1 FROM t;")
@@ -553,7 +548,7 @@ class ViewsNested(Generator):
 
 class ViewsMaterializedNested(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t (f1 INTEGER);")
         print("> INSERT INTO t VALUES (0);")
         print("> CREATE MATERIALIZED VIEW v0 (f1) AS SELECT f1 FROM t;")
@@ -573,7 +568,7 @@ class CTEs(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8600
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         cte_list = ", ".join(
@@ -590,7 +585,7 @@ class NestedCTEsIndependent(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8600
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES " + ", ".join(f"({i})" for i in cls.all()))
         cte_list = ", ".join(
@@ -610,7 +605,7 @@ class NestedCTEsChained(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8601
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1)")
         cte_list = ", ".join(
@@ -630,7 +625,7 @@ class DerivedTables(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8602
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1)")
         table_list = ", ".join(
@@ -647,7 +642,7 @@ class Lateral(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8603
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1)")
         table_list = ", LATERAL ".join(
@@ -660,7 +655,7 @@ class Lateral(Generator):
 
 class SelectExpression(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({column_list});")
 
@@ -674,7 +669,7 @@ class SelectExpression(Generator):
 
 class WhereExpression(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({column_list});")
 
@@ -688,7 +683,7 @@ class WhereExpression(Generator):
 
 class WhereConditionAnd(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({column_list});")
 
@@ -702,7 +697,7 @@ class WhereConditionAnd(Generator):
 
 class WhereConditionAndSameColumn(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(f"> CREATE TABLE t1 (f1 INTEGER);")
 
         print(f"> INSERT INTO t1 VALUES (1);")
@@ -714,7 +709,7 @@ class WhereConditionAndSameColumn(Generator):
 
 class WhereConditionOr(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         create_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({create_list});")
 
@@ -728,7 +723,7 @@ class WhereConditionOr(Generator):
 
 class WhereConditionOrSameColumn(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(f"> CREATE TABLE t1 (f1 INTEGER);")
 
         print(f"> INSERT INTO t1 VALUES (1);")
@@ -740,7 +735,7 @@ class WhereConditionOrSameColumn(Generator):
 
 class InList(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 VALUES ({cls.COUNT})")
 
@@ -753,7 +748,7 @@ class JoinUsing(Generator):
     COUNT = min(Generator.COUNT, 10)  # Slow
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         create_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({create_list});")
 
@@ -769,7 +764,7 @@ class JoinOn(Generator):
     COUNT = min(Generator.COUNT, 10)  # Slow
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         create_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({create_list});")
 
@@ -783,7 +778,7 @@ class JoinOn(Generator):
 
 class Aggregates(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         create_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({create_list});")
 
@@ -797,7 +792,7 @@ class Aggregates(Generator):
 
 class AggregateExpression(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         create_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({create_list});")
 
@@ -811,7 +806,7 @@ class AggregateExpression(Generator):
 
 class GroupBy(Generator):
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         create_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({create_list});")
 
@@ -829,7 +824,7 @@ class Unions(Generator):
     )  # https://github.com/MaterializeInc/materialize/issues/8600
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (0)")
 
@@ -846,7 +841,7 @@ class UnionsNested(Generator):
     )  # Otherwise we exceed the 128 limit to nested expressions
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1)")
 
@@ -869,7 +864,7 @@ class Column(Generator):
     COUNT = 100_000_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 STRING);")
         print(f"> INSERT INTO t1 VALUES (REPEAT('x', {cls.COUNT}));")
 
@@ -889,7 +884,7 @@ class Rows(Generator):
     COUNT = 10_000_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT})")
 
@@ -901,7 +896,7 @@ class RowsAggregate(Generator):
     COUNT = 1_000_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             f"> SELECT COUNT(*), MIN(generate_series), MAX(generate_series), COUNT(DISTINCT generate_series) FROM generate_series(1, {cls.COUNT});"
         )
@@ -912,7 +907,7 @@ class RowsOrderByLimit(Generator):
     COUNT = 10_000_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             f"> SELECT * FROM generate_series(1, {cls.COUNT}) ORDER BY generate_series DESC LIMIT 1;"
         )
@@ -923,7 +918,7 @@ class RowsJoinOneToOne(Generator):
     COUNT = 10_000_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
@@ -937,7 +932,7 @@ class RowsJoinOneToMany(Generator):
     COUNT = 10_000_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
@@ -949,7 +944,7 @@ class RowsJoinCross(Generator):
     COUNT = 1_000_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
@@ -961,7 +956,7 @@ class RowsJoinLargeRetraction(Generator):
     COUNT = 1_000_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT});")
 
@@ -982,7 +977,7 @@ class RowsJoinDifferential(Generator):
     COUNT = 1_000_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
         )
@@ -994,7 +989,7 @@ class RowsJoinOuter(Generator):
     COUNT = 1_000_000
 
     @classmethod
-    def body(cls):
+    def body(cls) -> None:
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
         )
@@ -1002,26 +997,20 @@ class RowsJoinOuter(Generator):
         print(f"{cls.COUNT}")
 
 
-servers = []
-
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Materialized(
         memory="8G", options="--persistent-user-tables --persistent-kafka-upsert-source"
     ),
-    Testdrive(),
+    Testdrive(depends_on=["kafka", "schema-registry", "materialized"]),
 ]
 
 
-def workflow_limits(w: Workflow):
-    w.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "materialized"]
-    )
-
-    with tempfile.NamedTemporaryFile(mode="w", dir=w.composition.path) as tmp:
+def workflow_limits(c: Composition) -> None:
+    with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
         with contextlib.redirect_stdout(tmp):
             [cls.generate() for cls in Generator.__subclasses__()]
             sys.stdout.flush()
-            w.run_service(service="testdrive-svc", command=os.path.basename(tmp.name))
+        c.run("testdrive-svc", Path(tmp.name).name)

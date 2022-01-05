@@ -10,7 +10,6 @@
 # Portions of this file are derived from
 # https://github.com/vdesabou/kafka-docker-playground/blob/master/environment/kerberos/docker-compose.yml
 
-version: "3.7"
 services:
   kdc:
     mzbuild: kafka-krb5-kdc

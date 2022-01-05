@@ -376,6 +376,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let _failpoint_scenario = FailScenario::setup();
 
     if args.version > 0 {
+        println!("{:?}", materialized::BUILD_INFO);
         println!("materialized {}", materialized::BUILD_INFO.human_version());
         if args.version > 1 {
             for bi in build_info() {

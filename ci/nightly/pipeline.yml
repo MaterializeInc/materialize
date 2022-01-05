@@ -81,7 +81,8 @@
     - ./ci/plugins/scratch-aws-access: ~
     - ./ci/plugins/mzcompose:
         composition: testdrive
-        run: testdrive-ci-workers-1
+        run: testdrive
+        args: [--materialized-workers=1]
 
 - id: testdrive_workers_32
   label: ":racing_car: testdrive with --workers 32"
@@ -90,7 +91,8 @@
     - ./ci/plugins/scratch-aws-access: ~
     - ./ci/plugins/mzcompose:
         composition: testdrive
-        run: testdrive-ci-workers-32
+        run: testdrive
+        args: [--materialized-workers=32]
 
 - id: persistence_testdrive
   label: ":racing_car: testdrive with --persistent-user-tables"
@@ -100,3 +102,4 @@
     - ./ci/plugins/mzcompose:
         composition: testdrive
         run: persistence-testdrive
+        args: [--materialized-persistent-user-tables]

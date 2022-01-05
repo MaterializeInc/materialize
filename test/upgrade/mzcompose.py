@@ -9,19 +9,17 @@
 
 import os
 from typing import List
-from unittest.mock import patch
 
 from semver import Version
 
 from materialize import util
-from materialize.mzcompose import (
+from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     Postgres,
     SchemaRegistry,
     Testdrive,
-    Workflow,
-    WorkflowArgumentParser,
     Zookeeper,
 )
 
@@ -31,7 +29,7 @@ all_versions = util.known_materialize_versions()
 # The `materialized` options that are valid only at or above a certain version.
 mz_options = {Version.parse("0.9.2"): "--persistent-user-tables"}
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
@@ -47,14 +45,16 @@ services = [
     # Disabling catalog validation is preferable to using a versioned testdrive
     # because that would involve maintaining backwards compatibility for all
     # testdrive commands.
-    Testdrive(validate_catalog=False),
+    Testdrive(
+        validate_catalog=False,
+        depends_on=["kafka", "schema-registry", "postgres", "materialized"],
+    ),
 ]
 
 
-def workflow_upgrade(w: Workflow, args: List[str]):
+def workflow_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test upgrades from various versions."""
 
-    parser = WorkflowArgumentParser(w)
     parser.add_argument(
         "--min-version",
         metavar="VERSION",
@@ -71,67 +71,64 @@ def workflow_upgrade(w: Workflow, args: List[str]):
     parser.add_argument(
         "filter", nargs="?", default="*", help="limit to only the files matching filter"
     )
-    args = parser.parse_args(args)
+    args = parser.parse_args()
 
     tested_versions = [v for v in all_versions if v >= args.min_version]
     if args.most_recent is not None:
         tested_versions = tested_versions[: args.most_recent]
     tested_versions.reverse()
 
-    w.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "postgres"]
-    )
-
     for version in tested_versions:
         priors = [f"v{v}" for v in all_versions if v < version]
-        test_upgrade_from_version(w, f"v{version}", priors, filter=args.filter)
+        test_upgrade_from_version(c, f"v{version}", priors, filter=args.filter)
 
-    test_upgrade_from_version(w, "current_source", priors=["*"], filter=args.filter)
+    test_upgrade_from_version(c, "current_source", priors=["*"], filter=args.filter)
 
 
 def test_upgrade_from_version(
-    w: Workflow, from_version: str, priors: List[str], filter: str
-):
+    c: Composition, from_version: str, priors: List[str], filter: str
+) -> None:
     print(f"===>>> Testing upgrade from Materialize {from_version} to current_source.")
 
     version_glob = "|".join(["any_version", *priors, from_version])
     print(">>> Version glob pattern: " + version_glob)
 
+    overrides = []
     if from_version != "current_source":
-        mz_from = Materialized(
-            image=f"materialize/materialized:{from_version}",
-            options=" ".join(
-                opt
-                for start_version, opt in mz_options.items()
-                if from_version[1:] >= start_version
-            ),
+        overrides.append(
+            Materialized(
+                image=f"materialize/materialized:{from_version}",
+                options=" ".join(
+                    opt
+                    for start_version, opt in mz_options.items()
+                    if from_version[1:] >= start_version
+                ),
+            )
         )
-        with w.with_services(services=[mz_from]):
-            w.start_services(services=["materialized"])
-    else:
-        w.start_services(services=["materialized"])
-
-    w.wait_for_mz(service="materialized")
 
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
-    with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
-        w.run_service(
-            service="testdrive-svc",
-            command=f"--seed=1 --no-reset {temp_dir} create-in-@({version_glob})-{filter}.td",
+
+    with c.override(*overrides):
+        c.run(
+            "testdrive-svc",
+            "--seed=1",
+            "--no-reset",
+            temp_dir,
+            f"create-in-@({version_glob})-{filter}.td",
+            env={"UPGRADE_FROM_VERSION": from_version},
         )
 
-    w.kill_services(services=["materialized"])
-    w.remove_services(services=["materialized", "testdrive-svc"])
+    c.rm("materialized", "testdrive-svc")
 
-    w.start_services(services=["materialized"])
-    w.wait_for_mz(service="materialized")
+    c.run(
+        "testdrive-svc",
+        "--seed=1",
+        "--no-reset",
+        temp_dir,
+        "--validate-catalog=/share/mzdata/catalog",
+        f"check-from-@({version_glob})-{filter}.td",
+        env={"UPGRADE_FROM_VERSION": from_version},
+    )
 
-    with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
-        w.run_service(
-            service="testdrive-svc",
-            command=f"--seed=1 --no-reset {temp_dir} --validate-catalog=/share/mzdata/catalog check-from-@({version_glob})-{filter}.td",
-        )
-
-    w.kill_services(services=["materialized"])
-    w.remove_services(services=["materialized", "testdrive-svc"])
-    w.remove_volumes(volumes=["mzdata", "tmp"])
+    c.rm("materialized", "testdrive-svc")
+    c.rm_volumes("mzdata", "tmp")

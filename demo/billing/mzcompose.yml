@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-version: '3.7'
-
 services:
   materialized:
     mzbuild: materialized
@@ -18,19 +16,24 @@ services:
     command: --disable-telemetry
     environment:
       - MZ_DEV=1
+    healthcheck: { test: curl -f localhost:6875, interval: 1s }
+
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
     - ZOOKEEPER_CLIENT_PORT=2181
+    healthcheck: { test: nc -z localhost 2181, interval: 1s, start_period: 120s }
 
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.4
     ports: [9092]
-    depends_on: [zookeeper]
     environment:
     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
     - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    depends_on:
+      zookeeper: { condition: service_healthy }
+    healthcheck: { test: nc -z localhost 9092, interval: 1s, start_period: 120s }
 
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
@@ -38,7 +41,9 @@ services:
     environment:
     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
     - SCHEMA_REGISTRY_HOST_NAME=localhost
-    depends_on: [kafka, zookeeper]
+    depends_on:
+      kafka: { condition: service_healthy }
+    healthcheck: { test: curl -f localhost:8081, interval: 1s, start_period: 120s }
 
   billing-demo:
     mzbuild: billing-demo
@@ -46,7 +51,10 @@ services:
     - db-data:/share/billing-demo/data
     environment:
     - RUST_LOG=billing-demo=debug,info
-    depends_on: [kafka, schema-registry, materialized]
+    depends_on:
+      materialized: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      schema-registry: { condition: service_healthy }
 
 volumes:
   db-data:

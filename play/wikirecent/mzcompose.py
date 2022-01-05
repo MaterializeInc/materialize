@@ -7,5 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT 1;
-1
+from pathlib import Path
+
+from materialize.mzcompose import Composition
+
+
+def workflow_demo(c: Composition) -> None:
+    """Streams data from Wikipedia to a browser visualzation."""
+    c.up("server")
+    c.sql((Path(__file__).parent / "views.sql").read_text())

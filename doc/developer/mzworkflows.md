@@ -1,14 +1,6 @@
-# Introduction
-
-This document describes the format and the available facilities for writing Python-based workflows, to be executed by the `mzworkflows` tool.
-
-Using Python to define workflows and their participating services replaces the previous YAML-based format and is the preferred way to write tests going forward.
-
-In this document, "workflow" and "test" are used interchangeably.
-
 # Overview
 
-Python-based workflows are contained in a file named `mzworkflows.py`. The file serves three different purposes:
+Python-based workflows are contained in a file named `mzcompose.py`. The file serves three different purposes:
 
 1. Declare the services that are needed to run the workflows
 
@@ -41,32 +33,7 @@ Depending on the test or the workflow that you intend to create, a suitable plac
 
 # Examples
 
-Here is a complete example:
 
-```python
-from materialize.mzcompose import (
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Workflow,
-    Zookeeper,
-)
-
-services = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
-    Materialized(),
-    Testdrive()
-]
-
-def workflow_test(w: Workflow):
-    w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry", "materialized"])
-    w.wait_for_mz()
-
-    w.run_service(service="testdrive-svc", command="*.td")
-```
 
 Additional examples can be found here:
 * [test/mzworkflows_examples/mzworkflows.py has sample workflows](https://github.com/MaterializeInc/materialize/blob/main/test/mzworkflows_examples/mzworkflows.py)
@@ -149,36 +116,6 @@ The one exception is the `run` step, which can be called as `w.run_service()`.
 
 In the example above, we are calling the [`StartServicesStep`](https://dev.materialize.com/api/python/materialize/mzcompose.html#materialize.mzcompose.StartServicesStep).
 
-## Starting services
-
-Starting the services for a workflow requires additional care because:
-- `w.start_services()` will not wait for a service to be fully up before moving on to start the next one which may depend on the previous one
-- for complex services such as third-party databases, even if `w.wait_for_tcp()` completes, the service may not be fully ready to accept SQL commands and may return errors on them
-
-Therefore, a couple of convenience steps are provided:
-
-### `w.start_and_wait_for_tcp(services=[...])`
-
-Starts the services from the list one after another, waiting for the respective port of the service to become open.
-
-Note that unlike other steps that deal with services, this step does not take a list of service names, but rather `PythonService` objects.
-
-### `w.wait_for_mz()`
-
-Waits until Materialize is capable of answering `SELECT 1` queries. A similar step is available for checking other Postgres-compatible services.
-
-### Example
-
-The fool-proof sequence for starting the complete Materialize stack would be something along the following lines:
-
-```python
-services = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized()]
-
-def workflow_start_services(w: Workflow):
-    w.start_and_wait_for_tcp(services=services)
-    w.wait_for_mz()
-```
-
 ## Executing SQL
 
 A test cannot be considered complete if it does not connnect to the Materialize instance to run SQL commands.
@@ -201,7 +138,3 @@ def workflow_simple_test(w: Workflow):
    w.run_service(service="testdrive-svc", command="*.td")
    ...
 ```
-
-# YAML-based workflows
-
-YAML-based workflows, defined in files named `mzcompose.yml` are being deprecated and should not be used for new tests.

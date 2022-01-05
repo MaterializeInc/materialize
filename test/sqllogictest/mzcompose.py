@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -8,7 +6,16 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-#
-# mzcompose — runs Docker Compose with Materialize customizations.
 
-exec "$(dirname "$0")/../../bin/mzcompose" "$@"
+from materialize.mzcompose import Composition
+from materialize.mzcompose.services import Sqllogictest
+
+SERVICES = [Sqllogictest()]
+
+
+def workflow_sqllogictest(c: Composition) -> None:
+    c.run("sqllogictest-svc", "ci/slt/slt.sh")
+
+
+def workflow_sqllogictest_fast(c: Composition) -> None:
+    c.run("sqllogictest-svc", "ci/test/slt-fast.sh")

@@ -12,7 +12,7 @@ import subprocess
 from tempfile import NamedTemporaryFile
 from typing import Any, Callable
 
-from materialize.mzcompose import Materialized, Testdrive, Workflow
+from materialize.mzcompose import Composition
 
 
 class Executor:
@@ -50,42 +50,34 @@ class Local(Executor):
 class Docker(Executor):
     def __init__(
         self,
-        workflow: Workflow,
-        mz_service: Materialized,
-        td_service: Testdrive,
+        composition: Composition,
         seed: int,
     ) -> None:
-        self._workflow = workflow
-        self._mz_service = mz_service
-        self._td_service = td_service
+        self._composition = composition
         self._seed = seed
 
     def RestartMz(self) -> Any:
-        w = self._workflow
-        w.kill_services(services=[self._mz_service.name])  # type: ignore
-        w.start_services(services=[self._mz_service.name])  # type: ignore
+        self._composition.kill("materialized")
+        self._composition.up("materialized")
         return 0.0
 
     def Td(self, input: str) -> Any:
         with NamedTemporaryFile(
             mode="w",
-            dir=self._workflow.composition.path / "tmp",
+            dir=self._composition.path / "tmp",
             prefix="tmp-",
             suffix=".td",
         ) as td_file:
             td_file.write(input)
             td_file.flush()
             dirname, basename = os.path.split(td_file.name)
-            return self._workflow.run_service(  # type: ignore
-                service=self._td_service.name,
-                command=" ".join(
-                    [
-                        "--no-reset",
-                        f"--seed={self._seed}",
-                        "--initial-backoff=0ms",
-                        "--backoff-factor=0",
-                        f"tmp/{basename}",
-                    ]
-                ),
+            return self._composition.run(
+                "testdrive-svc",
+                "--no-reset",
+                f"--seed={self._seed}",
+                "--initial-backoff=0ms",
+                "--backoff-factor=0",
+                f"tmp/{basename}",
+                rm=True,
                 capture=True,
-            )
+            ).stdout
