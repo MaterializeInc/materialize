@@ -51,7 +51,7 @@ pub(crate) fn upsert<G>(
     as_of_frontier: Antichain<Timestamp>,
     operators: &mut Option<LinearOperator>,
     key_arity: usize,
-    // Full arity, including the key(s)
+    // Full arity, including the key columns
     source_arity: usize,
     persist_config: Option<
         PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
@@ -201,7 +201,7 @@ where
                                 let mut datums = Vec::with_capacity(source_arity);
                                 datums.extend(key.iter());
                                 datums.extend(value.iter());
-                                evaluate(&datums, &predicates, &position_or, &mut row_packer, 0)
+                                evaluate(&datums, &predicates, &position_or, &mut row_packer)
                                     .map_err(DataflowError::from)
                             })
                             .transpose();
@@ -268,11 +268,6 @@ fn evaluate(
     predicates: &[MirScalarExpr],
     position_or: &[Option<usize>],
     row_packer: &mut repr::Row,
-    // key_arity is the number of columns in the front of `Datum`'s
-    // that are dedicated to the key. This is used to avoid
-    // repacking key values in so many places, and it relies on the fact that
-    // `position_or` never re-orders inputs.
-    key_arity: usize,
 ) -> Result<Option<Row>, EvalError> {
     let arena = RowArena::new();
     // Each predicate is tested in order.
@@ -286,7 +281,6 @@ fn evaluate(
     // specific columns.
     row_packer.clear();
     row_packer.extend(position_or.iter().map(|x| match x {
-        Some(column) if column < &key_arity => Datum::Dummy,
         Some(column) => datums[*column],
         None => Datum::Dummy,
     }));
@@ -405,7 +399,6 @@ where
                                                 &predicates,
                                                 &position_or,
                                                 &mut row_packer,
-                                                key_arity,
                                             )
                                             .map_err(DataflowError::from)
                                         }),
@@ -415,42 +408,45 @@ where
                                     // retracted if new rows show up for the same key.
                                     let new_value = decoded_value.transpose();
 
-                                    let old_value = if let Some(new_value) = &new_value {
-                                        current_values
-                                            .insert(decoded_key.clone(), new_value.clone())
-                                    } else {
-                                        current_values.remove(&decoded_key)
+                                    let repack_value = |row: Row, row_packer: &mut Row| {
+                                        // Re-use a `Row` to
+                                        // rebuild a full `Row` with both keys and values, before we
+                                        // send them out of this operator
+                                        row_packer.clear();
+                                        row_packer.extend(decoded_key.iter());
+                                        row_packer.extend(row.iter());
+                                        row_packer.finish_and_reuse()
                                     };
 
-                                    // This closure re-uses a `Row` to
-                                    // rebuild the full `Row` with both keys and values, before we
-                                    // send them off to sql-land
-                                    let mut repack_value = |row: Row| {
-                                        row_packer.clear();
-
-                                        row_packer.extend(decoded_key.iter());
-                                        // always skip all the keys
-                                        row_packer.extend(row.iter().skip(key_arity));
-
-                                        let r = row_packer.finish_and_reuse();
-                                        r
+                                    let old_value = if let Some(new_value) = &new_value {
+                                        // Thin out the row to not contain a copy of the
+                                        // key columns, cloning when need-be
+                                        let thinned_value = new_value
+                                            .as_ref()
+                                            .map(|full_row| {
+                                                row_packer.clear();
+                                                row_packer.extend(full_row.iter().skip(key_arity));
+                                                row_packer.finish_and_reuse()
+                                            })
+                                            .map_err(|e| e.clone());
+                                        current_values
+                                            .insert(decoded_key.clone(), thinned_value)
+                                            .map(|res| {
+                                                res.map(|v| repack_value(v, &mut row_packer))
+                                            })
+                                    } else {
+                                        current_values.remove(&decoded_key).map(|res| {
+                                            res.map(|v| repack_value(v, &mut row_packer))
+                                        })
                                     };
 
                                     if let Some(old_value) = old_value {
                                         // retract old value
-                                        session.give((
-                                            old_value.map(&mut repack_value),
-                                            cap.time().clone(),
-                                            -1,
-                                        ));
+                                        session.give((old_value, cap.time().clone(), -1));
                                     }
                                     if let Some(new_value) = new_value {
                                         // give new value
-                                        session.give((
-                                            new_value.map(&mut repack_value),
-                                            cap.time().clone(),
-                                            1,
-                                        ));
+                                        session.give((new_value, cap.time().clone(), 1));
                                     }
                                 }
                                 None => {}
