@@ -815,8 +815,8 @@ EXPLAIN SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS
 %0 =
 | Get materialize.public.t1 (u9)
 | Filter (0 = i32toi64(#0))
-| Map 123, 0
-| Project (#1, #2, #0)
+| Map 0, 123
+| Project (#2, #1, #0)
 
 EOF
 
