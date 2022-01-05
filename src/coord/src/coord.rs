@@ -2073,7 +2073,7 @@ where
                         id: table_id,
                         oid: table_oid,
                         name,
-                        item: CatalogItem::Table(table),
+                        item: CatalogItem::Table(table.clone()),
                     },
                     catalog::Op::CreateItem {
                         id: index_id,
@@ -2097,6 +2097,21 @@ where
         match df {
             Ok(df) => {
                 if let Some(df) = df {
+                    let since_ts = {
+                        match &table.persist {
+                            Some(persist) => Some(persist.since_ts),
+                            _ => None,
+                        }
+                    };
+
+                    let since_ts = since_ts.unwrap_or(0);
+                    let frontiers =
+                        self.new_frontiers(table_id, [since_ts], self.logical_compaction_window_ms);
+
+                    // NOTE: Tables are not sources, but to a large part of the system they look
+                    // like they are, e.g. they are rendered as a SourceConnector::Local.
+                    self.sources.insert(table_id, frontiers);
+
                     self.ship_dataflow(df).await?;
                 }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
