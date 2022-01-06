@@ -21,4 +21,4 @@ hyper = { version = "0.14.16", features = ["server"] }
 lazy_static = "1.4.0"
 serde_json = "1.0.74"
 tokio = { version = "1.15.0", features = ["macros"] }
-tracing = { version = "0.1.29", features = ["log"] }
+tracing = "0.1.29"
