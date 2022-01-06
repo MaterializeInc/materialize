@@ -91,22 +91,39 @@ true
 """
     )
 
+    # Since an individual query of this particular type being benchmarked takes 1ms to execute, the results are susceptible
+    # to a lot of random noise. As we can not make the query any slower by using e.g. a large dataset,
+    # we run the query 100 times in a row and measure the total execution time.
+
     BENCHMARK = Td(
         """
+> BEGIN
+
 > /* A */ SELECT 1;
 1
+"""
+        + "\n".join(
+            [
+                """
+> SELECT * FROM v1 WHERE f1 = 1;
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+"""
+                for i in range(0, 100)
+            ]
+        )
+        + """
+> /* B */ SELECT 1;
+1
 
-> /* B */ SELECT * FROM v1 WHERE f1 = 1;
-1
-1
-1
-1
-1
-1
-1
-1
-1
-1
 """
     )
 
