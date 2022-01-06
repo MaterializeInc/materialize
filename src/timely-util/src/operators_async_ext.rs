@@ -115,7 +115,7 @@ pub trait OperatorBuilderExt<G: Scope> {
             Vec<Capability<G::Timestamp>>,
             Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
             Scheduler,
-            Rc<RefCell<bool>>,
+            Rc<Cell<bool>>,
         ) -> Fut,
         Fut: Future<Output = Never> + 'static;
 }
@@ -127,7 +127,7 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
             Vec<Capability<G::Timestamp>>,
             Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
             Scheduler,
-            Rc<RefCell<bool>>,
+            Rc<Cell<bool>>,
         ) -> Fut,
         Fut: Future<Output = Never> + 'static,
     {
@@ -137,7 +137,7 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
             Antichain::from_elem(Timestamp::minimum());
             self.shape().inputs()
         ]));
-        let reschedule_flag = Rc::new(RefCell::new(false));
+        let reschedule_flag = Rc::new(Cell::new(false));
 
         self.build_reschedule(move |capabilities| {
             let scheduler = Scheduler::default();
@@ -178,7 +178,7 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
                     waker.wake_by_ref();
                 }
 
-                *reschedule_flag.borrow()
+                reschedule_flag.get()
             }
         });
     }
@@ -197,15 +197,11 @@ macro_rules! async_op {
                 #[allow(unused_mut)]
                 let mut $frontiers = &mut frontiers;
 
-                {
-                    // If this async block is `poll`ed and returns while `$body` is executing, it
-                    // should always be rescheduled.
-                    *reschedule_flag.borrow_mut() = true
-                }
+                // If this async block is `poll`ed and returns while `$body` is executing, it
+                // should always be rescheduled.
+                reschedule_flag.set(true);
                 let result: bool = async { $body }.await;
-                {
-                    *reschedule_flag.borrow_mut() = result;
-                }
+                reschedule_flag.set(result);
             }
         }
     };
