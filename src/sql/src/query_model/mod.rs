@@ -184,10 +184,22 @@ pub struct Get {
     id: expr::GlobalId,
 }
 
+impl From<Get> for BoxType {
+    fn from(get: Get) -> Self {
+        BoxType::Get(get)
+    }
+}
+
 /// The content of a Grouping box.
 #[derive(Debug, Default)]
 pub struct Grouping {
     pub key: Vec<BoxScalarExpr>,
+}
+
+impl From<Grouping> for BoxType {
+    fn from(grouping: Grouping) -> Self {
+        BoxType::Grouping(grouping)
+    }
 }
 
 /// The content of a OuterJoin box.
@@ -195,6 +207,12 @@ pub struct Grouping {
 pub struct OuterJoin {
     /// The predices in the ON clause of the outer join.
     pub predicates: Vec<BoxScalarExpr>,
+}
+
+impl From<OuterJoin> for BoxType {
+    fn from(outer_join: OuterJoin) -> Self {
+        BoxType::OuterJoin(outer_join)
+    }
 }
 
 /// The content of a Select box.
@@ -210,15 +228,33 @@ pub struct Select {
     pub offset: Option<BoxScalarExpr>,
 }
 
+impl From<Select> for BoxType {
+    fn from(select: Select) -> Self {
+        BoxType::Select(select)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TableFunction {
     pub parameters: Vec<BoxScalarExpr>,
     // @todo function metadata from the catalog
 }
 
+impl From<TableFunction> for BoxType {
+    fn from(table_function: TableFunction) -> Self {
+        BoxType::TableFunction(table_function)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Values {
     pub rows: Vec<Vec<BoxScalarExpr>>,
+}
+
+impl From<Values> for BoxType {
+    fn from(values: Values) -> Self {
+        BoxType::Values(values)
+    }
 }
 
 impl Model {
