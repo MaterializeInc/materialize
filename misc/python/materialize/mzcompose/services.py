@@ -539,9 +539,9 @@ class Testdrive(Service):
         if shell_eval:
             # Evaluate the arguments as a shell command
             # This allows bashisms to be used to prepare the list of tests to run
-            entrypoint.append("${TD_TEST:-`$$*`}")
+            entrypoint.append("${TD_TEST:-`$*`}")
         else:
-            entrypoint.append("${TD_TEST:-$$*}")
+            entrypoint.append("${TD_TEST:-$*}")
 
         super().__init__(
             name=name,

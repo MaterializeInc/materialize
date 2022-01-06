@@ -17,7 +17,6 @@ documentation][user-docs].
 
 import argparse
 import copy
-import functools
 import importlib
 import importlib.abc
 import importlib.util
@@ -29,7 +28,6 @@ import re
 import shlex
 import subprocess
 import sys
-import time
 from contextlib import contextmanager
 from inspect import getmembers, isfunction
 from pathlib import Path
@@ -37,20 +35,17 @@ from tempfile import TemporaryFile
 from typing import (
     Any,
     Callable,
-    Collection,
     Dict,
     Iterable,
     Iterator,
     List,
     Literal,
-    Match,
     Optional,
     Sequence,
     Type,
     TypedDict,
     TypeVar,
     Union,
-    cast,
 )
 
 import pg8000
@@ -63,22 +58,6 @@ from materialize.ui import UIError
 
 T = TypeVar("T")
 say = ui.speaker("C> ")
-
-_BASHLIKE_ALT_VAR_PATTERN = re.compile(
-    r"""\$\{
-        (?P<var>[^:}]+):\+
-        (?P<alt_var>[^}]+)
-        \}""",
-    re.VERBOSE,
-)
-
-_BASHLIKE_ENV_VAR_PATTERN = re.compile(
-    r"""\$\{
-        (?P<var>[^:}]+)
-        (?P<default>:-[^}]+)?
-        \}""",
-    re.VERBOSE,
-)
 
 
 class UnknownCompositionError(UIError):
@@ -226,9 +205,6 @@ class Composition:
         if "services" not in compose:
             compose["services"] = {}
 
-        # Stash away sub workflows so that we can load them with the correct environment variables
-        self.yaml_workflows = compose.pop("mzworkflows", {})
-
         # Load the mzworkflows.py file, if one exists
         mzworkflows_py = self.path / "mzworkflows.py"
         if mzworkflows_py.exists():
@@ -251,9 +227,6 @@ class Composition:
         # Resolve all services that reference an `mzbuild` image to a specific
         # `image` reference.
         for name, config in compose["services"].items():
-            compose["services"][name] = _substitute_env_vars(
-                config, {k: v for k, v in os.environ.items()}
-            )
             if "mzbuild" in config:
                 image_name = config["mzbuild"]
 
@@ -329,79 +302,18 @@ class Composition:
         yaml.dump(self.compose, self.file, encoding="utf-8")  # type: ignore
         self.file.flush()
 
-    def get_env(self, workflow_name: str, parent_env: Dict[str, str]) -> Dict[str, str]:
-        """Return the desired environment for a workflow."""
 
-        if workflow_name in self.yaml_workflows:
-            raw_env = self.yaml_workflows[workflow_name].get("env")
-        else:
-            raw_env = {}
-
-        if not isinstance(raw_env, dict) and raw_env is not None:
-            raise UIError(
-                f"Workflow {workflow_name} has wrong type for env: "
-                f"expected mapping, got {type(raw_env).__name__}: {raw_env}",
-            )
-        # ensure that integers (e.g. ports) are treated as env vars
-        if isinstance(raw_env, dict):
-            raw_env = {k: str(v) for k, v in raw_env.items()}
-
-        # Substitute environment variables from the parent environment, allowing for the child
-        # environment to inherit variables from the parent
-        child_env = _substitute_env_vars(raw_env, parent_env)
-
-        # Merge the child and parent environments, with the child environment having the tie
-        # breaker. This allows for the child to decide if it wants to inherit (from the step
-        # above) or override (from this step).
-        env = dict(**parent_env)
-        if child_env:
-            env.update(**child_env)
-        return env
-
-    def get_workflow(
-        self, workflow_name: str, parent_env: Dict[str, str]
-    ) -> "Workflow":
-        """Return sub-workflow, with env vars substituted using the supplied environment."""
-        if not self.yaml_workflows and not self.python_funcs:
-            raise KeyError(f"No workflows defined for composition {self.name}")
-        if (
-            workflow_name not in self.yaml_workflows
-            and workflow_name not in self.python_funcs
-        ):
+    def get_workflow(self, workflow_name: str) -> "Workflow":
+        """Return sub-workflow."""
+        if workflow_name not in self.python_funcs:
             raise KeyError(f"No workflow called {workflow_name} in {self.name}")
 
-        # Build this workflow, performing environment substitution as necessary
-        workflow_env = self.get_env(workflow_name, parent_env)
-
         # Return a PythonWorkflow if an appropriately-named Python function exists
-        if workflow_name in self.python_funcs:
-            return PythonWorkflow(
-                name=workflow_name,
-                func=self.python_funcs[workflow_name],
-                env=workflow_env,
-                composition=self,
-            )
-
-        # Otherwise, look for a YAML sub-workflow
-        yaml_workflow = _substitute_env_vars(
-            self.yaml_workflows[workflow_name], workflow_env
+        return PythonWorkflow(
+            name=workflow_name,
+            func=self.python_funcs[workflow_name],
+            composition=self,
         )
-        built_steps = []
-        for raw_step in yaml_workflow["steps"]:
-            # A step could be reused over several workflows, so operate on a copy
-            raw_step = raw_step.copy()
-
-            step_name = raw_step.pop("step")
-            step_ty = Steps.named(step_name)
-            munged = {k.replace("-", "_"): v for k, v in raw_step.items()}
-            try:
-                step = step_ty(**munged)
-            except TypeError as e:
-                a = " ".join([f"{k}={v}" for k, v in munged.items()])
-                raise UIError(f"Unable to construct {step_name} with args {a}: {e}")
-            built_steps.append(step)
-
-        return Workflow(workflow_name, built_steps, env=workflow_env, composition=self)
 
     @classmethod
     def lint(cls, repo: mzbuild.Repository, name: str) -> List[LintError]:
@@ -579,78 +491,6 @@ class Composition:
         return self.docker_inspect("{{.State.Running}}", container_id) == "'true'"
 
 
-def _substitute_env_vars(val: T, env: Dict[str, str]) -> T:
-    """Substitute docker-compose style env vars in a dict
-
-    This is necessary for mzconduct, since its parameters are not handled by docker-compose
-    """
-    if isinstance(val, str):
-        val = cast(
-            T, _BASHLIKE_ENV_VAR_PATTERN.sub(functools.partial(_subst, env), val)
-        )
-        val = cast(
-            T,
-            _BASHLIKE_ALT_VAR_PATTERN.sub(
-                functools.partial(_alt_subst, env), cast(str, val)
-            ),
-        )
-    elif isinstance(val, dict):
-        for k, v in val.items():
-            val[k] = _substitute_env_vars(v, env)
-    elif isinstance(val, list):
-        for i, v in enumerate(val):
-            val[i] = _substitute_env_vars(v, env)
-    return val
-
-
-def _subst(env: Dict[str, str], match: Match) -> str:
-    var = match.group("var")
-    if var is None:
-        raise UIError(f"Unable to parse environment variable {match.group(0)}")
-    # https://github.com/python/typeshed/issues/3902
-    default = cast(Optional[str], match.group("default"))
-
-    env_val = env.get(var)
-    if env_val is None and default is None:
-        say(f"WARNING: unknown env var {var!r}")
-        return cast(str, match.group(0))
-    elif env_val is None and default is not None:
-        # strip the leading ":-"
-        env_val = default[2:]
-    assert env_val is not None, "should be replaced correctly"
-    return env_val
-
-
-def _alt_subst(env: Dict[str, str], match: Match) -> str:
-    var = match.group("var")
-    if var is None:
-        raise UIError(f"Unable to parse environment variable {match.group(0)}")
-    # https://github.com/python/typeshed/issues/3902
-    altvar = cast(Optional[str], match.group("alt_var"))
-    assert altvar is not None, "alt var not captured by regex"
-
-    env_val = env.get(var)
-    if env_val is None:
-        return ""
-    return altvar
-
-
-class Workflows:
-    """All Known Workflows inside a Composition"""
-
-    def __init__(self, workflows: Dict[str, "Workflow"]) -> None:
-        self._inner = workflows
-
-    def __getitem__(self, workflow: str) -> "Workflow":
-        return self._inner[workflow]
-
-    def all_workflows(self) -> Collection["Workflow"]:
-        return self._inner.values()
-
-    def names(self) -> Collection[str]:
-        return self._inner.keys()
-
-
 class Workflow:
     """
     A workflow is a collection of WorkflowSteps and some context
@@ -720,7 +560,7 @@ class Workflow:
     def run_compose(
         self, args: List[str], capture: bool = False
     ) -> subprocess.CompletedProcess:
-        return self.composition.run(args, self.env, capture=capture)
+        return self.composition.run(args, capture=capture)
 
     def run_sql(self, sql: str) -> None:
         """Run a batch of SQL statements against the materialized service."""
@@ -777,12 +617,10 @@ class PythonWorkflow(Workflow):
         self,
         name: str,
         func: Callable,
-        env: Dict[str, str],
         composition: Composition,
     ) -> None:
         self.name = name
         self.func = func
-        self.env = env
         self.composition = composition
         self.takes_args = len(inspect.signature(func).parameters) > 1
 
@@ -794,23 +632,15 @@ class PythonWorkflow(Workflow):
 
     def run(self, args: List[str]) -> None:
         print("Running Python function {}".format(self.name))
-        old_env = dict(os.environ)
-        os.environ.clear()
-        os.environ.update(self.env)
-
-        try:
-            if self.takes_args:
-                self.func(self, args)
-            else:
-                # If the workflow doesn't have an `args` parameter, construct
-                # an empty parser to reject bogus arguments and to handle the
-                # trivial help message.
-                parser = WorkflowArgumentParser(self)
-                parser.parse_args(args)
-                self.func(self)
-        finally:
-            os.environ.clear()
-            os.environ.update(old_env)
+        if self.takes_args:
+            self.func(self, args)
+        else:
+            # If the workflow doesn't have an `args` parameter, construct
+            # an empty parser to reject bogus arguments and to handle the
+            # trivial help message.
+            parser = WorkflowArgumentParser(self)
+            parser.parse_args(args)
+            self.func(self)
 
 
 class WorkflowArgumentParser(argparse.ArgumentParser):
@@ -885,26 +715,6 @@ class WorkflowStep:
 
     def run(self, workflow: Workflow) -> Optional[str]:
         """Perform the action specified by this step"""
-
-
-@Steps.register("print-env")
-class PrintEnvStep(WorkflowStep):
-    """Prints the `env` `Dict` for this workflow."""
-
-    def run(self, workflow: Workflow) -> None:
-        print("Workflow has environment of", workflow.env)
-
-
-@Steps.register("sleep")
-class Sleep(WorkflowStep):
-    """Waits for the defined duration of time."""
-
-    def __init__(self, duration: Union[int, str]) -> None:
-        self._duration = int(duration)
-
-    def run(self, workflow: Workflow) -> None:
-        print(f"Sleeping {self._duration} seconds")
-        time.sleep(self._duration)
 
 
 @Steps.register("start-services")
@@ -1177,58 +987,6 @@ class WaitForMysqlStep(WorkflowStep):
         )
 
 
-@Steps.register("run-mysql")
-class RunMysql(WorkflowStep):
-    """
-    Params:
-        host: The host mysql is running on
-        port: The port mysql is listening on (Default: discover host port)
-        user: The user to connect as (Default: root)
-        password: The password to use (Default: rootpw)
-        service: The name mysql is running as (Default: mysql)
-        query: The query to execute
-    """
-
-    def __init__(
-        self,
-        *,
-        user: str = "root",
-        password: str = "rootpw",
-        host: str = "localhost",
-        port: Optional[int] = None,
-        service: str = "mysql",
-        query: str,
-    ) -> None:
-        self._user = user
-        self._password = password
-        self._host = host
-        self._port = port
-        self._service = service
-        self._query = query
-
-    def run(self, workflow: Workflow) -> None:
-        if self._port is None:
-            ports = workflow.composition.find_host_ports(self._service)
-            if len(ports) != 1:
-                raise UIError(
-                    f"Could not unambiguously determine port for {self._service} "
-                    f"found: {','.join(ports)}"
-                )
-            port = int(ports[0])
-        else:
-            port = self._port
-        conn = pymysql.connect(
-            user=self._user,
-            passwd=self._password,
-            host=self._host,
-            port=port,
-            client_flag=pymysql.constants.CLIENT.MULTI_STATEMENTS,
-            autocommit=True,
-        )
-        with conn.cursor() as cur:
-            cur.execute(self._query)
-
-
 class WaitDependency(TypedDict):
     """For wait-for-tcp, specify additional items to check"""
 
@@ -1331,52 +1089,6 @@ def _check_tcp(
     return cmd
 
 
-@Steps.register("drop-kafka-topics")
-class DropKafkaTopicsStep(WorkflowStep):
-    def __init__(self, *, kafka_container: str, topic_pattern: str) -> None:
-        self._container = kafka_container
-        self._topic_pattern = topic_pattern
-
-    def run(self, workflow: Workflow) -> None:
-        say(f"dropping kafka topics {self._topic_pattern} from {self._container}")
-        try:
-            spawn.runv(
-                [
-                    "docker",
-                    "exec",
-                    "-t",
-                    self._container,
-                    "kafka-topics",
-                    "--delete",
-                    "--bootstrap-server",
-                    "localhost:9092",
-                    "--topic",
-                    self._topic_pattern,
-                ],
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            # generally this is fine, it just means that the topics already don't exist
-            ui.log_in_automation(f"DEBUG: error purging topics: {e}: {e.output}")
-
-
-@Steps.register("workflow")
-class WorkflowWorkflowStep(WorkflowStep):
-    def __init__(self, workflow: str) -> None:
-        self._workflow = workflow
-
-    def run(self, workflow: Workflow) -> None:
-        try:
-            # Run the specified workflow with the context of the parent workflow
-            child_workflow = workflow.composition.get_workflow(
-                self._workflow, workflow.env
-            )
-            print(f"Running workflow {child_workflow.name} ...")
-            child_workflow.run([])
-        except KeyError:
-            raise UIError(f"unknown workflow {workflow.composition.name!r}")
-
-
 @Steps.register("run")
 class RunStep(WorkflowStep):
     """
@@ -1445,65 +1157,6 @@ class RunStep(WorkflowStep):
             raise UIError("giving up: {}".format(ui.shell_quote(self._command)))
 
 
-@Steps.register("exec")
-class ExecStep(WorkflowStep):
-    """
-    Run 'docker-compose exec' using `mzcompose run`
-
-    Args:
-
-      - service: (required) the name of the service
-      - command: (required) the command to run
-    """
-
-    def __init__(self, *, service: str, command: Union[str, list]) -> None:
-        self._service = service
-        cmd_list = ["exec", self._service]
-        if isinstance(command, str):
-            cmd_list.extend(shlex.split(command))
-        elif isinstance(command, list):
-            cmd_list.extend(command)
-
-        self._service = service
-        self._command = cmd_list
-
-    def run(self, workflow: Workflow) -> None:
-        try:
-            workflow.run_compose(self._command)
-        except subprocess.CalledProcessError:
-            raise UIError("giving up: {}".format(ui.shell_quote(self._command)))
-
-
-@Steps.register("ensure-stays-up")
-class EnsureStaysUpStep(WorkflowStep):
-    def __init__(self, *, container: str, seconds: int) -> None:
-        self._container = container
-        self._uptime_secs = seconds
-
-    def run(self, workflow: Workflow) -> None:
-        ui.progress(f"Ensuring {self._container} stays up ", "C")
-        for i in range(self._uptime_secs, 0, -1):
-            time.sleep(1)
-            containers = [
-                s["Name"]
-                for s in workflow.composition.inspect_service_containers(
-                    self._container, include_stopped=True
-                )
-            ]
-            if not containers:
-                try:
-                    logs = workflow.composition.service_logs(self._container)
-                except subprocess.CalledProcessError as e:
-                    logs = (
-                        f"Unable to determine service logs, docker output:\n{e.output}"
-                    )
-                raise UIError(
-                    f"container {self._container} stopped running!\nService logs:\n{logs}"
-                )
-            ui.progress(f" {i}")
-        print()
-
-
 @Steps.register("down")
 class DownStep(WorkflowStep):
     def __init__(self, *, destroy_volumes: bool = False) -> None:
@@ -1513,48 +1166,6 @@ class DownStep(WorkflowStep):
     def run(self, workflow: Workflow) -> None:
         say("bringing the cluster down")
         workflow.run_compose(["down", *(["-v"] if self._destroy_volumes else [])])
-
-
-@Steps.register("wait")
-class WaitStep(WorkflowStep):
-    def __init__(
-        self, *, service: str, expected_return_code: int, print_logs: bool = False
-    ) -> None:
-        """Wait for the container with name service to exit"""
-        self._expected_return_code = expected_return_code
-        self._service = service
-        self._print_logs = print_logs
-
-    def run(self, workflow: Workflow) -> None:
-        say(f"Waiting for the service {self._service} to exit")
-        ps_proc = workflow.run_compose(["ps", "-q", self._service], capture=True)
-        container_ids = [c for c in ps_proc.stdout.strip().split("\n")]
-        if len(container_ids) > 1:
-            raise UIError(
-                f"Expected to get a single container for {self._service}; got: {container_ids}"
-            )
-        elif not container_ids:
-            raise UIError(f"No containers returned for service {self._service}")
-
-        container_id = container_ids[0]
-        wait_cmd = ["docker", "wait", container_id]
-        wait_proc = spawn.runv(wait_cmd, capture_output=True)
-        return_codes = [
-            int(c) for c in wait_proc.stdout.decode("utf-8").strip().split("\n")
-        ]
-        if len(return_codes) != 1:
-            raise UIError(
-                f"Expected single exit code for {container_id}; got: {return_codes}"
-            )
-
-        return_code = return_codes[0]
-        if return_code != self._expected_return_code:
-            raise UIError(
-                f"Expected exit code {self._expected_return_code} for {container_id}; got: {return_code}"
-            )
-
-        if self._print_logs:
-            spawn.runv(["docker", "logs", container_id])
 
 
 def wait_for_pg(
