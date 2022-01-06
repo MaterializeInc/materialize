@@ -24,7 +24,7 @@ mz_disable_user_indexes = Materialized(
 
 testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),

@@ -30,7 +30,7 @@ sa_password = "AAbb!@" + "".join(
     random.choices(string.ascii_uppercase + string.digits, k=10)
 )
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),

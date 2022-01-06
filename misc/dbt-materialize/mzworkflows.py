@@ -12,7 +12,7 @@ from typing import Dict
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized, Service, TestCerts
 
-services = [
+SERVICES = [
     TestCerts(),
     Materialized(),
     Materialized(

@@ -10,7 +10,7 @@
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Postgres, SqlLogicTest
 
-services = [Postgres(), SqlLogicTest()]
+SERVICES = [Postgres(), SqlLogicTest()]
 
 
 def run_sqllogictest(c: Composition, command: str) -> None:

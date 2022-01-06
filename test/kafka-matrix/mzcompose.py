@@ -37,7 +37,7 @@ SERVICES = [
 def workflow_kafka_matrix(c: Composition) -> None:
     for version in CONFLUENT_PLATFORM_VERSIONS:
         print(f"==> Testing Confluent Platform {version}")
-        confluent_platform_SERVICES = [
+        confluent_platform_services = [
             Zookeeper(tag=version),
             Kafka(tag=version),
             SchemaRegistry(tag=version),

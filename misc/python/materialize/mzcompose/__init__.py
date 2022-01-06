@@ -220,7 +220,7 @@ class Composition:
                     name = name[len("workflow_") :].replace("_", "-")
                     self.workflows[name] = fn
 
-            for python_service in getattr(module, "services", []):
+            for python_service in getattr(module, "SERVICES", []):
                 compose["services"][python_service.name] = python_service.config
 
         # Resolve all services that reference an `mzbuild` image to a specific

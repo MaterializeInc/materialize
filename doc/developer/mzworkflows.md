@@ -51,7 +51,7 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
@@ -83,7 +83,7 @@ To declare the services the workflow/test will use, define a top-level global `s
 ```python
 from materialize.mzcompose import (Materialized, Testdrive)
 
-services = [
+SERVICES = [
     Materialized(),
     Testdrive(),
 ]
@@ -106,7 +106,7 @@ Truly one-off services can be declared inside the `mzworkflows.py` file itself:
 ```python
 from materialize.mzcompose import PythonService
 
-services = [PythonService(image = "vendor/container")]
+SERVICES = [PythonService(image = "vendor/container")]
 ```
 
 # Dealing with workflows
@@ -170,7 +170,7 @@ Waits until Materialize is capable of answering `SELECT 1` queries. A similar st
 The fool-proof sequence for starting the complete Materialize stack would be something along the following lines:
 
 ```python
-services = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized()]
+SERVICES = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized()]
 
 def workflow_start_services(w: Workflow):
     w.start_and_wait_for_tcp(services=services)

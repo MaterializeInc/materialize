@@ -18,7 +18,7 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(name="kafka1", broker_id=1, offsets_topic_replication_factor=2),
     Kafka(name="kafka2", broker_id=2, offsets_topic_replication_factor=2),

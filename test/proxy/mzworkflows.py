@@ -54,7 +54,7 @@ for t in tests:
 
 mzs = [t["mz"] for t in tests]
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),

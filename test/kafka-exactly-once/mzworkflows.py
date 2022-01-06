@@ -16,7 +16,7 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),

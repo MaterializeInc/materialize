@@ -998,7 +998,7 @@ class RowsJoinOuter(Generator):
         print(f"{cls.COUNT}")
 
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),

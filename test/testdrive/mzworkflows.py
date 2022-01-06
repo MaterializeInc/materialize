@@ -26,7 +26,7 @@ mz_persistence = Materialized(
     name="mz_persistence", hostname="materialized", options="--persistent-user-tables"
 )
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),

@@ -37,7 +37,7 @@ mz_with_options = [
     Materialized(name="mz_4_workers", hostname="materialized", options="--workers 4"),
 ]
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),

@@ -30,7 +30,7 @@ all_versions = util.known_materialize_versions()
 # The `materialized` options that are valid only at or above a certain version.
 mz_options = {Version.parse("0.9.2"): "--persistent-user-tables"}
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),

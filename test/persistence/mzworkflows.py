@@ -39,7 +39,7 @@ mz_without_system_tables = Materialized(
 
 prerequisites = ["zookeeper", "kafka", "schema-registry"]
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),

@@ -10,7 +10,7 @@
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized, Redpanda, Testdrive
 
-services = [
+SERVICES = [
     Redpanda(),
     Materialized(),
     Testdrive(shell_eval=True, volume_workdir="../testdrive:/workdir"),

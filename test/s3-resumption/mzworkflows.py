@@ -18,7 +18,7 @@ from materialize.mzcompose.services import (
     Toxiproxy,
 )
 
-services = [
+SERVICES = [
     Localstack(),
     Materialized(environment=["MZ_LOG_FILTER=dataflow::source::s3=trace,info"]),
     Toxiproxy(),

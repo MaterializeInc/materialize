@@ -93,7 +93,7 @@ tds = {
     ),
 }
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),

@@ -95,6 +95,6 @@ def workflow_load_test(c: Composition) -> None:
     )
 
 
-services = [
+SERVICES = [
     PrometheusSQLExporter(),
 ]

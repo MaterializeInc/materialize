@@ -10,7 +10,7 @@
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized, Postgres, Testdrive, Toxiproxy
 
-services = [
+SERVICES = [
     Materialized(),
     Postgres(),
     Toxiproxy(),

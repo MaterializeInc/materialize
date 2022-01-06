@@ -10,7 +10,7 @@
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Materialized, Postgres, TestCerts, Testdrive
 
-services = [
+SERVICES = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),
     Testdrive(volumes_extra=["secrets:/share/secrets"]),
     TestCerts(),
