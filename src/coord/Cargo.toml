@@ -23,6 +23,7 @@ fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.19"
 interchange = { path = "../interchange" }
 itertools = "0.10.3"
+kafka-util = { path = "../kafka-util" }
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }

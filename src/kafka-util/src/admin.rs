@@ -44,16 +44,29 @@ pub async fn create_topic<'a, C>(
 where
     C: ClientContext,
 {
+    create_topic_allow_existing(client, admin_opts, new_topic, true).await
+}
+
+/// Like `create_topic` but requires specification of whether topic can exist.
+pub async fn create_topic_allow_existing<'a, C>(
+    client: &'a AdminClient<C>,
+    admin_opts: &AdminOptions,
+    new_topic: &'a NewTopic<'a>,
+    allow_existing: bool,
+) -> Result<(), CreateTopicError>
+where
+    C: ClientContext,
+{
     let res = client
         .create_topics(iter::once(new_topic), &admin_opts)
         .await?;
     if res.len() != 1 {
         return Err(CreateTopicError::TopicCountMismatch(res.len()));
     }
-    match res.into_element() {
-        Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => Ok(()),
-        Err((_, e)) => Err(CreateTopicError::Kafka(KafkaError::AdminOp(e))),
-    }?;
+    res.into_element().map(|_| ()).or_else(|e| match e {
+        (_, RDKafkaErrorCode::TopicAlreadyExists) if allow_existing => Ok(()),
+        (_, e) => Err(CreateTopicError::Kafka(KafkaError::AdminOp(e))),
+    })?;
 
     // Topic creation is asynchronous, and if we don't wait for it to complete,
     // we might produce a message (below) that causes it to get automatically

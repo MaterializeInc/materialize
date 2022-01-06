@@ -297,28 +297,15 @@ async fn register_kafka_topic(
         kafka_topic = kafka_topic.set("retention.bytes", retention_bytes);
     }
 
-    let res = client
-        .create_topics(
-            &[kafka_topic],
-            &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
-        )
-        .await
-        .with_context(|| format!("error creating new topic {} for sink", topic))?;
-    if res.len() != 1 {
-        coord_bail!(
-            "error creating topic {} for sink: \
-             kafka topic creation returned {} results, but exactly one result was expected",
-            topic,
-            res.len()
-        );
-    }
-    if let Err((_, e)) = res.into_element() {
-        // if the topic already exists and we reuse_existing, don't fail - instead proceed
-        // to read the schema
-        if !(succeed_if_exists && e == rdkafka::types::RDKafkaErrorCode::TopicAlreadyExists) {
-            coord_bail!("error creating topic {} for sink: {}", topic, e)
-        }
-    }
+    ::kafka_util::admin::create_topic_allow_existing(
+        client,
+        &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
+        &kafka_topic,
+        succeed_if_exists,
+    )
+    .await
+    .with_context(|| format!("Error creating topic {} for sink", topic))?;
+
     Ok(())
 }
 
