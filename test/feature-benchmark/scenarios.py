@@ -7,10 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.measurement_source import Lambda, Td
 from materialize.feature_benchmark.scenario import Scenario
-from materialize.mzcompose import Workflow
 
 
 class Sleep(Scenario):

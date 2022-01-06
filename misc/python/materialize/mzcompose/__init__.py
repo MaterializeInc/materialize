@@ -42,6 +42,7 @@ from typing import (
     Literal,
     Optional,
     Sequence,
+    Tuple,
     TypedDict,
     TypeVar,
     Union,
@@ -180,7 +181,7 @@ class Composition:
         self.name = name
         self.repo = repo
         self.images: List[mzbuild.Image] = []
-        self.workflows: Dict[str, Callable[[Composition], None]] = {}
+        self.workflows: Dict[str, Callable[..., None]] = {}
 
         default_tag = os.getenv(f"MZBUILD_TAG", None)
 
@@ -299,17 +300,6 @@ class Composition:
         self.file.truncate()
         yaml.dump(self.compose, self.file, encoding="utf-8")  # type: ignore
         self.file.flush()
-
-    def get_workflow(self, workflow_name: str) -> "Workflow":
-        """Return sub-workflow."""
-        if workflow_name not in self.workflows:
-            raise KeyError(f"No workflow called {workflow_name} in {self.name}")
-
-        return Workflow(
-            name=workflow_name,
-            func=self.workflows[workflow_name],
-            composition=self,
-        )
 
     @classmethod
     def lint(cls, repo: mzbuild.Repository, name: str) -> List[LintError]:
@@ -488,37 +478,17 @@ class Composition:
     def docker_container_is_running(self, container_id: str) -> bool:
         return self.docker_inspect("{{.State.Running}}", container_id) == "'true'"
 
-
-class Workflow:
-    """
-    A workflow is a collection of WorkflowSteps and some context
-
-    It is possible to specify additional compose files for specific workflows, and all
-    their child workflows will have access to services defined in those files.
-    """
-
-    def __init__(
-        self,
-        name: str,
-        func: Callable,
-        composition: Composition,
-    ) -> None:
-        self.name = name
-        self.func = func
-        self.composition = composition
-        self.takes_args = len(inspect.signature(func).parameters) > 1
-
-    def run(self, args: List[str]) -> None:
-        print("Running Python function {}".format(self.name))
-        if self.takes_args:
-            self.func(self, args)
+    def workflow(self, name: str, args: List[str]) -> None:
+        ui.header(f"Running workflow {name}")
+        func = self.workflows[name]
+        parser = WorkflowArgumentParser(name, inspect.getdoc(func), args)
+        if len(inspect.signature(func).parameters) > 1:
+            func(self, parser)
         else:
-            # If the workflow doesn't have an `args` parameter, construct
-            # an empty parser to reject bogus arguments and to handle the
-            # trivial help message.
-            parser = WorkflowArgumentParser(self)
+            # If the workflow doesn't have an `args` parameter, parse them here
+            # to reject bogus arguments and to handle the trivial help message.
             parser.parse_args(args)
-            self.func(self)
+            func(self)
 
     @contextmanager
     def with_services(self, services: List["Service"]) -> Iterator[None]:
@@ -536,34 +506,34 @@ class Workflow:
         challenging.
         """
         # Remember the old composition.
-        old_compose = copy.deepcopy(self.composition.compose)
+        old_compose = copy.deepcopy(self.compose)
 
         # Update the composition with the new service definitions.
         for service in services:
-            if service.name not in self.composition.compose["services"]:
+            if service.name not in self.compose["services"]:
                 raise RuntimeError(
                     "programming error in call to Workflow.with_services: "
                     f"{service.name!r} does not exist"
                 )
-            self.composition.compose["services"][service.name] = service.config
-        self.composition._write_compose()
+            self.compose["services"][service.name] = service.config
+        self._write_compose()
 
         try:
             # Run the next composition.
             yield
         finally:
             # Restore the old composition.
-            self.composition.compose = old_compose
-            self.composition._write_compose()
+            self.compose = old_compose
+            self._write_compose()
 
     def run_compose(
         self, args: List[str], capture: bool = False
     ) -> subprocess.CompletedProcess:
-        return self.composition.run(args, capture=capture)
+        return self.run(args, capture=capture)
 
     def run_sql(self, sql: str) -> None:
         """Run a batch of SQL statements against the materialized service."""
-        ports = self.composition.find_host_ports("materialized")
+        ports = self.find_host_ports("materialized")
         conn = pg8000.connect(host="localhost", user="materialize", port=int(ports[0]))
         conn.autocommit = True
         cursor = conn.cursor()
@@ -577,7 +547,7 @@ class Workflow:
         # remove the `type: ignore` comments below.
         for service in services:
             self.start_services(services=[service])
-            for port in self.composition.compose["services"][service].get("ports", []):
+            for port in self.compose["services"][service].get("ports", []):
                 self.wait_for_tcp(host=service, port=port)
 
     def run_service(
@@ -681,7 +651,7 @@ class Workflow:
         Args:
             volumes: The volumes to remove.
         """
-        volumes = (f"{self.composition.name}_{v}" for v in volumes)
+        volumes = (f"{self.name}_{v}" for v in volumes)
         spawn.runv(["docker", "volume", "rm", *volumes])
 
     def wait_for_tcp(
@@ -693,7 +663,7 @@ class Workflow:
     ) -> None:
         ui.progress(f"waiting for {host}:{port}", "C")
         for remaining in ui.timeout_loop(timeout_secs):
-            cmd = f"docker run --rm -t --network {self.composition.name}_default ubuntu:focal-20210723".split()
+            cmd = f"docker run --rm -t --network {self.name}_default ubuntu:focal-20210723".split()
 
             try:
                 _check_tcp(cmd[:], host, port, timeout_secs)
@@ -705,7 +675,7 @@ class Workflow:
 
         ui.progress(" error!", finish=True)
         try:
-            logs = self.composition.service_logs(host)
+            logs = self.service_logs(host)
         except Exception as e:
             logs = f"unable to determine logs: {e}"
 
@@ -737,9 +707,9 @@ class Workflow:
             service: The service that postgres is running as (Default: postgres)
         """
         if port is None:
-            ports = self.composition.find_host_ports(service)
+            ports = self.find_host_ports(service)
             if len(ports) != 1:
-                logs = self.composition.service_logs(service)
+                logs = self.service_logs(service)
                 if ports:
                     msg = (
                         f"Unable to unambiguously determine port for {service},"
@@ -880,12 +850,26 @@ class Service:
 
 
 class WorkflowArgumentParser(argparse.ArgumentParser):
-    """An argument parser that takes its name and description from a `Workflow`."""
+    """An argument parser provided to a workflow in a `Composition`.
 
-    def __init__(self, w: Workflow):
-        super().__init__(
-            prog=f"mzcompose run {w.name}", description=inspect.getdoc(w.func)
-        )
+    You can call `add_argument` and other methods on this argument parser like
+    usual. When you are ready to parse arguments, call `parse_args` or
+    `parse_known_args` like usual; the argument parser will automatically use
+    the arguments that the user provided to the workflow.
+    """
+
+    def __init__(self, name: str, description: Optional[str], args: List[str]):
+        self.args = args
+        super().__init__(prog=f"mzcompose run {name}", description=description)
+
+    def parse_known_args(
+        self,
+        args: Optional[Sequence[str]] = None,
+        namespace: Optional[argparse.Namespace] = None,
+    ) -> Tuple[argparse.Namespace, List[str]]:
+        if args is None:
+            args = self.args
+        return super().parse_known_args(args, namespace)
 
 
 def _check_tcp(

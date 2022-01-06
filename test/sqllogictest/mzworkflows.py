@@ -7,21 +7,21 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Postgres, SqlLogicTest
 
 services = [Postgres(), SqlLogicTest()]
 
 
-def run_sqllogictest(w: Workflow, command: str) -> None:
-    w.start_services(services=["postgres"])
-    w.wait_for_postgres(dbname="postgres")
-    w.run_service(service="sqllogictest-svc", command=command)
+def run_sqllogictest(c: Composition, command: str) -> None:
+    c.start_services(services=["postgres"])
+    c.wait_for_postgres(dbname="postgres")
+    c.run_service(service="sqllogictest-svc", command=command)
 
 
-def workflow_sqllogictest(w: Workflow) -> None:
-    run_sqllogictest(w, "ci/slt/slt.sh")
+def workflow_sqllogictest(c: Composition) -> None:
+    run_sqllogictest(c, "ci/slt/slt.sh")
 
 
-def workflow_sqllogictest_fast(w: Workflow) -> None:
-    run_sqllogictest(w, "ci/test/slt-fast.sh")
+def workflow_sqllogictest_fast(c: Composition) -> None:
+    run_sqllogictest(c, "ci/test/slt-fast.sh")

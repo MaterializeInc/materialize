@@ -14,7 +14,7 @@ from unittest.mock import patch
 from semver import Version
 
 from materialize import util
-from materialize.mzcompose import Workflow, WorkflowArgumentParser
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
@@ -50,10 +50,9 @@ services = [
 ]
 
 
-def workflow_upgrade(w: Workflow, args: List[str]) -> None:
+def workflow_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test upgrades from various versions."""
 
-    parser = WorkflowArgumentParser(w)
     parser.add_argument(
         "--min-version",
         metavar="VERSION",
@@ -70,26 +69,26 @@ def workflow_upgrade(w: Workflow, args: List[str]) -> None:
     parser.add_argument(
         "filter", nargs="?", default="*", help="limit to only the files matching filter"
     )
-    args = parser.parse_args(args)
+    args = parser.parse_args()
 
     tested_versions = [v for v in all_versions if v >= args.min_version]
     if args.most_recent is not None:
         tested_versions = tested_versions[: args.most_recent]
     tested_versions.reverse()
 
-    w.start_and_wait_for_tcp(
+    c.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", "postgres"]
     )
 
     for version in tested_versions:
         priors = [f"v{v}" for v in all_versions if v < version]
-        test_upgrade_from_version(w, f"v{version}", priors, filter=args.filter)
+        test_upgrade_from_version(c, f"v{version}", priors, filter=args.filter)
 
-    test_upgrade_from_version(w, "current_source", priors=["*"], filter=args.filter)
+    test_upgrade_from_version(c, "current_source", priors=["*"], filter=args.filter)
 
 
 def test_upgrade_from_version(
-    w: Workflow, from_version: str, priors: List[str], filter: str
+    c: Composition, from_version: str, priors: List[str], filter: str
 ) -> None:
     print(f"===>>> Testing upgrade from Materialize {from_version} to current_source.")
 
@@ -105,32 +104,32 @@ def test_upgrade_from_version(
                 if from_version[1:] >= start_version
             ),
         )
-        with w.with_services(services=[mz_from]):
-            w.start_services(services=["materialized"])
+        with c.with_services(services=[mz_from]):
+            c.start_services(services=["materialized"])
     else:
-        w.start_services(services=["materialized"])
+        c.start_services(services=["materialized"])
 
-    w.wait_for_mz(service="materialized")
+    c.wait_for_mz(service="materialized")
 
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
-        w.run_service(
+        c.run_service(
             service="testdrive-svc",
             command=f"--seed=1 --no-reset {temp_dir} create-in-@({version_glob})-{filter}.td",
         )
 
-    w.kill_services(services=["materialized"])
-    w.remove_services(services=["materialized", "testdrive-svc"])
+    c.kill_services(services=["materialized"])
+    c.remove_services(services=["materialized", "testdrive-svc"])
 
-    w.start_services(services=["materialized"])
-    w.wait_for_mz(service="materialized")
+    c.start_services(services=["materialized"])
+    c.wait_for_mz(service="materialized")
 
     with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
-        w.run_service(
+        c.run_service(
             service="testdrive-svc",
             command=f"--seed=1 --no-reset {temp_dir} --validate-catalog=/share/mzdata/catalog check-from-@({version_glob})-{filter}.td",
         )
 
-    w.kill_services(services=["materialized"])
-    w.remove_services(services=["materialized", "testdrive-svc"])
-    w.remove_volumes(volumes=["mzdata", "tmp"])
+    c.kill_services(services=["materialized"])
+    c.remove_services(services=["materialized", "testdrive-svc"])
+    c.remove_volumes(volumes=["mzdata", "tmp"])

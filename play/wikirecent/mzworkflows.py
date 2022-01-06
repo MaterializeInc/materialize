@@ -9,11 +9,11 @@
 
 from pathlib import Path
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 
 
-def workflow_demo(w: Workflow) -> None:
+def workflow_demo(c: Composition) -> None:
     """Streams data from Wikipedia to a browser visualzation."""
-    w.start_services(services=["server"])
-    w.wait_for_mz()
-    w.run_sql((Path(__file__).parent / "views.sql").read_text())
+    c.start_services(services=["server"])
+    c.wait_for_mz()
+    c.run_sql((Path(__file__).parent / "views.sql").read_text())

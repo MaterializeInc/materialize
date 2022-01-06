@@ -13,7 +13,7 @@ import os
 import sys
 import tempfile
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
@@ -1009,13 +1009,13 @@ services = [
 ]
 
 
-def workflow_limits(w: Workflow) -> None:
-    w.start_and_wait_for_tcp(
+def workflow_limits(c: Composition) -> None:
+    c.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", "materialized"]
     )
 
-    with tempfile.NamedTemporaryFile(mode="w", dir=w.composition.path) as tmp:
+    with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
         with contextlib.redirect_stdout(tmp):
             [cls.generate() for cls in Generator.__subclasses__()]
             sys.stdout.flush()
-            w.run_service(service="testdrive-svc", command=os.path.basename(tmp.name))
+            c.run_service(service="testdrive-svc", command=os.path.basename(tmp.name))

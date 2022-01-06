@@ -9,7 +9,7 @@
 
 from typing import Any, Dict, List
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
     Localstack,
@@ -65,20 +65,20 @@ services = [
 ]
 
 
-def workflow_proxy(w: Workflow) -> None:
-    w.start_and_wait_for_tcp(services=prerequisites)
-    test_proxy(w, "--aws-endpoint http://localstack:4566")
+def workflow_proxy(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=prerequisites)
+    test_proxy(c, "--aws-endpoint http://localstack:4566")
 
 
-def workflow_proxy_ci(w: Workflow) -> None:
-    w.start_and_wait_for_tcp(services=prerequisites)
-    test_proxy(w, "--aws-region=us-east-2")
+def workflow_proxy_ci(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=prerequisites)
+    test_proxy(c, "--aws-region=us-east-2")
 
 
-def test_proxy(w: Workflow, aws: str) -> None:
+def test_proxy(c: Composition, aws: str) -> None:
     for test in tests:
         mz: Materialized = test["mz"]
-        w.start_services(services=[mz.name])
-        w.wait_for_mz(service=mz.name)
-        w.run_service(service="testdrive-svc", command=f"{aws} {test['td']}")
-        w.kill_services(services=[mz.name])
+        c.start_services(services=[mz.name])
+        c.wait_for_mz(service=mz.name)
+        c.run_service(service="testdrive-svc", command=f"{aws} {test['td']}")
+        c.kill_services(services=[mz.name])

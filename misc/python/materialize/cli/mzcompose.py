@@ -569,9 +569,7 @@ To see the available workflows, run:
     def handle_composition(
         self, args: argparse.Namespace, composition: mzcompose.Composition
     ) -> None:
-        try:
-            workflow = composition.get_workflow(args.workflow)
-        except KeyError:
+        if args.workflow not in composition.workflows:
             # Restart any dependencies whose definitions have changed. This is
             # Docker Compose's default behavior for `up`, but not for `run`,
             # which is a constant irritation that we paper over here. The trick,
@@ -598,7 +596,7 @@ To see the available workflows, run:
                     f"it can't be used when running {args.workflow!r}, because {args.workflow!r} "
                     "is a custom mzcompose workflow, not a Docker Compose service",
                 )
-            workflow.run(args.unknown_subargs[1:])
+            composition.workflow(args.workflow, args.unknown_subargs[1:])
 
 
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")

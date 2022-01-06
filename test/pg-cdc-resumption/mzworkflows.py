@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized, Postgres, Testdrive, Toxiproxy
 
 services = [
@@ -18,12 +18,12 @@ services = [
 ]
 
 
-def workflow_pg_cdc_resumption(w: Workflow) -> None:
+def workflow_pg_cdc_resumption(c: Composition) -> None:
     """Test Postgres direct replication's failure handling by
     disrupting replication at various stages using Toxiproxy or service restarts
     """
 
-    initialize(w)
+    initialize(c)
 
     for scenario in [
         disconnect_pg_during_snapshot,
@@ -33,40 +33,40 @@ def workflow_pg_cdc_resumption(w: Workflow) -> None:
         restart_pg_during_replication,
         restart_mz_during_replication,
     ]:
-        begin(w)
-        scenario(w)
-        end(w)
+        begin(c)
+        scenario(c)
+        end(c)
 
 
-def initialize(w: Workflow) -> None:
-    w.start_services(services=["materialized", "postgres", "toxiproxy"])
+def initialize(c: Composition) -> None:
+    c.start_services(services=["materialized", "postgres", "toxiproxy"])
 
-    w.wait_for_mz()
-    w.wait_for_postgres()
-    w.wait_for_tcp(host="toxiproxy", port=8474)
+    c.wait_for_mz()
+    c.wait_for_postgres()
+    c.wait_for_tcp(host="toxiproxy", port=8474)
 
     # We run configure-postgres.td only once for all workflows as
     # it contains CREATE USER that is not indempotent
 
-    w.run_service(service="testdrive-svc", command="configure-postgres.td")
+    c.run_service(service="testdrive-svc", command="configure-postgres.td")
 
 
-def restart_pg(w: Workflow) -> None:
-    w.kill_services(services=["postgres"])
-    w.start_services(services=["postgres"])
-    w.wait_for_postgres()
+def restart_pg(c: Composition) -> None:
+    c.kill_services(services=["postgres"])
+    c.start_services(services=["postgres"])
+    c.wait_for_postgres()
 
 
-def restart_mz(w: Workflow) -> None:
-    w.kill_services(services=["materialized"])
-    w.start_services(services=["materialized"])
-    w.wait_for_mz()
+def restart_mz(c: Composition) -> None:
+    c.kill_services(services=["materialized"])
+    c.start_services(services=["materialized"])
+    c.wait_for_mz()
 
 
-def begin(w: Workflow) -> None:
+def begin(c: Composition) -> None:
     """Configure Toxiproxy and Mz and populate initial data"""
 
-    w.run_service(
+    c.run_service(
         service="testdrive-svc",
         command=" ".join(
             ["configure-toxiproxy.td", "populate-tables.td", "configure-materalize.td"]
@@ -74,16 +74,16 @@ def begin(w: Workflow) -> None:
     )
 
 
-def end(w: Workflow) -> None:
+def end(c: Composition) -> None:
     """Validate the data at the end and reset Toxiproxy"""
-    w.run_service(
+    c.run_service(
         service="testdrive-svc",
         command=" ".join(["verify-data.td", "toxiproxy-remove.td"]),
     )
 
 
-def disconnect_pg_during_snapshot(w: Workflow) -> None:
-    w.run_service(
+def disconnect_pg_during_snapshot(c: Composition) -> None:
+    c.run_service(
         service="testdrive-svc",
         command=" ".join(
             [
@@ -96,10 +96,10 @@ def disconnect_pg_during_snapshot(w: Workflow) -> None:
     )
 
 
-def restart_pg_during_snapshot(w: Workflow) -> None:
-    restart_pg(w)
+def restart_pg_during_snapshot(c: Composition) -> None:
+    restart_pg(c)
 
-    w.run_service(
+    c.run_service(
         service="testdrive-svc",
         command=" ".join(
             [
@@ -110,10 +110,10 @@ def restart_pg_during_snapshot(w: Workflow) -> None:
     )
 
 
-def restart_mz_during_snapshot(w: Workflow) -> None:
-    restart_mz(w)
+def restart_mz_during_snapshot(c: Composition) -> None:
+    restart_mz(c)
 
-    w.run_service(
+    c.run_service(
         service="testdrive-svc",
         command=" ".join(
             [
@@ -124,8 +124,8 @@ def restart_mz_during_snapshot(w: Workflow) -> None:
     )
 
 
-def disconnect_pg_during_replication(w: Workflow) -> None:
-    w.run_service(
+def disconnect_pg_during_replication(c: Composition) -> None:
+    c.run_service(
         service="testdrive-svc",
         command=" ".join(
             [
@@ -139,23 +139,23 @@ def disconnect_pg_during_replication(w: Workflow) -> None:
     )
 
 
-def restart_pg_during_replication(w: Workflow) -> None:
-    w.run_service(
+def restart_pg_during_replication(c: Composition) -> None:
+    c.run_service(
         service="testdrive-svc",
         command=" ".join(["wait-for-snapshot.td", "delete-rows-t1.td"]),
     )
 
-    restart_pg(w)
+    restart_pg(c)
 
-    w.run_service(service="testdrive-svc", command="delete-rows-t2.td")
+    c.run_service(service="testdrive-svc", command="delete-rows-t2.td")
 
 
-def restart_mz_during_replication(w: Workflow) -> None:
-    w.run_service(
+def restart_mz_during_replication(c: Composition) -> None:
+    c.run_service(
         service="testdrive-svc",
         command=" ".join(["wait-for-snapshot.td", "delete-rows-t1.td"]),
     )
 
-    restart_mz(w)
+    restart_mz(c)
 
-    w.run_service(service="testdrive-svc", command="delete-rows-t2.td")
+    c.run_service(service="testdrive-svc", command="delete-rows-t2.td")

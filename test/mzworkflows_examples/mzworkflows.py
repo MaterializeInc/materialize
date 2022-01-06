@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
@@ -48,32 +48,32 @@ services = [
 ]
 
 
-def workflow_start_confluents(w: Workflow) -> None:
-    w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+def workflow_start_confluents(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
 
-def workflow_versioned_mz(w: Workflow) -> None:
+def workflow_versioned_mz(c: Composition) -> None:
     for mz in versioned_mz:
-        w.start_services(services=[mz.name])
+        c.start_services(services=[mz.name])
 
-        w.wait_for_mz(service=mz.name)
+        c.wait_for_mz(service=mz.name)
 
-        w.run_service(service="testdrive-svc", command="test*.td")
+        c.run_service(service="testdrive-svc", command="test*.td")
 
-        w.kill_services(services=[mz.name])
+        c.kill_services(services=[mz.name])
 
 
-def workflow_two_mz(w: Workflow) -> None:
+def workflow_two_mz(c: Composition) -> None:
     for mz in multiple_mz:
-        w.start_services(services=[mz.name])
-        w.wait_for_mz(service=mz.name)
+        c.start_services(services=[mz.name])
+        c.wait_for_mz(service=mz.name)
 
 
-def workflow_mz_with_options(w: Workflow) -> None:
-    w.start_services(services=["mz_2_workers"])
-    w.wait_for_mz(service="mz_2_workers")
-    w.kill_services(services=["mz_2_workers"])
+def workflow_mz_with_options(c: Composition) -> None:
+    c.start_services(services=["mz_2_workers"])
+    c.wait_for_mz(service="mz_2_workers")
+    c.kill_services(services=["mz_2_workers"])
 
-    w.start_services(services=["mz_4_workers"])
-    w.wait_for_mz(service="mz_4_workers")
-    w.kill_services(services=["mz_4_workers"])
+    c.start_services(services=["mz_4_workers"])
+    c.wait_for_mz(service="mz_4_workers")
+    c.kill_services(services=["mz_4_workers"])

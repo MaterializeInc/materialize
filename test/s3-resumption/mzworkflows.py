@@ -10,7 +10,7 @@
 from os import environ
 from unittest.mock import patch
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Localstack,
     Materialized,
@@ -31,9 +31,9 @@ services = [
 # network and expect full recovery if the interruption has been
 # shorter than the timeout.
 #
-def workflow_s3_resumption(w: Workflow) -> None:
-    w.start_and_wait_for_tcp(services=["localstack", "materialized", "toxiproxy"])
-    w.wait_for_mz()
+def workflow_s3_resumption(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=["localstack", "materialized", "toxiproxy"])
+    c.wait_for_mz()
 
     # For different values of bytes_allowed, the following happens:
     # 0 - Connection is dropped immediately
@@ -64,7 +64,7 @@ def workflow_s3_resumption(w: Workflow) -> None:
         with patch.dict(
             environ, {"TOXIPROXY_BYTES_ALLOWED": str(toxiproxy_bytes_allowed)}
         ):
-            w.run_service(
+            c.run_service(
                 service="testdrive-svc",
                 command=" ".join(
                     [

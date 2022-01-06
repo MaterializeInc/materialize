@@ -27,7 +27,7 @@ from materialize.feature_benchmark.termination import (
     ProbForMin,
     TerminationCondition,
 )
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
@@ -102,7 +102,7 @@ services = [
 ]
 
 
-def run_one_scenario(w: Workflow, scenario: Scenario) -> Comparator:
+def run_one_scenario(c: Composition, scenario: Scenario) -> Comparator:
     name = scenario.__name__
     print(f"Now benchmarking {name} ...")
     comparator = make_comparator(name)
@@ -113,11 +113,11 @@ def run_one_scenario(w: Workflow, scenario: Scenario) -> Comparator:
         mz_service_name = mzs[revision].name
         td_service_name = tds[revision].name
 
-        w.start_and_wait_for_tcp(services=[mzs[revision].name])
-        w.wait_for_mz(service=mz_service_name)
+        c.start_and_wait_for_tcp(services=[mzs[revision].name])
+        c.wait_for_mz(service=mz_service_name)
 
         executor = Docker(
-            workflow=w,
+            composition=c,
             mz_service=mzs[revision],
             td_service=tds[revision],
             seed=common_seed,
@@ -135,15 +135,15 @@ def run_one_scenario(w: Workflow, scenario: Scenario) -> Comparator:
         outcome, iterations = benchmark.run()
         comparator.append(outcome)
 
-        w.kill_services(services=[mz_service_name])
-        w.remove_services(services=[mz_service_name, td_service_name])
-        w.remove_volumes(volumes=["mzdata"])
+        c.kill_services(services=[mz_service_name])
+        c.remove_services(services=[mz_service_name, td_service_name])
+        c.remove_volumes(volumes=["mzdata"])
 
     return comparator
 
 
-def workflow_feature_benchmark(w: Workflow) -> None:
-    w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+def workflow_feature_benchmark(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     report = Report()
     has_regressions = False
@@ -168,7 +168,7 @@ def workflow_feature_benchmark(w: Workflow) -> None:
     )
 
     for scenario in scenarios:
-        comparison = run_one_scenario(w, scenario)
+        comparison = run_one_scenario(c, scenario)
         report.append(comparison)
 
         if comparison.is_regression():

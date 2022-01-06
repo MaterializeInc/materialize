@@ -9,7 +9,7 @@
 
 import time
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
@@ -37,8 +37,8 @@ services = [
 ]
 
 
-def workflow_kafka_multi_broker(w: Workflow) -> None:
-    w.start_and_wait_for_tcp(
+def workflow_kafka_multi_broker(c: Composition) -> None:
+    c.start_and_wait_for_tcp(
         services=[
             "zookeeper",
             "kafka1",
@@ -48,20 +48,20 @@ def workflow_kafka_multi_broker(w: Workflow) -> None:
             "materialized",
         ]
     )
-    w.run_service(
+    c.run_service(
         service="testdrive-svc",
         command="--kafka-addr=kafka2 01-init.td",
     )
     time.sleep(10)
-    w.kill_services(services=["kafka1"], signal="SIGKILL")
+    c.kill_services(services=["kafka1"], signal="SIGKILL")
     time.sleep(10)
-    w.run_service(
+    c.run_service(
         service="testdrive-svc",
         command="--kafka-addr=kafka2,kafka3 --no-reset 02-after-leave.td",
     )
-    w.start_services(services=["kafka1"])
+    c.start_services(services=["kafka1"])
     time.sleep(10)
-    w.run_service(
+    c.run_service(
         service="testdrive-svc",
         command="--kafka-addr=kafka1 --no-reset 03-after-join.td",
     )

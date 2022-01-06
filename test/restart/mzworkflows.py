@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
@@ -35,34 +35,34 @@ services = [
 ]
 
 
-def workflow_disable_user_indexes(w: Workflow) -> None:
-    w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+def workflow_disable_user_indexes(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     # Create catalog with vanilla MZ
-    w.start_services(services=["materialized"])
-    w.wait_for_mz(service="materialized")
-    w.run_service(service="testdrive-svc", command="user-indexes-enabled.td")
-    w.kill_services(services=["materialized"])
+    c.start_services(services=["materialized"])
+    c.wait_for_mz(service="materialized")
+    c.run_service(service="testdrive-svc", command="user-indexes-enabled.td")
+    c.kill_services(services=["materialized"])
 
     # Test semantics of disabling user indexes
-    w.start_services(services=["mz_disable_user_indexes"])
-    w.wait_for_mz(service="mz_disable_user_indexes")
-    w.run_service(service="testdrive_no_reset", command="user-indexes-disabled.td")
-    w.kill_services(services=["mz_disable_user_indexes"])
+    c.start_services(services=["mz_disable_user_indexes"])
+    c.wait_for_mz(service="mz_disable_user_indexes")
+    c.run_service(service="testdrive_no_reset", command="user-indexes-disabled.td")
+    c.kill_services(services=["mz_disable_user_indexes"])
 
 
-def workflow_github_8021(w: Workflow) -> None:
-    w.start_services(services=["materialized"])
-    w.wait_for_mz(service="materialized")
-    w.run_service(service="testdrive-svc", command="github-8021.td")
+def workflow_github_8021(c: Composition) -> None:
+    c.start_services(services=["materialized"])
+    c.wait_for_mz(service="materialized")
+    c.run_service(service="testdrive-svc", command="github-8021.td")
 
     # Ensure MZ can boot
-    w.kill_services(services=["materialized"])
-    w.start_services(services=["materialized"])
-    w.wait_for_mz(service="materialized")
-    w.kill_services(services=["materialized"])
+    c.kill_services(services=["materialized"])
+    c.start_services(services=["materialized"])
+    c.wait_for_mz(service="materialized")
+    c.kill_services(services=["materialized"])
 
 
-def workflow_all_restart(w: Workflow) -> None:
-    workflow_disable_user_indexes(w)
-    workflow_github_8021(w)
+def workflow_all_restart(c: Composition) -> None:
+    workflow_disable_user_indexes(c)
+    workflow_github_8021(c)

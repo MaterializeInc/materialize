@@ -9,7 +9,7 @@
 
 import os
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
     Localstack,
@@ -44,33 +44,33 @@ aws_localstack = "--aws-endpoint http://localstack:4566"
 aws_amazon = "--aws-region=us-east-2"
 
 
-def workflow_testdrive(w: Workflow) -> None:
+def workflow_testdrive(c: Composition) -> None:
     """Run non-esoteric tests with localstack"""
-    w.start_and_wait_for_tcp(services=["localstack"])
-    test_testdrive(w, mz_default, aws_localstack, tests)
+    c.start_and_wait_for_tcp(services=["localstack"])
+    test_testdrive(c, mz_default, aws_localstack, tests)
 
 
-def workflow_testdrive_ci(w: Workflow) -> None:
+def workflow_testdrive_ci(c: Composition) -> None:
     """Run all tests with actual AWS credentials"""
-    test_testdrive(w, mz_default, aws_amazon, tests_ci)
+    test_testdrive(c, mz_default, aws_amazon, tests_ci)
 
 
-def workflow_testdrive_ci_workers_1(w: Workflow) -> None:
-    test_testdrive(w, mz_workers_1, aws_amazon, tests_ci)
+def workflow_testdrive_ci_workers_1(c: Composition) -> None:
+    test_testdrive(c, mz_workers_1, aws_amazon, tests_ci)
 
 
-def workflow_testdrive_ci_workers_32(w: Workflow) -> None:
-    test_testdrive(w, mz_workers_32, aws_amazon, tests_ci)
+def workflow_testdrive_ci_workers_32(c: Composition) -> None:
+    test_testdrive(c, mz_workers_32, aws_amazon, tests_ci)
 
 
-def workflow_persistence_testdrive(w: Workflow) -> None:
-    test_testdrive(w, mz_persistence, aws_amazon, tests_ci)
+def workflow_persistence_testdrive(c: Composition) -> None:
+    test_testdrive(c, mz_persistence, aws_amazon, tests_ci)
 
 
-def test_testdrive(w: Workflow, mz: Materialized, aws: str, tests: str) -> None:
-    w.start_and_wait_for_tcp(
+def test_testdrive(c: Composition, mz: Materialized, aws: str, tests: str) -> None:
+    c.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", mz.name]
     )
-    w.wait_for_mz(service=mz.name)
-    w.run_service(service="testdrive-svc", command=f"{aws} {tests}")
-    w.kill_services(services=[mz.name])
+    c.wait_for_mz(service=mz.name)
+    c.run_service(service="testdrive-svc", command=f"{aws} {tests}")
+    c.kill_services(services=[mz.name])

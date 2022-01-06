@@ -12,7 +12,7 @@ import subprocess
 from tempfile import NamedTemporaryFile
 from typing import Any, Callable
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized, Testdrive
 
 
@@ -51,33 +51,32 @@ class Local(Executor):
 class Docker(Executor):
     def __init__(
         self,
-        workflow: Workflow,
+        composition: Composition,
         mz_service: Materialized,
         td_service: Testdrive,
         seed: int,
     ) -> None:
-        self._workflow = workflow
+        self._composition = composition
         self._mz_service = mz_service
         self._td_service = td_service
         self._seed = seed
 
     def RestartMz(self) -> Any:
-        w = self._workflow
-        w.kill_services(services=[self._mz_service.name])
-        w.start_services(services=[self._mz_service.name])
+        self._composition.kill_services(services=[self._mz_service.name])
+        self._composition.start_services(services=[self._mz_service.name])
         return 0.0
 
     def Td(self, input: str) -> Any:
         with NamedTemporaryFile(
             mode="w",
-            dir=self._workflow.composition.path / "tmp",
+            dir=self._composition.path / "tmp",
             prefix="tmp-",
             suffix=".td",
         ) as td_file:
             td_file.write(input)
             td_file.flush()
             dirname, basename = os.path.split(td_file.name)
-            return self._workflow.run_service(
+            return self._composition.run_service(
                 service=self._td_service.name,
                 command=" ".join(
                     [
