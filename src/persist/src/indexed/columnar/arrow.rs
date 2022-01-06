@@ -82,7 +82,7 @@ pub fn encode_unsealed_arrow<W: Write>(w: &mut W, batch: &BlobUnsealedBatch) -> 
     let options = WriteOptions { compression: None };
     let mut writer = FileWriter::try_new(w, &schema, options)?;
     for records in batch.updates.iter() {
-        writer.write(&RecordBatch::from(records))?;
+        writer.write(&encode_arrow_batch_kvtd(records))?;
     }
     writer.finish()?;
     Ok(())
@@ -99,7 +99,7 @@ pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Result
     let options = WriteOptions { compression: None };
     let mut writer = FileWriter::try_new(w, &schema, options)?;
     let records = batch.updates.iter().collect::<ColumnarRecords>();
-    writer.write(&RecordBatch::from(&records))?;
+    writer.write(&encode_arrow_batch_kvtd(&records))?;
     writer.finish()?;
     Ok(())
 }
@@ -112,7 +112,7 @@ pub fn decode_unsealed_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBa
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
-        ProtoBatchFormat::ArrowKVTD => decode_arrow_kvtd(r, file_meta)?,
+        ProtoBatchFormat::ArrowKVTD => decode_arrow_file_kvtd(r, file_meta)?,
         ProtoBatchFormat::ParquetKVTD => {
             return Err("ParquetKVTD format not supported in arrow".into())
         }
@@ -134,7 +134,7 @@ pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, E
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
-        ProtoBatchFormat::ArrowKVTD => decode_arrow_kvtd(r, file_meta)?,
+        ProtoBatchFormat::ArrowKVTD => decode_arrow_file_kvtd(r, file_meta)?,
         ProtoBatchFormat::ParquetKVTD => {
             return Err("ParquetKVTD format not supported in arrow".into())
         }
@@ -165,7 +165,7 @@ pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, E
     Ok(ret)
 }
 
-fn decode_arrow_kvtd<R: Read + Seek>(
+fn decode_arrow_file_kvtd<R: Read + Seek>(
     r: &mut R,
     file_meta: FileMetadata,
 ) -> Result<Vec<ColumnarRecords>, Error> {
@@ -185,112 +185,100 @@ fn decode_arrow_kvtd<R: Read + Seek>(
 
     let mut ret = Vec::new();
     for batch in file_reader {
-        ret.push(ColumnarRecords::try_from(batch?)?);
+        ret.push(decode_arrow_batch_kvtd(&batch?)?);
     }
     Ok(ret)
 }
 
-// This only makes sense as a From impl because we currently have one mapping
-// between ColumnarRecords and arrow schema: `[(K, V, T, D)]`. If we add
-// something like `[(K, [(V, [(T, D)])])])]`, then we should probably make this
-// a descriptively named method.
-impl From<&ColumnarRecords> for RecordBatch {
-    fn from(x: &ColumnarRecords) -> Self {
-        RecordBatch::try_new(
-            SCHEMA_ARROW_KVTD.clone(),
-            vec![
-                Arc::new(BinaryArray::from_data(
-                    DataType::Binary,
-                    x.key_offsets.clone(),
-                    x.key_data.clone(),
-                    None,
-                )),
-                Arc::new(BinaryArray::from_data(
-                    DataType::Binary,
-                    x.val_offsets.clone(),
-                    x.val_data.clone(),
-                    None,
-                )),
-                Arc::new(PrimitiveArray::from_data(
-                    DataType::UInt64,
-                    x.timestamps.clone(),
-                    None,
-                )),
-                Arc::new(PrimitiveArray::from_data(
-                    DataType::Int64,
-                    x.diffs.clone(),
-                    None,
-                )),
-            ],
-        )
-        .expect("schema matches fields")
-    }
+/// Converts a ColumnarRecords into an arrow [(K, V, T, D)] RecordBatch.
+pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> RecordBatch {
+    RecordBatch::try_new(
+        SCHEMA_ARROW_KVTD.clone(),
+        vec![
+            Arc::new(BinaryArray::from_data(
+                DataType::Binary,
+                x.key_offsets.clone(),
+                x.key_data.clone(),
+                None,
+            )),
+            Arc::new(BinaryArray::from_data(
+                DataType::Binary,
+                x.val_offsets.clone(),
+                x.val_data.clone(),
+                None,
+            )),
+            Arc::new(PrimitiveArray::from_data(
+                DataType::UInt64,
+                x.timestamps.clone(),
+                None,
+            )),
+            Arc::new(PrimitiveArray::from_data(
+                DataType::Int64,
+                x.diffs.clone(),
+                None,
+            )),
+        ],
+    )
+    .expect("schema matches fields")
 }
 
-// This only makes sense as a TryFrom impl because we currently have one mapping
-// between ColumnarRecords and arrow schema: `[(K, V, T, D)]`. If we add
-// something like `[(K, [(V, [(T, D)])])])]`, then we should probably make this
-// a descriptively named method.
-impl TryFrom<RecordBatch> for ColumnarRecords {
-    type Error = String;
-
-    fn try_from(x: RecordBatch) -> Result<Self, Self::Error> {
-        // We're not trying to accept any sort of user created data, so be strict.
-        if x.schema().fields() != SCHEMA_ARROW_KVTD.fields() {
-            return Err(format!(
-                "expected arrow schema {:?} got: {:?}",
-                SCHEMA_ARROW_KVTD.fields(),
-                x.schema()
-            ));
-        }
-
-        let columns = x.columns();
-        if columns.len() != 4 {
-            return Err(format!("expected 4 fields got {}", columns.len()));
-        }
-        let key_col = x.column(0);
-        let val_col = x.column(1);
-        let ts_col = x.column(2);
-        let diff_col = x.column(3);
-
-        let key_array = key_col
-            .as_any()
-            .downcast_ref::<BinaryArray<i32>>()
-            .ok_or(format!("column 0 doesn't match schema"))?
-            .clone();
-        let key_offsets = key_array.offsets().clone();
-        let key_data = key_array.values().clone();
-        let val_array = val_col
-            .as_any()
-            .downcast_ref::<BinaryArray<i32>>()
-            .ok_or(format!("column 1 doesn't match schema"))?
-            .clone();
-        let val_offsets = val_array.offsets().clone();
-        let val_data = val_array.values().clone();
-        let timestamps = ts_col
-            .as_any()
-            .downcast_ref::<PrimitiveArray<u64>>()
-            .ok_or(format!("column 2 doesn't match schema"))?
-            .values()
-            .clone();
-        let diffs = diff_col
-            .as_any()
-            .downcast_ref::<PrimitiveArray<i64>>()
-            .ok_or(format!("column 3 doesn't match schema"))?
-            .values()
-            .clone();
-
-        let len = x.num_rows();
-        let ret = ColumnarRecords {
-            len,
-            key_data,
-            key_offsets,
-            val_data,
-            val_offsets,
-            timestamps,
-            diffs,
-        };
-        ret.borrow().validate()?;
-        Ok(ret)
+/// Converts an arrow [(K, V, T, D)] RecordBatch into a ColumnarRecords.
+pub fn decode_arrow_batch_kvtd(x: &RecordBatch) -> Result<ColumnarRecords, String> {
+    // We're not trying to accept any sort of user created data, so be strict.
+    if x.schema().fields() != SCHEMA_ARROW_KVTD.fields() {
+        return Err(format!(
+            "expected arrow schema {:?} got: {:?}",
+            SCHEMA_ARROW_KVTD.fields(),
+            x.schema()
+        ));
     }
+
+    let columns = x.columns();
+    if columns.len() != 4 {
+        return Err(format!("expected 4 fields got {}", columns.len()));
+    }
+    let key_col = x.column(0);
+    let val_col = x.column(1);
+    let ts_col = x.column(2);
+    let diff_col = x.column(3);
+
+    let key_array = key_col
+        .as_any()
+        .downcast_ref::<BinaryArray<i32>>()
+        .ok_or(format!("column 0 doesn't match schema"))?
+        .clone();
+    let key_offsets = key_array.offsets().clone();
+    let key_data = key_array.values().clone();
+    let val_array = val_col
+        .as_any()
+        .downcast_ref::<BinaryArray<i32>>()
+        .ok_or(format!("column 1 doesn't match schema"))?
+        .clone();
+    let val_offsets = val_array.offsets().clone();
+    let val_data = val_array.values().clone();
+    let timestamps = ts_col
+        .as_any()
+        .downcast_ref::<PrimitiveArray<u64>>()
+        .ok_or(format!("column 2 doesn't match schema"))?
+        .values()
+        .clone();
+    let diffs = diff_col
+        .as_any()
+        .downcast_ref::<PrimitiveArray<i64>>()
+        .ok_or(format!("column 3 doesn't match schema"))?
+        .values()
+        .clone();
+
+    let len = x.num_rows();
+    let ret = ColumnarRecords {
+        len,
+        key_data,
+        key_offsets,
+        val_data,
+        val_offsets,
+        timestamps,
+        diffs,
+    };
+    ret.borrow().validate()?;
+    Ok(ret)
 }

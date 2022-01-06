@@ -13,7 +13,6 @@ use std::io::{Read, Seek, Write};
 
 use arrow2::io::parquet::read::RecordReader;
 use arrow2::io::parquet::write::RowGroupIterator;
-use arrow2::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use parquet2::compression::Compression;
 use parquet2::encoding::Encoding;
@@ -23,7 +22,9 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
 use crate::gen::persist::ProtoBatchFormat;
-use crate::indexed::columnar::arrow::SCHEMA_ARROW_KVTD;
+use crate::indexed::columnar::arrow::{
+    decode_arrow_batch_kvtd, encode_arrow_batch_kvtd, SCHEMA_ARROW_KVTD,
+};
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
     decode_trace_inline, decode_unsealed_inline, encode_trace_inline_meta,
@@ -77,7 +78,7 @@ pub fn decode_unsealed_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealed
         ProtoBatchFormat::ParquetKVTD => {
             let mut updates = Vec::new();
             for batch in reader {
-                updates.push(ColumnarRecords::try_from(batch?)?);
+                updates.push(decode_arrow_batch_kvtd(&batch?)?);
             }
             updates
         }
@@ -109,7 +110,7 @@ pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch,
         ProtoBatchFormat::ParquetKVTD => {
             let mut updates = Vec::new();
             for batch in reader {
-                for ((k, v), t, d) in ColumnarRecords::try_from(batch?)?.iter() {
+                for ((k, v), t, d) in decode_arrow_batch_kvtd(&batch?)?.iter() {
                     updates.push(((k.to_vec(), v.to_vec()), t, d));
                 }
             }
@@ -139,7 +140,7 @@ fn encode_parquet_kvtd<W: Write>(
     inline_base64: String,
     batches: &[ColumnarRecords],
 ) -> Result<(), Error> {
-    let iter = batches.iter().map(|x| Ok(RecordBatch::from(x)));
+    let iter = batches.iter().map(|x| Ok(encode_arrow_batch_kvtd(x)));
 
     let schema = SCHEMA_ARROW_KVTD.clone();
     let options = WriteOptions {
