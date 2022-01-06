@@ -791,24 +791,87 @@ class Workflow:
 
 
 class ServiceConfig(TypedDict, total=False):
+    """The definition of a service in Docker Compose.
+
+    This object corresponds directly to the YAML definition in a
+    docker-compose.yml file, plus two mzcompose-specific attributes. Full
+    details are available in [Services top-level element][ref] chapter of the
+    Compose Specification.
+
+    [ref]: https://github.com/compose-spec/compose-spec/blob/master/spec.md#services-top-level-element
+    """
+
     mzbuild: str
-    image: str
-    hostname: str
-    command: str
-    ports: Sequence[Union[int, str]]
-    environment: List[str]
-    depends_on: List[str]
-    entrypoint: List[str]
-    volumes: List[str]
-    networks: Dict[str, Dict[str, List[str]]]
-    deploy: Dict[str, Dict[str, Dict[str, str]]]
+    """The name of an mzbuild image to dynamically acquire before invoking
+    Docker Compose.
+
+    This is a mzcompose-extension to Docker Compose. The image must exist in
+    the repository. If `mzbuild` is set, neither `build` nor `image` should be
+    set.
+    """
+
     propagate_uid_gid: bool
+    """Request that the Docker image be run with the user ID and group ID of the
+    host user.
+
+    This is an mzcompose extension to Docker Compose. It is equivalent to
+    passing `--user $(id -u):$(id -g)` to `docker run`. The defualt is `False`.
+    """
+
+    image: str
+    """The name and tag of an image on Docker Hub."""
+
+    hostname: str
+    """The hostname to use.
+
+    By default, the name of the service is used as the hostname.
+    """
+
+    entrypoint: List[str]
+    """Override the entrypoint specified in the image."""
+
+    command: str
+    """Override the command specified in the image."""
+
     init: bool
+    """Whether to run an init process in the container."""
+
+    ports: Sequence[Union[int, str]]
+    """Service ports to expose to the host."""
+
+    environment: List[str]
+    """Additional environment variables to set.
+
+    Each entry must be in the form `NAME=VALUE`.
+
+    TODO(benesch): this should accept a `Dict[str, str]` instead.
+    """
+
+    depends_on: List[str]
+    """The list of other services that must be started before this one."""
+
+    volumes: List[str]
+    """Volumes to attach to the service."""
+
+    networks: Dict[str, Dict[str, List[str]]]
+    """Additional networks to join.
+
+    TODO(benesch): this should use a nested TypedDict.
+    """
+
+    deploy: Dict[str, Dict[str, Dict[str, str]]]
+    """Additional deployment configuration, like resource limits.
+
+    TODO(benesch): this should use a nested TypedDict.
+    """
 
 
 class Service:
-    """
-    A Service is a service that has been specified in the 'services' variable of mzworkflows.py
+    """A Docker Compose service in a `Composition`.
+
+    Attributes:
+        name: The name of the service.
+        config: The definition of the service.
     """
 
     def __init__(self, name: str, config: ServiceConfig) -> None:
