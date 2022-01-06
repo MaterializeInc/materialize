@@ -140,10 +140,12 @@ message ProtoDictElement {
     ProtoDatum val = 2;
 }
 
-// TODO: These are difficult to define, but are passed directly from and into
-// the decimal library we use. It hasn't changed these in WIP years and so we
-// hope it continues to remain unchanged. A slower but perhaps safer alternative
-// might be a string representation.
+// These are passed directly from and into the decimal library we use. It hasn't
+// changed them in several years and so we hope it continues to remain
+// unchanged. For more details about these fields, see the [upstream
+// documentation](http://speleotrove.com/decimal/dnnumb.html).
+//
+// A slower but perhaps safer alternative might be a string representation.
 message ProtoNumeric {
     uint32 digits = 1;
     int32 exponent = 2;
