@@ -63,8 +63,8 @@ class Docker(Executor):
 
     def RestartMz(self) -> Any:
         w = self._workflow
-        w.kill_services(services=[self._mz_service.name])  # type: ignore
-        w.start_services(services=[self._mz_service.name])  # type: ignore
+        w.kill_services(services=[self._mz_service.name])
+        w.start_services(services=[self._mz_service.name])
         return 0.0
 
     def Td(self, input: str) -> Any:
@@ -77,7 +77,7 @@ class Docker(Executor):
             td_file.write(input)
             td_file.flush()
             dirname, basename = os.path.split(td_file.name)
-            return self._workflow.run_service(  # type: ignore
+            return self._workflow.run_service(
                 service=self._td_service.name,
                 command=" ".join(
                     [

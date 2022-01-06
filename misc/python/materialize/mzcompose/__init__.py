@@ -42,14 +42,12 @@ from typing import (
     Literal,
     Optional,
     Sequence,
-    Type,
     TypedDict,
     TypeVar,
     Union,
 )
 
 import pg8000
-import pymysql
 import sqlparse
 import yaml
 
@@ -182,7 +180,7 @@ class Composition:
         self.name = name
         self.repo = repo
         self.images: List[mzbuild.Image] = []
-        self.python_funcs: Dict[str, Callable[[Composition], None]] = {}
+        self.workflows: Dict[str, Callable[[Composition], None]] = {}
 
         default_tag = os.getenv(f"MZBUILD_TAG", None)
 
@@ -219,7 +217,7 @@ class Composition:
                     # with the "workflow_" prefix stripped and any underscores
                     # replaced with dashes.
                     name = name[len("workflow_") :].replace("_", "-")
-                    self.python_funcs[name] = fn
+                    self.workflows[name] = fn
 
             for python_service in getattr(module, "services", []):
                 compose["services"][python_service.name] = python_service.config
@@ -302,16 +300,14 @@ class Composition:
         yaml.dump(self.compose, self.file, encoding="utf-8")  # type: ignore
         self.file.flush()
 
-
     def get_workflow(self, workflow_name: str) -> "Workflow":
         """Return sub-workflow."""
-        if workflow_name not in self.python_funcs:
+        if workflow_name not in self.workflows:
             raise KeyError(f"No workflow called {workflow_name} in {self.name}")
 
-        # Return a PythonWorkflow if an appropriately-named Python function exists
-        return PythonWorkflow(
+        return Workflow(
             name=workflow_name,
-            func=self.python_funcs[workflow_name],
+            func=self.workflows[workflow_name],
             composition=self,
         )
 
@@ -356,6 +352,8 @@ class Composition:
             check: Whether to raise an error if the child process exits with
                 a failing exit code.
         """
+        print(f"$ docker-compose {' '.join(args)}")
+
         self.file.seek(0)
         if env is not None:
             env = dict(os.environ, **env)
@@ -502,24 +500,25 @@ class Workflow:
     def __init__(
         self,
         name: str,
-        steps: List["WorkflowStep"],
-        env: Dict[str, str],
+        func: Callable,
         composition: Composition,
     ) -> None:
         self.name = name
-        self.env = env
+        self.func = func
         self.composition = composition
-        self._steps = steps
-
-    def overview(self) -> str:
-        return "{} [{}]".format(self.name, " ".join([s.name for s in self._steps]))
-
-    def __repr__(self) -> str:
-        return "Workflow<{}>".format(self.overview())
+        self.takes_args = len(inspect.signature(func).parameters) > 1
 
     def run(self, args: List[str]) -> None:
-        for step in self._steps:
-            step.run(self)
+        print("Running Python function {}".format(self.name))
+        if self.takes_args:
+            self.func(self, args)
+        else:
+            # If the workflow doesn't have an `args` parameter, construct
+            # an empty parser to reject bogus arguments and to handle the
+            # trivial help message.
+            parser = WorkflowArgumentParser(self)
+            parser.parse_args(args)
+            self.func(self)
 
     @contextmanager
     def with_services(self, services: List["Service"]) -> Iterator[None]:
@@ -577,9 +576,218 @@ class Workflow:
         # TODO(benesch): once the workflow API is a proper Python API,
         # remove the `type: ignore` comments below.
         for service in services:
-            self.start_services(services=[service])  # type: ignore
+            self.start_services(services=[service])
             for port in self.composition.compose["services"][service].get("ports", []):
-                self.wait_for_tcp(host=service, port=port)  # type: ignore
+                self.wait_for_tcp(host=service, port=port)
+
+    def run_service(
+        self,
+        service: str,
+        command: Optional[Union[str, list]] = None,
+        *,
+        env: Dict[str, str] = {},
+        capture: bool = False,
+        daemon: bool = False,
+        entrypoint: Optional[str] = None,
+    ) -> Any:
+        """Run a service using `mzcompose run`.
+
+        Running a service behaves slightly differently than making it come up, importantly it
+        is not an _error_ if it ends at all.
+
+        Args:
+            service: (required) the name of the service, from the mzcompose file
+            entrypoint: Overwrite the entrypoint with this
+            command: the command to run. These are the arguments to the entrypoint
+            capture: Capture and return output (default: False)
+            daemon: run as a daemon (default: False)
+        """
+
+        cmd = []
+        if daemon:
+            cmd.append("-d")
+        if entrypoint:
+            cmd.append(f"--entrypoint={entrypoint}")
+        cmd.append(service)
+        if isinstance(command, str):
+            cmd.extend(shlex.split(command))
+        elif isinstance(command, list):
+            cmd.extend(command)
+        return self.run_compose(
+            args=[
+                "run",
+                *(f"-e{k}={v}" for k, v in env.items()),
+                *cmd,
+            ],
+            capture=capture,
+        ).stdout
+
+    def start_services(self, services: List[str]) -> None:
+        """Start a service.
+
+        This method delegates to `docker-compose start`. See that command's help
+        for details.
+
+        Args:
+            services: The names of services in the workflow.
+        """
+        self.run_compose(["up", "-d", *services])
+
+    def kill_services(self, services: List[str], signal: Optional[str] = None) -> None:
+        """Kill a service.
+
+        This method delegates to `docker-compose kill`. See that command's help
+        for details.
+
+        Args:
+            services: The names of services in the workflow.
+            signal: The signal to send. The default is SIGKILL.
+        """
+        self.run_compose(
+            [
+                "kill",
+                *(["-s", signal] if signal else []),
+                *services,
+            ]
+        )
+
+    def remove_services(
+        self, services: List[str], destroy_volumes: bool = False
+    ) -> None:
+        """Remove a stopped service.
+
+        This method delegates to `docker-compose rm`. See that command's help
+        for details.
+
+        Args:
+            services: The names of services in the workflow.
+            destroy_volumes: Whether to destroy any anonymous volumes associated
+                with the service. Note that named volumes are not removed even
+                when this option is enabled.
+        """
+        self.run_compose(
+            [
+                "rm",
+                "-f",
+                "-s",
+                *(["-v"] if destroy_volumes else []),
+                *services,
+            ],
+        )
+
+    def remove_volumes(self, volumes: List[str]) -> None:
+        """Remove the named volumes.
+
+        Args:
+            volumes: The volumes to remove.
+        """
+        volumes = (f"{self.composition.name}_{v}" for v in volumes)
+        spawn.runv(["docker", "volume", "rm", *volumes])
+
+    def wait_for_tcp(
+        self,
+        *,
+        host: str = "localhost",
+        port: int,
+        timeout_secs: int = 240,
+    ) -> None:
+        ui.progress(f"waiting for {host}:{port}", "C")
+        for remaining in ui.timeout_loop(timeout_secs):
+            cmd = f"docker run --rm -t --network {self.composition.name}_default ubuntu:focal-20210723".split()
+
+            try:
+                _check_tcp(cmd[:], host, port, timeout_secs)
+            except subprocess.CalledProcessError:
+                ui.progress(" {}".format(int(remaining)))
+            else:
+                ui.progress(" success!", finish=True)
+                return
+
+        ui.progress(" error!", finish=True)
+        try:
+            logs = self.composition.service_logs(host)
+        except Exception as e:
+            logs = f"unable to determine logs: {e}"
+
+        raise UIError(f"Unable to connect to {host}:{port}\nService logs:\n{logs}")
+
+    def wait_for_postgres(
+        self,
+        *,
+        dbname: str = "postgres",
+        port: Optional[int] = None,
+        host: str = "localhost",
+        timeout_secs: int = 120,
+        query: str = "SELECT 1",
+        user: str = "postgres",
+        password: str = "postgres",
+        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
+        print_result: bool = False,
+        service: str = "postgres",
+    ) -> None:
+        """Wait for a PostgreSQL service to start.
+
+        Args:
+            dbname: the name of the database to wait for
+            host: the host postgres is listening on
+            port: the port postgres is listening on
+            timeout_secs: How long to wait for postgres to be up before failing (Default: 30)
+            query: The query to execute to ensure that it is running (Default: "Select 1")
+            user: The chosen user (this is only relevant for postgres)
+            service: The service that postgres is running as (Default: postgres)
+        """
+        if port is None:
+            ports = self.composition.find_host_ports(service)
+            if len(ports) != 1:
+                logs = self.composition.service_logs(service)
+                if ports:
+                    msg = (
+                        f"Unable to unambiguously determine port for {service},"
+                        f"found ports: {','.join(ports)}\nService logs:\n{logs}"
+                    )
+                else:
+                    msg = f"No ports found for {service}\nService logs:\n{logs}"
+                raise UIError(msg)
+            port = int(ports[0])
+        else:
+            port = port
+        _wait_for_pg(
+            dbname=dbname,
+            host=host,
+            port=port,
+            timeout_secs=timeout_secs,
+            query=query,
+            user=user,
+            password=password,
+            expected=expected,
+            print_result=print_result,
+        )
+
+    def wait_for_mz(
+        self,
+        *,
+        user: str = "materialize",
+        dbname: str = "materialize",
+        host: str = "localhost",
+        port: Optional[int] = None,
+        timeout_secs: int = 60,
+        query: str = "SELECT 1",
+        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
+        print_result: bool = False,
+        service: str = "materialized",
+    ) -> None:
+        """Like `Workflow.wait_for_mz`, but with Materialize defaults."""
+        self.wait_for_postgres(
+            user=user,
+            dbname=dbname,
+            host=host,
+            port=port,
+            timeout_secs=timeout_secs,
+            query=query,
+            expected=expected,
+            print_result=print_result,
+            service=service,
+        )
 
 
 class ServiceConfig(TypedDict, total=False):
@@ -608,460 +816,12 @@ class Service:
         self.config = config
 
 
-class PythonWorkflow(Workflow):
-    """
-    A PythonWorkflow is a workflow that has been specified as a Python function in a mzworkflows.py file
-    """
-
-    def __init__(
-        self,
-        name: str,
-        func: Callable,
-        composition: Composition,
-    ) -> None:
-        self.name = name
-        self.func = func
-        self.composition = composition
-        self.takes_args = len(inspect.signature(func).parameters) > 1
-
-    def overview(self) -> str:
-        return "{} [{}]".format(self.name, self.func)
-
-    def __repr__(self) -> str:
-        return "Workflow<{}>".format(self.overview())
-
-    def run(self, args: List[str]) -> None:
-        print("Running Python function {}".format(self.name))
-        if self.takes_args:
-            self.func(self, args)
-        else:
-            # If the workflow doesn't have an `args` parameter, construct
-            # an empty parser to reject bogus arguments and to handle the
-            # trivial help message.
-            parser = WorkflowArgumentParser(self)
-            parser.parse_args(args)
-            self.func(self)
-
-
 class WorkflowArgumentParser(argparse.ArgumentParser):
     """An argument parser that takes its name and description from a `Workflow`."""
 
-    def __init__(self, w: PythonWorkflow):
+    def __init__(self, w: Workflow):
         super().__init__(
             prog=f"mzcompose run {w.name}", description=inspect.getdoc(w.func)
-        )
-
-
-class Steps:
-    """A registry of named `WorkflowStep`_"""
-
-    _steps: Dict[str, Type["WorkflowStep"]] = {}
-
-    @classmethod
-    def named(cls, name: str) -> Type["WorkflowStep"]:
-        try:
-            return cls._steps[name]
-        except KeyError:
-            raise UIError(f"unknown step {name!r}")
-
-    @classmethod
-    def register(
-        cls, name: str
-    ) -> Callable[[Type["WorkflowStep"]], Type["WorkflowStep"]]:
-        if name in cls._steps:
-            raise ValueError(f"Double registration of step name: {name}")
-
-        def reg(to_register: Type["WorkflowStep"]) -> Type["WorkflowStep"]:
-            cls._steps[name] = to_register
-            to_register.name = name
-
-            # Allow the step to also be called as a Workflow.step_name() classmethod
-            def run_step(workflow: Workflow, **kwargs: Any) -> Optional[str]:
-                step: WorkflowStep = to_register(**kwargs)
-                return step.run(workflow)
-
-            func_name = name.replace("-", "_")
-            if func_name == "run":
-                # Temporary workaround for the fact that `Workflow.run` already
-                # exists.
-                func_name = "run_service"
-            if not hasattr(Workflow, func_name):
-                setattr(Workflow, func_name, run_step)
-            else:
-                raise UIError(
-                    f"Unable to register method Workflow.{func_name} as one already exists."
-                )
-
-            return to_register
-
-        return reg
-
-    @classmethod
-    def print_known_steps(cls) -> None:
-        """Print all steps registered with `register`_"""
-        for name in sorted(cls._steps):
-            print(name)
-
-
-class WorkflowStep:
-    """Peform a single action in a workflow"""
-
-    # populated by Steps.register
-    name: str
-    """The name used to refer to this step in a workflow file"""
-
-    def __init__(self, **kwargs: Any) -> None:
-        pass
-
-    def run(self, workflow: Workflow) -> Optional[str]:
-        """Perform the action specified by this step"""
-
-
-@Steps.register("start-services")
-class StartServicesStep(WorkflowStep):
-    """
-    Params:
-      services: List of service names
-    """
-
-    def __init__(self, *, services: Optional[List[str]] = None) -> None:
-        self._services = services if services is not None else []
-        if not isinstance(self._services, list):
-            raise UIError(f"services should be a list, got: {self._services}")
-
-    def run(self, workflow: Workflow) -> None:
-        try:
-            workflow.run_compose(["up", "-d", *self._services])
-        except subprocess.CalledProcessError:
-            services = ", ".join(self._services)
-            raise UIError(f"services didn't come up cleanly: {services}")
-
-
-@Steps.register("kill-services")
-class KillServicesStep(WorkflowStep):
-    """
-    Params:
-      services: List of service names
-      signal: signal to send to the container (e.g. SIGINT)
-    """
-
-    def __init__(
-        self, *, services: Optional[List[str]] = None, signal: Optional[str] = None
-    ) -> None:
-        self._services = services if services is not None else []
-        if not isinstance(self._services, list):
-            raise UIError(f"services should be a list, got: {self._services}")
-        self._signal = signal
-
-    def run(self, workflow: Workflow) -> None:
-        compose_cmd = ["kill"]
-        if self._signal:
-            compose_cmd.extend(["-s", self._signal])
-        compose_cmd.extend(self._services)
-
-        try:
-            workflow.run_compose(compose_cmd)
-        except subprocess.CalledProcessError:
-            services = ", ".join(self._services)
-            raise UIError(f"services didn't die cleanly: {services}")
-
-
-@Steps.register("restart-services")
-class RestartServicesStep(WorkflowStep):
-    """
-    Params:
-      services: List of service names
-    """
-
-    def __init__(self, *, services: Optional[List[str]] = None) -> None:
-        self._services = services if services is not None else []
-        if not isinstance(self._services, list):
-            raise UIError(f"services should be a list, got: {self._services}")
-
-    def run(self, workflow: Workflow) -> None:
-        try:
-            workflow.run_compose(["restart", *self._services])
-        except subprocess.CalledProcessError:
-            services = ", ".join(self._services)
-            raise UIError(f"services didn't restart cleanly: {services}")
-
-
-@Steps.register("remove-services")
-class RemoveServicesStep(WorkflowStep):
-    """
-    Params:
-      services: List of service names
-      destroy_volumes: Boolean to indicate if the volumes should be removed as well
-    """
-
-    def __init__(
-        self,
-        *,
-        services: Optional[List[str]] = None,
-        destroy_volumes: bool = False,
-    ) -> None:
-        self._services = services if services is not None else []
-        self._destroy_volumes = destroy_volumes
-        if not isinstance(self._services, list):
-            raise UIError(f"services should be a list, got: {self._services}")
-
-    def run(self, workflow: Workflow) -> None:
-        try:
-            workflow.run_compose(
-                [
-                    "rm",
-                    "-f",
-                    "-s",
-                    *(["-v"] if self._destroy_volumes else []),
-                    *self._services,
-                ],
-            )
-        except subprocess.CalledProcessError:
-            services = ", ".join(self._services)
-            raise UIError(f"services didn't restart cleanly: {services}")
-
-
-@Steps.register("remove-volumes")
-class RemoveVolumesStep(WorkflowStep):
-    """
-    Params:
-      volumes: List of volume names
-    """
-
-    def __init__(self, *, volumes: List[str]) -> None:
-        self._volumes = volumes
-        if not isinstance(self._volumes, list):
-            raise UIError(f"volumes should be a list, got: {self._volumes}")
-
-    def run(self, workflow: Workflow) -> None:
-        volumes = (f"{workflow.composition.name}_{v}" for v in self._volumes)
-        spawn.runv(["docker", "volume", "rm", *volumes])
-
-
-@Steps.register("wait-for-postgres")
-class WaitForPgStep(WorkflowStep):
-    """
-    Args:
-        dbname: the name of the database to wait for
-        host: the host postgres is listening on
-        port: the port postgres is listening on
-        timeout_secs: How long to wait for postgres to be up before failing (Default: 30)
-        query: The query to execute to ensure that it is running (Default: "Select 1")
-        user: The chosen user (this is only relevant for postgres)
-        service: The service that postgres is running as (Default: postgres)
-    """
-
-    def __init__(
-        self,
-        *,
-        dbname: str = "postgres",
-        port: Optional[int] = None,
-        host: str = "localhost",
-        timeout_secs: int = 120,
-        query: str = "SELECT 1",
-        user: str = "postgres",
-        password: str = "postgres",
-        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
-        print_result: bool = False,
-        service: str = "postgres",
-    ) -> None:
-        self._dbname = dbname
-        self._host = host
-        self._port = port
-        self._user = user
-        self._password = password
-        self._timeout_secs = timeout_secs
-        self._query = query
-        self._expected = expected
-        self._print_result = print_result
-        self._service = service
-
-    def run(self, workflow: Workflow) -> None:
-        if self._port is None:
-            ports = workflow.composition.find_host_ports(self._service)
-            if len(ports) != 1:
-                logs = workflow.composition.service_logs(self._service)
-                if ports:
-                    msg = (
-                        f"Unable to unambiguously determine port for {self._service},"
-                        f"found ports: {','.join(ports)}\nService logs:\n{logs}"
-                    )
-                else:
-                    msg = f"No ports found for {self._service}\nService logs:\n{logs}"
-                raise UIError(msg)
-            port = int(ports[0])
-        else:
-            port = self._port
-        try:
-            wait_for_pg(
-                dbname=self._dbname,
-                host=self._host,
-                port=port,
-                timeout_secs=self._timeout_secs,
-                query=self._query,
-                user=self._user,
-                password=self._password,
-                expected=self._expected,
-                print_result=self._print_result,
-            )
-        except UIError as e:
-            logs = workflow.composition.service_logs(self._service)
-            raise UIError(f"{e}:\nService logs:\n{logs}")
-
-
-@Steps.register("wait-for-mz")
-class WaitForMzStep(WaitForPgStep):
-    """Same thing as wait-for-postgres, but with materialized defaults"""
-
-    def __init__(
-        self,
-        *,
-        user: str = "materialize",
-        dbname: str = "materialize",
-        host: str = "localhost",
-        port: Optional[int] = None,
-        timeout_secs: int = 60,
-        query: str = "SELECT 1",
-        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
-        print_result: bool = False,
-        service: str = "materialized",
-    ) -> None:
-        super().__init__(
-            user=user,
-            dbname=dbname,
-            host=host,
-            port=port,
-            timeout_secs=timeout_secs,
-            query=query,
-            expected=expected,
-            print_result=print_result,
-            service=service,
-        )
-
-
-@Steps.register("wait-for-mysql")
-class WaitForMysqlStep(WorkflowStep):
-    """
-    Params:
-        host: The host mysql is running on
-        port: The port mysql is listening on (Default: discover host port)
-        user: The user to connect as (Default: mysqluser)
-        password: The password to use (Default: mysqlpw)
-        service: The name mysql is running as (Default: mysql)
-    """
-
-    def __init__(
-        self,
-        *,
-        user: str = "root",
-        password: str = "rootpw",
-        host: str = "localhost",
-        port: Optional[int] = None,
-        timeout_secs: int = 60,
-        service: str = "mysql",
-    ) -> None:
-        self._user = user
-        self._password = password
-        self._host = host
-        self._port = port
-        self._timeout_secs = timeout_secs
-        self._service = service
-
-    def run(self, workflow: Workflow) -> None:
-        if self._port is None:
-            ports = workflow.composition.find_host_ports(self._service)
-            if len(ports) != 1:
-                raise UIError(
-                    f"Could not unambiguously determine port for {self._service} "
-                    f"found: {','.join(ports)}"
-                )
-            port = int(ports[0])
-        else:
-            port = self._port
-        wait_for_mysql(
-            user=self._user,
-            passwd=self._password,
-            host=self._host,
-            port=port,
-            timeout_secs=self._timeout_secs,
-        )
-
-
-class WaitDependency(TypedDict):
-    """For wait-for-tcp, specify additional items to check"""
-
-    host: str
-    port: int
-    hint: Optional[str]
-
-
-@Steps.register("wait-for-tcp")
-class WaitForTcpStep(WorkflowStep):
-    """Wait for a tcp port to be open inside a container
-
-    Params:
-        host: The host that is available inside the docker network
-        port: the port to connect to
-        timeout_secs: How long to wait (default: 30)
-
-        dependencies: A list of {host, port, hint} objects that must
-            continue to be up while checking this one. Immediately fail
-            the wait if these go down.
-    """
-
-    def __init__(
-        self,
-        *,
-        host: str = "localhost",
-        port: int,
-        timeout_secs: int = 240,
-        dependencies: Optional[List[WaitDependency]] = None,
-    ) -> None:
-        self._host = host
-        self._port = port
-        self._timeout_secs = timeout_secs
-        self._dependencies = dependencies or []
-
-    def run(self, workflow: Workflow) -> None:
-        ui.progress(f"waiting for {self._host}:{self._port}", "C")
-        for remaining in ui.timeout_loop(self._timeout_secs):
-            cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:focal-20210723".split()
-
-            try:
-                _check_tcp(cmd[:], self._host, self._port, self._timeout_secs)
-            except subprocess.CalledProcessError:
-                ui.progress(" {}".format(int(remaining)))
-            else:
-                ui.progress(" success!", finish=True)
-                return
-
-            for dep in self._dependencies:
-                host, port = dep["host"], dep["port"]
-                try:
-                    _check_tcp(
-                        cmd[:], host, port, self._timeout_secs, kind="dependency "
-                    )
-                except subprocess.CalledProcessError:
-                    message = f"Dependency is down {host}:{port}"
-                    try:
-                        dep_logs = workflow.composition.service_logs(host)
-                    except Exception as e:
-                        dep_logs = f"unable to determine logs: {e}"
-                    if "hint" in dep:
-                        message += f"\n    hint: {dep['hint']}"
-                    message += "\nDependency service logs:\n"
-                    message += dep_logs
-                    ui.progress(" error!", finish=True)
-                    raise UIError(message)
-
-        ui.progress(" error!", finish=True)
-        try:
-            logs = workflow.composition.service_logs(self._host)
-        except Exception as e:
-            logs = f"unable to determine logs: {e}"
-
-        raise UIError(
-            f"Unable to connect to {self._host}:{self._port}\nService logs:\n{logs}"
         )
 
 
@@ -1089,86 +849,7 @@ def _check_tcp(
     return cmd
 
 
-@Steps.register("run")
-class RunStep(WorkflowStep):
-    """
-    Run a service using `mzcompose run`
-
-    Running a service behaves slightly differently than making it come up, importantly it
-    is not an _error_ if it ends at all.
-
-    Args:
-
-      - service: (required) the name of the service, from the mzcompose file
-      - entrypoint: Overwrite the entrypoint with this
-      - command: the command to run. These are the arguments to the entrypoint
-      - capture: Capture and return output (default: False)
-      - daemon: run as a daemon (default: False)
-      - service_ports: expose and use service ports. (Default: True)
-      - force_service_name: ensure that this container has exactly the name of
-        its service. Only one container can exist with a given name at the same
-        time, so this should only be used when a start_services step cannot be used --e.g.
-        because it is not desired for it to be restarted on completion, or
-        because it needs to be passed command-line arguments.
-    """
-
-    def __init__(
-        self,
-        *,
-        service: str,
-        command: Optional[Union[str, list]] = None,
-        env: Dict[str, str] = {},
-        capture: bool = False,
-        daemon: bool = False,
-        entrypoint: Optional[str] = None,
-        service_ports: bool = True,
-        force_service_name: bool = False,
-    ) -> None:
-        cmd = []
-        if daemon:
-            cmd.append("-d")
-        if entrypoint:
-            cmd.append(f"--entrypoint={entrypoint}")
-        cmd.append(service)
-        if isinstance(command, str):
-            cmd.extend(shlex.split(command))
-        elif isinstance(command, list):
-            cmd.extend(command)
-        self._service = service
-        self._force_service_name = force_service_name
-        self._service_ports = service_ports
-        self._command = cmd
-        self._capture = capture
-        self._env = env
-
-    def run(self, workflow: Workflow) -> Any:
-        try:
-            return workflow.run_compose(
-                capture=self._capture,
-                args=[
-                    "run",
-                    *(["--service-ports"] if self._service_ports else []),
-                    *(["--name", self._service] if self._force_service_name else []),
-                    *(f"-e{k}={v}" for k, v in self._env.items()),
-                    *self._command,
-                ],
-            ).stdout
-        except subprocess.CalledProcessError:
-            raise UIError("giving up: {}".format(ui.shell_quote(self._command)))
-
-
-@Steps.register("down")
-class DownStep(WorkflowStep):
-    def __init__(self, *, destroy_volumes: bool = False) -> None:
-        """Bring the cluster down"""
-        self._destroy_volumes = destroy_volumes
-
-    def run(self, workflow: Workflow) -> None:
-        say("bringing the cluster down")
-        workflow.run_compose(["down", *(["-v"] if self._destroy_volumes else [])])
-
-
-def wait_for_pg(
+def _wait_for_pg(
     timeout_secs: int,
     query: str,
     dbname: str,
@@ -1216,28 +897,3 @@ def wait_for_pg(
             error = e
     ui.progress(finish=True)
     raise UIError(f"never got correct result for {args}: {error}")
-
-
-def wait_for_mysql(
-    timeout_secs: int, user: str, passwd: str, host: str, port: int
-) -> None:
-    args = f"mysql user={user} host={host} port={port}"
-    ui.progress(f"waiting for {args}", "C")
-    error = None
-    for _ in ui.timeout_loop(timeout_secs):
-        try:
-            conn = pymysql.connect(user=user, passwd=passwd, host=host, port=port)
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                result = cur.fetchone()
-            if result == (1,):
-                print(f"success!")
-                return
-            else:
-                print(f"weird, {args} did not return 1: {result}")
-        except Exception as e:
-            ui.progress(".")
-            error = e
-    ui.progress(finish=True)
-
-    raise UIError(f"Never got correct result for {args}: {error}")
