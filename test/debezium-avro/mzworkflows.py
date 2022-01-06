@@ -38,11 +38,11 @@ services = [
     Materialized(),
     Postgres(),
     SqlServer(sa_password=sa_password),
-    Testdrive(no_reset=True, default_timeout=300),
+    Testdrive(no_reset=True, default_timeout="300s"),
 ]
 
 
-def workflow_debezium_avro(w: Workflow):
+def workflow_debezium_avro(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=prerequisites)
     w.start_and_wait_for_tcp(services=["postgres"])
 
@@ -54,7 +54,7 @@ def workflow_debezium_avro(w: Workflow):
 
 
 @patch.dict(os.environ, {"SA_PASSWORD": sa_password})
-def workflow_debezium_sql_server(w: Workflow):
+def workflow_debezium_sql_server(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=prerequisites)
     w.start_and_wait_for_tcp(services=["sql-server"])
 

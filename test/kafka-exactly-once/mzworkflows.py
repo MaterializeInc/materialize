@@ -27,7 +27,7 @@ services = [
 ]
 
 
-def workflow_kafka_exactly_once(w: Workflow, args: List[str]):
+def workflow_kafka_exactly_once(w: Workflow, args: List[str]) -> None:
     parser = WorkflowArgumentParser(w)
     parser.add_argument(
         "--seed",

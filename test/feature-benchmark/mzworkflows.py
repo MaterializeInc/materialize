@@ -10,19 +10,22 @@
 import os
 import sys
 import time
+from typing import List
 
-import numpy as np
 from scenarios import *
-from scipy import stats
 
-from materialize.feature_benchmark.aggregation import MinAggregation
+from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark, Report
-from materialize.feature_benchmark.comparator import RelativeThresholdComparator
+from materialize.feature_benchmark.comparator import (
+    Comparator,
+    RelativeThresholdComparator,
+)
 from materialize.feature_benchmark.executor import Docker
-from materialize.feature_benchmark.filter import NoFilter, RemoveOutliers
+from materialize.feature_benchmark.filter import Filter, NoFilter
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
     ProbForMin,
+    TerminationCondition,
 )
 from materialize.mzcompose import Workflow
 from materialize.mzcompose.services import (
@@ -37,18 +40,25 @@ from materialize.mzcompose.services import (
 # Global feature benchmark thresholds and termination conditions
 #
 
-filter_class = NoFilter
 
-termination_conditions = [
-    {"class": NormalDistributionOverlap, "threshold": 0.99},
-    {"class": ProbForMin, "threshold": 0.95},
-]
+def make_filter() -> Filter:
+    return NoFilter()
 
-aggregation_class = MinAggregation
 
-comparator_class = {"class": RelativeThresholdComparator, "threshold": 0.10}
+def make_termination_conditions() -> List[TerminationCondition]:
+    return [
+        NormalDistributionOverlap(threshold=0.99),
+        ProbForMin(threshold=0.95),
+    ]
 
-confluents = []
+
+def make_aggregation() -> Aggregation:
+    return MinAggregation()
+
+
+def make_comparator(name: str) -> Comparator:
+    return RelativeThresholdComparator(name, threshold=0.10)
+
 
 this_image = os.getenv("THIS_IMAGE", None)
 this_options = os.getenv("THIS_OPTIONS", None)
@@ -92,12 +102,10 @@ services = [
 ]
 
 
-def run_one_scenario(w: Workflow, scenario: Scenario):
+def run_one_scenario(w: Workflow, scenario: Scenario) -> Comparator:
     name = scenario.__name__
     print(f"Now benchmarking {name} ...")
-    comparator = comparator_class["class"](
-        name=name, threshold=comparator_class["threshold"]
-    )
+    comparator = make_comparator(name)
     common_seed = round(time.time())
 
     for mz_id, revision in enumerate(["this", "other"]):
@@ -119,11 +127,9 @@ def run_one_scenario(w: Workflow, scenario: Scenario):
             mz_id=mz_id,
             scenario=scenario,
             executor=executor,
-            filter=filter_class(),
-            termination_conditions=[
-                c["class"](threshold=c["threshold"]) for c in termination_conditions
-            ],
-            aggregation=aggregation_class(),
+            filter=make_filter(),
+            termination_conditions=make_termination_conditions(),
+            aggregation=make_aggregation(),
         )
 
         outcome, iterations = benchmark.run()
@@ -136,7 +142,7 @@ def run_one_scenario(w: Workflow, scenario: Scenario):
     return comparator
 
 
-def workflow_feature_benchmark(w: Workflow):
+def workflow_feature_benchmark(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     report = Report()

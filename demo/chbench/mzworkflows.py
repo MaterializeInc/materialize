@@ -15,7 +15,7 @@ from materialize.mzcompose import Workflow, WorkflowArgumentParser
 from materialize.mzcompose.services import PrometheusSQLExporter
 
 
-def workflow_demo(w: Workflow, args: List[str]):
+def workflow_demo(w: Workflow, args: List[str]) -> None:
     """Run CH-benCHmark without any load on Materialize"""
 
     # Parse arguments.
@@ -83,7 +83,7 @@ def workflow_demo(w: Workflow, args: List[str]):
     )
 
 
-def workflow_load_test(w: Workflow):
+def workflow_load_test(w: Workflow) -> None:
     """Run CH-benCHmark with a selected amount of load against Materialize."""
     w.start_services(services=["prometheus-sql-exporter"])
     workflow_demo(

@@ -16,8 +16,6 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-confluent = []
-
 mz_disable_user_indexes = Materialized(
     name="mz_disable_user_indexes",
     hostname="materialized",
@@ -37,7 +35,7 @@ services = [
 ]
 
 
-def workflow_disable_user_indexes(w: Workflow):
+def workflow_disable_user_indexes(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     # Create catalog with vanilla MZ

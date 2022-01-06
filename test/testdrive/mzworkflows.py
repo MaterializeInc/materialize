@@ -44,30 +44,30 @@ aws_localstack = "--aws-endpoint http://localstack:4566"
 aws_amazon = "--aws-region=us-east-2"
 
 
-def workflow_testdrive(w: Workflow):
+def workflow_testdrive(w: Workflow) -> None:
     """Run non-esoteric tests with localstack"""
     w.start_and_wait_for_tcp(services=["localstack"])
     test_testdrive(w, mz_default, aws_localstack, tests)
 
 
-def workflow_testdrive_ci(w: Workflow):
+def workflow_testdrive_ci(w: Workflow) -> None:
     """Run all tests with actual AWS credentials"""
     test_testdrive(w, mz_default, aws_amazon, tests_ci)
 
 
-def workflow_testdrive_ci_workers_1(w: Workflow):
+def workflow_testdrive_ci_workers_1(w: Workflow) -> None:
     test_testdrive(w, mz_workers_1, aws_amazon, tests_ci)
 
 
-def workflow_testdrive_ci_workers_32(w: Workflow):
+def workflow_testdrive_ci_workers_32(w: Workflow) -> None:
     test_testdrive(w, mz_workers_32, aws_amazon, tests_ci)
 
 
-def workflow_persistence_testdrive(w: Workflow):
+def workflow_persistence_testdrive(w: Workflow) -> None:
     test_testdrive(w, mz_persistence, aws_amazon, tests_ci)
 
 
-def test_testdrive(w: Workflow, mz: Materialized, aws: str, tests: str):
+def test_testdrive(w: Workflow, mz: Materialized, aws: str, tests: str) -> None:
     w.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", mz.name]
     )

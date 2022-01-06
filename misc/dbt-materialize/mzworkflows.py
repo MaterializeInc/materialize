@@ -37,18 +37,18 @@ services = [
 ]
 
 
-def workflow_ci(w: Workflow):
+def workflow_ci(w: Workflow) -> None:
     """Runs the dbt adapter test suite against Materialize with and without TLS."""
     workflow_no_tls(w)
     workflow_tls(w)
 
 
-def workflow_no_tls(w: Workflow):
+def workflow_no_tls(w: Workflow) -> None:
     """Runs the dbt adapter test suite against Materialize with TLS disabled."""
     run_test(w, "materialized", {"DBT_HOST": "materialized"})
 
 
-def workflow_tls(w: Workflow):
+def workflow_tls(w: Workflow) -> None:
     """Runs the dbt adapter test suite against Materialize with TLS enabled."""
     run_test(
         w,
@@ -62,7 +62,7 @@ def workflow_tls(w: Workflow):
     )
 
 
-def run_test(w: Workflow, materialized: str, env: Dict[str, str]):
+def run_test(w: Workflow, materialized: str, env: Dict[str, str]) -> None:
     w.start_services(services=[materialized])
     w.wait_for_tcp(host=materialized, port=6875)
     w.run_service(

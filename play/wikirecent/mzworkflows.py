@@ -12,7 +12,7 @@ from pathlib import Path
 from materialize.mzcompose import Workflow
 
 
-def workflow_demo(w: Workflow):
+def workflow_demo(w: Workflow) -> None:
     """Streams data from Wikipedia to a browser visualzation."""
     w.start_services(services=["server"])
     w.wait_for_mz()

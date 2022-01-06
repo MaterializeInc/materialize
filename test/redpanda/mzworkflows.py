@@ -17,7 +17,7 @@ services = [
 ]
 
 
-def workflow_redpanda_testdrive(w: Workflow):
+def workflow_redpanda_testdrive(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=["redpanda", "materialized"])
 
     # Features currently not supported by Redpanda:
