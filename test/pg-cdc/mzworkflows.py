@@ -9,14 +9,8 @@
 
 from typing import List
 
-from materialize.mzcompose import (
-    Materialized,
-    Postgres,
-    TestCerts,
-    Testdrive,
-    Workflow,
-    WorkflowArgumentParser,
-)
+from materialize.mzcompose import Workflow, WorkflowArgumentParser
+from materialize.mzcompose.services import Materialized, Postgres, TestCerts, Testdrive
 
 services = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),

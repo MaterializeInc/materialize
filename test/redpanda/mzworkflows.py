@@ -7,7 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Materialized, Redpanda, Testdrive, Workflow
+from materialize.mzcompose import Workflow
+from materialize.mzcompose.services import Materialized, Redpanda, Testdrive
 
 services = [
     Redpanda(),

@@ -9,13 +9,12 @@
 
 from typing import List
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow, WorkflowArgumentParser
+from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     SchemaRegistry,
     Testdrive,
-    Workflow,
-    WorkflowArgumentParser,
     Zookeeper,
 )
 

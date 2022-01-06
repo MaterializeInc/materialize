@@ -12,7 +12,8 @@ import subprocess
 from tempfile import NamedTemporaryFile
 from typing import Any, Callable
 
-from materialize.mzcompose import Materialized, Testdrive, Workflow
+from materialize.mzcompose import Workflow
+from materialize.mzcompose.services import Materialized, Testdrive
 
 
 class Executor:

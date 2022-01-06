@@ -9,17 +9,13 @@
 
 from typing import List
 
-from materialize.mzcompose import (
-    Materialized,
-    PrometheusSQLExporter,
-    PythonService,
-    Workflow,
-)
+from materialize.mzcompose import Service, Workflow
+from materialize.mzcompose.services import Materialized, PrometheusSQLExporter
 
 services = [
     Materialized(),
     PrometheusSQLExporter(),
-    PythonService(
+    Service(
         name="perf-kinesis",
         config={
             "mzbuild": "perf-kinesis",

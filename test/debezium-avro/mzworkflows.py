@@ -12,7 +12,8 @@ import random
 import string
 from unittest.mock import patch
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow
+from materialize.mzcompose.services import (
     Debezium,
     Kafka,
     Materialized,
@@ -20,7 +21,6 @@ from materialize.mzcompose import (
     SchemaRegistry,
     SqlServer,
     Testdrive,
-    Workflow,
     Zookeeper,
 )
 

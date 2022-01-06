@@ -9,12 +9,12 @@
 
 import time
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow
+from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     SchemaRegistry,
     Testdrive,
-    Workflow,
     Zookeeper,
 )
 

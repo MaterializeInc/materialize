@@ -9,7 +9,8 @@
 
 from typing import Dict
 
-from materialize.mzcompose import Materialized, PythonService, TestCerts, Workflow
+from materialize.mzcompose import Workflow
+from materialize.mzcompose.services import Materialized, Service, TestCerts
 
 services = [
     TestCerts(),
@@ -25,7 +26,7 @@ services = [
         depends_on=["test-certs"],
         volumes=["secrets:/secrets"],
     ),
-    PythonService(
+    Service(
         "dbt-test",
         {
             "mzbuild": "dbt-materialize",

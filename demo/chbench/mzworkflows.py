@@ -11,11 +11,8 @@ from typing import List
 
 import requests
 
-from materialize.mzcompose import (
-    PrometheusSQLExporter,
-    Workflow,
-    WorkflowArgumentParser,
-)
+from materialize.mzcompose import Workflow, WorkflowArgumentParser
+from materialize.mzcompose.services import PrometheusSQLExporter
 
 
 def workflow_demo(w: Workflow, args: List[str]):
