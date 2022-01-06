@@ -9,11 +9,13 @@
 
 //! Modular Timely Dataflow operators that can persist and seal updates in streams.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::task::Context;
 
@@ -458,6 +460,170 @@ where
             },
         )
     }
+}
+
+/// Extension trait for [`Stream`].
+// NOTE: This is not named AllowCompaction because there are already too many things with that
+// name...
+pub trait AllowPersistCompaction<G: Scope<Timestamp = u64>, D: TimelyData> {
+    /// Passes through each element of the stream and allows compaction on the given collection
+    /// (the `write` handle) when the input frontier combined with the allowed compaction frontier
+    /// advance.
+    fn allow_compaction<K, V>(
+        &self,
+        name: &str,
+        write: StreamWriteHandle<K, V>,
+        allowed_compaction_frontier: Rc<RefCell<Antichain<u64>>>,
+    ) -> Stream<G, (D, u64, isize)>
+    where
+        K: Codec,
+        V: Codec;
+}
+
+impl<G, D> AllowPersistCompaction<G, D> for Stream<G, (D, u64, isize)>
+where
+    G: Scope<Timestamp = u64>,
+    D: TimelyData,
+{
+    fn allow_compaction<K, V>(
+        &self,
+        name: &str,
+        write: StreamWriteHandle<K, V>,
+        allowed_compaction_frontier: Rc<RefCell<Antichain<u64>>>,
+    ) -> Stream<G, (D, u64, isize)>
+    where
+        K: Codec,
+        V: Codec,
+    {
+        let operator_name = format!("allow_compaction({})", name);
+        let mut op = OperatorBuilder::new(operator_name.clone(), self.scope());
+
+        let mut data_input = op.new_input(&self, Pipeline);
+        let (mut data_output, data_output_stream) = op.new_output();
+        let mut data_buffer = Vec::new();
+
+        // We only allow compaction from one worker because doing so from multiple workers could
+        // lead to a race conditions where one worker allows compaction up to time `t` while
+        // another worker is still trying to write data with timestamps that are not beyond `t`.
+        //
+        // Upstream operators will only advance their frontier when writes are succesful. With
+        // timely progress tracking we are therefore sure that when the frontier advances for
+        // worker 0, it has advanced to at least that point for all upstream operators.
+        //
+        // Alternative solutions would be to "teach" persistence to work with allowing compaction
+        // from multiple workers, or to use a non-timely solution for keeping track of outstanding
+        // write capabilities.
+        let active_operator = self.scope().index() == 0;
+
+        // An activator that allows futures to re-schedule this operator when ready.
+        let activator = Arc::new(
+            self.scope()
+                .sync_activator_for(&op.operator_info().address[..]),
+        );
+
+        let mut pending_futures = VecDeque::new();
+
+        // Double buffering, so we have fewer allocations.
+        let mut effective_compaction_frontier = Antichain::new();
+        let mut new_effective_compaction_frontier = Antichain::new();
+
+        op.build_reschedule(move |_capabilities| {
+            move |frontiers| {
+                let mut data_output = data_output.activate();
+
+                // Pass through all data.
+                data_input.for_each(|cap, data| {
+                    data.swap(&mut data_buffer);
+
+                    let mut session = data_output.session(&cap);
+                    session.give_vec(&mut data_buffer);
+                });
+
+                if !active_operator {
+                    // We are always complete if we're not the active operator.
+                    return false;
+                }
+
+                let allowed_compaction_frontier = allowed_compaction_frontier.borrow_mut();
+                let input_frontier = frontiers[0].frontier();
+
+                new_effective_compaction_frontier.clear();
+                new_effective_compaction_frontier.extend(input_frontier.iter().cloned());
+                new_effective_compaction_frontier
+                    .extend(allowed_compaction_frontier.iter().cloned());
+
+                if new_effective_compaction_frontier == effective_compaction_frontier {
+                    // No progress!
+                    return !pending_futures.is_empty();
+                }
+
+                std::mem::swap(
+                    &mut effective_compaction_frontier,
+                    &mut new_effective_compaction_frontier,
+                );
+
+                log::trace!(
+                    "In {}, allowing compaction up to {:?}...",
+                    &operator_name,
+                    effective_compaction_frontier,
+                );
+
+                let future = write.allow_compaction(effective_compaction_frontier.clone());
+
+                pending_futures.push_back(CompactionFuture {
+                    frontier: effective_compaction_frontier.clone(),
+                    future,
+                });
+
+                // Swing through all pending futures and see if they're ready. Ready futures will
+                // invoke the Activator, which will make sure that we arrive here, even when there
+                // are no changes in the input frontier or new input.
+                let waker = futures_util::task::waker_ref(&activator);
+                let mut context = Context::from_waker(&waker);
+
+                while let Some(mut pending_future) = pending_futures.pop_front() {
+                    match Pin::new(&mut pending_future.future).poll(&mut context) {
+                        std::task::Poll::Ready(Ok(_)) => {
+                            log::trace!(
+                                "In {}, finished allowing compaction up to {:?}",
+                                &operator_name,
+                                pending_future.frontier,
+                            );
+                        }
+                        std::task::Poll::Ready(Err(e)) => {
+                            // We don't retry or emit an error. Compaction is an optimization that
+                            // is not strictly necessary for correctness.
+                            log::error!("In {}: {}", &operator_name, e);
+                        }
+                        std::task::Poll::Pending => {
+                            // We assume that compaction requests are worked off in order and stop
+                            // trying for the first one that is not done. Push the future back to
+                            // the front of the queue. We have to do this dance of popping and
+                            // pushing because we're modifying the queue while we work on a future.
+                            // This prevents us from just getting a reference to the front of the
+                            // queue and then popping once we know that a future is done.
+                            pending_futures.push_front(pending_future);
+                            break;
+                        }
+                    }
+                }
+
+                // When we're done, clear all pending futures to allow speedy shutdown.
+                if frontiers[0].frontier().is_empty() {
+                    pending_futures.clear();
+                }
+
+                !pending_futures.is_empty()
+            }
+        });
+
+        data_output_stream
+    }
+}
+
+struct CompactionFuture<F: Future<Output = Result<SeqNo, Error>>> {
+    frontier: Antichain<u64>,
+    future: F,
 }
 
 /// Extension trait for [`Stream`].

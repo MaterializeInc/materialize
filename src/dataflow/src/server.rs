@@ -135,6 +135,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
                 local_inputs: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
+                allowed_compaction_frontiers: HashMap::default(),
                 dataflow_tokens: HashMap::new(),
                 sink_write_frontiers: HashMap::new(),
                 metrics,
@@ -808,6 +809,15 @@ where
                         .allow_compaction(id, frontier.borrow());
                     if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
                         ts_history.set_compaction_frontier(frontier.borrow());
+                    }
+
+                    if let Some(allowed_compaction_frontier) =
+                        self.render_state.allowed_compaction_frontiers.get_mut(&id)
+                    {
+                        let mut allowed_compaction_frontier =
+                            allowed_compaction_frontier.borrow_mut();
+                        allowed_compaction_frontier.clear();
+                        allowed_compaction_frontier.extend(frontier);
                     }
                 }
             }

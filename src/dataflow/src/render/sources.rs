@@ -9,20 +9,23 @@
 
 //! Logic related to the creation of dataflow sources.
 
+use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use timely::progress::Antichain;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
-use persist_types::Codec;
-use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Concat, Map, OkErr, UnorderedInput};
 use timely::dataflow::Scope;
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use persist::operators::source::PersistedSource;
-use persist::operators::stream::{AwaitFrontier, Seal};
+use persist::operators::stream::{AllowPersistCompaction, AwaitFrontier, Seal};
 use persist::operators::upsert::PersistentUpsertConfig;
+use persist_types::Codec;
 
 use dataflow_types::*;
 use expr::{GlobalId, Id, SourceInstanceId};
@@ -496,11 +499,40 @@ where
                                         source_persist_config,
                                     ) = source_persist_config
                                     {
+                                        let bindings_handle = source_persist_config
+                                            .bindings_config
+                                            .write_handle
+                                            .clone();
+                                        let upsert_state_handle =
+                                            source_persist_config.upsert_config.write_handle;
+
                                         let sealed_upsert = upsert_ok.conditional_seal(
                                             &source_name,
                                             &ts_bindings,
-                                            source_persist_config.upsert_config.write_handle,
-                                            source_persist_config.bindings_config.write_handle,
+                                            upsert_state_handle.clone(),
+                                            bindings_handle.clone(),
+                                        );
+
+                                        let allowed_compaction_frontier = Rc::new(RefCell::new(
+                                            Antichain::<Timestamp>::from_elem(
+                                                TimelyTimestamp::minimum(),
+                                            ),
+                                        ));
+                                        render_state.allowed_compaction_frontiers.insert(
+                                            orig_id.clone(),
+                                            Rc::clone(&allowed_compaction_frontier),
+                                        );
+
+                                        ts_bindings.allow_compaction(
+                                            format!("{}-timestamp-bindings", source_name).as_str(),
+                                            bindings_handle,
+                                            Rc::clone(&allowed_compaction_frontier),
+                                        );
+
+                                        let sealed_upsert = sealed_upsert.allow_compaction(
+                                            format!("{}-upsert-state", source_name).as_str(),
+                                            upsert_state_handle,
+                                            Rc::clone(&allowed_compaction_frontier),
                                         );
 
                                         // Don't send data forward to "dataflow" until the frontier
