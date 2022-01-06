@@ -77,15 +77,15 @@ class LintError:
         return (self.file, self.message) < (other.file, other.message)
 
 
-def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
+def _lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
     if "services" not in composition:
         return
 
     for (name, service) in composition["services"].items():
         if service.get("mzbuild") == "materialized":
-            lint_materialized_service(path, name, service, errors)
+            _lint_materialized_service(path, name, service, errors)
         elif "mzbuild" not in service and "image" in service:
-            lint_image_name(path, service["image"], errors)
+            _lint_image_name(path, service["image"], errors)
 
         if isinstance(service.get("environment"), dict):
             errors.append(
@@ -95,7 +95,7 @@ def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> N
             )
 
 
-def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
+def _lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
     from materialize.mzcompose.services import (
         DEFAULT_CONFLUENT_PLATFORM_VERSION,
         LINT_DEBEZIUM_VERSIONS,
@@ -146,7 +146,7 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
         )
 
 
-def lint_materialized_service(
+def _lint_materialized_service(
     path: Path, name: str, service: Any, errors: List[LintError]
 ) -> None:
     # command may be a string that is passed to the shell, or a list of
@@ -325,7 +325,7 @@ class Composition:
             with open(path) as f:
                 composition = yaml.safe_load(f) or {}
 
-            lint_composition(path, composition, errs)
+            _lint_composition(path, composition, errs)
         return errs
 
     def run(
