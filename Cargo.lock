@@ -3307,7 +3307,7 @@ dependencies = [
 [[package]]
 name = "parquet-format-async-temp"
 version = "0.2.0"
-source = "git+https://github.com/danhhz/parquet-format-rs?branch=dep#7effe937f6efbf72b580fb92031a6dfc17b1355f"
+source = "git+https://github.com/MaterializeInc/parquet-format-rs?branch=main#52ef597df1a4067f1d8b12766661ca9b32fd7310"
 dependencies = [
  "async-trait",
  "byteorder",

@@ -122,5 +122,5 @@ allow-git = [
     # Until https://github.com/prisma/tiberius/pull/189 is released
     "https://github.com/prisma/tiberius.git",
     # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
-    "https://github.com/danhhz/parquet-format-rs.git",
+    "https://github.com/MaterializeInc/parquet-format-rs.git",
 ]
