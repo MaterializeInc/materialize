@@ -474,11 +474,14 @@ where
                                     // The opeator currently does it unconditionally
                                     let upsert_operator_name = format!("{}-upsert", source_name);
 
+                                    let key_arity = key_desc.expect("SourceEnvelope::Upsert to require SourceDataEncoding::KeyValue").arity();
+
                                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                                         &upsert_operator_name,
                                         &results,
                                         self.as_of_frontier.clone(),
                                         &mut linear_operators,
+                                        key_arity,
                                         src.bare_desc.typ().arity(),
                                         source_persist_config
                                             .as_ref()
