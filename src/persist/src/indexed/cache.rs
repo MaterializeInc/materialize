@@ -45,7 +45,7 @@ use crate::storage::{Atomicity, Blob};
 #[derive(Debug)]
 pub struct BlobCache<B: Blob> {
     build_version: Version,
-    metrics: Metrics,
+    metrics: Arc<Metrics>,
     blob: Arc<Mutex<B>>,
     // TODO: Use a disk-backed LRU cache.
     unsealed: Arc<Mutex<HashMap<String, Arc<BlobUnsealedBatch>>>>,
@@ -70,7 +70,7 @@ impl<B: Blob> BlobCache<B> {
     const META_KEY: &'static str = "META";
 
     /// Returns a new, empty cache for the given [Blob] storage.
-    pub fn new(build: BuildInfo, metrics: Metrics, blob: B) -> Self {
+    pub fn new(build: BuildInfo, metrics: Arc<Metrics>, blob: B) -> Self {
         BlobCache {
             build_version: build.semver_version(),
             metrics,
@@ -404,7 +404,7 @@ mod tests {
     fn build_version() -> Result<(), Error> {
         let mut cache = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
-            Metrics::default(),
+            Arc::new(Metrics::default()),
             MemRegistry::new().blob_no_reentrance()?,
         );
 

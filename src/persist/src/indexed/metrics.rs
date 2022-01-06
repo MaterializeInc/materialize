@@ -55,7 +55,10 @@ impl BlobMetricsByType {
 }
 
 /// Persistence related monitoring metrics.
-#[derive(Clone, Debug)]
+///
+/// Intentionally not Clone because we expect this to be passed around in an
+/// Arc.
+#[derive(Debug)]
 pub struct Metrics {
     pub(crate) stream_count: ThirdPartyMetric<UIntGauge>,
     // TODO: pub(crate) stream_updated: ThirdPartyMetric<UIntGauge>,
