@@ -299,7 +299,7 @@ class ListWorkflowsCommand(Command):
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
-        for name in sorted(composition.python_funcs):
+        for name in sorted(composition.workflows):
             print(name)
 
 
@@ -312,7 +312,7 @@ class DescribeCommand(Command):
         composition = load_composition(args)
 
         workflows = []
-        for name, fn in composition.python_funcs.items():
+        for name, fn in composition.workflows.items():
             workflows.append((name, inspect.getdoc(fn) or ""))
         workflows.sort()
 
