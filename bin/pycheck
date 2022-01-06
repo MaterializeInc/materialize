@@ -21,10 +21,10 @@ py_folders=(ci misc/python)
 
 try bin/pyactivate --dev -m mypy "${py_folders[@]}"
 if ! try_last_failed; then
-    # mzworkflows.py files need to be passed to mypy individually to avoid
+    # mzcompose.py files need to be passed to mypy individually to avoid
     # duplicate module warnings. We don't check these if the previous `mypy`
     # invocation failed, though, or we'll get a ton of duplicate warnings.
-    for file in $(git_files "**/mzworkflows.py"); do
+    for file in $(git_files "**/mzcompose.py"); do
         try bin/pyactivate --dev -m mypy "$file"
     done
 fi

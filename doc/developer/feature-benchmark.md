@@ -79,7 +79,7 @@ This framework has the following features:
 
 The framework is organized around the idea of repeatedly executing the feature under test until a termination condition is met. After measurements have been accumulated, a definitive performance value is chosen.
 
-All the rules and constants governing the process can be seen at the top of `test/feature-benchmark/mzworkflows.py`.
+All the rules and constants governing the process can be seen at the top of `test/feature-benchmark/mzcompose.py`.
 
 ## Executor
 

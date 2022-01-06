@@ -173,7 +173,7 @@ def _lint_materialized_service(
 
 
 class Composition:
-    """A parsed mzcompose.yml with a loaded mzworkflows.py file."""
+    """A parsed mzcompose.yml with a loaded mzcompose.py file."""
 
     def __init__(
         self, repo: mzbuild.Repository, name: str, preserve_ports: bool = False
@@ -204,10 +204,10 @@ class Composition:
         if "services" not in compose:
             compose["services"] = {}
 
-        # Load the mzworkflows.py file, if one exists
-        mzworkflows_py = self.path / "mzworkflows.py"
-        if mzworkflows_py.exists():
-            spec = importlib.util.spec_from_file_location("mzworkflows", mzworkflows_py)
+        # Load the mzcompose.py file, if one exists
+        mzcompose_py = self.path / "mzcompose.py"
+        if mzcompose_py.exists():
+            spec = importlib.util.spec_from_file_location("mzcompose", mzcompose_py)
             assert spec
             module = importlib.util.module_from_spec(spec)
             assert isinstance(spec.loader, importlib.abc.Loader)

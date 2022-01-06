@@ -46,7 +46,7 @@ def main(argv: List[str]) -> None:
         prog="mzcompose",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="""
-mzcompose orchestrates services defined in mzcompose.yml or mzworkflows.py.
+mzcompose orchestrates services defined in mzcompose.yml or mzcompose.py.
 It wraps Docker Compose to add some Materialize-specific features.""",
         epilog="""
 These are only the most common options. There are additional Docker Compose
@@ -152,7 +152,7 @@ def load_composition(args: argparse.Namespace) -> mzcompose.Composition:
             for path in repo.compositions.values():
                 hint += f"    {path.relative_to(Path.cwd())}\n"
             raise UIError(
-                "directory does not contain an mzcompose.yml or mzworkflows.py",
+                "directory does not contain an mzcompose.yml or mzcompose.py",
                 hint,
             )
 
