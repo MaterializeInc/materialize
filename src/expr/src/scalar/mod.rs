@@ -1201,6 +1201,7 @@ pub enum EvalError {
         target_type: String,
         length: usize,
     },
+    MultidimensionalArrayRemovalNotSupported,
 }
 
 impl fmt::Display for EvalError {
@@ -1299,6 +1300,12 @@ impl fmt::Display for EvalError {
                 length,
             } => {
                 write!(f, "value too long for type {}({})", target_type, length)
+            }
+            &EvalError::MultidimensionalArrayRemovalNotSupported => {
+                write!(
+                    f,
+                    "removing elements from multidimensional arrays is not supported"
+                )
             }
         }
     }

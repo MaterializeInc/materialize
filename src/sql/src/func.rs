@@ -117,6 +117,7 @@ impl TypeCategory {
         match param {
             ParamType::Any
             | ParamType::ArrayAny
+            | ParamType::ArrayElementAny
             | ParamType::ListAny
             | ParamType::ListElementAny
             | ParamType::NonVecAny
@@ -512,7 +513,8 @@ impl ParamList {
     ///
     /// Polymorphic type consistency constraints include:
     /// - All arguments passed to `ArrayAny` must be `ScalarType::Array`s with
-    ///   the same types of elements.
+    ///   the same types of elements. All arguments passed to `ArrayElementAny`
+    ///   must also be of these elements' type.
     /// - All arguments passed to `ListAny` must be `ScalarType::List`s with the
     ///   same types of elements. All arguments passed to `ListElementAny` must
     ///   also be of these elements' type.
@@ -544,7 +546,8 @@ impl ParamList {
     ///   Valid `ScalarType`s passed to these parameters have a `custom_oid`
     ///   field and some embedded type, which we'll refer to as its element.
     ///
-    /// - **Element parameters** which include `ListElementAny` and `NonVecAny`.
+    /// - **Element parameters** which include `ArrayElementAny`,
+    ///   `ListElementAny` and `NonVecAny`.
     ///
     /// Note that:
     /// - Custom types can be used as values for either complex or element
@@ -661,6 +664,22 @@ impl ParamList {
                         element_lock = true;
                     }
                 }
+                (ParamType::ArrayElementAny, Some(t), None) => {
+                    constrained_type = Some(ScalarType::Array(Box::new(t.clone())));
+                    element_lock = t.is_custom_type();
+                }
+                (ParamType::ArrayElementAny, Some(t), Some(constrained)) => {
+                    let constrained_element_type = constrained.unwrap_array_element_type();
+                    if (element_lock && t.is_custom_type() && t != constrained_element_type)
+                        || !complex_base_eq(t, &constrained_element_type)
+                    {
+                        return None;
+                    }
+                    if t.is_custom_type() && !element_lock {
+                        constrained_type = Some(ScalarType::Array(Box::new(t.clone())));
+                        element_lock = true;
+                    }
+                }
                 (ParamType::ListElementAny, Some(t), None) => {
                     constrained_type = Some(ScalarType::List {
                         custom_oid: None,
@@ -751,6 +770,10 @@ pub enum ParamType {
     /// A polymorphic pseudotype permitting any array type.  For more details,
     /// see `ParamList::resolve_polymorphic_types`.
     ArrayAny,
+    /// A polymorphic pseudotype permitting all types, with more constraints
+    /// than `Any`, i.e. it is subject to polymorphic constraints. For more
+    /// details, see `ParamList::resolve_polymorphic_types`.
+    ArrayElementAny,
     /// A polymorphic pseudotype permitting a `ScalarType::List` of any element
     /// type.  For more details, see `ParamList::resolve_polymorphic_types`.
     ListAny,
@@ -779,7 +802,7 @@ impl ParamType {
         match self {
             ArrayAny => matches!(t, Array(..)),
             ListAny => matches!(t, List { .. }),
-            Any | ListElementAny => true,
+            Any | ArrayElementAny | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
             Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t.clone(), to.clone()),
@@ -808,7 +831,7 @@ impl ParamType {
     fn is_polymorphic(&self) -> bool {
         use ParamType::*;
         match self {
-            ArrayAny | ListAny | MapAny | ListElementAny | NonVecAny => true,
+            ArrayAny | ArrayElementAny | ListAny | MapAny | ListElementAny | NonVecAny => true,
             Any | Plain(_) => false,
         }
     }
@@ -828,6 +851,7 @@ impl ParamType {
             },
             ParamType::Any => postgres_types::Type::ANY.oid(),
             ParamType::ArrayAny => postgres_types::Type::ANYARRAY.oid(),
+            ParamType::ArrayElementAny => postgres_types::Type::ANYELEMENT.oid(),
             ParamType::ListAny => pgrepr::LIST.oid(),
             ParamType::ListElementAny => postgres_types::Type::ANYELEMENT.oid(),
             ParamType::MapAny => pgrepr::MAP.oid(),
@@ -1212,6 +1236,10 @@ fn coerce_args_to_types(
             ParamType::ArrayAny | ParamType::ListAny | ParamType::MapAny => {
                 do_convert(arg, &get_constrained_ty())?
             }
+            ParamType::ArrayElementAny => {
+                let constrained_array = get_constrained_ty();
+                do_convert(arg, &constrained_array.unwrap_array_element_type())?
+            }
             ParamType::ListElementAny => {
                 let constrained_list = get_constrained_ty();
                 do_convert(arg, &constrained_list.unwrap_list_element_type())?
@@ -1338,6 +1366,9 @@ lazy_static! {
             },
             "array_lower" => Scalar {
                 params!(ArrayAny, Int64) => BinaryFunc::ArrayLower, 2091;
+            },
+            "array_remove" => Scalar {
+                params!(ArrayAny, ArrayElementAny) => BinaryFunc::ArrayRemove, 3167;
             },
             "array_to_string" => Scalar {
                 params!(ArrayAny, String) => Operation::variadic(array_to_string), 395;
@@ -2195,6 +2226,12 @@ lazy_static! {
             },
             "list_prepend" => Scalar {
                 vec![ListElementAny, ListAny] => BinaryFunc::ElementListConcat, oid::FUNC_LIST_PREPEND_OID;
+            },
+            "list_remove" => Scalar {
+                vec![ListAny, ListElementAny] => Operation::binary(|ecx, lhs, rhs| {
+                    ecx.require_experimental_mode("list_remove")?;
+                    Ok(lhs.call_binary(rhs, BinaryFunc::ListRemove))
+                }), oid::FUNC_LIST_REMOVE_OID;
             },
             "mz_cluster_id" => Scalar {
                 params!() => Operation::nullary(mz_cluster_id), oid::FUNC_MZ_CLUSTER_ID_OID;

@@ -113,6 +113,8 @@ changes that have not yet been documented.
   Previous versions of Materialize would incorrectly return `0` in these cases.
   The new behavior matches PostgreSQL.
 
+- Add the `array_remove` and `list_remove` functions.
+
 {{< comment >}}
 Only add new release notes above this line.
 
