@@ -1,8 +1,6 @@
 # Introduction
 
-This document describes the format and the available facilities for writing Python-based workflows, to be executed by the `mzworkflows` tool.
-
-Using Python to define workflows and their participating services replaces the previous YAML-based format and is the preferred way to write tests going forward.
+This document describes the format and the available facilities for writing Python-based workflows, to be executed by the `mzcompose` tool.
 
 In this document, "workflow" and "test" are used interchangeably.
 
@@ -18,7 +16,7 @@ Python-based workflows are contained in a file named `mzworkflows.py`. The file 
 
 # Running
 
-Python-based workflows are executed in the same manner as YAML-based ones:
+Python-based workflows are executed like so:
 
 ```sh
 cd test/directory
@@ -134,7 +132,7 @@ The Python functions that start with `workflow_` are considered workflows. This 
 
 ## Steps
 
-A Python workflow can execute steps, which are the actions that were previously available in the YAML-based workflows.
+A Python workflow can execute steps.
 
 The [definitive reference](https://dev.materialize.com/api/python/materialize/mzcompose.html#materialize.mzcompose.WorkflowStep) lists all the individual steps that are available.
 
@@ -201,7 +199,3 @@ def workflow_simple_test(w: Workflow):
    w.run_service(service="testdrive-svc", command="*.td")
    ...
 ```
-
-# YAML-based workflows
-
-YAML-based workflows, defined in files named `mzcompose.yml` are being deprecated and should not be used for new tests.

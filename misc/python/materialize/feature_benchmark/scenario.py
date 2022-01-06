@@ -17,6 +17,8 @@ from materialize.feature_benchmark.measurement_source import (
 
 
 class Scenario:
+    __name__: str
+
     SHARED: Optional[MeasurementSource] = None
     INIT: Optional[MeasurementSource] = None
 

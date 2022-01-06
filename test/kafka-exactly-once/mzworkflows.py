@@ -9,13 +9,12 @@
 
 from typing import List
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow, WorkflowArgumentParser
+from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     SchemaRegistry,
     Testdrive,
-    Workflow,
-    WorkflowArgumentParser,
     Zookeeper,
 )
 
@@ -28,7 +27,7 @@ services = [
 ]
 
 
-def workflow_kafka_exactly_once(w: Workflow, args: List[str]):
+def workflow_kafka_exactly_once(w: Workflow, args: List[str]) -> None:
     parser = WorkflowArgumentParser(w)
     parser.add_argument(
         "--seed",

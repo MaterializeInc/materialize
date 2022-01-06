@@ -14,14 +14,13 @@ from unittest.mock import patch
 from semver import Version
 
 from materialize import util
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow, WorkflowArgumentParser
+from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     Postgres,
     SchemaRegistry,
     Testdrive,
-    Workflow,
-    WorkflowArgumentParser,
     Zookeeper,
 )
 
@@ -51,7 +50,7 @@ services = [
 ]
 
 
-def workflow_upgrade(w: Workflow, args: List[str]):
+def workflow_upgrade(w: Workflow, args: List[str]) -> None:
     """Test upgrades from various versions."""
 
     parser = WorkflowArgumentParser(w)
@@ -91,7 +90,7 @@ def workflow_upgrade(w: Workflow, args: List[str]):
 
 def test_upgrade_from_version(
     w: Workflow, from_version: str, priors: List[str], filter: str
-):
+) -> None:
     print(f"===>>> Testing upgrade from Materialize {from_version} to current_source.")
 
     version_glob = "|".join(["any_version", *priors, from_version])

@@ -9,12 +9,12 @@
 
 import os
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow
+from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     SchemaRegistry,
     Testdrive,
-    Workflow,
     Zookeeper,
 )
 
@@ -52,14 +52,14 @@ services = [
 td_test = os.environ.pop("TD_TEST", "*")
 
 
-def workflow_persistence(w: Workflow):
+def workflow_persistence(w: Workflow) -> None:
     workflow_kafka_sources(w)
     workflow_user_tables(w)
     workflow_failpoints(w)
     workflow_disable_user_indexes(w)
 
 
-def workflow_kafka_sources(w: Workflow):
+def workflow_kafka_sources(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=prerequisites)
 
     w.start_services(services=["materialized"])
@@ -94,7 +94,7 @@ def workflow_kafka_sources(w: Workflow):
     w.remove_volumes(volumes=["mzdata"])
 
 
-def workflow_user_tables(w: Workflow):
+def workflow_user_tables(w: Workflow) -> None:
     w.start_services(services=["materialized"])
     w.wait_for_mz(service="materialized")
 
@@ -116,7 +116,7 @@ def workflow_user_tables(w: Workflow):
     w.remove_volumes(volumes=["mzdata"])
 
 
-def workflow_failpoints(w: Workflow):
+def workflow_failpoints(w: Workflow) -> None:
     w.start_services(services=["mz_without_system_tables"])
     w.wait_for_mz(service="mz_without_system_tables")
 
@@ -129,7 +129,7 @@ def workflow_failpoints(w: Workflow):
     w.remove_volumes(volumes=["mzdata"])
 
 
-def workflow_disable_user_indexes(w: Workflow):
+def workflow_disable_user_indexes(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=prerequisites)
 
     w.start_services(services=["materialized"])

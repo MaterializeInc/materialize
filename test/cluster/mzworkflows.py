@@ -7,13 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow
+from materialize.mzcompose.services import (
     Coordd,
     Dataflowd,
     Kafka,
     SchemaRegistry,
     Testdrive,
-    Workflow,
     Zookeeper,
 )
 
@@ -49,11 +49,11 @@ services = [
 ]
 
 
-def workflow_cluster_smoke(w: Workflow):
+def workflow_cluster_smoke(w: Workflow) -> None:
     test_cluster(w, "ls -1 smoke/*.td")
 
 
-def workflow_cluster_testdrive(w: Workflow):
+def workflow_cluster_testdrive(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
     # Skip tests that use features that are not supported yet
     test_cluster(
@@ -61,7 +61,7 @@ def workflow_cluster_testdrive(w: Workflow):
     )
 
 
-def test_cluster(w: Workflow, glob: str):
+def test_cluster(w: Workflow, glob: str) -> None:
     w.start_services(services=["dataflowd_1", "dataflowd_2"])
     w.start_services(services=["materialized"])
     w.wait_for_mz()

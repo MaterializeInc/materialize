@@ -12,7 +12,7 @@ from typing import List
 from materialize.mzcompose import Workflow, WorkflowArgumentParser
 
 
-def workflow_start_live_data(w: Workflow, args: List[str]):
+def workflow_start_live_data(w: Workflow, args: List[str]) -> None:
     parser = WorkflowArgumentParser(w)
     parser.add_argument(
         "--config-file",
@@ -30,7 +30,7 @@ def workflow_start_live_data(w: Workflow, args: List[str]):
     )
 
 
-def workflow_replay(w: Workflow, args: List[str]):
+def workflow_replay(w: Workflow, args: List[str]) -> None:
     parser = WorkflowArgumentParser(w)
     parser.add_argument(
         "--config-file",
@@ -46,7 +46,7 @@ def workflow_replay(w: Workflow, args: List[str]):
     )
 
 
-def start_everything(w: Workflow):
+def start_everything(w: Workflow) -> None:
     w.start_services(services=["kafka", "materialized"])
     w.wait_for_tcp(host="kafka", port=9092)
     w.wait_for_mz()

@@ -7,16 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow
+from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     SchemaRegistry,
     Testdrive,
-    Workflow,
     Zookeeper,
 )
-
-confluent = []
 
 mz_disable_user_indexes = Materialized(
     name="mz_disable_user_indexes",
@@ -37,7 +35,7 @@ services = [
 ]
 
 
-def workflow_disable_user_indexes(w: Workflow):
+def workflow_disable_user_indexes(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     # Create catalog with vanilla MZ

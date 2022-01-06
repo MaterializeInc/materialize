@@ -9,14 +9,8 @@
 
 from typing import List
 
-from materialize.mzcompose import (
-    Materialized,
-    Postgres,
-    TestCerts,
-    Testdrive,
-    Workflow,
-    WorkflowArgumentParser,
-)
+from materialize.mzcompose import Workflow, WorkflowArgumentParser
+from materialize.mzcompose.services import Materialized, Postgres, TestCerts, Testdrive
 
 services = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),
@@ -26,7 +20,7 @@ services = [
 ]
 
 
-def workflow_pg_cdc(w: Workflow, args: List[str]):
+def workflow_pg_cdc(w: Workflow, args: List[str]) -> None:
     parser = WorkflowArgumentParser(w)
     parser.add_argument(
         "filter",

@@ -10,12 +10,12 @@
 from os import environ
 from unittest.mock import patch
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow
+from materialize.mzcompose.services import (
     Localstack,
     Materialized,
     Testdrive,
     Toxiproxy,
-    Workflow,
 )
 
 services = [
@@ -31,7 +31,7 @@ services = [
 # network and expect full recovery if the interruption has been
 # shorter than the timeout.
 #
-def workflow_s3_resumption(w: Workflow):
+def workflow_s3_resumption(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=["localstack", "materialized", "toxiproxy"])
     w.wait_for_mz()
 
