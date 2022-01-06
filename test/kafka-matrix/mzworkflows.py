@@ -43,8 +43,9 @@ def workflow_kafka_matrix(w: Workflow):
             SchemaRegistry(tag=version),
         ]
         with w.with_services(confluent_platform_services):
-            w.start_and_wait_for_tcp(services=confluent_platform_services)
-            w.start_services(services=["materialized"])
+            w.start_and_wait_for_tcp(
+                services=["zookeeper", "kafka", "schema-registry", "materialized"]
+            )
             w.wait_for_mz()
             w.run_service(
                 service="testdrive-svc",
