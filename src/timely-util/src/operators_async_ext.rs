@@ -9,8 +9,7 @@
 
 //! Extensions for `OperatorBuilder` to create async operators.
 
-use std::cell::Cell;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -20,8 +19,7 @@ use std::task::{Context, Poll};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 /// A type that is not inhabited by any value. Should be redefined as the
@@ -106,18 +104,14 @@ pub trait OperatorBuilderExt<G: Scope> {
     /// ecosystem the only way to yield control back to timely is by awaiting on
     /// `scheduler.yield_now()`. The operator will ensure that this call resolves when there is
     /// more work to do.
-    ///
-    /// The `reschedule_flag` argument to the `constructor` is used to communicate whether the
-    /// operator is complete.  It corresponds to the `bool` return value of `build_reschedule`.
     fn build_async<B, Fut>(self, scope: G, constructor: B)
     where
         B: FnOnce(
             Vec<Capability<G::Timestamp>>,
             Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
             Scheduler,
-            Rc<Cell<bool>>,
         ) -> Fut,
-        Fut: Future<Output = Never> + 'static;
+        Fut: Future<Output = ()> + 'static;
 }
 
 impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
@@ -127,9 +121,8 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
             Vec<Capability<G::Timestamp>>,
             Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
             Scheduler,
-            Rc<Cell<bool>>,
         ) -> Fut,
-        Fut: Future<Output = Never> + 'static,
+        Fut: Future<Output = ()> + 'static,
     {
         let activator = scope.sync_activator_for(&self.operator_info().address[..]);
         let waker = futures_util::task::waker(Arc::new(activator));
@@ -137,7 +130,6 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
             Antichain::from_elem(Timestamp::minimum());
             self.shape().inputs()
         ]));
-        let reschedule_flag = Rc::new(Cell::new(false));
 
         self.build_reschedule(move |capabilities| {
             let scheduler = Scheduler::default();
@@ -145,7 +137,6 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
                 capabilities,
                 Rc::clone(&shared_frontiers),
                 scheduler.clone(),
-                Rc::clone(&reschedule_flag),
             ));
             move |frontiers| {
                 // Attempt to update the shared frontier before polling the future.  This operation
@@ -163,7 +154,9 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
                 }
 
                 let had_pending_notify = scheduler.notify();
-                let _ = Pin::new(&mut logic_fut).poll(&mut Context::from_waker(&waker));
+                let operator_incomplete = Pin::new(&mut logic_fut)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending();
                 // Here we check that:
                 //   1. the scheduler had been notified in some previous run of the closure
                 //   2. the future just went past a `scheduler.notified().await` point
@@ -178,7 +171,7 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
                     waker.wake_by_ref();
                 }
 
-                reschedule_flag.get()
+                operator_incomplete
             }
         });
     }
@@ -188,7 +181,7 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
 #[macro_export]
 macro_rules! async_op {
     (|$capabilities:ident, $frontiers:ident| $body:block) => {
-        move |mut capabilities, mut frontiers, scheduler, reschedule_flag| async move {
+        move |mut capabilities, mut frontiers, scheduler| async move {
             loop {
                 scheduler.notified().await;
                 // rebind to mutable references to make sure they can't be accidentally dropped
@@ -197,11 +190,9 @@ macro_rules! async_op {
                 #[allow(unused_mut)]
                 let mut $frontiers = &mut frontiers;
 
-                // If this async block is `poll`ed and returns while `$body` is executing, it
-                // should always be rescheduled.
-                reschedule_flag.set(true);
-                let result: bool = async { $body }.await;
-                reschedule_flag.set(result);
+                if !async { $body }.await && frontiers.borrow().iter().all(|f| f.is_empty()) {
+                    break;
+                }
             }
         }
     };
