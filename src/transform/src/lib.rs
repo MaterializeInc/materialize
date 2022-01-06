@@ -359,6 +359,7 @@ impl Optimizer {
                     Box::new(crate::union_cancel::UnionBranchCancellation),
                     Box::new(crate::cse::relation_cse::RelationCSE),
                     Box::new(crate::inline_let::InlineLet::new(true)),
+                    Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
                 ],
             }),
         ];
