@@ -168,6 +168,38 @@ impl BoxScalarExpr {
         }
     }
 
+    /// Adds any columns that *must* be non-Null for `self` to be non-Null.
+    pub fn non_null_requirements(&self, columns: &mut HashSet<ColumnReference>) {
+        use BoxScalarExpr::*;
+        match self {
+            ColumnReference(col) => {
+                columns.insert(col.clone());
+            }
+            BaseColumn(..) | Literal(..) | CallNullary(_) => (),
+            CallUnary { func, expr } => {
+                if func.propagates_nulls() {
+                    expr.non_null_requirements(columns);
+                }
+            }
+            CallBinary { func, expr1, expr2 } => {
+                if func.propagates_nulls() {
+                    expr1.non_null_requirements(columns);
+                    expr2.non_null_requirements(columns);
+                }
+            }
+            CallVariadic { func, exprs } => {
+                if func.propagates_nulls() {
+                    for expr in exprs {
+                        expr.non_null_requirements(columns);
+                    }
+                }
+            }
+            If { .. } => (),
+            // TODO
+            Aggregate { .. } => (),
+        }
+    }
+
     pub fn visit1<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),
