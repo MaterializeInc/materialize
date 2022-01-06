@@ -1,4 +1,5 @@
 # Copyright 2020 The Actions Ecosystem Authors
+# Modifications Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: [Slack] Notify P1
+# Portions of this file are derived from the README examples in the Action
+# Slack Notifier project. The original source code was retrieved on
+# January 5, 2022 from:
+
+#     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
+
+name: Slack - Notify P1
 
 on:
   issues:
@@ -28,7 +35,7 @@ jobs:
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           message: |
-            `${{ github.event.label.name }}` label has been added.
+            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (#${{ github.event.issue.number }}).
           channel: github-p1
           color: red
           verbose: true
