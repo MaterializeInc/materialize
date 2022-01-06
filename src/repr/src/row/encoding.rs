@@ -157,7 +157,10 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                 cached_size: Default::default(),
             }),
             Datum::Numeric(x) => {
-                // WIP should we do the same reduce that pack_numeric does?
+                // NB: This intentionally doesn't reduce this like push_datum
+                // does. That reduction doesn't effect equality, but it _is_
+                // destructive and we don't want to lose e.g. how many zeros
+                // were after the decimal.
                 let (digits, exponent, bits, lsu) = x.0.to_raw_parts();
                 Datum_type::numeric(ProtoNumeric {
                     digits,
