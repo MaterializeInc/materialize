@@ -398,39 +398,37 @@ impl KafkaSinkState {
     }
 
     async fn init_transactions(&self, timeout: Duration) -> KafkaResult<()> {
-        let self_producer = self.producer.clone();
+        let self_producer = Arc::clone(&self.producer);
         task::spawn_blocking(move || self_producer.init_transactions(timeout))
             .await
             .unwrap_or(Err(KafkaError::Canceled))
     }
 
     async fn begin_transaction(&self) -> KafkaResult<()> {
-        let self_producer = self.producer.clone();
+        let self_producer = Arc::clone(&self.producer);
         task::spawn_blocking(move || self_producer.begin_transaction())
             .await
             .unwrap_or(Err(KafkaError::Canceled))
     }
 
     async fn commit_transaction(&self, timeout: Duration) -> KafkaResult<()> {
-        let self_producer = self.producer.clone();
+        let self_producer = Arc::clone(&self.producer);
         task::spawn_blocking(move || self_producer.commit_transaction(timeout))
             .await
             .unwrap_or(Err(KafkaError::Canceled))
     }
 
     async fn abort_transaction(&self, timeout: Duration) -> KafkaResult<()> {
-        let self_producer = self.producer.clone();
+        let self_producer = Arc::clone(&self.producer);
         task::spawn_blocking(move || self_producer.abort_transaction(timeout))
             .await
             .unwrap_or(Err(KafkaError::Canceled))
     }
 
-    // TODO: make calls to ThreadedProducer::send on a backgroundthread.  Currently BaseRecord
-    // cannot be passed because its lifetime is not static.
-    async fn send<'a, K, P>(&self, record: BaseRecord<'a, K, P>) -> Result<(), bool>
+    fn send<'a, K, P>(&self, record: BaseRecord<'a, K, P>) -> Result<(), bool>
     where
-        K: ToBytes + ?Sized + Sync,
-        P: ToBytes + ?Sized + Sync,
+        K: ToBytes + ?Sized,
+        P: ToBytes + ?Sized,
     {
         if let Err((e, _)) = self.producer.send(record) {
             self.metrics.message_send_errors_counter.inc();
@@ -454,7 +452,7 @@ impl KafkaSinkState {
         }
     }
 
-    async fn send_consistency_record(
+    fn send_consistency_record(
         &self,
         transaction_id: &str,
         status: &str,
@@ -477,7 +475,7 @@ impl KafkaSinkState {
             .payload(&encoded)
             .key(&self.topic_prefix);
 
-        self.send(record).await
+        self.send(record)
     }
 
     /// Asserts that the write frontier has not yet advanced beyond `t`.
@@ -541,7 +539,6 @@ impl KafkaSinkState {
                     }
 
                     self.send_consistency_record(&min_frontier.to_string(), "END", None)
-                        .await
                         .map_err(|_e| anyhow::anyhow!("Error sending write frontier update."))?;
 
                     if self.transactional {
@@ -844,9 +841,8 @@ where
                         }
                         SendState::Begin => {
                             if s.consistency.is_some() {
-                                let result = s
-                                    .send_consistency_record(&ts.to_string(), "BEGIN", None)
-                                    .await;
+                                let result =
+                                    s.send_consistency_record(&ts.to_string(), "BEGIN", None);
 
                                 if let Err(retry) = result {
                                     return retry;
@@ -875,7 +871,7 @@ where
                             } else {
                                 record
                             };
-                            if let Err(retry) = s.send(record).await {
+                            if let Err(retry) = s.send(record) {
                                 return retry;
                             }
 
@@ -902,13 +898,11 @@ where
                         }
                         SendState::End(total_count) => {
                             if s.consistency.is_some() {
-                                let result = s
-                                    .send_consistency_record(
-                                        &ts.to_string(),
-                                        "END",
-                                        Some(total_count),
-                                    )
-                                    .await;
+                                let result = s.send_consistency_record(
+                                    &ts.to_string(),
+                                    "END",
+                                    Some(total_count),
+                                );
 
                                 if let Err(retry) = result {
                                     return retry;
