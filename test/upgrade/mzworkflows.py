@@ -14,14 +14,13 @@ from unittest.mock import patch
 from semver import Version
 
 from materialize import util
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow, WorkflowArgumentParser
+from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     Postgres,
     SchemaRegistry,
     Testdrive,
-    Workflow,
-    WorkflowArgumentParser,
     Zookeeper,
 )
 

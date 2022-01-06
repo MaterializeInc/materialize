@@ -10,12 +10,12 @@
 from os import environ
 from unittest.mock import patch
 
-from materialize.mzcompose import (
+from materialize.mzcompose import Workflow
+from materialize.mzcompose.services import (
     Localstack,
     Materialized,
     Testdrive,
     Toxiproxy,
-    Workflow,
 )
 
 services = [
