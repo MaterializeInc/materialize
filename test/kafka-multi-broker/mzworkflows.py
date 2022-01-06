@@ -37,7 +37,7 @@ services = [
 ]
 
 
-def workflow_kafka_multi_broker(w: Workflow):
+def workflow_kafka_multi_broker(w: Workflow) -> None:
     w.start_and_wait_for_tcp(
         services=[
             "zookeeper",

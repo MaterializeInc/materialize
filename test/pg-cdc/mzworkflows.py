@@ -20,7 +20,7 @@ services = [
 ]
 
 
-def workflow_pg_cdc(w: Workflow, args: List[str]):
+def workflow_pg_cdc(w: Workflow, args: List[str]) -> None:
     parser = WorkflowArgumentParser(w)
     parser.add_argument(
         "filter",

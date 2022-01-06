@@ -12,7 +12,7 @@ from typing import List
 from materialize.mzcompose import Workflow, WorkflowArgumentParser
 
 
-def workflow_demo(w: Workflow, args: List[str]):
+def workflow_demo(w: Workflow, args: List[str]) -> None:
     parser = WorkflowArgumentParser(w)
     parser.add_argument("--message-count", type=int, default=1000)
     parser.add_argument("--partitions", type=int, default=1)

@@ -48,11 +48,11 @@ services = [
 ]
 
 
-def workflow_start_confluents(w: Workflow):
+def workflow_start_confluents(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
 
-def workflow_versioned_mz(w: Workflow):
+def workflow_versioned_mz(w: Workflow) -> None:
     for mz in versioned_mz:
         w.start_services(services=[mz.name])
 
@@ -63,13 +63,13 @@ def workflow_versioned_mz(w: Workflow):
         w.kill_services(services=[mz.name])
 
 
-def workflow_two_mz(w: Workflow):
+def workflow_two_mz(w: Workflow) -> None:
     for mz in multiple_mz:
         w.start_services(services=[mz.name])
         w.wait_for_mz(service=mz.name)
 
 
-def workflow_mz_with_options(w: Workflow):
+def workflow_mz_with_options(w: Workflow) -> None:
     w.start_services(services=["mz_2_workers"])
     w.wait_for_mz(service="mz_2_workers")
     w.kill_services(services=["mz_2_workers"])

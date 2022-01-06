@@ -36,7 +36,7 @@ class Benchmark:
         self._aggregation = aggregation
 
     def run(self) -> Tuple[float, int]:
-        name = self._scenario.__name__  # type: ignore
+        name = self._scenario.__name__
 
         # Run the SHARED section once for both Mzs under measurement
         shared = self._scenario.SHARED

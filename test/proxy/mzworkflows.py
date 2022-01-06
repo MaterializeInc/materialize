@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from typing import Any, Dict, List
+
 from materialize.mzcompose import Workflow
 from materialize.mzcompose.services import (
     Kafka,
@@ -21,7 +23,7 @@ from materialize.mzcompose.services import (
 prerequisites = ["zookeeper", "kafka", "schema-registry", "squid", "localstack"]
 
 # Run certain testdrive tests for each combination of env variables under test
-tests = [
+tests: List[Dict[str, Any]] = [
     {
         "name": "with_proxy",
         "env": ["ALL_PROXY=http://squid:3128"],
@@ -63,19 +65,20 @@ services = [
 ]
 
 
-def workflow_proxy(w: Workflow):
+def workflow_proxy(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=prerequisites)
     test_proxy(w, "--aws-endpoint http://localstack:4566")
 
 
-def workflow_proxy_ci(w: Workflow):
+def workflow_proxy_ci(w: Workflow) -> None:
     w.start_and_wait_for_tcp(services=prerequisites)
     test_proxy(w, "--aws-region=us-east-2")
 
 
-def test_proxy(w: Workflow, aws: str):
+def test_proxy(w: Workflow, aws: str) -> None:
     for test in tests:
-        w.start_services(services=[test["mz"].name])
-        w.wait_for_mz(service=test["mz"].name)
+        mz: Materialized = test["mz"]
+        w.start_services(services=[mz.name])
+        w.wait_for_mz(service=mz.name)
         w.run_service(service="testdrive-svc", command=f"{aws} {test['td']}")
-        w.kill_services(services=[test["mz"].name])
+        w.kill_services(services=[mz.name])
