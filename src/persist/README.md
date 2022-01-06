@@ -75,13 +75,16 @@ you view it as [rustdoc for the persist crate].
 [storage layer]: #integration-with-platform
 
 
-# Rust API
+# Async API
 
-Persist has 2 public APIs: a rust one and a set of differential dataflow
-operators built on top of it.
+Persist has 2 public APIs: one based on rust's async [Future] and another one
+made of a set of differential dataflow operators built on top of it.
 
-Most methods in the persist rust API have a correspondence to part of the
-following dataflow:
+The Async API client lives in [`persist::indexed::runtime`]. Most methods have a
+correspondence to part of the following dataflow:
+
+[Future]: std::future::Future
+[`persist::indexed::runtime`]: crate::indexed::runtime
 
 ```rust,no_run
     use differential_dataflow::operators::arrange::ArrangeByKey;
@@ -132,12 +135,13 @@ user of persist is responsible for adapting the semantics.
 
 # Operator API
 
-Built on top of the rust API is a set of dataflow operators, the most notable of
-which is [PersistedSource]. The rest are more in flux and specific to the needs
-of source persistence and are individually documented in the [operators] module.
+Built on top of the async API is a set of dataflow operators that all live in
+[`persist::operators`], collectively called the operator API. The most notable
+of these is [PersistedSource]. The rest are more in flux and specific to the
+needs of source persistence and are individually documented in the rustdoc.
 
 [PersistedSource]: crate::operators::source::PersistedSource
-[operators]: crate::operators
+[`persist::operators`]: crate::operators
 
 The `PersistedSource` operator is a zero-input operator that reflects the
 contents of a persisted collection in its single output. As records are written
@@ -210,7 +214,7 @@ invalid, or vice-versa.
 
 # Persist Guarantees: Atomic
 
-Each call to a method of the rust API is atomic. [MultiWriteHandle] allows
+Each call to a method of the async API is atomic. [MultiWriteHandle] allows
 atomic operations involving multiple persisted collections.
 
 [MultiWriteHandle]: crate::indexed::runtime::MultiWriteHandle
