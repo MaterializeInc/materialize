@@ -171,6 +171,8 @@ pub struct StorageState {
     pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
     /// Metrics reported by all dataflows.
     pub metrics: Metrics,
+    /// Frontier up to which each source is allowed to compact its data.
+    pub allowed_compaction_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,

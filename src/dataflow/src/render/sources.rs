@@ -9,18 +9,22 @@
 
 //! Logic related to the creation of dataflow sources.
 
+use std::cell::RefCell;
 use std::rc::Rc;
+
+use serde::{Deserialize, Serialize};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
-use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, UnorderedInput};
 use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use persist::client::StreamWriteHandle;
 use persist::operators::source::PersistedSource;
-use persist::operators::stream::{AwaitFrontier, Seal};
+use persist::operators::stream::{AllowPersistCompaction, AwaitFrontier, Seal};
 use persist::operators::upsert::PersistentUpsertConfig;
 use persist_types::Codec;
 
@@ -37,6 +41,7 @@ use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::envelope_none;
 use crate::render::envelope_none::PersistentEnvelopeNoneConfig;
+use crate::render::StorageState;
 use crate::server::LocalInput;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
@@ -472,6 +477,8 @@ where
                                         upsert_state_handle,
                                         bindings_handle,
                                         &source_name,
+                                        &orig_id,
+                                        storage_state,
                                     );
 
                                     (sealed_upsert, upsert_err)
@@ -520,6 +527,8 @@ where
                                             envelope_config.write_handle.clone(),
                                             bindings_config.write_handle.clone(),
                                             &source_name,
+                                            &orig_id,
+                                            storage_state,
                                         );
 
                                         // NOTE: Persistence errors don't go through the same
@@ -799,6 +808,8 @@ fn seal_and_await<G, D1, D2, K1, V1, K2, V2>(
     write: StreamWriteHandle<K1, V1>,
     bindings_write: StreamWriteHandle<K2, V2>,
     source_name: &str,
+    source_id: &GlobalId,
+    render_state: &mut StorageState,
 ) -> Stream<G, (D1, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -809,8 +820,40 @@ where
     K2: Codec + timely::Data,
     V2: Codec + timely::Data,
 {
-    let sealed_stream =
-        stream.conditional_seal(&source_name, bindings_stream, write, bindings_write);
+    let sealed_stream = stream.conditional_seal(
+        &source_name,
+        bindings_stream,
+        write.clone(),
+        bindings_write.clone(),
+    );
+
+    let allowed_compaction_frontier = Rc::new(RefCell::new(Antichain::<Timestamp>::from_elem(
+        TimelyTimestamp::minimum(),
+    )));
+
+    let previous = render_state
+        .allowed_compaction_frontiers
+        .insert(source_id.clone(), Rc::clone(&allowed_compaction_frontier));
+    assert!(
+        previous.is_none(),
+        "cannot have multiple instances of a persistent source"
+    );
+
+    let sealed_stream = sealed_stream.allow_compaction(
+        format!("{}", source_name).as_str(),
+        write,
+        Rc::clone(&allowed_compaction_frontier),
+    );
+
+    // NOTE: It is *very* important to compact the bindings
+    // only as far as we compact the data. Otherwise, we might
+    // end up in a situation where we don't restore bindings
+    // because they are beyond the common seal timestamp.
+    let sealed_stream = sealed_stream.allow_compaction(
+        format!("{}-timestamp-bindings", source_name).as_str(),
+        bindings_write,
+        Rc::clone(&allowed_compaction_frontier),
+    );
 
     // Don't send data forward to "dataflow" until the frontier
     // tells us that we both persisted and sealed it.
