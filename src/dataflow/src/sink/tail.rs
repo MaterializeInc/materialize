@@ -9,6 +9,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::ops::DerefMut;
 use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::ArrangeByKey;
@@ -60,32 +61,52 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
+        let scope = sinked_collection.scope();
+        use differential_dataflow::Hashable;
+        // `active_worker` indicates the index of the worker that receives all data.
+        let active_worker = (sink_id.hashed() as usize) % scope.peers() == scope.index();
+        // An encapsulation of the Tail response protocol.
+        // Used to send rows and progress messages,
+        // and alert if the dataflow was dropped before completing.
+        // Set to `None` for instances that should not produce output.
+        let tail_protocol_handle = Rc::new(RefCell::new(if active_worker {
+            Some(TailProtocol {
+                sink_id,
+                tail_response_buffer: Some(render_state.tail_response_buffer.clone()),
+            })
+        } else {
+            None
+        }));
+        let tail_protocol_weak = Rc::downgrade(&tail_protocol_handle);
+
         tail(
             sinked_collection,
             sink_id,
-            render_state.tail_response_buffer.clone(),
             sink.as_of.clone(),
+            tail_protocol_handle,
+            active_worker,
         );
 
-        // no sink token
-        None
+        // Inform the coordinator that we have been dropped,
+        // and destroy the tail protocol so the sink operator
+        // can't send spurious messages while shutting down.
+        Some(Box::new(scopeguard::guard((), move |_| {
+            if let Some(tail_protocol_handle) = tail_protocol_weak.upgrade() {
+                std::mem::drop(tail_protocol_handle.borrow_mut().take())
+            }
+        })))
     }
 }
 
 fn tail<G>(
     sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     sink_id: GlobalId,
-    tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
     as_of: SinkAsOf,
+    tail_protocol_handle: Rc<RefCell<Option<TailProtocol>>>,
+    active_worker: bool,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    // `active_worker` indicates the index of the worker that receives all data.
-    // This should line up with the exchange just below, but we test in the implementation
-    // just to be certain.
-    let scope = sinked_collection.scope();
-    use differential_dataflow::Hashable;
-    let active_worker = (sink_id.hashed() as usize) % scope.peers() == scope.index();
     // make sure all data is routed to one worker by keying on the sink id
     let batches = sinked_collection
         .map(move |(k, v)| {
@@ -98,17 +119,6 @@ fn tail<G>(
 
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
-    // An encapsulation of the Tail response protocol.
-    // Used to send rows and eventually mark complete.
-    // Set to `None` for instances that should not produce output.
-    let mut tail_protocol = if active_worker {
-        Some(TailProtocol {
-            sink_id,
-            tail_response_buffer: Some(tail_response_buffer),
-        })
-    } else {
-        None
-    };
 
     batches.sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
         input.for_each(|_, batches| {
@@ -135,9 +145,11 @@ fn tail<G>(
                 }
             }
 
-            // Emit data if configured, otherwise it is an error to have data to send.
-            if let Some(tail_protocol) = &mut tail_protocol {
-                tail_protocol.send_rows(results);
+            if active_worker {
+                // Emit data if configured, otherwise it is an error to have data to send.
+                if let Some(tail_protocol) = tail_protocol_handle.borrow_mut().deref_mut() {
+                    tail_protocol.send_rows(results);
+                }
             } else {
                 assert!(
                     results.is_empty(),
@@ -147,7 +159,9 @@ fn tail<G>(
 
             if let Some(batch) = batches.last() {
                 let progress = update_progress(&mut input_frontier, batch.desc.upper().borrow());
-                if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
+                if let (Some(tail_protocol), Some(progress)) =
+                    (tail_protocol_handle.borrow_mut().deref_mut(), progress)
+                {
                     tail_protocol.send_progress(progress);
                 }
             }
@@ -156,18 +170,10 @@ fn tail<G>(
         let progress = update_progress(&mut input_frontier, input.frontier().frontier());
 
         // Only emit updates if this operator/worker received actual data for emission.
-        if let (Some(tail_protocol), Some(progress)) = (&mut tail_protocol, progress) {
+        if let (Some(tail_protocol), Some(progress)) =
+            (tail_protocol_handle.borrow_mut().deref_mut(), progress)
+        {
             tail_protocol.send_progress(progress);
-        }
-
-        // If the frontier is empty the tailing is complete. We should say so!
-        if input.frontier().frontier().is_empty() {
-            if let Some(tail_protocol) = tail_protocol.take() {
-                tail_protocol.complete();
-            } else {
-                // Not an error to notice the end of the stream at non-emitters,
-                // or to notice it a second time at a previous emitter.
-            }
         }
     })
 }
@@ -184,45 +190,40 @@ struct TailProtocol {
 
 impl TailProtocol {
     /// Send the current upper frontier of the tail.
-    ///
-    /// Does nothing if `self.complete()` has been called.
     fn send_progress(&mut self, upper: Antichain<Timestamp>) {
-        if let Some(buffer) = &mut self.tail_response_buffer {
-            buffer
-                .borrow_mut()
-                .push((self.sink_id, TailResponse::Progress(upper)));
+        let input_exhausted = upper.is_empty();
+        let buffer = self
+            .tail_response_buffer
+            .as_mut()
+            .expect("The tail response buffer is only cleared on drop.");
+        buffer
+            .borrow_mut()
+            .push((self.sink_id, TailResponse::Progress(upper)));
+        if input_exhausted {
+            // The dataflow's input has been exhausted; clear the channel,
+            // to avoid sending `TailResponse::Dropped`.
+            self.tail_response_buffer = None;
         }
     }
 
     /// Send further rows as responses.
-    ///
-    /// Does nothing if `self.complete()` has been called.
     fn send_rows(&mut self, rows: Vec<(Row, Timestamp, Diff)>) {
-        if let Some(buffer) = &mut self.tail_response_buffer {
-            buffer
-                .borrow_mut()
-                .push((self.sink_id, TailResponse::Rows(rows)));
-        }
-    }
-    /// Completes the channel, preventing further transmissions.
-    fn complete(mut self) {
-        if let Some(buffer) = &mut self.tail_response_buffer {
-            buffer
-                .borrow_mut()
-                .push((self.sink_id, TailResponse::Complete));
-            // Set to `None` to avoid `TailResponse::Dropped`.
-            self.tail_response_buffer = None;
-        }
+        let buffer = self
+            .tail_response_buffer
+            .as_mut()
+            .expect("Unexpectedly saw more rows! The tail response buffer should only have been cleared when either the dataflow was dropped or the input was exhausted.");
+        buffer
+            .borrow_mut()
+            .push((self.sink_id, TailResponse::Rows(rows)));
     }
 }
 
 impl Drop for TailProtocol {
     fn drop(&mut self) {
-        if let Some(buffer) = &mut self.tail_response_buffer {
+        if let Some(buffer) = self.tail_response_buffer.take() {
             buffer
                 .borrow_mut()
                 .push((self.sink_id, TailResponse::Dropped));
-            self.tail_response_buffer = None;
         }
     }
 }

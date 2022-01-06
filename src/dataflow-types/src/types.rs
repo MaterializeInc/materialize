@@ -66,11 +66,7 @@ pub enum TailResponse {
     Progress(Antichain<Timestamp>),
     /// Rows that should be returned in order to the client.
     Rows(Vec<(Row, Timestamp, Diff)>),
-    /// Sent once the stream is complete. Indicates the end.
-    /// TODO(#9479): mh@ thinks this state can be included in Progress with an emtpy antichain
-    Complete,
     /// The TAIL dataflow was dropped before completing. Indicates the end.
-    /// TODO(#9479): mh@ thinks this state can be included in Progress with an emtpy antichain
     Dropped,
 }
 

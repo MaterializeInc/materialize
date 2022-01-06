@@ -108,7 +108,7 @@ impl PendingTail {
                 }
                 false
             }
-            TailResponse::Complete | TailResponse::Dropped => {
+            TailResponse::Dropped => {
                 // TODO: Could perhaps do this earlier, in response to DROP SINK.
                 true
             }
