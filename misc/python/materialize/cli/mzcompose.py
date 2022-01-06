@@ -299,9 +299,7 @@ class ListWorkflowsCommand(Command):
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
-        for name in sorted(
-            list(composition.yaml_workflows) + list(composition.python_funcs)
-        ):
+        for name in sorted(composition.python_funcs):
             print(name)
 
 
@@ -314,8 +312,6 @@ class DescribeCommand(Command):
         composition = load_composition(args)
 
         workflows = []
-        for name in composition.yaml_workflows:
-            workflows.append((name, ""))
         for name, fn in composition.python_funcs.items():
             workflows.append((name, inspect.getdoc(fn) or ""))
         workflows.sort()
@@ -329,7 +325,7 @@ class DescribeCommand(Command):
         print()
         print("Workflows:")
         for name, description in workflows:
-            if len(name) <= name_width:
+            if len(name) <= name_width or not description:
                 print(f"    {name: <{name_width}}    {description}")
             else:
                 print(f"    {name}")
@@ -574,7 +570,7 @@ To see the available workflows, run:
         self, args: argparse.Namespace, composition: mzcompose.Composition
     ) -> None:
         try:
-            workflow = composition.get_workflow(args.workflow, dict(os.environ))
+            workflow = composition.get_workflow(args.workflow)
         except KeyError:
             # Restart any dependencies whose definitions have changed. This is
             # Docker Compose's default behavior for `up`, but not for `run`,
