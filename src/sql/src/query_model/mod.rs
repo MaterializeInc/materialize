@@ -394,6 +394,28 @@ impl Model {
 }
 
 impl QueryBox {
+    /// Resolve the input quantifiers of this box as an iterator of immutable
+    /// references.
+    fn input_quantifiers<'a>(
+        &'a self,
+        model: &'a Model,
+    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
+        self.quantifiers
+            .iter()
+            .map(|q_id| model.get_quantifier(*q_id))
+    }
+
+    /// Resolve the quantifiers ranging over this box as an iterator of immutable
+    /// references.
+    fn ranging_quantifiers<'a>(
+        &'a self,
+        model: &'a Model,
+    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
+        self.ranging_quantifiers
+            .iter()
+            .map(|q_id| model.get_quantifier(*q_id))
+    }
+
     /// Add all columns from the non-subquery input quantifiers of the box to the
     /// projection of the box.
     fn add_all_input_columns(&mut self, model: &Model) {
