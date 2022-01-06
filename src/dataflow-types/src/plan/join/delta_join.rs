@@ -17,9 +17,10 @@
 //! This implementation strategy allows us to re-use existing arrangements, and
 //! not create any new stateful operators.
 
+use std::collections::HashSet;
+
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
-use crate::plan::make_thinning_expression;
 use expr::JoinInputMapper;
 use expr::MapFilterProject;
 use expr::MirScalarExpr;
@@ -68,8 +69,8 @@ pub struct DeltaStagePlan {
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
     pub stream_key: Vec<MirScalarExpr>,
-    /// The columns in the stream that are not redundant with the key
-    pub stream_thinning: Vec<usize>,
+    /// The logical arity of the stream, before it is thinned for arrangement
+    pub unthinned_stream_arity: usize,
     /// The key expressions to use for the lookup relation.
     pub lookup_key: Vec<MirScalarExpr>,
     /// The closure to apply to the concatenation of columns
@@ -159,13 +160,13 @@ impl DeltaJoinPlan {
                     })
                     .collect::<Vec<_>>();
 
-                let stream_thinning = make_thinning_expression(&stream_key, unthinned_stream_arity);
+                let thinned_stream_arity = unthinned_stream_arity - stream_key.iter().filter_map(MirScalarExpr::as_column).collect::<HashSet<_>>().len();
 
                 // Introduce new columns and expressions they enable. Form a new closure.
                 let closure = join_build_state.add_columns(
                     input_mapper.global_columns(*lookup_relation),
                     &lookup_key_rebased,
-                    Some((&stream_key, stream_thinning.len())),
+                    Some((&stream_key, thinned_stream_arity)),
                     &lookup_key,
                 );
                 unthinned_stream_arity = closure.before.projection.len();
@@ -175,8 +176,8 @@ impl DeltaJoinPlan {
                 stage_plans.push(DeltaStagePlan {
                     lookup_relation: *lookup_relation,
                     stream_key,
+                    unthinned_stream_arity,
                     lookup_key: lookup_key.clone(),
-                    stream_thinning,
                     closure,
                 });
             }

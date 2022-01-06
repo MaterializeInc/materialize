@@ -12,6 +12,7 @@
 //! Consult [DeltaJoinPlan] documentation for details.
 
 #![allow(clippy::op_ref)]
+use dataflow_types::plan::make_thinning_expression;
 use std::collections::HashSet;
 use timely::dataflow::Scope;
 
@@ -174,11 +175,13 @@ where
                         let DeltaStagePlan {
                             lookup_relation,
                             stream_key,
-                            stream_thinning,
+                            unthinned_stream_arity,
                             lookup_key,
                             closure,
                         } = stage_plan;
 
+                        let stream_thinning =
+                            make_thinning_expression(&stream_key, unthinned_stream_arity);
                         // We require different logic based on the relative order of the two inputs.
                         // If the `source` relation precedes the `lookup` relation, we present all
                         // updates with less or equal `time`, and otherwise we present only updates
