@@ -551,6 +551,7 @@ AND ol_quantity BETWEEN 1 AND 100000
 
 %2 =
 | Constant ()
+| ArrangeBy ()
 
 %3 =
 | Union %1 %2
@@ -1033,6 +1034,7 @@ AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 
 %4 =
 | Constant ()
+| ArrangeBy ()
 
 %5 =
 | Union %3 %4
@@ -1246,6 +1248,7 @@ AND ol_quantity < t.a
 
 %5 =
 | Constant ()
+| ArrangeBy ()
 
 %6 =
 | Union %4 %5
@@ -1356,6 +1359,7 @@ WHERE (
 
 %4 =
 | Constant ()
+| ArrangeBy ()
 
 %5 =
 | Union %3 %4

@@ -76,6 +76,7 @@ EXPLAIN SELECT (SELECT * FROM t1), (SELECT * FROM t1) FROM t2
 
 %5 =
 | Constant ()
+| ArrangeBy ()
 
 %6 =
 | Union %4 %5
@@ -779,6 +780,7 @@ EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM
 
 %24 =
 | Constant ()
+| ArrangeBy ()
 
 %25 =
 | Union %23 %24

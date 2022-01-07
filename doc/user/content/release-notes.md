@@ -121,6 +121,8 @@ changes that have not yet been documented.
 - Correctly parse `SET SCHEMA ____` special case as per: https://www.postgresql.org/docs/9.1/sql-set.html,
   but it remains unsettable.
 
+- Fix a crash triggered under some circumstances when rendering delta joins of constant relations.
+
 {{< comment >}}
 Only add new release notes above this line.
 

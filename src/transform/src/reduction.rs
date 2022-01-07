@@ -50,7 +50,7 @@ impl crate::Transform for FoldConstants {
 }
 
 impl FoldConstants {
-    /// Replace operators on constants collections with constant collections.
+    /// Replace operators on constant collections with constant collections.
     ///
     /// This transform will cease optimization if it encounters constant collections
     /// that are larger than `self.limit`, if that is set. It is not guaranteed that
@@ -65,6 +65,24 @@ impl FoldConstants {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
             MirRelationExpr::Let { .. } => { /* constant prop done in InlineLet */ }
+            MirRelationExpr::ArrangeBy { input, keys } => {
+                // A consumer might be relyying on this arrangement existing, so don't
+                // remove it, even if it wraps a constant.
+
+                // However, inner iterations of this optimization pass _could_ introduce new `ArrangeBy`
+                // nodes, in the branch for `MirRelationExpr::Reduce`. That would have no runtime performance impact
+                // (we only render arrangements for a given key if they are not already present),
+                // but would make for slightly uglier and more confusing plans, so we strip them out here.
+                if let MirRelationExpr::ArrangeBy {
+                    input: inner_input,
+                    keys: inner_keys,
+                } = &mut **input
+                {
+                    let all_keys: HashSet<_> = keys.iter().chain(inner_keys.iter()).collect();
+                    *keys = all_keys.into_iter().cloned().collect();
+                    *input = Box::new(inner_input.take_dangerous());
+                }
+            }
             MirRelationExpr::Reduce {
                 input,
                 group_key,
@@ -74,8 +92,8 @@ impl FoldConstants {
             } => {
                 let input_typ = input_types.first().unwrap();
                 // Reduce expressions to their simplest form.
-                for key in group_key.iter_mut() {
-                    key.reduce(input_typ);
+                for key_column in group_key.iter_mut() {
+                    key_column.reduce(input_typ);
                 }
                 for aggregate in aggregates.iter_mut() {
                     aggregate.expr.reduce(input_typ);
@@ -93,9 +111,16 @@ impl FoldConstants {
                         Ok(rows) => Self::fold_reduce_constant(group_key, aggregates, rows),
                         Err(e) => Err(e.clone()),
                     };
-                    *relation = MirRelationExpr::Constant {
+                    let constant = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation_type.clone(),
+                    };
+                    // A consumer might be relying on the fact that `MirRelationExpr::Reduce` produces an
+                    // arrangement by its group key, so install one here.
+                    let key = (0..group_key.len()).map(MirScalarExpr::column).collect();
+                    *relation = MirRelationExpr::ArrangeBy {
+                        input: Box::new(constant),
+                        keys: vec![key],
                     };
                 }
             }
@@ -380,11 +405,6 @@ impl FoldConstants {
                     }
 
                     *relation = MirRelationExpr::union_many(new_inputs, relation_type.clone());
-                }
-            }
-            MirRelationExpr::ArrangeBy { input, .. } => {
-                if let MirRelationExpr::Constant { .. } = &**input {
-                    *relation = input.take_dangerous();
                 }
             }
         }

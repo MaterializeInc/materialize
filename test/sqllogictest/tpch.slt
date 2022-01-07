@@ -470,6 +470,7 @@ WHERE
 
 %2 =
 | Constant ()
+| ArrangeBy ()
 
 %3 =
 | Union %1 %2
@@ -1047,6 +1048,7 @@ WHERE
 
 %4 =
 | Constant ()
+| ArrangeBy ()
 
 %5 =
 | Union %3 %4
@@ -1288,6 +1290,7 @@ WHERE
 
 %7 =
 | Constant ()
+| ArrangeBy ()
 
 %8 =
 | Union %6 %7
@@ -1448,6 +1451,7 @@ WHERE
 
 %4 =
 | Constant ()
+| ArrangeBy ()
 
 %5 =
 | Union %3 %4

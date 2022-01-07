@@ -104,6 +104,7 @@ EXPLAIN PLAN FOR SELECT state, COUNT(*) FROM (
 ----
 %0 =
 | Constant
+| ArrangeBy (#0)
 
 EOF
 

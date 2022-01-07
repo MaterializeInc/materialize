@@ -258,6 +258,7 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) OR f2 = (SELECT f1 FROM 
 
 %4 =
 | Constant ()
+| ArrangeBy ()
 
 %5 =
 | Union %3 %4
@@ -422,6 +423,7 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 
 
 %6 =
 | Constant ()
+| ArrangeBy ()
 
 %7 =
 | Union %5 %6
@@ -460,20 +462,21 @@ EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHE
 %3 = Let l1 =
 | Union %1 %2
 
-%4 =
+%4 = Let l2 =
+| Constant ()
+| ArrangeBy ()
+
+%5 =
 | Get %3 (l1)
 | Project ()
 | Distinct group=()
 | Negate
 
-%5 =
-| Constant ()
-
 %6 =
-| Union %4 %5
+| Union %5 %4
 | Map null
 
-%7 = Let l2 =
+%7 = Let l3 =
 | Union %3 %6
 
 %8 =
@@ -482,10 +485,10 @@ EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHE
 | ArrangeBy ()
 
 %9 =
-| Get %7 (l2)
+| Get %7 (l3)
 | ArrangeBy ()
 
-%10 = Let l3 =
+%10 = Let l4 =
 | Join %8 %9 %7
 | | implementation = Differential %7 %8.() %9.()
 | Reduce group=()
@@ -493,19 +496,16 @@ EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHE
 | | agg max(#1)
 
 %11 =
-| Get %10 (l3)
+| Get %10 (l4)
 | Project ()
 | Negate
 
 %12 =
-| Constant ()
-
-%13 =
-| Union %11 %12
+| Union %11 %4
 | Map null, null
 
-%14 =
-| Union %10 %13
+%13 =
+| Union %10 %12
 
 EOF
 
@@ -557,6 +557,7 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1 WHERE EXISTS (SELECT f1 
 
 %8 =
 | Constant ()
+| ArrangeBy ()
 
 %9 =
 | Union %7 %8
@@ -609,6 +610,7 @@ SELECT f1 FROM t1 WHERE f1 = 1
 
 %6 =
 | Constant ()
+| ArrangeBy ()
 
 %7 =
 | Union %5 %6
@@ -967,6 +969,7 @@ SELECT MIN(f1) FROM t1;
 
 %2 =
 | Constant ()
+| ArrangeBy ()
 
 %3 = Let l1 =
 | Union %1 %2
@@ -1320,16 +1323,17 @@ SELECT MAX(f1) FROM t1
 | Reduce group=()
 | | agg max(#0)
 
-%3 =
+%3 = Let l3 =
+| Constant ()
+| ArrangeBy ()
+
+%4 =
 | Get %1 (l1)
 | Project ()
 | Negate
 
-%4 =
-| Constant ()
-
 %5 =
-| Union %3 %4
+| Union %4 %3
 | Map null
 
 %6 =
@@ -1338,14 +1342,11 @@ SELECT MAX(f1) FROM t1
 | Negate
 
 %7 =
-| Constant ()
-
-%8 =
-| Union %6 %7
+| Union %6 %3
 | Map null
 
-%9 =
-| Union %1 %5 %2 %8
+%8 =
+| Union %1 %5 %2 %7
 
 EOF
 
@@ -1367,16 +1368,17 @@ SELECT MIN(f2) FROM t1
 | Reduce group=()
 | | agg min(#0)
 
-%2 =
+%2 = Let l2 =
+| Constant ()
+| ArrangeBy ()
+
+%3 =
 | Get %0 (l0)
 | Project ()
 | Negate
 
-%3 =
-| Constant ()
-
 %4 =
-| Union %2 %3
+| Union %3 %2
 | Map null
 
 %5 =
@@ -1385,13 +1387,10 @@ SELECT MIN(f2) FROM t1
 | Negate
 
 %6 =
-| Constant ()
-
-%7 =
-| Union %5 %6
+| Union %5 %2
 | Map null
 
-%8 =
-| Union %0 %4 %1 %7
+%7 =
+| Union %0 %4 %1 %6
 
 EOF

@@ -313,8 +313,11 @@ SELECT abs(generate_series) FROM generate_series(-1, 2), repeat_row(generate_ser
 statement error  Negative multiplicity in constant result: -1
 SELECT * FROM (values ('a')), repeat_row(-1)
 
-statement error constant folding encountered reduce on collection with non-positive multiplicities
+simple
 SELECT (SELECT 1 FROM repeat_row(-1))
+----
+db error: ERROR: Invalid data in source, saw retractions (1) for row that does not exist: [Int32(1)]
+
 
 query T
 SELECT generate_series FROM generate_series(null, null, null)

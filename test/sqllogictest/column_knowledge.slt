@@ -274,6 +274,7 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 
 %5 =
 | Constant ()
+| ArrangeBy ()
 
 %6 =
 | Union %4 %5
