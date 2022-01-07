@@ -1549,7 +1549,15 @@ impl<'a> ScalarType {
                     custom_oid: oid_b,
                     custom_name: name_b,
                 },
-            ) => fields_a.eq(fields_b) && oid_a == oid_b && name_a == name_b,
+            ) => {
+                oid_a == oid_b
+                    && name_a == name_b
+                    && fields_a
+                        .iter()
+                        .zip(fields_b)
+                        // Compare field names and scalar types, but ignore nullability.
+                        .all(|(a, b)| a.0 == b.0 && a.1.scalar_type.base_eq(&b.1.scalar_type))
+            }
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
     }
