@@ -2777,7 +2777,7 @@ fn plan_expr_inner<'a>(
         .into()),
         Expr::FieldAccess { expr, field } => plan_field_access(ecx, expr, field),
         Expr::WildcardAccess(expr) => plan_expr(ecx, expr),
-        Expr::SubscriptIndex { expr, subscript } => plan_subscript_index(ecx, expr, subscript),
+        Expr::SubscriptScalar { expr, subscript } => plan_subscript_scalar(ecx, expr, subscript),
         Expr::SubscriptSlice { expr, positions } => plan_subscript_slice(ecx, expr, positions),
 
         // Subqueries.
@@ -2922,7 +2922,7 @@ fn plan_field_access(
     }
 }
 
-fn plan_subscript_index(
+fn plan_subscript_scalar(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
     subscript: &Expr<Aug>,
