@@ -63,15 +63,15 @@ To access the data as JSON we can use standard JSON [functions](/sql/functions/#
 ```sql
 > CREATE MATERIALIZED VIEW json_example AS
   SELECT
-    jsonified.data->>user_id AS user_id,
-    jsonified.data->>disks_used AS disks_used,
-    jsonified.data->>cpu_used_minutes AS cpu_used_minutes
+    jsonified.data->>'user_id' AS user_id,
+    jsonified.data->>'disks_used' AS disks_used,
+    jsonified.data->>'cpu_used_minutes' AS cpu_used_minutes
   FROM (SELECT text::JSONB AS data FROM json_source) AS jsonified;
 ```
 
 This creates a source that...
 
-- Has three *double* columns (`user_id`, `disks_used`, and `cpu_used_minutes`)
+- Has three *string* columns (`user_id`, `disks_used`, and `cpu_used_minutes`)
 - Is immediately materialized, so will be cached in memory and is immediately queryable
 
 ## Related pages
