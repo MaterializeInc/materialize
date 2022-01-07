@@ -132,6 +132,18 @@ changes that have not yet been documented.
 - **Breaking change.** Disallow the string `'sNaN'` (in any casing) as a valid
   [`numeric`] value.
 
+- Support [subscripting `jsonb` values](/sql/types/jsonb/#subscripting) to
+  retrieve array elements or object values, as in:
+
+  ```sql
+  SELECT ('{"a": 1, "b": 2, "c": 3}'::jsonb)['b'];
+  ```
+  ```nofmt
+   jsonb
+  -------
+   2
+  ```
+
 - Add the `array_remove` and `list_remove` functions.
 
 - Allow `SET NAMES ____` special case as per: https://www.postgresql.org/docs/9.1/sql-set.html.

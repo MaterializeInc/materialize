@@ -2405,6 +2405,9 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ColumnName>
         },
         Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
         Expr::Exists { .. } => Some("exists".into()),
+        Expr::SubscriptScalar { expr, .. } | Expr::SubscriptSlice { expr, .. } => {
+            invent_column_name(ecx, expr)
+        }
         Expr::Subquery(query) | Expr::ListSubquery(query) => {
             // A bit silly to have to plan the query here just to get its column
             // name, since we throw away the planned expression, but fixing this
@@ -2949,6 +2952,7 @@ fn plan_subscript_scalar(
     let func = match &ty {
         ScalarType::List { .. } => BinaryFunc::ListIndex,
         ScalarType::Array(_) => BinaryFunc::ArrayIndex,
+        ScalarType::Jsonb => return plan_subscript_jsonb(ecx, expr, subscript),
         ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
     };
 
@@ -2989,6 +2993,7 @@ fn plan_subscript_slice(
                 )
             }
         }
+        ScalarType::Jsonb => sql_bail!("jsonb subscript does not support slices"),
         ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
     };
 
@@ -3016,6 +3021,40 @@ fn plan_subscript_slice(
         exprs,
     }
     .into())
+}
+
+fn plan_subscript_jsonb(
+    ecx: &ExprContext,
+    expr: HirScalarExpr,
+    subscript: &Expr<Aug>,
+) -> Result<CoercibleScalarExpr, PlanError> {
+    use CastContext::Implicit;
+    use ScalarType::{Int64, String};
+
+    let subscript = plan_expr(ecx, subscript)?;
+    let subscript = if let Ok(subscript) = subscript.clone().cast_to(ecx, Implicit, &String) {
+        subscript
+    } else if let Ok(subscript) = subscript.cast_to(ecx, Implicit, &Int64) {
+        // Integers are converted to a string here and then re-parsed as an
+        // integer by `JsonbGetPath`. Weird, but this is how PostgreSQL says to
+        // do it.
+        typeconv::to_string(ecx, subscript)
+    } else {
+        sql_bail!("jsonb subscript type must be coercible to integer or text");
+    };
+
+    // Subscripting works like `expr #> ARRAY[subscript]` rather than
+    // `expr->subscript` as you might expect.
+    let expr = expr.call_binary(
+        HirScalarExpr::CallVariadic {
+            func: VariadicFunc::ArrayCreate {
+                elem_type: ScalarType::String,
+            },
+            exprs: vec![subscript],
+        },
+        BinaryFunc::JsonbGetPath { stringify: false },
+    );
+    Ok(expr.into())
 }
 
 fn plan_exists(ecx: &ExprContext, query: &Query<Aug>) -> Result<CoercibleScalarExpr, PlanError> {
