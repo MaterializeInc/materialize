@@ -154,6 +154,38 @@ mod constants {
         select_input: false,
         select_parent: true,
     };
+
+    pub(crate) const ONE_OR_TWO_PRES_FOREACH: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(1),
+        max: Bound::Included(2),
+        allowed_types: QuantifierType::PreservedForeach as usize,
+        select_input: false,
+        select_parent: false,
+    };
+
+    pub(crate) const ZERO_OR_ONE_FOREACH: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(0),
+        max: Bound::Included(1),
+        allowed_types: QuantifierType::Foreach as usize,
+        select_input: false,
+        select_parent: false,
+    };
+
+    pub(crate) const TWO_OUTER_JOIN_INPUTS: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(2),
+        max: Bound::Included(2),
+        allowed_types: QuantifierType::PreservedForeach as usize | QuantifierType::Foreach as usize,
+        select_input: false,
+        select_parent: false,
+    };
+
+    pub(crate) const ZERO_NOT_OUTER_JOIN_INPUTS: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(0),
+        max: Bound::Included(0),
+        allowed_types: !TWO_OUTER_JOIN_INPUTS.allowed_types,
+        select_input: false,
+        select_parent: false,
+    };
 }
 
 /// A [`Validator`] that checks the following quantifier constraints:
@@ -167,6 +199,12 @@ mod constants {
 ///   `Foreach` that has a `Select` box as its parent.
 /// - A `Select` box must have one or more input quantifiers of
 ///   arbitrary type (except `PreservedForeach`).
+/// - An `OuterJoin` box must have one or two input quantifiers of
+///   type `PreservedForeach`.
+/// - An `OuterJoin` box must have at most one input quantifier of
+///   type `Foreach`.
+/// - An `OuterJoin` box must have exactly two input quantifiers of
+///   type `Foreach` or `PreservedForeach`.
 #[derive(Default)]
 pub(crate) struct QuantifierConstraintValidator;
 
@@ -206,7 +244,17 @@ impl Validator for QuantifierConstraintValidator {
                         errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
                     });
                 }
-                _ => { /* everything is OK with the current box */ }
+                OuterJoin(..) => {
+                    let constraints = [
+                        ONE_OR_TWO_PRES_FOREACH,
+                        ZERO_OR_ONE_FOREACH,
+                        TWO_OUTER_JOIN_INPUTS,
+                        ZERO_NOT_OUTER_JOIN_INPUTS,
+                    ];
+                    check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
+                        errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
+                    });
+                }
             }
         }
 
@@ -398,6 +446,54 @@ mod tests {
         let errors_exp = HashSet::from([
             ValidationError::InvalidInputQuantifiers(box_select, ONE_OR_MORE_NOT_PRES_FOREACH),
             ValidationError::InvalidInputQuantifiers(box_select, ZERO_PRESERVED_FOREACH),
+        ]);
+        assert_eq!(errors_act, errors_exp);
+    }
+
+    /// Tests constraints for quantifiers incident with [`BoxType::OuterJoin`] boxes (happy case).
+    #[test]
+    fn test_outer_join_ok() {
+        let mut model = Model::new();
+
+        let box_lhs = model.make_box(get_user_id(0).into());
+        let box_rhs = model.make_box(get_user_id(1).into());
+        let box_outer_join_1 = model.make_box(OuterJoin::default().into());
+        let box_outer_join_2 = model.make_box(OuterJoin::default().into());
+
+        model.make_quantifier(QuantifierType::Foreach, box_lhs, box_outer_join_1);
+        model.make_quantifier(QuantifierType::PreservedForeach, box_rhs, box_outer_join_1);
+        model.make_quantifier(QuantifierType::PreservedForeach, box_lhs, box_outer_join_2);
+        model.make_quantifier(QuantifierType::PreservedForeach, box_rhs, box_outer_join_2);
+
+        let result = QuantifierConstraintValidator::default().validate(&model);
+        assert!(result.is_ok());
+    }
+
+    /// Tests constraints for quantifiers incident with [`BoxType::OuterJoin`] boxes (bad case).
+    #[test]
+    fn test_outer_join_not_ok() {
+        let mut model = Model::new();
+
+        let box_lhs = model.make_box(get_user_id(0).into());
+        let box_rhs = model.make_box(get_user_id(1).into());
+        let box_outer_join_1 = model.make_box(OuterJoin::default().into());
+        let box_outer_join_2 = model.make_box(OuterJoin::default().into());
+
+        model.make_quantifier(QuantifierType::Existential, box_lhs, box_outer_join_1);
+        model.make_quantifier(QuantifierType::Scalar, box_rhs, box_outer_join_1);
+        model.make_quantifier(QuantifierType::Foreach, box_lhs, box_outer_join_2);
+        model.make_quantifier(QuantifierType::Foreach, box_rhs, box_outer_join_2);
+
+        let result = QuantifierConstraintValidator::default().validate(&model);
+        assert!(result.is_err());
+
+        let errors_act: HashSet<_> = result.unwrap_err().drain(..).collect();
+        let errors_exp = HashSet::from([
+            ValidationError::InvalidInputQuantifiers(box_outer_join_1, ONE_OR_TWO_PRES_FOREACH),
+            ValidationError::InvalidInputQuantifiers(box_outer_join_1, TWO_OUTER_JOIN_INPUTS),
+            ValidationError::InvalidInputQuantifiers(box_outer_join_1, ZERO_NOT_OUTER_JOIN_INPUTS),
+            ValidationError::InvalidInputQuantifiers(box_outer_join_2, ONE_OR_TWO_PRES_FOREACH),
+            ValidationError::InvalidInputQuantifiers(box_outer_join_2, ZERO_OR_ONE_FOREACH),
         ]);
         assert_eq!(errors_act, errors_exp);
     }
