@@ -31,7 +31,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures-executor = "0.3.16"
 futures-util = "0.3.19"
-log = "0.4.13"
+tracing = "0.1.29"
 md-5 = "0.10.0"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 ore = { path = "../ore", default-features = false, features = ["metrics"] }

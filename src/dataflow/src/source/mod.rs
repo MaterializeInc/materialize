@@ -37,10 +37,10 @@ use dataflow_types::{
     Consistency, ExternalSourceConnector, MzOffset, SourceDataEncoding, SourceError,
 };
 use expr::{PartitionId, SourceInstanceId};
-use log::error;
 use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use ore::now::NowFn;
 use prometheus::core::{AtomicI64, AtomicU64};
+use tracing::error;
 
 use repr::{Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
@@ -1350,7 +1350,7 @@ where
                             false,
                         );
                     } else {
-                        log::debug!(
+                        tracing::debug!(
                             "Filtered out timestamp binding {:?} from persistence because we already have {}.",
                             (source_ts, assigned_ts),
                             current_binding
@@ -1557,7 +1557,7 @@ where
                 // wasteful but we don't expect large numbers of bindings.
                 let mut to_emit = to_emit.collect::<Vec<_>>();
 
-                log::trace!(
+                tracing::trace!(
                     "In {} (worker {}), emitting new timestamp bindings: {:?}, cap: {:?}",
                     name.clone(),
                     worker_id,
@@ -1659,13 +1659,13 @@ impl SourceReaderPersistence {
             self.config.upper_data_seal_ts,
         )?;
 
-        log::trace!(
+        tracing::trace!(
             "In {}, initial (restored) source offsets: {:?}",
             self.source_name,
             offsets,
         );
 
-        log::trace!(
+        tracing::trace!(
             "In {}, initial (restored) timestamp bindings: {:?}",
             self.source_name,
             bindings,

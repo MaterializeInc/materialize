@@ -140,7 +140,7 @@ async fn download_objects_task(
             tx.send(Err(S3Error::ClientConstructionFailed(e)))
                 .await
                 .unwrap_or_else(|e| {
-                    log::debug!("unable to send error on stream creating s3 client: {}", e)
+                    tracing::debug!("unable to send error on stream creating s3 client: {}", e)
                 });
             return;
         }
@@ -164,7 +164,7 @@ async fn download_objects_task(
             status = shutdown_rx.changed() => {
                 if status.is_ok() {
                     if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
-                        log::debug!("source_id={} download_objects received dataflow shutdown message", source_id);
+                        tracing::debug!("source_id={} download_objects received dataflow shutdown message", source_id);
                         break;
                     }
                 }
@@ -177,7 +177,7 @@ async fn download_objects_task(
                 if let Some(bi) = seen_buckets.get_mut(&msg.bucket) {
                     if bi.keys.contains(&msg.key) {
                         bi.metrics.objects_duplicate.inc();
-                        log::debug!(
+                        tracing::debug!(
                             "source_id={} skipping object because it was already seen: {}/{}",
                             source_id,
                             msg.bucket,
@@ -212,7 +212,7 @@ async fn download_objects_task(
                     Ok(update) => {
                         let bucket_info = seen_buckets.get_mut(&msg.bucket).expect("just inserted");
                         bucket_info.metrics.inc(1, update.bytes, update.messages);
-                        log::debug!(
+                        tracing::debug!(
                             "source_id={} successfully downloaded {}/{}",
                             source_id,
                             msg.bucket,
@@ -240,7 +240,7 @@ async fn download_objects_task(
             }
         }
     }
-    log::debug!("source_id={} exiting download objects task", source_id);
+    tracing::debug!("source_id={} exiting download objects task", source_id);
 }
 
 async fn scan_bucket_task(
@@ -261,7 +261,7 @@ async fn scan_bucket_task(
             tx.send(Err(S3Error::ClientConstructionFailed(e)))
                 .await
                 .unwrap_or_else(|e| {
-                    log::debug!("unable to send error on stream creating s3 client: {}", e)
+                    tracing::debug!("unable to send error on stream creating s3 client: {}", e)
                 });
             return;
         }
@@ -278,7 +278,7 @@ async fn scan_bucket_task(
     let is_literal_object = glob.is_some() && prefix.as_deref() == glob.map(|g| g.glob().glob());
     if is_literal_object {
         let key = glob.unwrap().glob().glob();
-        log::debug!(
+        tracing::debug!(
             "source_id={} downloading single object from s3 bucket={} key={}",
             source_id,
             bucket,
@@ -291,7 +291,7 @@ async fn scan_bucket_task(
             }))
             .await
         {
-            log::debug!(
+            tracing::debug!(
                 "source_id={} Unable to send single key to downloader: {}",
                 source_id,
                 e
@@ -300,7 +300,7 @@ async fn scan_bucket_task(
 
         return;
     } else {
-        log::debug!(
+        tracing::debug!(
             "source_id={} scanning bucket to find objects to download bucket={}",
             source_id,
             bucket
@@ -341,7 +341,7 @@ async fn scan_bucket_task(
                         match res {
                             Ok(_) => scan_metrics.objects_discovered.inc(),
                             Err(e) => {
-                                log::debug!("unable to send keys to downloader: {}", e);
+                                tracing::debug!("unable to send keys to downloader: {}", e);
                                 break;
                             }
                         }
@@ -358,20 +358,20 @@ async fn scan_bucket_task(
                 tx.send(Err(S3Error::ListObjectsFailed(e)))
                     .await
                     .unwrap_or_else(|e| {
-                        log::debug!("unable to send error on listing objects: {}", e)
+                        tracing::debug!("unable to send error on listing objects: {}", e)
                     });
 
-                log::error!("failed to list bucket {}: {}", bucket, err_string);
+                tracing::error!("failed to list bucket {}: {}", bucket, err_string);
                 tx.send(Err(S3Error::RetryFailed))
                     .await
                     .unwrap_or_else(|e| {
-                        log::debug!("unable to send error on retries failed: {}", e)
+                        tracing::debug!("unable to send error on retries failed: {}", e)
                     });
                 break;
             }
         }
     }
-    log::debug!(
+    tracing::debug!(
         "source_id={} exiting bucket scan task bucket={}",
         source_id,
         bucket
@@ -387,7 +387,7 @@ async fn read_sqs_task(
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     base_metrics: SourceBaseMetrics,
 ) {
-    log::debug!(
+    tracing::debug!(
         "source_id={} starting read sqs task queue={}",
         source_id,
         queue,
@@ -403,7 +403,7 @@ async fn read_sqs_task(
             tx.send(Err(S3Error::ClientConstructionFailed(e)))
                 .await
                 .unwrap_or_else(|e| {
-                    log::debug!(
+                    tracing::debug!(
                         "source_id={} unable to send error on stream creating sqs client: {}",
                         source_id,
                         e
@@ -421,12 +421,12 @@ async fn read_sqs_task(
             if let Some(url) = response.queue_url {
                 url
             } else {
-                log::error!("Empty queue url response for queue {}", queue);
+                tracing::error!("Empty queue url response for queue {}", queue);
                 return;
             }
         }
         Err(e) => {
-            log::error!("Unable to retrieve queue url for queue {}: {}", queue, e);
+            tracing::error!("Unable to retrieve queue url for queue {}: {}", queue, e);
             return;
         }
     };
@@ -448,7 +448,7 @@ async fn read_sqs_task(
             status = shutdown_rx.changed() => {
                 if status.is_ok() {
                     if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
-                        log::debug!("source_id={} scan_sqs received dataflow shutdown message", source_id);
+                        tracing::debug!("source_id={} scan_sqs received dataflow shutdown message", source_id);
                         break;
                     }
                 }
@@ -512,10 +512,10 @@ async fn read_sqs_task(
             Err(e) => {
                 allowed_errors -= 1;
                 if allowed_errors == 0 {
-                    log::error!("failed to read from SQS queue {}: {}", queue, e);
+                    tracing::error!("failed to read from SQS queue {}: {}", queue, e);
                     break;
                 } else {
-                    log::warn!(
+                    tracing::warn!(
                         "unable to read from SQS queue {}: {} ({} retries remaining)",
                         queue,
                         e,
@@ -527,7 +527,7 @@ async fn read_sqs_task(
             }
         }
     }
-    log::debug!("source_id={} exiting sqs reader queue={}", source_id, queue);
+    tracing::debug!("source_id={} exiting sqs reader queue={}", source_id, queue);
 }
 
 /// Send the relevant parts of the message to the download objects task
@@ -550,7 +550,7 @@ async fn process_message(
         match event {
             Ok(event) => {
                 if event.records.is_empty() {
-                    log::debug!(
+                    tracing::debug!(
                         "source_id={} sqs event is surprisingly empty {:#?}",
                         source_id,
                         event
@@ -558,7 +558,7 @@ async fn process_message(
                 }
 
                 for record in event.records {
-                    log::trace!(
+                    tracing::trace!(
                         "source_id={} processing message from sqs for key={} type={:?}",
                         source_id,
                         record.s3.object.key,
@@ -590,7 +590,7 @@ async fn process_message(
                                 key: key.clone(),
                             });
                             if tx.send(ki).await.is_err() {
-                                log::debug!(
+                                tracing::debug!(
                                     "source_id={} sqs reader is closed, marking message as visible",
                                     source_id
                                 );
@@ -604,10 +604,10 @@ async fn process_message(
                 let test: Result<TestEvent, _> = serde_json::from_str(&body);
                 match test {
                     Ok(_) => {
-                        log::trace!("got test event for new queue");
+                        tracing::trace!("got test event for new queue");
                     }
                     Err(_) => {
-                        log::error!(
+                        tracing::error!(
                             "[customer-data] Unrecognized message from SQS queue {}: {}",
                             queue_url,
                             body,
@@ -629,7 +629,7 @@ async fn process_message(
         .send()
         .await
     {
-        log::warn!(
+        tracing::warn!(
             "source_id={} Error deleting processed SQS message: {}",
             source_id,
             e
@@ -704,7 +704,7 @@ async fn download_object(
         let range = if offset == 0 {
             None
         } else {
-            log::debug!(
+            tracing::debug!(
                 "Failed to download object: {}/{} attempt={} read={}",
                 bucket,
                 key,
@@ -736,9 +736,9 @@ async fn download_object(
                 ("gzip", Compression::Gzip) => (),
                 ("identity", Compression::None) => (),
                 ("identity" | "gzip", _) => {
-                    log::debug!("object {} has mismatched Content-Encoding: {}", key, s)
+                    tracing::debug!("object {} has mismatched Content-Encoding: {}", key, s)
                 }
-                _ => log::debug!("object {} has unrecognized Content-Encoding: {}", key, s),
+                _ => tracing::debug!("object {} has unrecognized Content-Encoding: {}", key, s),
             }
         }
 
@@ -753,7 +753,7 @@ async fn download_object(
     match reader.fill_buf().await {
         Ok(buf) => {
             if buf.is_empty() {
-                log::trace!("source_id={} empty object {}/{}", source_id, bucket, key);
+                tracing::trace!("source_id={} empty object {}/{}", source_id, bucket, key);
                 return Ok(Default::default());
             }
         }
@@ -768,7 +768,7 @@ async fn download_object(
         }
     };
 
-    log::debug!(
+    tracing::debug!(
         "source_id={} {}/{} download_result={:?}",
         source_id,
         bucket,
@@ -819,7 +819,7 @@ where
         }
     }
 
-    log::trace!(
+    tracing::trace!(
         "source_id={} finished sending object to dataflow chunks={} bytes={}",
         source_id,
         chunks,
@@ -872,7 +872,7 @@ impl SourceReader for S3SourceReader {
             for key_source in s3_conn.key_sources {
                 match key_source {
                     S3KeySource::Scan { bucket } => {
-                        log::debug!(
+                        tracing::debug!(
                             "source_id={} reading s3 bucket={} worker={}",
                             source_id,
                             bucket,
@@ -888,7 +888,7 @@ impl SourceReader for S3SourceReader {
                         ));
                     }
                     S3KeySource::SqsNotifications { queue } => {
-                        log::debug!(
+                        tracing::debug!(
                             "source_id={} reading sqs queue={} worker={}",
                             source_id,
                             queue,
@@ -934,7 +934,7 @@ impl SourceReader for S3SourceReader {
                 }))
             }
             Some(Some(Err(e))) => {
-                log::warn!(
+                tracing::warn!(
                     "when reading source '{}' ({}): {}",
                     self.source_name,
                     self.id,
@@ -959,9 +959,9 @@ impl SourceReader for S3SourceReader {
 
 impl Drop for S3SourceReader {
     fn drop(&mut self) {
-        log::debug!("source_id={} Dropping S3SourceReader", self.id);
+        tracing::debug!("source_id={} Dropping S3SourceReader", self.id);
         if self.dataflow_status.send(DataflowStatus::Stopped).is_err() {
-            log::debug!("source_id={} already shutdown", self.id);
+            tracing::debug!("source_id={} already shutdown", self.id);
         };
     }
 }
@@ -986,7 +986,7 @@ async fn release_messages(
                 .filter_map(|m| m.receipt_handle)
                 .enumerate()
                 .map(|(i, receipt_handle)| {
-                    log::debug!(
+                    tracing::debug!(
                         "source_id={} releasing message unprocessed_key={}",
                         source_id,
                         failed_key.as_deref().unwrap_or("<none>")
@@ -1003,7 +1003,7 @@ async fn release_messages(
         .send()
         .await
     {
-        log::warn!("unexpected error releasing SQS messages: {}", e);
+        tracing::warn!("unexpected error releasing SQS messages: {}", e);
     };
 }
 

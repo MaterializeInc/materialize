@@ -413,7 +413,7 @@ impl SimpleSource for PostgresSourceReader {
                 let mut writer = tokio::io::BufWriter::new(file);
                 match self.produce_snapshot(&mut snapshot_tx, &mut writer).await {
                     Ok(_) => {
-                        log::info!(
+                        tracing::info!(
                             "replication snapshot for source {} succeeded",
                             &self.source_name
                         );
@@ -424,7 +424,7 @@ impl SimpleSource for PostgresSourceReader {
                             source_name: self.source_name.clone(),
                             error: SourceErrorDetails::Initialization(e.to_string()),
                         })?;
-                        log::warn!(
+                        tracing::warn!(
                             "replication snapshot for source {} failed, retrying: {}",
                             &self.source_name,
                             e
@@ -453,7 +453,7 @@ impl SimpleSource for PostgresSourceReader {
         loop {
             match self.produce_replication(timestamper).await {
                 Err(ReplicationError::Recoverable(e)) => {
-                    log::warn!(
+                    tracing::warn!(
                         "replication for source {} interrupted, retrying: {}",
                         &self.source_name,
                         e
@@ -470,7 +470,7 @@ impl SimpleSource for PostgresSourceReader {
 
             // TODO(petrosagg): implement exponential back-off
             tokio::time::sleep(Duration::from_secs(3)).await;
-            log::info!("resuming replication for source {}", &self.source_name);
+            tracing::info!("resuming replication for source {}", &self.source_name);
         }
     }
 }

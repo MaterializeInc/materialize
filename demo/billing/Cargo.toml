@@ -15,7 +15,7 @@ env_logger = "0.9.0"
 futures = "0.3.19"
 futures-channel = "0.3.16"
 hex = "0.4.3"
-log = "0.4.13"
+tracing = "0.1.29"
 ore = { path = "../../src/ore" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }

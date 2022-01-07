@@ -125,17 +125,17 @@ fn golden() -> Result<(), Error> {
     let (current, raw_blobs) = current_state(&reqs)?;
     let golden = golden_state(DATAZ).map_err(|e| {
         for req in reqs.iter() {
-            log::debug!("req {:?}", req);
+            tracing::debug!("req {:?}", req);
         }
-        log::info!("current impl blob state: {}", raw_blobs);
+        tracing::info!("current impl blob state: {}", raw_blobs);
         e
     })?;
 
     if golden != current {
         for req in reqs {
-            log::debug!("req {:?}", req);
+            tracing::debug!("req {:?}", req);
         }
-        log::info!("current impl blob state: {}", raw_blobs);
+        tracing::info!("current impl blob state: {}", raw_blobs);
         assert_eq!(golden, current);
     }
 
@@ -146,7 +146,7 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
     let runtime = Arc::new(tokio::runtime::Runtime::new()?);
     let mut blob = MemBlob::new_no_reentrance("");
     if let Err(err) = runtime.block_on(Blobs::deserialize_to(blob_json, &mut blob)) {
-        log::error!("error deserializing golden: {}", err);
+        tracing::error!("error deserializing golden: {}", err);
     }
     let mut persist = runtime::start(
         RuntimeConfig::for_tests(),

@@ -11,7 +11,7 @@ async-trait = "0.1.52"
 clap = { version = "3.0.0", features = ["derive", "env"] }
 dataflow-types = { path = "../dataflow-types" }
 dataflow = { path = "../dataflow" }
-log = "0.4.13"
+tracing = "0.1.29"
 ore = { path = "../ore" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tracing-subscriber = "0.3.5"

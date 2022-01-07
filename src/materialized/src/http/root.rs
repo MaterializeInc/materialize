@@ -79,7 +79,7 @@ fn get_static_file(path: &str) -> Option<Body> {
     match fs::read(dev_path).or_else(|_| fs::read(prod_path)) {
         Ok(contents) => Some(Body::from(contents)),
         Err(e) => {
-            log::debug!("dev-web failed to load static file: {}: {}", path, e);
+            tracing::debug!("dev-web failed to load static file: {}: {}", path, e);
             None
         }
     }

@@ -13,10 +13,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use log::trace;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
+use tracing::trace;
 
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;

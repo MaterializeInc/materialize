@@ -688,7 +688,7 @@ fn get_persist_config(
     let bindings_seal_ts = persist_desc.timestamp_bindings_stream.upper_seal_ts;
     let data_seal_ts = persist_desc.primary_stream.upper_seal_ts;
 
-    log::debug!(
+    tracing::debug!(
             "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
             source_id,
             persist_desc.primary_stream.name,

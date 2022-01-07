@@ -11,7 +11,7 @@ enum-kinds = "0.5.1"
 hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-log = "0.4.13"
+tracing = "0.1.29"
 ore = { path = "../ore", default-features = false, features = ["stack"] }
 phf = { version = "0.10.1", features = ["uncased"] }
 uncased = "0.9.6"

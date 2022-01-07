@@ -67,7 +67,7 @@ impl<T: PartialOrder + Ord + Clone + std::fmt::Debug> AntichainToken<T> {
         new_frontier.extend(frontier.into_iter());
 
         if !<_ as PartialOrder>::less_equal(&self.antichain.frontier(), &new_frontier.borrow()) {
-            log::trace!(
+            tracing::trace!(
                 "Ignoring request to 'advance' to {:?} current antichain {:?}",
                 new_frontier,
                 self.antichain

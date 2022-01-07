@@ -42,7 +42,7 @@ fn load_system_config() -> ProxyConfig {
         match val {
             Some(Ok(val)) => Some(val),
             Some(Err(e)) => {
-                log::warn!("ignoring invalid configuration for {}: {}", names[0], e);
+                tracing::warn!("ignoring invalid configuration for {}: {}", names[0], e);
                 None
             }
             None => None,
@@ -53,7 +53,7 @@ fn load_system_config() -> ProxyConfig {
         match get_any_env(names)?.parse() {
             Ok(uri) => Some(uri),
             Err(e) => {
-                log::warn!("ignoring invalid configuration for {}: {}", names[0], e);
+                tracing::warn!("ignoring invalid configuration for {}: {}", names[0], e);
                 None
             }
         }

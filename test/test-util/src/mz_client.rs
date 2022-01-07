@@ -66,7 +66,7 @@ pub async fn try_query_one(mz_client: &Client, query: &str, delay: Duration) -> 
 /// instead of failing.
 fn check_error(e: Error) -> Result<()> {
     if e.code() == Some(&SqlState::SQL_STATEMENT_NOT_YET_COMPLETE) {
-        log::info!("Error querying, will try again... {}", e.to_string());
+        tracing::info!("Error querying, will try again... {}", e.to_string());
         Ok(())
     } else {
         Err(anyhow::Error::from(e))
@@ -78,7 +78,7 @@ async fn delay_for(elapsed: Duration, delay: Duration) {
     if elapsed < delay {
         time::sleep(delay - elapsed).await;
     } else {
-        log::info!(
+        tracing::info!(
             "Expected to query for records in {:#?}, took {:#?}",
             delay,
             elapsed
@@ -99,21 +99,21 @@ pub async fn show_sources(mz_client: &Client) -> Result<Vec<String>> {
 /// Delete a source and all dependent views, if the source exists
 pub async fn drop_source(mz_client: &Client, name: &str) -> Result<()> {
     let q = format!("DROP SOURCE IF EXISTS {} CASCADE", name);
-    log::debug!("deleting source=> {}", q);
+    tracing::debug!("deleting source=> {}", q);
     mz_client.execute(&*q, &[]).await?;
     Ok(())
 }
 
 /// Run PostgreSQL's `execute` function
 pub async fn execute(mz_client: &Client, query: &str) -> Result<u64> {
-    log::debug!("exec=> {}", query);
+    tracing::debug!("exec=> {}", query);
     Ok(mz_client.execute(query, &[]).await?)
 }
 
 /// Delete an index
 pub async fn drop_index(mz_client: &Client, name: &str) -> Result<()> {
     let q = format!("DROP INDEX {}", name);
-    log::debug!("deleting index=> {}", q);
+    tracing::debug!("deleting index=> {}", q);
     mz_client.execute(&*q, &[]).await?;
     Ok(())
 }

@@ -22,7 +22,6 @@ use dataflow_types::{
 use expr::{Id, PartitionId};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{info, trace};
 use ore::collections::CollectionExt;
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, EpochMillis, NowFn};
@@ -30,6 +29,7 @@ use persist::indexed::runtime::MultiWriteHandle;
 use regex::Regex;
 use repr::Timestamp;
 use serde::{Deserialize, Serialize};
+use tracing::{info, trace};
 
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};

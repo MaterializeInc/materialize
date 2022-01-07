@@ -70,7 +70,7 @@ impl Validator {
     }
 
     fn step(&mut self, s: Step) {
-        log::info!("step: {:?}", &s);
+        tracing::info!("step: {:?}", &s);
         match s.res {
             Res::Write(WriteReq::Single(req), res) => self.step_write_single(&s.meta, req, res),
             Res::Write(WriteReq::Multi(req), res) => self.step_write_multi(&s.meta, req, res),

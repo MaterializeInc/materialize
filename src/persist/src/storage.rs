@@ -40,7 +40,7 @@ pub fn check_meta_version_maybe_delete_data<B: Blob>(b: &mut B) -> Result<(), Er
         Ok(())
     } else if current_version > persisted_version {
         // Delete all the keys, as we are upgrading to a new version.
-        log::info!(
+        tracing::info!(
             "Persistence beta detected version mismatch. Deleting all previously persisted data as part of upgrade from version {} to {}.",
             persisted_version,
             current_version

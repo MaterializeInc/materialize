@@ -636,7 +636,7 @@ fn ast_rewrite_csv_column_aliases_0_9_2(
     // they match then everything will work out. If they don't match, then at least there isn't
     // a catalog corruption error.
     if let Err(e) = result {
-        log::warn!(
+        tracing::warn!(
             "Error retrieving column names from file ({}) \
                  using previously defined column aliases",
             e
