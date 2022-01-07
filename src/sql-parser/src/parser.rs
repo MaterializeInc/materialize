@@ -24,7 +24,7 @@ use std::error::Error;
 use std::fmt;
 
 use itertools::Itertools;
-use log::{debug, warn};
+use log::warn;
 
 use ore::collections::CollectionExt;
 use ore::option::OptionExt;
@@ -296,10 +296,8 @@ impl<'a> Parser<'a> {
         mut expr: Expr<Raw>,
     ) -> Result<Expr<Raw>, ParserError> {
         self.checked_recur_mut(|parser| {
-            debug!("prefix: {:?}", expr);
             loop {
                 let next_precedence = parser.get_next_precedence();
-                debug!("next precedence: {:?}", next_precedence);
                 if precedence >= next_precedence {
                     break;
                 }
@@ -899,7 +897,6 @@ impl<'a> Parser<'a> {
         expr: Expr<Raw>,
         precedence: Precedence,
     ) -> Result<Expr<Raw>, ParserError> {
-        debug!("parsing infix");
         let tok = self.next_token().unwrap(); // safe as EOF's precedence is the lowest
 
         let regular_binary_operator = match &tok {
@@ -1248,8 +1245,6 @@ impl<'a> Parser<'a> {
     /// Get the precedence of the next token
     fn get_next_precedence(&self) -> Precedence {
         if let Some(token) = self.peek_token() {
-            debug!("get_next_precedence() {:?}", token);
-
             match &token {
                 Token::Keyword(OR) => Precedence::Or,
                 Token::Keyword(AND) => Precedence::And,
