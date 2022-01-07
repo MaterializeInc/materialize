@@ -332,13 +332,7 @@ impl Validator {
                 .since_frontier
                 .get(&req.stream)
                 .copied()
-                .unwrap_or_default()
-            && req.ts
-                < self
-                    .seal_frontier
-                    .get(&req.stream)
-                    .copied()
-                    .unwrap_or_default();
+                .unwrap_or_default();
         let require_succeed = self.uptime.storage_available(meta.before, meta.after)
             && self.uptime.runtime_available(meta.before, meta.after)
             && req_ok;

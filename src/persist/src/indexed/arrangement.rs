@@ -517,13 +517,6 @@ impl Arrangement {
     /// Checks whether the given since would be valid to pass to
     /// [Self::allow_compaction].
     pub fn validate_allow_compaction(&self, since: &Antichain<u64>) -> Result<(), String> {
-        if PartialOrder::less_equal(&self.seal, since) {
-            return Err(format!(
-                "invalid compaction at or in advance of trace seal {:?}: {:?}",
-                self.seal, since,
-            ));
-        }
-
         if PartialOrder::less_than(since, &self.since) {
             return Err(format!(
                 "invalid compaction less than trace since {:?}: {:?}",
@@ -1277,12 +1270,10 @@ mod tests {
             Err("invalid compaction less than trace since Antichain { elements: [6] }: Antichain { elements: [5] }".into()));
 
         // Advance since frontier to seal
-        assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(10)),
-            Err("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [10] }".into()));
+        t.validate_allow_compaction(&Antichain::from_elem(10))?;
 
         // Advance since frontier beyond seal
-        assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(11)),
-            Err("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [11] }".into()));
+        t.validate_allow_compaction(&Antichain::from_elem(11))?;
 
         Ok(())
     }
