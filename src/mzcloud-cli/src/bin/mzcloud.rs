@@ -125,7 +125,7 @@ enum DeploymentsCommand {
     /// Create a new Materialize deployment.
     Create {
         /// Cloud provider:region pair in which to deploy Materialize. Example: `aws:us-east-1`
-        #[structopt(long, parse(try_from_str = parse_cloud_region))]
+        #[clap(long, parse(try_from_str = parse_cloud_region))]
         cloud_provider_region: SupportedCloudRegionRequest,
 
         /// Name of the deployed materialized instance. Defaults to randomly assigned.
@@ -145,7 +145,7 @@ enum DeploymentsCommand {
         disable_user_indexes: Option<bool>,
 
         /// Extra arguments to provide to materialized.
-        #[clap(long)]
+        #[clap(long, allow_hyphen_values = true, multiple_values = true)]
         materialized_extra_args: Option<Vec<String>>,
 
         /// Version of materialized to deploy. Defaults to latest available version.
@@ -182,7 +182,7 @@ enum DeploymentsCommand {
 
         /// Extra arguments to provide to materialized. Defaults to the
         /// currently set extra arguments.
-        #[clap(long)]
+        #[clap(long, allow_hyphen_values = true, multiple_values = true)]
         materialized_extra_args: Option<Vec<String>>,
 
         /// Version of materialized to upgrade to. Defaults to the current
