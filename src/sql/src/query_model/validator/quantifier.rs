@@ -98,6 +98,14 @@ fn check_constraints<'a, const N: usize>(
 /// [`QuantifierConstraint`] constants used by the [`QuantifierConstraintValidator`].
 mod constants {
     use super::*;
+
+    pub(crate) const ZERO_ARBITRARY: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(0),
+        max: Bound::Included(0),
+        allowed_types: ARBITRARY_QUANTIFIER,
+        select_input: false,
+        select_parent: false,
+    };
 }
 
 /// A [`Validator`] that checks the following quantifier constraints:
@@ -109,6 +117,20 @@ pub(crate) struct QuantifierConstraintValidator;
 impl Validator for QuantifierConstraintValidator {
     fn validate(&self, model: &Model) -> ValidationResult {
         let mut errors = vec![];
+
+        for b in model.boxes.values().map(|b| b.borrow()) {
+            use constants::*;
+            use BoxType::*;
+            match b.box_type {
+                Get(..) | TableFunction(..) | Values(..) => {
+                    let constraints = [ZERO_ARBITRARY];
+                    check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
+                        errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
+                    })
+                }
+                _ => { /* everything is OK with the current box */ }
+            }
+        }
 
         if errors.is_empty() {
             Ok(())
@@ -122,6 +144,31 @@ impl Validator for QuantifierConstraintValidator {
 mod tests {
     use super::constants::*;
     use super::*;
+
+    #[test]
+    fn test_invalid_get_table_fn_values() {
+        let mut model = Model::new();
+
+        let box_src = model.make_box(get_user_id(0).into());
+        let box_get = model.make_box(get_user_id(1).into());
+        let box_table_fn = model.make_box(TableFunction::default().into());
+        let box_values = model.make_box(Values::default().into());
+
+        model.make_quantifier(QuantifierType::Foreach, box_src, box_get);
+        model.make_quantifier(QuantifierType::Foreach, box_src, box_table_fn);
+        model.make_quantifier(QuantifierType::Foreach, box_src, box_values);
+
+        let result = QuantifierConstraintValidator::default().validate(&model);
+        assert!(result.is_err());
+
+        let errors_act: HashSet<_> = result.unwrap_err().drain(..).collect();
+        let errors_exp = HashSet::from([
+            ValidationError::InvalidInputQuantifiers(box_get, ZERO_ARBITRARY),
+            ValidationError::InvalidInputQuantifiers(box_table_fn, ZERO_ARBITRARY),
+            ValidationError::InvalidInputQuantifiers(box_values, ZERO_ARBITRARY),
+        ]);
+        assert_eq!(errors_act, errors_exp);
+    }
 
     fn get_user_id(id: u64) -> Get {
         Get {

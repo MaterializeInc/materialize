@@ -22,7 +22,9 @@ use quantifier::*;
 impl Model {
     /// Validate a model with a default validator chain.
     pub fn validate(&self) -> ValidationResult {
-        let chain = ValidatorChain { validators: vec![] };
+        let chain = ValidatorChain {
+            validators: vec![Box::new(QuantifierConstraintValidator)],
+        };
         chain.validate(self)
     }
 }
