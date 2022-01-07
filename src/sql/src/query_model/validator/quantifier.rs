@@ -122,6 +122,22 @@ mod constants {
         select_input: false,
         select_parent: false,
     };
+
+    pub(crate) const ONE_FOREACH_INPUT_SELECT: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(1),
+        max: Bound::Included(1),
+        allowed_types: QuantifierType::Foreach as usize,
+        select_input: true,
+        select_parent: false,
+    };
+
+    pub(crate) const ONE_FOREACH_PARENT_SELECT: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(1),
+        max: Bound::Included(1),
+        allowed_types: QuantifierType::Foreach as usize,
+        select_input: false,
+        select_parent: true,
+    };
 }
 
 /// A [`Validator`] that checks the following quantifier constraints:
@@ -129,6 +145,10 @@ mod constants {
 ///    quantifiers.
 /// - `Union`, `Except` and `Intersect` boxes can only have input
 ///    quantifiers of type `Foreach`.
+/// - A `Grouping` box must have a single input quantifier of type
+///   `Foreach` ranging over the contents of a `Select` box.
+/// - A `Grouping` box must have a single ranging quantifier of type
+///   `Foreach` that has a `Select` box as its parent.
 #[derive(Default)]
 pub(crate) struct QuantifierConstraintValidator;
 
@@ -151,6 +171,16 @@ impl Validator for QuantifierConstraintValidator {
                     check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
                         errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
                     })
+                }
+                Grouping(..) => {
+                    let constraints = [ONE_FOREACH_INPUT_SELECT, ZERO_NOT_FOREACH];
+                    check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
+                        errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
+                    });
+                    let constraints = [ONE_FOREACH_PARENT_SELECT, ZERO_NOT_FOREACH];
+                    check_constraints(&constraints, b.ranging_quantifiers(model), model, |c| {
+                        errors.push(ValidationError::InvalidRangingQuantifiers(b.id, c.clone()))
+                    });
                 }
                 _ => { /* everything is OK with the current box */ }
             }
@@ -263,6 +293,50 @@ mod tests {
             ValidationError::InvalidInputQuantifiers(box_except, ZERO_NOT_FOREACH),
             ValidationError::InvalidInputQuantifiers(box_intersect, ONE_OR_MORE_FOREACH),
             ValidationError::InvalidInputQuantifiers(box_intersect, ZERO_NOT_FOREACH),
+        ]);
+        assert_eq!(errors_act, errors_exp);
+    }
+
+    /// Tests constraints for quantifiers incident with [`BoxType::Grouping`] boxes (happy case).
+    #[test]
+    fn test_invalid_grouping_ok() {
+        let mut model = Model::new();
+
+        let box_src = model.make_box(get_user_id(0).into());
+        let box_select = model.make_box(Select::default().into());
+        let box_grouping = model.make_box(Grouping::default().into());
+        let box_dst = model.make_box(Select::default().into());
+
+        model.make_quantifier(QuantifierType::Foreach, box_src, box_select);
+        model.make_quantifier(QuantifierType::Foreach, box_select, box_grouping);
+        model.make_quantifier(QuantifierType::Foreach, box_grouping, box_dst);
+
+        let result = QuantifierConstraintValidator::default().validate(&model);
+        assert!(result.is_ok());
+    }
+
+    /// Tests constraints for quantifiers incident with [`BoxType::Grouping`] boxes (bad case).
+    #[test]
+    fn test_invalid_grouping_not_ok() {
+        let mut model = Model::new();
+
+        let box_src = model.make_box(get_user_id(0).into());
+        let box_grouping = model.make_box(Grouping::default().into());
+        let box_dst = model.make_box(BoxType::Union);
+
+        model.make_quantifier(QuantifierType::Existential, box_src, box_grouping);
+        model.make_quantifier(QuantifierType::Foreach, box_src, box_grouping);
+        model.make_quantifier(QuantifierType::Foreach, box_grouping, box_dst);
+        model.make_quantifier(QuantifierType::Foreach, box_grouping, box_dst);
+
+        let result = QuantifierConstraintValidator::default().validate(&model);
+        assert!(result.is_err());
+
+        let errors_act: HashSet<_> = result.unwrap_err().drain(..).collect();
+        let errors_exp = HashSet::from([
+            ValidationError::InvalidInputQuantifiers(box_grouping, ZERO_NOT_FOREACH),
+            ValidationError::InvalidInputQuantifiers(box_grouping, ONE_FOREACH_INPUT_SELECT),
+            ValidationError::InvalidRangingQuantifiers(box_grouping, ONE_FOREACH_PARENT_SELECT),
         ]);
         assert_eq!(errors_act, errors_exp);
     }
