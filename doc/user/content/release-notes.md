@@ -113,6 +113,9 @@ changes that have not yet been documented.
   Previous versions of Materialize would incorrectly return `0` in these cases.
   The new behavior matches PostgreSQL.
 
+- **Breaking change.** Disallow the string `'sNaN'` (in any casing) as a valid
+  [`numeric`] value.
+
 - Add the `array_remove` and `list_remove` functions.
 
 - Allow `SET NAMES ____` special case as per: https://www.postgresql.org/docs/9.1/sql-set.html.
