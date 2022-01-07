@@ -106,11 +106,29 @@ mod constants {
         select_input: false,
         select_parent: false,
     };
+
+    pub(crate) const ZERO_NOT_FOREACH: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(0),
+        max: Bound::Included(0),
+        allowed_types: ARBITRARY_QUANTIFIER & !(QuantifierType::Foreach as usize),
+        select_input: false,
+        select_parent: false,
+    };
+
+    pub(crate) const ONE_OR_MORE_FOREACH: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(1),
+        max: Bound::Unbounded,
+        allowed_types: QuantifierType::Foreach as usize,
+        select_input: false,
+        select_parent: false,
+    };
 }
 
 /// A [`Validator`] that checks the following quantifier constraints:
 /// - `Get`, `TableFunction` and `Values` boxes cannot have input
 ///    quantifiers.
+/// - `Union`, `Except` and `Intersect` boxes can only have input
+///    quantifiers of type `Foreach`.
 #[derive(Default)]
 pub(crate) struct QuantifierConstraintValidator;
 
@@ -124,6 +142,12 @@ impl Validator for QuantifierConstraintValidator {
             match b.box_type {
                 Get(..) | TableFunction(..) | Values(..) => {
                     let constraints = [ZERO_ARBITRARY];
+                    check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
+                        errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
+                    })
+                }
+                Union | Except | Intersect => {
+                    let constraints = [ONE_OR_MORE_FOREACH, ZERO_NOT_FOREACH];
                     check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
                         errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
                     })
@@ -166,6 +190,35 @@ mod tests {
             ValidationError::InvalidInputQuantifiers(box_get, ZERO_ARBITRARY),
             ValidationError::InvalidInputQuantifiers(box_table_fn, ZERO_ARBITRARY),
             ValidationError::InvalidInputQuantifiers(box_values, ZERO_ARBITRARY),
+        ]);
+        assert_eq!(errors_act, errors_exp);
+    }
+
+    /// Tests the "box types that can only have input quantifiers of type Foreach" case.
+    #[test]
+    fn test_invalid_union_except_intersect() {
+        let mut model = Model::new();
+
+        let box_src = model.make_box(get_user_id(0).into());
+        let box_union = model.make_box(BoxType::Union);
+        let box_except = model.make_box(BoxType::Except);
+        let box_intersect = model.make_box(BoxType::Intersect);
+
+        model.make_quantifier(QuantifierType::PreservedForeach, box_src, box_union);
+        model.make_quantifier(QuantifierType::PreservedForeach, box_src, box_except);
+        model.make_quantifier(QuantifierType::PreservedForeach, box_src, box_intersect);
+
+        let result = QuantifierConstraintValidator::default().validate(&model);
+        assert!(result.is_err());
+
+        let errors_act: HashSet<_> = result.unwrap_err().drain(..).collect();
+        let errors_exp = HashSet::from([
+            ValidationError::InvalidInputQuantifiers(box_union, ONE_OR_MORE_FOREACH),
+            ValidationError::InvalidInputQuantifiers(box_union, ZERO_NOT_FOREACH),
+            ValidationError::InvalidInputQuantifiers(box_except, ONE_OR_MORE_FOREACH),
+            ValidationError::InvalidInputQuantifiers(box_except, ZERO_NOT_FOREACH),
+            ValidationError::InvalidInputQuantifiers(box_intersect, ONE_OR_MORE_FOREACH),
+            ValidationError::InvalidInputQuantifiers(box_intersect, ZERO_NOT_FOREACH),
         ]);
         assert_eq!(errors_act, errors_exp);
     }
