@@ -13,7 +13,6 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::fmt;
 
 use lazy_static::lazy_static;
 
@@ -543,14 +542,7 @@ fn get_cast(
 ///
 /// All types are convertible to string, so this never fails.
 pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
-    plan_cast(
-        "to_string",
-        ecx,
-        CastContext::Explicit,
-        expr,
-        &ScalarType::String,
-    )
-    .expect("cast known to exist")
+    plan_cast(ecx, CastContext::Explicit, expr, &ScalarType::String).expect("cast known to exist")
 }
 
 /// Converts an expression to `ScalarType::Jsonb`.
@@ -569,15 +561,11 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 
     match ecx.scalar_type(&expr) {
         Bool | Jsonb | Numeric { .. } => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Int16 | Int32 | Float32 | Float64 => plan_cast(
-            "to_jsonb",
-            ecx,
-            CastContext::Explicit,
-            expr,
-            &Numeric { scale: None },
-        )
-        .expect("cast known to exist")
-        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Int16 | Int32 | Float32 | Float64 => {
+            plan_cast(ecx, CastContext::Explicit, expr, &Numeric { scale: None })
+                .expect("cast known to exist")
+                .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
+        }
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {
@@ -697,7 +685,7 @@ pub fn plan_coerce<'a>(
                 ScalarType::Char { .. } | ScalarType::VarChar { .. } => CastContext::Assignment,
                 _ => CastContext::Explicit,
             };
-            plan_cast("string literal", ecx, ccx, lit, coerce_to)?
+            plan_cast(ecx, ccx, lit, coerce_to)?
         }
 
         LiteralRecord(exprs) => {
@@ -774,7 +762,7 @@ pub fn plan_hypothetical_cast(
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
     Some(
-        plan_cast("plan_hypothetical_cast", &ecx, ccx, col_expr, to)
+        plan_cast(&ecx, ccx, col_expr, to)
             .ok()?
             .lower_uncorrelated()
             .expect(
@@ -793,16 +781,12 @@ pub fn plan_hypothetical_cast(
 /// - Not possible, e.g. `Bytes` to `Interval`
 /// - Not permitted, e.g. implicitly casting from `Float64` to `Float32`.
 /// - Not implemented yet
-pub fn plan_cast<D>(
-    caller_name: D,
+pub fn plan_cast(
     ecx: &ExprContext,
     ccx: CastContext,
     expr: HirScalarExpr,
     cast_to: &ScalarType,
-) -> Result<HirScalarExpr, PlanError>
-where
-    D: fmt::Display,
-{
+) -> Result<HirScalarExpr, PlanError> {
     use ScalarType::*;
 
     let cast_from = ecx.scalar_type(&expr);
@@ -813,7 +797,7 @@ where
         Some(cast) => Ok(cast(expr)),
         None => sql_bail!(
             "{} does not support {}casting from {} to {}",
-            caller_name,
+            ecx.name,
             if ccx == CastContext::Implicit {
                 "implicitly "
             } else {

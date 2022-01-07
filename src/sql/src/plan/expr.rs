@@ -355,13 +355,12 @@ impl CoercibleScalarExpr {
 
     pub fn cast_to(
         self,
-        op: &str,
         ecx: &ExprContext,
         ccx: CastContext,
         ty: &ScalarType,
     ) -> Result<HirScalarExpr, PlanError> {
         let expr = typeconv::plan_coerce(ecx, self, ty)?;
-        typeconv::plan_cast(op, ecx, ccx, expr, ty)
+        typeconv::plan_cast(ecx, ccx, expr, ty)
     }
 }
 
