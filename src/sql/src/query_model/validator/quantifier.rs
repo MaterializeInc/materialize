@@ -115,6 +115,22 @@ mod constants {
         select_parent: false,
     };
 
+    pub(crate) const ZERO_PRESERVED_FOREACH: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(0),
+        max: Bound::Included(0),
+        allowed_types: QuantifierType::PreservedForeach as usize,
+        select_input: false,
+        select_parent: false,
+    };
+
+    pub(crate) const ONE_OR_MORE_NOT_PRES_FOREACH: QuantifierConstraint = QuantifierConstraint {
+        min: Bound::Included(1),
+        max: Bound::Unbounded,
+        allowed_types: ARBITRARY_QUANTIFIER & !(QuantifierType::PreservedForeach as usize),
+        select_input: false,
+        select_parent: false,
+    };
+
     pub(crate) const ONE_OR_MORE_FOREACH: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(1),
         max: Bound::Unbounded,
@@ -149,6 +165,8 @@ mod constants {
 ///   `Foreach` ranging over the contents of a `Select` box.
 /// - A `Grouping` box must have a single ranging quantifier of type
 ///   `Foreach` that has a `Select` box as its parent.
+/// - A `Select` box must have one or more input quantifiers of
+///   arbitrary type (except `PreservedForeach`).
 #[derive(Default)]
 pub(crate) struct QuantifierConstraintValidator;
 
@@ -180,6 +198,12 @@ impl Validator for QuantifierConstraintValidator {
                     let constraints = [ONE_FOREACH_PARENT_SELECT, ZERO_NOT_FOREACH];
                     check_constraints(&constraints, b.ranging_quantifiers(model), model, |c| {
                         errors.push(ValidationError::InvalidRangingQuantifiers(b.id, c.clone()))
+                    });
+                }
+                Select(..) => {
+                    let constraints = [ONE_OR_MORE_NOT_PRES_FOREACH, ZERO_PRESERVED_FOREACH];
+                    check_constraints(&constraints, b.input_quantifiers(model), model, |c| {
+                        errors.push(ValidationError::InvalidInputQuantifiers(b.id, c.clone()))
                     });
                 }
                 _ => { /* everything is OK with the current box */ }
@@ -337,6 +361,43 @@ mod tests {
             ValidationError::InvalidInputQuantifiers(box_grouping, ZERO_NOT_FOREACH),
             ValidationError::InvalidInputQuantifiers(box_grouping, ONE_FOREACH_INPUT_SELECT),
             ValidationError::InvalidRangingQuantifiers(box_grouping, ONE_FOREACH_PARENT_SELECT),
+        ]);
+        assert_eq!(errors_act, errors_exp);
+    }
+
+    /// Tests constraints for quantifiers incident with [`BoxType::Select`] boxes (happy case).
+    #[test]
+    fn test_invalid_select_ok() {
+        let mut model = Model::new();
+
+        let box_src = model.make_box(get_user_id(0).into());
+        let box_select = model.make_box(Select::default().into());
+
+        model.make_quantifier(QuantifierType::Foreach, box_src, box_select);
+        model.make_quantifier(QuantifierType::Existential, box_src, box_select);
+        model.make_quantifier(QuantifierType::Scalar, box_src, box_select);
+
+        let result = QuantifierConstraintValidator::default().validate(&model);
+        assert!(result.is_ok());
+    }
+
+    /// Tests constraints for quantifiers incident with [`BoxType::Select`] boxes (bad case).
+    #[test]
+    fn test_invalid_select_not_ok() {
+        let mut model = Model::new();
+
+        let box_src = model.make_box(get_user_id(0).into());
+        let box_select = model.make_box(Select::default().into());
+
+        model.make_quantifier(QuantifierType::PreservedForeach, box_src, box_select);
+
+        let result = QuantifierConstraintValidator::default().validate(&model);
+        assert!(result.is_err());
+
+        let errors_act: HashSet<_> = result.unwrap_err().drain(..).collect();
+        let errors_exp = HashSet::from([
+            ValidationError::InvalidInputQuantifiers(box_select, ONE_OR_MORE_NOT_PRES_FOREACH),
+            ValidationError::InvalidInputQuantifiers(box_select, ZERO_PRESERVED_FOREACH),
         ]);
         assert_eq!(errors_act, errors_exp);
     }
