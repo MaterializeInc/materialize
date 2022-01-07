@@ -66,7 +66,7 @@ impl KafkaClient {
             topic = topic.set(key, val);
         }
 
-        kafka_util::admin::create_topic(&client, &admin_opts, &topic)
+        kafka_util::admin::ensure_topic(&client, &admin_opts, &topic)
             .await
             .context(format!("creating Kafka topic: {}", topic_name))?;
 

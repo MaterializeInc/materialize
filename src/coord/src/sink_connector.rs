@@ -29,7 +29,6 @@ use ore::collections::CollectionExt;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::KafkaError;
 use repr::Timestamp;
-use sql::kafka_util;
 
 use crate::error::CoordError;
 
@@ -81,7 +80,7 @@ fn get_latest_ts(
         .context("creating consumer client failed")?;
 
     // ensure the consistency topic has exactly one partition
-    let partitions = kafka_util::get_partitions(&consumer, consistency_topic, timeout)
+    let partitions = sql::kafka_util::get_partitions(&consumer, consistency_topic, timeout)
         .with_context(|| {
             format!(
                 "Unable to fetch metadata about consistency topic {}",
@@ -297,13 +296,21 @@ async fn register_kafka_topic(
         kafka_topic = kafka_topic.set("retention.bytes", retention_bytes);
     }
 
-    ::kafka_util::admin::create_topic_allow_existing(
-        client,
-        &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
-        &kafka_topic,
-        succeed_if_exists,
-    )
-    .await
+    if succeed_if_exists {
+        kafka_util::admin::ensure_topic(
+            client,
+            &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
+            &kafka_topic,
+        )
+        .await
+    } else {
+        kafka_util::admin::create_new_topic(
+            client,
+            &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
+            &kafka_topic,
+        )
+        .await
+    }
     .with_context(|| format!("Error creating topic {} for sink", topic))?;
 
     Ok(())
