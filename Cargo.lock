@@ -910,6 +910,7 @@ dependencies = [
  "futures",
  "interchange",
  "itertools",
+ "kafka-util",
  "lazy_static",
  "log",
  "mz-avro",

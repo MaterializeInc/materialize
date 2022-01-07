@@ -36,10 +36,34 @@ use ore::retry::Retry;
 /// requested in `new_topic`. Empirically, this seems to be the condition that
 /// guarantees that future attempts to consume from or produce to the topic will
 /// succeed.
-pub async fn create_topic<'a, C>(
+pub async fn create_new_topic<'a, C>(
     client: &'a AdminClient<C>,
     admin_opts: &AdminOptions,
     new_topic: &'a NewTopic<'a>,
+) -> Result<(), CreateTopicError>
+where
+    C: ClientContext,
+{
+    create_topic_helper(client, admin_opts, new_topic, false).await
+}
+
+/// Like `create_new_topic` but allow topic to already exist
+pub async fn ensure_topic<'a, C>(
+    client: &'a AdminClient<C>,
+    admin_opts: &AdminOptions,
+    new_topic: &'a NewTopic<'a>,
+) -> Result<(), CreateTopicError>
+where
+    C: ClientContext,
+{
+    create_topic_helper(client, admin_opts, new_topic, true).await
+}
+
+async fn create_topic_helper<'a, C>(
+    client: &'a AdminClient<C>,
+    admin_opts: &AdminOptions,
+    new_topic: &'a NewTopic<'a>,
+    allow_existing: bool,
 ) -> Result<(), CreateTopicError>
 where
     C: ClientContext,
@@ -51,7 +75,8 @@ where
         return Err(CreateTopicError::TopicCountMismatch(res.len()));
     }
     match res.into_element() {
-        Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => Ok(()),
+        Ok(_) => Ok(()),
+        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) if allow_existing => Ok(()),
         Err((_, e)) => Err(CreateTopicError::Kafka(KafkaError::AdminOp(e))),
     }?;
 

@@ -29,7 +29,6 @@ use ore::collections::CollectionExt;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::KafkaError;
 use repr::Timestamp;
-use sql::kafka_util;
 
 use crate::error::CoordError;
 
@@ -81,7 +80,7 @@ fn get_latest_ts(
         .context("creating consumer client failed")?;
 
     // ensure the consistency topic has exactly one partition
-    let partitions = kafka_util::get_partitions(&consumer, consistency_topic, timeout)
+    let partitions = sql::kafka_util::get_partitions(&consumer, consistency_topic, timeout)
         .with_context(|| {
             format!(
                 "Unable to fetch metadata about consistency topic {}",
@@ -297,28 +296,23 @@ async fn register_kafka_topic(
         kafka_topic = kafka_topic.set("retention.bytes", retention_bytes);
     }
 
-    let res = client
-        .create_topics(
-            &[kafka_topic],
+    if succeed_if_exists {
+        kafka_util::admin::ensure_topic(
+            client,
             &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
+            &kafka_topic,
         )
         .await
-        .with_context(|| format!("error creating new topic {} for sink", topic))?;
-    if res.len() != 1 {
-        coord_bail!(
-            "error creating topic {} for sink: \
-             kafka topic creation returned {} results, but exactly one result was expected",
-            topic,
-            res.len()
-        );
+    } else {
+        kafka_util::admin::create_new_topic(
+            client,
+            &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
+            &kafka_topic,
+        )
+        .await
     }
-    if let Err((_, e)) = res.into_element() {
-        // if the topic already exists and we reuse_existing, don't fail - instead proceed
-        // to read the schema
-        if !(succeed_if_exists && e == rdkafka::types::RDKafkaErrorCode::TopicAlreadyExists) {
-            coord_bail!("error creating topic {} for sink: {}", topic, e)
-        }
-    }
+    .with_context(|| format!("Error creating topic {} for sink", topic))?;
+
     Ok(())
 }
 

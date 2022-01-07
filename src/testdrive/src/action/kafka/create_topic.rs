@@ -187,7 +187,7 @@ impl Action for CreateTopicAction {
             new_topic
         };
 
-        kafka_util::admin::create_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
+        kafka_util::admin::ensure_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
             .await
             .map_err_to_string()?;
         state.kafka_topics.insert(topic_name, self.partitions);
