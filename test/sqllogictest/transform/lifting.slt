@@ -205,6 +205,7 @@ select c1, c1 + a from (select 1 as c1, x as c2, 3 as c3 from generate_series(1,
 ----
 %0 =
 | Constant () () () () () () ()
+| ArrangeBy ()
 
 %1 =
 | Get materialize.public.t (u1)
@@ -236,6 +237,9 @@ select c.* from (select f1, f2 from (select f2, f1 from (select 1 as f1), genera
 | Constant (2) (3) (4)
 | | types = (integer)
 | | keys = ((#0))
+| ArrangeBy ()
+| | types = (integer)
+| | keys = ((#0))
 
 %1 =
 | Get materialize.public.t (u1)
@@ -265,6 +269,9 @@ select c.* from (select f2, f1, f3 from (select f3, f2, f1 from generate_series(
 ----
 %0 =
 | Constant (2, 3) (2, 4) (2, 5) (3, 3) (3, 4) (3, 5) (4, 3) (4, 4) (4, 5)
+| | types = (integer, integer)
+| | keys = ((#0, #1))
+| ArrangeBy ()
 | | types = (integer, integer)
 | | keys = ((#0, #1))
 

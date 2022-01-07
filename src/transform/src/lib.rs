@@ -323,9 +323,7 @@ impl Optimizer {
                 transforms: vec![
                     Box::new(crate::join_implementation::JoinImplementation::default()),
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
-                    Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand::default()),
-                    Box::new(crate::map_lifting::LiteralLifting::default()),
                 ],
             }),
             Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
@@ -334,7 +332,6 @@ impl Optimizer {
             Box::new(crate::cse::relation_cse::RelationCSE),
             Box::new(crate::inline_let::InlineLet::new(false)),
             Box::new(crate::update_let::UpdateLet::default()),
-            Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
         Self { transforms }
     }

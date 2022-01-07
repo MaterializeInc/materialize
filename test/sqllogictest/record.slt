@@ -18,8 +18,7 @@ EXPLAIN SELECT (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
 ----
 %0 =
 | Get materialize.public.t1 (u1)
-| Map #0
-| Project (#2)
+| Project (#0)
 
 EOF
 
@@ -38,7 +37,32 @@ EXPLAIN SELECT (COALESCE(record, ROW(NULL, NULL))).f2 FROM (SELECT ROW(a, a) AS 
 ----
 %0 =
 | Get materialize.public.t1 (u1)
-| Map #0
-| Project (#2)
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM (SELECT (record).f2 as a FROM (SELECT ROW(a, a) AS record FROM t1)) WHERE a > 2
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 > 2)
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT (record2).f1
+FROM (
+    SELECT ROW(c, (record)) as record2
+    FROM (
+        SELECT (record).f2 as c, record
+        FROM (
+            SELECT ROW(a, b) as record FROM t1)))
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Project (#1)
 
 EOF

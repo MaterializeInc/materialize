@@ -9,6 +9,8 @@
 
 //! Canonicalizes MFPs and performs common sub-expression elimination.
 //!
+//! Also reduces map and filter expressions.
+//!
 //! This transform takes a sequence of Maps, Filters, and Projects and
 //! canonicalizes it to a sequence like this:
 //! | Filter
@@ -56,41 +58,60 @@ impl CanonicalizeMfp {
         let mut mfp = expr::MapFilterProject::extract_non_errors_from_expr_mut(relation);
         relation.try_visit_mut_children(|e| self.action(e))?;
         mfp.optimize();
-        if !mfp.is_identity() {
-            let (map, mut filter, project) = mfp.as_map_filter_project();
+
+        // Loop expression reduction and MFP canonicalization until a steady
+        // point is reached.
+        loop {
+            if mfp.is_identity() {
+                break;
+            }
+
+            let (mut map, mut filter, project) = mfp.as_map_filter_project();
+            let mut relation_type = relation.typ();
+            for expr in map.iter_mut() {
+                expr.reduce(&relation_type);
+                relation_type.column_types.push(expr.typ(&relation_type));
+            }
             if !filter.is_empty() {
                 // Push down the predicates that can be pushed down, removing
                 // them from the mfp object to be optimized.
-                let mut relation_type = relation.typ();
-                for expr in map.iter() {
-                    relation_type.column_types.push(expr.typ(&relation_type));
-                }
                 canonicalize_predicates(&mut filter, &relation_type);
                 let all_errors = filter.iter().all(|p| p.is_literal_err());
-                let (retained, pushdown) = crate::predicate_pushdown::PredicatePushdown::default()
-                    .push_filters_through_map(&map, &mut filter, mfp.input_arity, all_errors);
+                let (retained, mut pushdown) =
+                    crate::predicate_pushdown::PredicatePushdown::default()
+                        .push_filters_through_map(&map, &mut filter, mfp.input_arity, all_errors);
                 if !pushdown.is_empty() {
+                    for predicate in pushdown.iter_mut() {
+                        predicate.reduce(&relation_type);
+                    }
                     *relation = relation.take_dangerous().filter(pushdown);
                 }
-                mfp = expr::MapFilterProject::new(mfp.input_arity)
-                    .map(map)
-                    .filter(retained)
-                    .project(project);
+                filter = retained;
             }
-            mfp.optimize();
-            if !mfp.is_identity() {
-                let (map, filter, project) = mfp.as_map_filter_project();
-                let total_arity = mfp.input_arity + map.len();
-                if !map.is_empty() {
-                    *relation = relation.take_dangerous().map(map);
-                }
-                if !filter.is_empty() {
-                    *relation = relation.take_dangerous().filter(filter);
-                }
-                if project.len() != total_arity || !project.iter().enumerate().all(|(i, o)| i == *o)
-                {
-                    *relation = relation.take_dangerous().project(project);
-                }
+
+            let mut new_mfp = expr::MapFilterProject::new(mfp.input_arity)
+                .map(map)
+                .filter(filter)
+                .project(project);
+            new_mfp.optimize();
+
+            if mfp == new_mfp {
+                break;
+            }
+            mfp = new_mfp;
+        }
+
+        if !mfp.is_identity() {
+            let (map, filter, project) = mfp.as_map_filter_project();
+            let total_arity = mfp.input_arity + map.len();
+            if !map.is_empty() {
+                *relation = relation.take_dangerous().map(map);
+            }
+            if !filter.is_empty() {
+                *relation = relation.take_dangerous().filter(filter);
+            }
+            if project.len() != total_arity || !project.iter().enumerate().all(|(i, o)| i == *o) {
+                *relation = relation.take_dangerous().project(project);
             }
         }
         Ok(())
