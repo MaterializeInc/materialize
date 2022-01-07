@@ -650,3 +650,36 @@ SELECT x FROM xs WHERE EXISTS (SELECT y FROM (SELECT 1 as y) WHERE x = y)
 ----
 1
 1
+
+# Regression test for #9921, in which the presence of a SELECT subquery inside
+# of another subexpression produced a degenerate join that was not elided before
+# join implementation planning.
+query I
+SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
+WHERE a IN (9, 0)
+  OR 0  <  ALL (
+      SELECT agg1  NULL
+      FROM (SELECT MAX(3) agg1  FROM (SELECT  FROM x)
+      GROUP BY TRUE)
+  )
+  GROUP BY TRUE;
+----
+1
+
+query T multiline
+EXPLAIN SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
+WHERE a IN (9, 0)
+  OR 0  <  ALL (
+      SELECT agg1  NULL
+      FROM (SELECT MAX(3) agg1  FROM (SELECT  FROM x)
+      GROUP BY TRUE)
+  )
+  GROUP BY TRUE;
+----
+%0 =
+| Get materialize.public.y (u27)
+| Project ()
+| Distinct group=()
+| Map 1
+
+EOF
