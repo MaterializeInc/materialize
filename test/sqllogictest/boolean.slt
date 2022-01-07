@@ -69,6 +69,18 @@ SELECT 1 AND FALSE
 query error AND argument must have type boolean, not type integer
 SELECT FALSE AND 1
 
+query B colnames
+SELECT TRUE
+----
+bool
+true
+
+query B colnames
+SELECT FALSE
+----
+bool
+false
+
 query B
 SELECT NOT TRUE
 ----

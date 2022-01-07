@@ -107,6 +107,22 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+- **Breaking change.** When inferring a column name for a cast expression, fall
+  back to choosing the name of the target type.
+
+  Consider the following query:
+
+  ```sql
+  SELECT 'a'::text
+  ```
+
+  This version of Materialize will infer the column name `text`, while previous
+  versions of Materialize would fall back to the default column name `?column?`.
+
+- **Breaking change.** When inferring a column name for a [`bool`] or
+  [`interval`] literal, fall back to choosing `bool` or `interval`,
+  respectively.
+
 - **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
   is called with a [`time`] value but a date-related field (e.g., `YEAR`).
 

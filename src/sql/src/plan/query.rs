@@ -2376,6 +2376,13 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
 fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ColumnName> {
     match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
+        Expr::Value(v) => match v {
+            // Per PostgreSQL, `bool` and `interval` literals take on the name
+            // of their type, but not other literal types.
+            Value::Boolean(_) => Some("bool".into()),
+            Value::Interval(_) => Some("interval".into()),
+            _ => None,
+        },
         Expr::Function(func) => {
             let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
             if name.schema.as_deref() == Some("mz_internal") {
@@ -2388,7 +2395,15 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ColumnName>
         Expr::NullIf { .. } => Some("nullif".into()),
         Expr::Array { .. } => Some("array".into()),
         Expr::List { .. } => Some("list".into()),
-        Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
+        Expr::Cast { expr, data_type } => match invent_column_name(ecx, expr) {
+            Some(name) => Some(name),
+            None => {
+                let ty = scalar_type_from_sql(&ecx.qcx.scx, data_type).ok()?;
+                let pgrepr_type = pgrepr::Type::from(&ty);
+                let entry = ecx.catalog().get_item_by_oid(&pgrepr_type.oid());
+                Some(entry.name().item.clone().into())
+            }
+        },
         Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
         Expr::Exists { .. } => Some("exists".into()),
         Expr::Subquery(query) | Expr::ListSubquery(query) => {
