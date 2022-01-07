@@ -352,7 +352,7 @@ class Composition:
             check: Whether to raise an error if the child process exits with
                 a failing exit code.
         """
-        print(f"$ docker-compose {' '.join(args)}")
+        print(f"$ docker-compose {' '.join(args)}", file=sys.stderr)
 
         self.file.seek(0)
         if env is not None:
