@@ -80,8 +80,8 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
                 let err_stream = vec![(err.to_string(), 0, 1)].to_stream(scope);
                 (ok_stream, err_stream)
             });
-            ok_stream.inspect(|d| log::info!("ok: {:?}", d));
-            err_stream.inspect(|d| log::info!("err: {:?}", d));
+            ok_stream.inspect(|d| tracing::info!("ok: {:?}", d));
+            err_stream.inspect(|d| tracing::info!("err: {:?}", d));
         })
     })?;
 

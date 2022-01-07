@@ -12,9 +12,9 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
 
-use log::info;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use materialized::http;

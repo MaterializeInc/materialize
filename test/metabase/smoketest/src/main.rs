@@ -28,7 +28,7 @@ async fn connect_materialized() -> Result<tokio_postgres::Client, anyhow::Error>
         .retry_async(|_| async {
             let res = TcpStream::connect("materialized:6875").await;
             if let Err(e) = &res {
-                log::debug!("error connecting to materialized: {}", e);
+                tracing::debug!("error connecting to materialized: {}", e);
             }
             res
         })
@@ -55,7 +55,7 @@ async fn connect_metabase() -> Result<metabase::Client, anyhow::Error> {
         .retry_async(|_| async {
             let res = client.session_properties().await;
             if let Err(e) = &res {
-                log::debug!("error connecting to metabase: {}", e);
+                tracing::debug!("error connecting to metabase: {}", e);
             }
             res.map(|res| res.setup_token)
         })
@@ -115,7 +115,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let metabase_client = connect_metabase().await?;
 
     let databases = metabase_client.databases().await?;
-    log::debug!("Databases: {:#?}", databases);
+    tracing::debug!("Databases: {:#?}", databases);
 
     let database_names: Vec<_> = databases.iter().map(|d| &d.name).sorted().collect();
     assert_eq!(database_names, &["Materialize", "Sample Dataset"]);
@@ -164,7 +164,7 @@ async fn main() -> Result<(), anyhow::Error> {
             for t in &mut metadata.tables {
                 t.fields.sort_by(|a, b| a.name.cmp(&b.name));
             }
-            log::debug!("Materialize database metadata: {:#?}", metadata);
+            tracing::debug!("Materialize database metadata: {:#?}", metadata);
             if expected_metadata != metadata {
                 bail!(
                     "metadata did not match\nexpected:\n{:#?}\nactual:\n{:#?}",

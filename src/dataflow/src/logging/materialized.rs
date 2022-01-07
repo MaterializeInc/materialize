@@ -15,11 +15,11 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::operators::Count;
-use log::error;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::WorkerIdentifier;
+use tracing::error;
 
 use super::{LogVariant, MaterializedLog};
 use crate::activator::RcActivator;

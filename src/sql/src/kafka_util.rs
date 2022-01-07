@@ -16,7 +16,6 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
-use log::{debug, error, info, warn};
 use ore::collections::CollectionExt;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};

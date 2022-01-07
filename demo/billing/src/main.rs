@@ -50,7 +50,7 @@ async fn run() -> Result<()> {
     let k_config = config.kafka_config();
     let mz_config = config.mz_config();
 
-    log::info!(
+    tracing::info!(
         "starting up message_count={} mzd={}:{} kafka={} preserve_source={} start_time={} seed={} enable_persistence={}",
         config.message_count,
         config.materialized_host,
@@ -115,21 +115,21 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         for _ in 0..messages_to_send {
             let m = randomizer::random_batch(rng, &mut recordstate);
             m.write_to_vec(&mut buf)?;
-            log::trace!("sending: {:?}", m);
+            tracing::trace!("sending: {:?}", m);
             let res = k_client.send(&config.topic, &buf);
             match res {
                 Ok(fut) => {
                     tokio::spawn(fut);
                 }
                 Err(e) => {
-                    log::error!("failed to produce message: {}", e);
+                    tracing::error!("failed to produce message: {}", e);
                     time::sleep(Duration::from_millis(100)).await;
                 }
             };
             bytes_sent += buf.len();
             buf.clear();
         }
-        log::info!(
+        tracing::info!(
             "produced {} records ({} bytes / record) ({} remaining)",
             messages_to_send,
             bytes_sent / messages_to_send,
@@ -198,7 +198,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
             mz::init_sink_views(&client, config::REINGESTED_SINK_SOURCE_NAME).await?;
         }
     } else {
-        log::info!(
+        tracing::info!(
             "source '{}' already exists, not recreating",
             config::KAFKA_SOURCE_NAME
         );

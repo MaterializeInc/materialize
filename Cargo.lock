@@ -619,7 +619,6 @@ dependencies = [
  "futures",
  "futures-channel",
  "hex",
- "log",
  "mz-protoc",
  "ore",
  "postgres-types",
@@ -629,6 +628,7 @@ dependencies = [
  "test-util",
  "tokio",
  "tokio-postgres",
+ "tracing",
  "uuid",
 ]
 
@@ -922,6 +922,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-stream",
+ "tracing",
  "transform",
  "uncased",
  "url",
@@ -1244,6 +1245,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-util",
+ "tracing",
  "url",
  "uuid",
 ]
@@ -1276,7 +1278,6 @@ dependencies = [
  "http",
  "interchange",
  "kafka-util",
- "log",
  "mz-aws-util",
  "num_enum",
  "ore",
@@ -1289,6 +1290,7 @@ dependencies = [
  "serde_regex",
  "timely",
  "tokio",
+ "tracing",
  "url",
  "uuid",
 ]
@@ -1303,12 +1305,12 @@ dependencies = [
  "dataflow",
  "dataflow-types",
  "futures",
- "log",
  "ore",
  "timely",
  "tokio",
  "tokio-serde",
  "tokio-util",
+ "tracing",
  "tracing-subscriber",
 ]
 
@@ -2354,7 +2356,6 @@ dependencies = [
  "hex",
  "itertools",
  "lazy_static",
- "log",
  "mz-avro",
  "mz-protoc",
  "num-traits",
@@ -2371,6 +2372,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
+ "tracing",
  "url",
  "uuid",
 ]
@@ -2626,7 +2628,6 @@ dependencies = [
  "krb5-src",
  "lazy_static",
  "libc",
- "log",
  "mz-http-proxy",
  "mz-process-collector",
  "nix",
@@ -2747,11 +2748,11 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "itertools",
- "log",
  "metabase",
  "ore",
  "tokio",
  "tokio-postgres",
+ "tracing",
 ]
 
 [[package]]
@@ -2820,7 +2821,6 @@ dependencies = [
  "flate2",
  "itertools",
  "lazy_static",
- "log",
  "md-5",
  "rand",
  "regex",
@@ -2828,6 +2828,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "snap",
+ "tracing",
  "uuid",
 ]
 
@@ -2858,8 +2859,8 @@ dependencies = [
  "hyper-tls",
  "ipnet",
  "lazy_static",
- "log",
  "reqwest",
+ "tracing",
 ]
 
 [[package]]
@@ -3316,13 +3317,13 @@ dependencies = [
  "env_logger",
  "futures",
  "futures-channel",
- "log",
  "mz-aws-util",
  "ore",
  "rand",
  "test-util",
  "tokio",
  "tokio-postgres",
+ "tracing",
 ]
 
 [[package]]
@@ -3344,7 +3345,6 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "lazy_static",
- "log",
  "md-5",
  "mz-aws-util",
  "mz-protoc",
@@ -3359,6 +3359,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -3412,7 +3413,6 @@ dependencies = [
  "futures",
  "itertools",
  "lazy_static",
- "log",
  "openssl",
  "ordered-float",
  "ore",
@@ -3424,6 +3424,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-stream",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -4484,7 +4485,6 @@ dependencies = [
  "interchange",
  "itertools",
  "lazy_static",
- "log",
  "lowertest",
  "mz-avro",
  "mz-aws-util",
@@ -4505,6 +4505,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-postgres",
+ "tracing",
  "uncased",
  "url",
  "uuid",
@@ -4520,10 +4521,10 @@ dependencies = [
  "hex",
  "itertools",
  "lazy_static",
- "log",
  "ore",
  "phf",
  "phf_codegen",
+ "tracing",
  "uncased",
  "unicode-width",
  "walkabout",
@@ -4739,12 +4740,12 @@ dependencies = [
  "anyhow",
  "chrono",
  "kafka-util",
- "log",
  "ore",
  "rand",
  "rdkafka",
  "tokio",
  "tokio-postgres",
+ "tracing",
 ]
 
 [[package]]

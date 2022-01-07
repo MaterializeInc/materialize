@@ -563,7 +563,7 @@ where
                 // XXX: This reports user data, which we perhaps should not do!
                 for (val, cnt) in source.iter() {
                     if cnt < &0 {
-                        log::error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?}", val, cnt);
+                        tracing::error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?}", val, cnt);
                     }
                 }
             } else {

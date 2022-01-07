@@ -11,9 +11,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
-use log::{debug, error};
 use tokio::io::{self, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tracing::{debug, error};
 
 use ore::netio::{self, SniffedStream, SniffingStream};
 

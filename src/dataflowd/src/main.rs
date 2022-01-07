@@ -12,9 +12,9 @@ use std::process;
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
-use log::info;
 use tokio::net::TcpListener;
 use tokio::select;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use dataflow_types::client::Client;

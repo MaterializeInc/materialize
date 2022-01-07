@@ -146,7 +146,7 @@ fn get_latest_ts(
     // Topic not empty but we couldn't read any messages.  We don't expect this to happen but we
     // have no reason to rely on kafka not inserting any internal messages at the beginning.
     if latest_offset.is_none() {
-        log::debug!(
+        tracing::debug!(
             "unable to read any messages from non-empty topic {}:{}, lo/hi: {}/{}",
             consistency_topic,
             partition,

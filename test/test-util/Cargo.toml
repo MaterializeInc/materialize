@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.52"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 kafka-util = { path = "../../src/kafka-util" }
-log = "0.4.13"
+tracing = "0.1.29"
 ore = { path = "../../src/ore" }
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }

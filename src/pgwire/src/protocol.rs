@@ -18,12 +18,12 @@ use byteorder::{ByteOrder, NetworkEndian};
 use expr::GlobalId;
 use futures::future::{BoxFuture, FutureExt};
 use itertools::izip;
-use log::debug;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::{self, Duration, Instant};
+use tracing::debug;
 
 use coord::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,

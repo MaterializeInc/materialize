@@ -130,7 +130,7 @@ where
                         std::task::Poll::Ready(result) => {
                             match result {
                                 Ok(seq_no) => {
-                                    log::trace!(
+                                    tracing::trace!(
                                         "In {}, finished writing for time: {}, seq_no: {:?}",
                                         &operator_name,
                                         cap.time(),
@@ -145,7 +145,7 @@ where
                                         error_cap.time(),
                                         e
                                     );
-                                    log::error!("{}", error);
+                                    tracing::error!("{}", error);
 
                                     // TODO: make error retractable? Probably not...
                                     session.give((error, *error_cap.time(), 1));
@@ -279,7 +279,7 @@ where
                 // This way, we are prepared for a future of multi-dimensional frontiers, though.
                 for frontier_element in new_input_frontier.iter() {
                     if input_frontier.less_than(&frontier_element) {
-                        log::trace!(
+                        tracing::trace!(
                             "In {}, sealing collection up to {}...",
                             &operator_name,
                             frontier_element,
@@ -303,7 +303,7 @@ where
                 while let Some(mut pending_future) = pending_futures.pop_front() {
                     match Pin::new(&mut pending_future.future).poll(&mut context) {
                         std::task::Poll::Ready(Ok(_)) => {
-                            log::trace!(
+                            tracing::trace!(
                                 "In {}, finished sealing collection up to {}",
                                 &operator_name,
                                 pending_future.time,
@@ -313,7 +313,7 @@ where
                             cap_set.downgrade(Some(pending_future.time));
                         }
                         std::task::Poll::Ready(Err(e)) => {
-                            log::trace!(
+                            tracing::trace!(
                                 "Error sealing {} up to {}: {}",
                                 &operator_name,
                                 pending_future.time,
@@ -335,7 +335,10 @@ where
                             };
 
                             if retry {
-                                log::trace!("Adding seal to queue again: {}", pending_future.time);
+                                tracing::trace!(
+                                    "Adding seal to queue again: {}",
+                                    pending_future.time
+                                );
 
                                 let future = write.seal(pending_future.time);
                                 pending_futures.push_front(SealFuture {

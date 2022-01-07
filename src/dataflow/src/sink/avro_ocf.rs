@@ -13,10 +13,10 @@ use std::fs::OpenOptions;
 use differential_dataflow::{Collection, Hashable};
 
 use itertools::repeat_n;
-use log::error;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::Scope;
+use tracing::error;
 
 use dataflow_types::{AvroOcfSinkConnector, SinkDesc};
 use expr::GlobalId;

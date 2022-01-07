@@ -19,7 +19,6 @@ use std::time::Duration;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use interchange::json::JsonEncoder;
 use itertools::Itertools;
-use log::{debug, error, info};
 use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
@@ -36,6 +35,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
+use tracing::{debug, error, info};
 
 use dataflow_types::{
     KafkaSinkConnector, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkAsOf, SinkDesc,

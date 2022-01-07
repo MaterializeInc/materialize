@@ -21,7 +21,6 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{debug, error, info, log_enabled, warn};
 use mz_avro::schema::Schema;
 use mz_avro::types::Value;
 use ore::metric;
@@ -31,6 +30,7 @@ use rdkafka::message::BorrowedMessage;
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use tokio::sync::mpsc;
+use tracing::{debug, error, info, warn};
 
 use dataflow_types::{
     Consistency, DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
@@ -568,7 +568,10 @@ impl Timestamper {
                     {
                         (connector, encoding, envelope, consistency)
                     } else {
-                        log::debug!("Local source {} cannot be timestamped. Ignoring", source_id);
+                        tracing::debug!(
+                            "Local source {} cannot be timestamped. Ignoring",
+                            source_id
+                        );
                         continue;
                     };
 
@@ -723,7 +726,7 @@ impl Timestamper {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &kc.addrs.to_string());
 
-        if log_enabled!(target: "librdkafka", log::Level::Debug) {
+        if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
             config.set("debug", "all");
         }
 

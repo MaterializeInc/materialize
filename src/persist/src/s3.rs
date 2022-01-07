@@ -393,7 +393,7 @@ mod tests {
         let config = match S3BlobConfig::new_for_test().await? {
             Some(client) => client,
             None => {
-                log::info!(
+                tracing::info!(
                     "{} env not set: skipping test that uses external service",
                     S3BlobConfig::EXTERNAL_TESTS_S3_BUCKET
                 );

@@ -26,6 +26,7 @@ itertools = "0.10.3"
 kafka-util = { path = "../kafka-util" }
 lazy_static = "1.4.0"
 log = "0.4.13"
+tracing = "0.1.29"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util" }
 mz-protoc = { path = "../protoc" }

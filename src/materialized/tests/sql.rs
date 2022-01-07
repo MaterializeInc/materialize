@@ -25,9 +25,9 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use log::info;
 use postgres::Row;
 use tempfile::NamedTempFile;
+use tracing::info;
 
 use ore::assert_contains;
 

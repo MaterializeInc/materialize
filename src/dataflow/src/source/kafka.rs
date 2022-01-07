@@ -25,8 +25,8 @@ use dataflow_types::{
 };
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
-use log::{error, info, log_enabled, warn};
 use repr::adt::jsonb::Jsonb;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::logging::materialized::{Logger, MaterializedEvent};
@@ -534,7 +534,7 @@ fn create_kafka_config(
     // This is a very simple integration at the moment; enabling `debug`-level
     // logs for the `librdkafka` target enables the full firehouse of librdkafka
     // debug logs. We may want to investigate finer-grained control.
-    if log_enabled!(target: "librdkafka", log::Level::Debug) {
+    if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
         kafka_config.set("debug", "all");
     }
 

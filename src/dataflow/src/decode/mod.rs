@@ -32,9 +32,9 @@ use dataflow_types::{
     KeyEnvelope, LinearOperator, RegexEncoding, SourceEnvelope,
 };
 use interchange::avro::ConfluentAvroResolver;
-use log::error;
 use repr::Datum;
 use repr::{Diff, Row, Timestamp};
+use tracing::error;
 
 use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
