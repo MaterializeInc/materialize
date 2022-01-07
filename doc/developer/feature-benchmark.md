@@ -122,7 +122,7 @@ Failed! giving up: testdrive_this --no-reset --seed=1639555967 --initial-backoff
 ```
 
 This indicates that testdrive could not run the queries from the benchmark definition. To understand what went wrong, use `docker ps -a` to see the ID
-of the `feature-benchmark_testdrive_*' container that exited most recently and then `docker logs <id_of_the_container>` to obtain the output from testdrive.
+of the `feature-benchmark_testdrive_*` container that exited most recently and then `docker logs <id_of_the_container>` to obtain the output from testdrive.
 
 # Writing benchmark scenarios
 
@@ -197,3 +197,34 @@ If you are benchmarking a single query, put the `/* A */` marker on a dummy `SEL
 
 * Before attempting to run your testdrive fragments, put them in a stand-alone .td file and run them manually through `testdrive` so as to avoid repeated debugging
 cycles with the benchmark running.
+
+# Bisection
+
+It is possible to use `git bisect` to determine the specific revision when a performance regression occurred
+
+## Running
+
+The steps are pretty straightforward
+
+```
+git bisect start
+git bisect good vGOOD.MZ.VERSION
+git bisect bad HEAD
+git bisect run /path/to/bisect.sh
+```
+
+The `bisect.sh` can be something along the following lines:
+
+```
+#!/bin/bash
+THIS_SHA=$(git rev-parse HEAD)
+export THIS_IMAGE="materialize/materialized:unstable-$THIS_SHA"
+
+GOOD_MZ_VERSION="vX.Y.Z"
+export OTHER_IMAGE="materialize/materialized:$GOOD_MZ_VERSION"
+
+export FB_SCENARIO=...
+pushd /path/to/test/feature-benchmark
+./mzcompose down -v
+./mzcompose run feature-benchmark
+```
