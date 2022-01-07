@@ -42,16 +42,16 @@ def workflow_kafka_matrix(c: Composition) -> None:
             Kafka(tag=version),
             SchemaRegistry(tag=version),
         ]
-        with c.with_services(confluent_platform_services):
+        with c.override(*confluent_platform_services):
             c.start_and_wait_for_tcp(
                 services=["zookeeper", "kafka", "schema-registry", "materialized"]
             )
-            c.wait_for_mz()
-            c.run_service(
-                service="testdrive-svc",
-                command="kafka-matrix.td",
-            )
-            c.remove_services(
-                services=["zookeeper", "kafka", "schema-registry", "materialized"],
+            c.wait_for_materialized()
+            c.run("testdrive-svc", "kafka-matrix.td")
+            c.rm(
+                "zookeeper",
+                "kafka",
+                "schema-registry",
+                "materialized",
                 destroy_volumes=True,
             )

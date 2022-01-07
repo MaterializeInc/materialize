@@ -67,7 +67,7 @@ SERVICES = [
 
 def workflow_proxy(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
-    test_proxy(c, "--aws-endpoint http://localstack:4566")
+    test_proxy(c, "--aws-endpoint=http://localstack:4566")
 
 
 def workflow_proxy_ci(c: Composition) -> None:
@@ -78,7 +78,7 @@ def workflow_proxy_ci(c: Composition) -> None:
 def test_proxy(c: Composition, aws: str) -> None:
     for test in tests:
         mz: Materialized = test["mz"]
-        c.start_services(services=[mz.name])
-        c.wait_for_mz(service=mz.name)
-        c.run_service(service="testdrive-svc", command=f"{aws} {test['td']}")
-        c.kill_services(services=[mz.name])
+        c.up(mz.name)
+        c.wait_for_materialized(mz.name)
+        c.run("testdrive-svc", aws, test["td"])
+        c.kill(mz.name)

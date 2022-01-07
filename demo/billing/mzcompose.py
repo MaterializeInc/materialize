@@ -17,17 +17,15 @@ def workflow_demo(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
-    c.run_service(
-        service="billing-demo",
-        command=[
-            "--materialized-host=materialized",
-            "--kafka-host=kafka",
-            "--schema-registry-url=http://schema-registry:8081",
-            "--csv-file-name=/share/billing-demo/data/prices.csv",
-            "--create-topic",
-            "--replication-factor=1",
-            f"--message-count={args.message_count}",
-            f"--partitions={args.partitions}",
-            *(["--check-sink"] if args.check_sink else []),
-        ],
+    c.run(
+        "billing-demo",
+        "--materialized-host=materialized",
+        "--kafka-host=kafka",
+        "--schema-registry-url=http://schema-registry:8081",
+        "--csv-file-name=/share/billing-demo/data/prices.csv",
+        "--create-topic",
+        "--replication-factor=1",
+        f"--message-count={args.message_count}",
+        f"--partitions={args.partitions}",
+        *(["--check-sink"] if args.check_sink else []),
     )

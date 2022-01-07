@@ -47,10 +47,10 @@ def workflow_debezium_avro(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=["postgres"])
 
     c.wait_for_postgres(service="postgres")
-    c.wait_for_mz(service="materialized")
+    c.wait_for_materialized("materialized")
 
-    c.run_service(service="testdrive-svc", command="debezium-postgres.td.initialize")
-    c.run_service(service="testdrive-svc", command="*.td")
+    c.run("testdrive-svc", "debezium-postgres.td.initialize")
+    c.run("testdrive-svc", "*.td")
 
 
 @patch.dict(os.environ, {"SA_PASSWORD": sa_password})
@@ -58,4 +58,4 @@ def workflow_debezium_sql_server(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
     c.start_and_wait_for_tcp(services=["sql-server"])
 
-    c.run_service(service="testdrive-svc", command="sql-server/*.td")
+    c.run("testdrive-svc", "sql-server/*.td")

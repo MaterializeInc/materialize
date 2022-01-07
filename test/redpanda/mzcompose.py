@@ -28,7 +28,4 @@ def workflow_redpanda_testdrive(c: Composition) -> None:
     # except tests that contain features known to be not supported by Redpanda. So the run includes testdrive
     # tests that do not touch Kafka at all.
 
-    c.run_service(
-        service="testdrive-svc",
-        command="grep -L -E 'kafka_time_offset' *.td",
-    )
+    c.run("testdrive-svc", "grep", "-LE", "kafka_time_offset", "*.td")

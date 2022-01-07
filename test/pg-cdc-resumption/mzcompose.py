@@ -39,123 +39,90 @@ def workflow_pg_cdc_resumption(c: Composition) -> None:
 
 
 def initialize(c: Composition) -> None:
-    c.start_services(services=["materialized", "postgres", "toxiproxy"])
+    c.up("materialized", "postgres", "toxiproxy")
 
-    c.wait_for_mz()
+    c.wait_for_materialized()
     c.wait_for_postgres()
     c.wait_for_tcp(host="toxiproxy", port=8474)
 
     # We run configure-postgres.td only once for all workflows as
     # it contains CREATE USER that is not indempotent
 
-    c.run_service(service="testdrive-svc", command="configure-postgres.td")
+    c.run("testdrive-svc", "configure-postgres.td")
 
 
 def restart_pg(c: Composition) -> None:
-    c.kill_services(services=["postgres"])
-    c.start_services(services=["postgres"])
+    c.kill("postgres")
+    c.up("postgres")
     c.wait_for_postgres()
 
 
 def restart_mz(c: Composition) -> None:
-    c.kill_services(services=["materialized"])
-    c.start_services(services=["materialized"])
-    c.wait_for_mz()
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized()
 
 
 def begin(c: Composition) -> None:
     """Configure Toxiproxy and Mz and populate initial data"""
 
-    c.run_service(
-        service="testdrive-svc",
-        command=" ".join(
-            ["configure-toxiproxy.td", "populate-tables.td", "configure-materalize.td"]
-        ),
+    c.run(
+        "testdrive-svc",
+        "configure-toxiproxy.td",
+        "populate-tables.td",
+        "configure-materalize.td",
     )
 
 
 def end(c: Composition) -> None:
     """Validate the data at the end and reset Toxiproxy"""
-    c.run_service(
-        service="testdrive-svc",
-        command=" ".join(["verify-data.td", "toxiproxy-remove.td"]),
-    )
+    c.run("testdrive-svc", "verify-data.td", "toxiproxy-remove.td")
 
 
 def disconnect_pg_during_snapshot(c: Composition) -> None:
-    c.run_service(
-        service="testdrive-svc",
-        command=" ".join(
-            [
-                "toxiproxy-close-connection.td",
-                "toxiproxy-restore-connection.td",
-                "delete-rows-t1.td",
-                "delete-rows-t2.td",
-            ]
-        ),
+    c.run(
+        "testdrive-svc",
+        "toxiproxy-close-connection.td",
+        "toxiproxy-restore-connection.td",
+        "delete-rows-t1.td",
+        "delete-rows-t2.td",
     )
 
 
 def restart_pg_during_snapshot(c: Composition) -> None:
     restart_pg(c)
 
-    c.run_service(
-        service="testdrive-svc",
-        command=" ".join(
-            [
-                "delete-rows-t1.td",
-                "delete-rows-t2.td",
-            ]
-        ),
-    )
+    c.run("testdrive-svc", "delete-rows-t1.td", "delete-rows-t2.td")
 
 
 def restart_mz_during_snapshot(c: Composition) -> None:
     restart_mz(c)
 
-    c.run_service(
-        service="testdrive-svc",
-        command=" ".join(
-            [
-                "delete-rows-t1.td",
-                "delete-rows-t2.td",
-            ]
-        ),
-    )
+    c.run("testdrive-svc", "delete-rows-t1.td", "delete-rows-t2.td")
 
 
 def disconnect_pg_during_replication(c: Composition) -> None:
-    c.run_service(
-        service="testdrive-svc",
-        command=" ".join(
-            [
-                "wait-for-snapshot.td",
-                "delete-rows-t1.td",
-                "delete-rows-t2.td",
-                "toxiproxy-close-connection.td",
-                "toxiproxy-restore-connection.td",
-            ]
-        ),
+    c.run(
+        "testdrive-svc",
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+        "delete-rows-t2.td",
+        "toxiproxy-close-connection.td",
+        "toxiproxy-restore-connection.td",
     )
 
 
 def restart_pg_during_replication(c: Composition) -> None:
-    c.run_service(
-        service="testdrive-svc",
-        command=" ".join(["wait-for-snapshot.td", "delete-rows-t1.td"]),
-    )
+    c.run("testdrive-svc", "wait-for-snapshot.td", "delete-rows-t1.td")
 
     restart_pg(c)
 
-    c.run_service(service="testdrive-svc", command="delete-rows-t2.td")
+    c.run("testdrive-svc", "delete-rows-t2.td")
 
 
 def restart_mz_during_replication(c: Composition) -> None:
-    c.run_service(
-        service="testdrive-svc",
-        command=" ".join(["wait-for-snapshot.td", "delete-rows-t1.td"]),
-    )
+    c.run("testdrive-svc", "wait-for-snapshot.td", "delete-rows-t1.td")
 
     restart_mz(c)
 
-    c.run_service(service="testdrive-svc", command="delete-rows-t2.td")
+    c.run("testdrive-svc", "delete-rows-t2.td")

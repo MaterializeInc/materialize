@@ -1018,4 +1018,4 @@ def workflow_limits(c: Composition) -> None:
         with contextlib.redirect_stdout(tmp):
             [cls.generate() for cls in Generator.__subclasses__()]
             sys.stdout.flush()
-            c.run_service(service="testdrive-svc", command=os.path.basename(tmp.name))
+            c.run("testdrive-svc", os.path.basename(tmp.name))

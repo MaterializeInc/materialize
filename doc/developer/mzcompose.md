@@ -64,9 +64,9 @@ SERVICES = [
 
 def workflow_test(c: Composition):
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry", "materialized"])
-    c.wait_for_mz()
+    c.wait_for_materialized()
 
-    c.run_service(service="testdrive-svc", command="*.td")
+    c.run("testdrive-svc", "*.td")
 ```
 
 Additional examples can be found here:
@@ -118,9 +118,9 @@ A Python workflow is a Python function that contains the steps to execute as par
 
 ```python
 def workflow_simple_test(c: Composition):
-    c.start_services(services=["materialize"])
-    c.wait_for_mz(service="materialize")
-    c.kill_services(services=["materialize"])
+    c.up("materialize")
+    c.wait_for_materialized("materialize")
+    c.kill("materialize")
 ```
 
 A `mzcompose.py` file can contain multiple workflows.
@@ -133,27 +133,25 @@ The Python functions that start with `workflow_` are considered workflows. This 
 ./mzcompose run simple-test
 ```
 
-## Steps
+## Interactions
 
-A Python workflow can execute steps.
+A Python workflow can interact with the services in the composition.
 
-The [definitive reference](https://dev.materialize.com/api/python/materialize/mzcompose.html#materialize.mzcompose.WorkflowStep) lists all the individual steps that are available.
+The [definitive reference](https://dev.materialize.com/api/python/materialize/mzcompose.html#materialize.mzcompose.Composition) lists all the individual methods that are available.
 
-The steps have been exposed as methods to the `Workflow` object, with the names of the methods derived from the names of the YAML steps, replacing dashes with underscores. Therefore, one can call a step as follows:
+For example, here is how to bring up the `materialized` service:
 
 ```python
 def workflow_test(c: Composition):
-    w.start_services(services=["materialize"])
+    w.up("materialized")
 ```
 
-The one exception is the `run` step, which can be called as `w.run_service()`.
-
-In the example above, we are calling the [`StartServicesStep`](https://dev.materialize.com/api/python/materialize/mzcompose.html#materialize.mzcompose.StartServicesStep).
+In the example above, we are calling the [`run`](https://dev.materialize.com/api/python/materialize/mzcompose.html#materialize.mzcompose.run) method, which maps directly to a call to `docker-compose run`.
 
 ## Starting services
 
 Starting the services for a workflow requires additional care because:
-- `w.start_services()` will not wait for a service to be fully up before moving on to start the next one which may depend on the previous one
+- `w.up()` will not wait for a service to be fully up before moving on to start the next one which may depend on the previous one
 - for complex services such as third-party databases, even if `w.wait_for_tcp()` completes, the service may not be fully ready to accept SQL commands and may return errors on them
 
 Therefore, a couple of convenience steps are provided:
@@ -164,7 +162,7 @@ Starts the services from the list one after another, waiting for the respective 
 
 Note that unlike other steps that deal with services, this step does not take a list of service names, but rather `PythonService` objects.
 
-### `w.wait_for_mz()`
+### `w.wait_for_materialized()`
 
 Waits until Materialize is capable of answering `SELECT 1` queries. A similar step is available for checking other Postgres-compatible services.
 
@@ -177,7 +175,7 @@ SERVICES = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized()]
 
 def workflow_start_services(c: Composition):
     w.start_and_wait_for_tcp(services=services)
-    w.wait_for_mz()
+    w.wait_for_materialized()
 ```
 
 ## Executing SQL
@@ -199,6 +197,6 @@ To run a Testdrive test or tests:
 ```python
 def workflow_simple_test(c: Composition):
    ...
-   w.run_service(service="testdrive-svc", command="*.td")
+   w.run("testdrive-svc", "*.td")
    ...
 ```

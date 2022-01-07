@@ -40,7 +40,7 @@ SERVICES = [
 
 tests = os.getenv("TD_TEST", "*.td esoteric/*.td")
 tests_ci = tests + " esoteric/pubnub/pubnub.td"
-aws_localstack = "--aws-endpoint http://localstack:4566"
+aws_localstack = "--aws-endpoint=http://localstack:4566"
 aws_amazon = "--aws-region=us-east-2"
 
 
@@ -71,6 +71,6 @@ def test_testdrive(c: Composition, mz: Materialized, aws: str, tests: str) -> No
     c.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", mz.name]
     )
-    c.wait_for_mz(service=mz.name)
-    c.run_service(service="testdrive-svc", command=f"{aws} {tests}")
-    c.kill_services(services=[mz.name])
+    c.wait_for_materialized(mz.name)
+    c.run("testdrive-svc", aws, tests)
+    c.kill(mz.name)

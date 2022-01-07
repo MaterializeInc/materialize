@@ -50,19 +50,23 @@ SERVICES = [
 
 
 def workflow_cluster_smoke(c: Composition) -> None:
-    test_cluster(c, "ls -1 smoke/*.td")
+    test_cluster(c, "ls", "-1", "smoke/*.td")
 
 
 def workflow_cluster_testdrive(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
     # Skip tests that use features that are not supported yet
     test_cluster(
-        c, "grep -L -E 'mz_catalog|mz_kafka_|mz_records_|mz_metrics' testdrive/*.td"
+        c,
+        "grep",
+        "-LE",
+        "mz_catalog|mz_kafka_|mz_records_|mz_metrics",
+        "testdrive/*.td",
     )
 
 
-def test_cluster(c: Composition, glob: str) -> None:
-    c.start_services(services=["dataflowd_1", "dataflowd_2"])
-    c.start_services(services=["materialized"])
-    c.wait_for_mz()
-    c.run_service(service="testdrive-svc", command=glob)
+def test_cluster(c: Composition, *glob: str) -> None:
+    c.up("dataflowd_1", "dataflowd_2")
+    c.up("materialized")
+    c.wait_for_materialized()
+    c.run("testdrive-svc", *glob)

@@ -114,7 +114,7 @@ def run_one_scenario(c: Composition, scenario: Scenario) -> Comparator:
         td_service_name = tds[revision].name
 
         c.start_and_wait_for_tcp(services=[mzs[revision].name])
-        c.wait_for_mz(service=mz_service_name)
+        c.wait_for_materialized(mz_service_name)
 
         executor = Docker(
             composition=c,
@@ -135,9 +135,9 @@ def run_one_scenario(c: Composition, scenario: Scenario) -> Comparator:
         outcome, iterations = benchmark.run()
         comparator.append(outcome)
 
-        c.kill_services(services=[mz_service_name])
-        c.remove_services(services=[mz_service_name, td_service_name])
-        c.remove_volumes(volumes=["mzdata"])
+        c.kill(mz_service_name)
+        c.rm(mz_service_name, td_service_name)
+        c.rm_volumes("mzdata")
 
     return comparator
 

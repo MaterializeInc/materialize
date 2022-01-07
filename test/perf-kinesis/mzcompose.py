@@ -34,16 +34,16 @@ SERVICES = [
 def workflow_ci(c: Composition) -> None:
     """Run the load generator for one minute as a smoke test."""
     args = ["--total-records=6000", "--records-per-second=100", "--shard-count=2"]
-    run(c, args, daemon=False)
+    run(c, args, detach=False)
 
 
 def workflow_load_test(c: Composition) -> None:
     """Run the load generator with a hefty load in the background."""
-    c.start_services(services=["prometheus-sql-exporter"])
-    run(c, args=[], daemon=True)
+    c.up("prometheus-sql-exporter")
+    run(c, args=[], detach=True)
 
 
-def run(c: Composition, args: List[str], daemon: bool) -> None:
-    c.start_services(services=["materialized"])
-    c.wait_for_mz()
-    c.run_service(service="perf-kinesis", command=args, daemon=daemon)
+def run(c: Composition, args: List[str], detach: bool) -> None:
+    c.up("materialized")
+    c.wait_for_materialized()
+    c.run("perf-kinesis", *args, detach=detach)

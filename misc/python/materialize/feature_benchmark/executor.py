@@ -62,8 +62,8 @@ class Docker(Executor):
         self._seed = seed
 
     def RestartMz(self) -> Any:
-        self._composition.kill_services(services=[self._mz_service.name])
-        self._composition.start_services(services=[self._mz_service.name])
+        self._composition.kill(self._mz_service.name)
+        self._composition.up(self._mz_service.name)
         return 0.0
 
     def Td(self, input: str) -> Any:
@@ -76,16 +76,12 @@ class Docker(Executor):
             td_file.write(input)
             td_file.flush()
             dirname, basename = os.path.split(td_file.name)
-            return self._composition.run_service(
-                service=self._td_service.name,
-                command=" ".join(
-                    [
-                        "--no-reset",
-                        f"--seed={self._seed}",
-                        "--initial-backoff=0ms",
-                        "--backoff-factor=0",
-                        f"tmp/{basename}",
-                    ]
-                ),
+            return self._composition.run(
+                self._td_service.name,
+                "--no-reset",
+                f"--seed={self._seed}",
+                "--initial-backoff=0ms",
+                "--backoff-factor=0",
+                f"tmp/{basename}",
                 capture=True,
-            )
+            ).stdout

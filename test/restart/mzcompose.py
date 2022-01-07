@@ -39,28 +39,28 @@ def workflow_disable_user_indexes(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     # Create catalog with vanilla MZ
-    c.start_services(services=["materialized"])
-    c.wait_for_mz(service="materialized")
-    c.run_service(service="testdrive-svc", command="user-indexes-enabled.td")
-    c.kill_services(services=["materialized"])
+    c.up("materialized")
+    c.wait_for_materialized("materialized")
+    c.run("testdrive-svc", "user-indexes-enabled.td")
+    c.kill("materialized")
 
     # Test semantics of disabling user indexes
-    c.start_services(services=["mz_disable_user_indexes"])
-    c.wait_for_mz(service="mz_disable_user_indexes")
-    c.run_service(service="testdrive_no_reset", command="user-indexes-disabled.td")
-    c.kill_services(services=["mz_disable_user_indexes"])
+    c.up("mz_disable_user_indexes")
+    c.wait_for_materialized("mz_disable_user_indexes")
+    c.run("testdrive_no_reset", "user-indexes-disabled.td")
+    c.kill("mz_disable_user_indexes")
 
 
 def workflow_github_8021(c: Composition) -> None:
-    c.start_services(services=["materialized"])
-    c.wait_for_mz(service="materialized")
-    c.run_service(service="testdrive-svc", command="github-8021.td")
+    c.up("materialized")
+    c.wait_for_materialized("materialized")
+    c.run("testdrive-svc", "github-8021.td")
 
     # Ensure MZ can boot
-    c.kill_services(services=["materialized"])
-    c.start_services(services=["materialized"])
-    c.wait_for_mz(service="materialized")
-    c.kill_services(services=["materialized"])
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized("materialized")
+    c.kill("materialized")
 
 
 def workflow_all_restart(c: Composition) -> None:

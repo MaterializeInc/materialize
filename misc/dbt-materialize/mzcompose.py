@@ -63,10 +63,11 @@ def workflow_tls(c: Composition) -> None:
 
 
 def run_test(c: Composition, materialized: str, env: Dict[str, str]) -> None:
-    c.start_services(services=[materialized])
+    c.up(materialized)
     c.wait_for_tcp(host=materialized, port=6875)
-    c.run_service(
-        service="dbt-test",
-        command=["pytest", "dbt-materialize/test"],
+    c.run(
+        "dbt-test",
+        "pytest",
+        "dbt-materialize/test",
         env=env,
     )

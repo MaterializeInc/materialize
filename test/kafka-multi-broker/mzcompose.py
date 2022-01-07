@@ -48,20 +48,13 @@ def workflow_kafka_multi_broker(c: Composition) -> None:
             "materialized",
         ]
     )
-    c.run_service(
-        service="testdrive-svc",
-        command="--kafka-addr=kafka2 01-init.td",
-    )
+    c.run("testdrive-svc", "--kafka-addr=kafka2", "01-init.td")
     time.sleep(10)
-    c.kill_services(services=["kafka1"], signal="SIGKILL")
+    c.kill("kafka1")
     time.sleep(10)
-    c.run_service(
-        service="testdrive-svc",
-        command="--kafka-addr=kafka2,kafka3 --no-reset 02-after-leave.td",
+    c.run(
+        "testdrive-svc", "--kafka-addr=kafka2,kafka3", "--no-reset", "02-after-leave.td"
     )
-    c.start_services(services=["kafka1"])
+    c.up("kafka1")
     time.sleep(10)
-    c.run_service(
-        service="testdrive-svc",
-        command="--kafka-addr=kafka1 --no-reset 03-after-join.td",
-    )
+    c.run("testdrive-svc", "--kafka-addr=kafka1", "--no-reset", "03-after-join.td")

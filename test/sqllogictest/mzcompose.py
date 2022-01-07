@@ -14,9 +14,9 @@ SERVICES = [Postgres(), SqlLogicTest()]
 
 
 def run_sqllogictest(c: Composition, command: str) -> None:
-    c.start_services(services=["postgres"])
+    c.up("postgres")
     c.wait_for_postgres(dbname="postgres")
-    c.run_service(service="sqllogictest-svc", command=command)
+    c.run("sqllogictest-svc", command)
 
 
 def workflow_sqllogictest(c: Composition) -> None:

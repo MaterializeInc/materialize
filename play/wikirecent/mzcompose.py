@@ -14,6 +14,6 @@ from materialize.mzcompose import Composition
 
 def workflow_demo(c: Composition) -> None:
     """Streams data from Wikipedia to a browser visualzation."""
-    c.start_services(services=["server"])
-    c.wait_for_mz()
-    c.run_sql((Path(__file__).parent / "views.sql").read_text())
+    c.up("server")
+    c.wait_for_materialized()
+    c.sql((Path(__file__).parent / "views.sql").read_text())

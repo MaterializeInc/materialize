@@ -27,9 +27,7 @@ def workflow_pg_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.start_services(
-        services=["materialized", "test-certs", "testdrive-svc", "postgres"]
-    )
-    c.wait_for_mz()
+    c.up("materialized", "test-certs", "testdrive-svc", "postgres")
+    c.wait_for_materialized()
     c.wait_for_postgres()
-    c.run_service(service="testdrive-svc", command=args.filter)
+    c.run("testdrive-svc", args.filter)

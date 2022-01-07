@@ -62,96 +62,75 @@ def workflow_persistence(c: Composition) -> None:
 def workflow_kafka_sources(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
 
-    c.start_services(services=["materialized"])
-    c.wait_for_mz(service="materialized")
+    c.up("materialized")
+    c.wait_for_materialized("materialized")
 
-    c.run_service(
-        service="testdrive-svc",
-        command=f"kafka-sources/*{td_test}*-before.td",
-    )
+    c.run("testdrive-svc", f"kafka-sources/*{td_test}*-before.td")
 
-    c.kill_services(services=["materialized"], signal="SIGKILL")
-    c.start_services(services=["materialized"])
-    c.wait_for_mz(service="materialized")
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized("materialized")
 
     # And restart again, for extra stress
-    c.kill_services(services=["materialized"], signal="SIGKILL")
-    c.start_services(services=["materialized"])
-    c.wait_for_mz(service="materialized")
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized("materialized")
 
-    c.run_service(
-        service="testdrive-svc",
-        command=f"kafka-sources/*{td_test}*-after.td",
-    )
+    c.run("testdrive-svc", f"kafka-sources/*{td_test}*-after.td")
 
     # Do one more restart, just in case and just confirm that Mz is able to come up
-    c.kill_services(services=["materialized"], signal="SIGKILL")
-    c.start_services(services=["materialized"])
-    c.wait_for_mz(service="materialized")
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized("materialized")
 
-    c.kill_services(services=["materialized"], signal="SIGKILL")
-    c.remove_services(services=["materialized", "testdrive-svc"], destroy_volumes=True)
-    c.remove_volumes(volumes=["mzdata"])
+    c.kill("materialized")
+    c.rm("materialized", "testdrive-svc", destroy_volumes=True)
+    c.rm_volumes("mzdata")
 
 
 def workflow_user_tables(c: Composition) -> None:
-    c.start_services(services=["materialized"])
-    c.wait_for_mz(service="materialized")
+    c.up("materialized")
+    c.wait_for_materialized()
 
-    c.run_service(
-        service="testdrive-svc",
-        command=f"user-tables/table-persistence-before-{td_test}.td",
-    )
+    c.run("testdrive-svc", f"user-tables/table-persistence-before-{td_test}.td")
 
-    c.kill_services(services=["materialized"], signal="SIGKILL")
-    c.start_services(services=["materialized"])
+    c.kill("materialized")
+    c.up("materialized")
 
-    c.run_service(
-        service="testdrive-svc",
-        command=f"user-tables/table-persistence-after-{td_test}.td",
-    )
+    c.run("testdrive-svc", f"user-tables/table-persistence-after-{td_test}.td")
 
-    c.kill_services(services=["materialized"], signal="SIGKILL")
-    c.remove_services(services=["materialized", "testdrive-svc"], destroy_volumes=True)
-    c.remove_volumes(volumes=["mzdata"])
+    c.kill("materialized")
+    c.rm("materialized", "testdrive-svc", destroy_volumes=True)
+    c.rm_volumes("mzdata")
 
 
 def workflow_failpoints(c: Composition) -> None:
-    c.start_services(services=["mz_without_system_tables"])
-    c.wait_for_mz(service="mz_without_system_tables")
+    c.up("mz_without_system_tables")
+    c.wait_for_materialized("mz_without_system_tables")
 
-    c.run_service(service="testdrive-svc", command=f"failpoints/{td_test}.td")
+    c.run("testdrive-svc", f"failpoints/{td_test}.td")
 
-    c.kill_services(services=["mz_without_system_tables"], signal="SIGKILL")
-    c.remove_services(
-        services=["mz_without_system_tables", "testdrive-svc"], destroy_volumes=True
-    )
-    c.remove_volumes(volumes=["mzdata"])
+    c.kill("mz_without_system_tables")
+    c.rm("mz_without_system_tables", "testdrive-svc", destroy_volumes=True)
+    c.rm_volumes("mzdata")
 
 
 def workflow_disable_user_indexes(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=prerequisites)
 
-    c.start_services(services=["materialized"])
-    c.wait_for_mz(service="materialized")
+    c.up("materialized")
+    c.wait_for_materialized("materialized")
 
-    c.run_service(
-        service="testdrive-svc",
-        command="disable-user-indexes/before.td",
+    c.run("testdrive-svc", "disable-user-indexes/before.td")
+
+    c.kill("materialized")
+    c.up("mz_disable_user_indexes")
+    c.wait_for_materialized("mz_disable_user_indexes")
+
+    c.run("testdrive-svc", "disable-user-indexes/after.td")
+
+    c.kill("mz_disable_user_indexes")
+    c.rm(
+        "materialized", "mz_disable_user_indexes", "testdrive-svc", destroy_volumes=True
     )
-
-    c.kill_services(services=["materialized"], signal="SIGKILL")
-    c.start_services(services=["mz_disable_user_indexes"])
-    c.wait_for_mz(service="mz_disable_user_indexes")
-
-    c.run_service(
-        service="testdrive-svc",
-        command="disable-user-indexes/after.td",
-    )
-
-    c.kill_services(services=["mz_disable_user_indexes"], signal="SIGKILL")
-    c.remove_services(
-        services=["materialized", "mz_disable_user_indexes", "testdrive-svc"],
-        destroy_volumes=True,
-    )
-    c.remove_volumes(volumes=["mzdata"])
+    c.rm_volumes("mzdata")

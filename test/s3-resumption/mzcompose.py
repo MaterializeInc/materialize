@@ -33,7 +33,7 @@ SERVICES = [
 #
 def workflow_s3_resumption(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=["localstack", "materialized", "toxiproxy"])
-    c.wait_for_mz()
+    c.wait_for_materialized()
 
     # For different values of bytes_allowed, the following happens:
     # 0 - Connection is dropped immediately
@@ -64,26 +64,25 @@ def workflow_s3_resumption(c: Composition) -> None:
         with patch.dict(
             environ, {"TOXIPROXY_BYTES_ALLOWED": str(toxiproxy_bytes_allowed)}
         ):
-            c.run_service(
-                service="testdrive-svc",
-                command=" ".join(
-                    [
-                        f"--no-reset --max-errors=1 --seed {toxiproxy_bytes_allowed} --aws-endpoint=http://toxiproxy:4566",
-                        "configure-toxiproxy.td",
-                        "s3-create.td s3-insert-long.td s3-insert-long-gzip.td",
-                        #
-                        # Confirm that short network interruptions are tolerated
-                        #
-                        *toxiproxy_setup,
-                        "short-sleep.td toxiproxy-restore-connection.td materialize-verify-success.td",
-                        #
-                        # Confirm that long network interruptions cause source error
-                        # Disabled due to https://github.com/MaterializeInc/materialize/issues/7009
-                        # "s3-insert-long.td s3-insert-long-gzip.td toxiproxy-close-connection.td materialize-verify-failure.td",
-                        #
-                        # Cleanup
-                        #
-                        "materialize-drop-source.td toxiproxy-remove.td",
-                    ]
-                ),
+            c.run(
+                "testdrive-svc",
+                "--no-reset",
+                "--max-errors=1",
+                f"--seed={toxiproxy_bytes_allowed}",
+                "--aws-endpoint=http://toxiproxy:4566",
+                "configure-toxiproxy.td",
+                "s3-create.td s3-insert-long.td s3-insert-long-gzip.td",
+                #
+                # Confirm that short network interruptions are tolerated
+                #
+                *toxiproxy_setup,
+                "short-sleep.td toxiproxy-restore-connection.td materialize-verify-success.td",
+                #
+                # Confirm that long network interruptions cause source error
+                # Disabled due to https://github.com/MaterializeInc/materialize/issues/7009
+                # "s3-insert-long.td s3-insert-long-gzip.td toxiproxy-close-connection.td materialize-verify-failure.td",
+                #
+                # Cleanup
+                #
+                "materialize-drop-source.td toxiproxy-remove.td",
             )

@@ -82,12 +82,11 @@ repeated requests to upstream systems:
 
 ### Connect to `materialized`
 
-The `materialized` instance is not exposed on a well-known port; instead,
-`mzcompose` chooses a random high-numbered port. To open a Postgres shell
-connected to the `materialized` instance running as part of this demo, run:
+To open a Postgres shell connected to the `materialized` instance running as
+part of this demo, run:
 
 ```
-$ psql -h localhost -p $(./mzcompose list-ports materialized) -U materialize materialize
+./mzcompose sql materialized
 ```
 
 To then stream the `top10` updates to your console:

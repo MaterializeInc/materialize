@@ -102,7 +102,6 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     KillCommand.register(parser, subparsers)
     LintCommand().register(parser, subparsers)
     ListCompositionsCommand().register(parser, subparsers)
-    ListPortsCommand().register(parser, subparsers)
     ListWorkflowsCommand().register(parser, subparsers)
     LogsCommand.register(parser, subparsers)
     PauseCommand.register(parser, subparsers)
@@ -272,27 +271,6 @@ class ListCompositionsCommand(Command):
             print(name)
 
 
-class ListPortsCommand(Command):
-    name = "list-ports"
-    help = "list ports exposed by a service"
-
-    def configure(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "service", metavar="SERVICE", help="the service to list ports for"
-        )
-
-    def run(self, args: argparse.Namespace) -> None:
-        composition = load_composition(args)
-        ports = composition.find_host_ports(args.service)
-        if not ports:
-            raise UIError(
-                f"no ports for service {args.service!r} found",
-                hint="is the service running?",
-            )
-        for port in ports:
-            print(port)
-
-
 class ListWorkflowsCommand(Command):
     name = "list-workflows"
     help = "list workflows in the composition"
@@ -360,8 +338,9 @@ class SqlCommand(Command):
                 f"cannot connect SQL shell to non-materialized service {args.service!r}"
             )
 
-        if not composition.find_host_ports(args.service):
-            raise UIError(f"service {args.service!r} is not running")
+        # Attempting to load the default port will produce a nice error message
+        # if the service isn't running or isn't exposing a port.
+        composition.default_port(args.service)
 
         deps = composition.repo.resolve_dependencies([composition.repo.images["psql"]])
         deps.acquire()
@@ -388,13 +367,8 @@ class WebCommand(Command):
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
-        ports = composition.find_host_ports(args.service)
-        if not ports:
-            raise UIError(
-                f"no ports discovered for service {args.service!r}",
-                hint="is the service running?",
-            )
-        url = f"http://localhost:{ports[0]}"
+        port = composition.default_port(args.service)
+        url = f"http://localhost:{port}"
         print(f"Opening {url} in a web browser...")
         webbrowser.open(url)
 
@@ -465,10 +439,7 @@ class DockerComposeCommand(Command):
         self, args: argparse.Namespace, composition: mzcompose.Composition
     ) -> None:
         ui.header("Delegating to Docker Compose")
-        composition.run(
-            [*args.unknown_args, self.name, *args.unknown_subargs],
-            check=False,
-        )
+        composition.invoke(*args.unknown_args, self.name, *args.unknown_subargs)
 
     def check_docker_resource_limits(self) -> None:
         output = self.capture(
@@ -576,8 +547,12 @@ To see the available workflows, run:
             # taken from Buildkite's Docker Compose plugin, is to run an `up`
             # command that requests zero instances of the requested service.
             if args.workflow:
-                composition.run(
-                    ["up", "-d", "--scale", f"{args.workflow}=0", args.workflow]
+                composition.invoke(
+                    "up",
+                    "-d",
+                    "--scale",
+                    f"{args.workflow}=0",
+                    args.workflow,
                 )
             super().handle_composition(args, composition)
         else:
@@ -596,7 +571,7 @@ To see the available workflows, run:
                     f"it can't be used when running {args.workflow!r}, because {args.workflow!r} "
                     "is a custom mzcompose workflow, not a Docker Compose service",
                 )
-            composition.workflow(args.workflow, args.unknown_subargs[1:])
+            composition.workflow(args.workflow, *args.unknown_subargs[1:])
 
 
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")

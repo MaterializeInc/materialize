@@ -37,14 +37,19 @@ def workflow_kafka_exactly_once(c: Composition, parser: WorkflowArgumentParser) 
     c.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", "materialized"]
     )
-    c.run_service(
-        service="testdrive-svc",
-        command=f"--seed {args.seed} --kafka-option=group.id=group1 before-restart.td",
+    c.run(
+        "testdrive-svc",
+        f"--seed={args.seed}",
+        "--kafka-option=group.id=group1",
+        "before-restart.td",
     )
-    c.kill_services(services=["materialized"])
-    c.start_services(services=["materialized"])
-    c.wait_for_mz()
-    c.run_service(
-        service="testdrive-svc",
-        command=f"--seed {args.seed} --no-reset --kafka-option=group.id=group2 after-restart.td",
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized()
+    c.run(
+        "testdrive-svc",
+        f"--seed={args.seed}",
+        "--no-reset",
+        "--kafka-option=group.id=group2",
+        "after-restart.td",
     )

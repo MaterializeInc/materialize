@@ -104,32 +104,38 @@ def test_upgrade_from_version(
                 if from_version[1:] >= start_version
             ),
         )
-        with c.with_services(services=[mz_from]):
-            c.start_services(services=["materialized"])
+        with c.override(mz_from):
+            c.up("materialized")
     else:
-        c.start_services(services=["materialized"])
+        c.up("materialized")
 
-    c.wait_for_mz(service="materialized")
+    c.wait_for_materialized("materialized")
 
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
-        c.run_service(
-            service="testdrive-svc",
-            command=f"--seed=1 --no-reset {temp_dir} create-in-@({version_glob})-{filter}.td",
+        c.run(
+            "testdrive-svc",
+            "--seed=1",
+            "--no-reset",
+            temp_dir,
+            f"create-in-@({version_glob})-{filter}.td",
         )
 
-    c.kill_services(services=["materialized"])
-    c.remove_services(services=["materialized", "testdrive-svc"])
+    c.kill("materialized")
+    c.rm("materialized", "testdrive-svc")
 
-    c.start_services(services=["materialized"])
-    c.wait_for_mz(service="materialized")
+    c.up("materialized")
+    c.wait_for_materialized("materialized")
 
     with patch.dict(os.environ, {"UPGRADE_FROM_VERSION": from_version}):
-        c.run_service(
-            service="testdrive-svc",
-            command=f"--seed=1 --no-reset {temp_dir} --validate-catalog=/share/mzdata/catalog check-from-@({version_glob})-{filter}.td",
+        c.run(
+            "testdrive-svc",
+            "--seed=1",
+            "--no-reset",
+            temp_dir,
+            f"--validate-catalog=/share/mzdata/catalog check-from-@({version_glob})-{filter}.td",
         )
 
-    c.kill_services(services=["materialized"])
-    c.remove_services(services=["materialized", "testdrive-svc"])
-    c.remove_volumes(volumes=["mzdata", "tmp"])
+    c.kill("materialized")
+    c.rm("materialized", "testdrive-svc")
+    c.rm_volumes("mzdata", "tmp")
