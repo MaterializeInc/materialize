@@ -43,3 +43,34 @@ digraph G {
 }
 
 EOF
+
+query T multiline
+EXPLAIN TYPED QUERY GRAPH FOR
+SELECT * FROM t;
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer?) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer?) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
