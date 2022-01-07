@@ -124,7 +124,6 @@ pub struct StreamRegistration {
 /// Invariants:
 /// - The unsealed_batch SeqNo ranges are sorted and non-overlapping.
 /// - The trace_batch Descriptions are sorted, non-overlapping, and contiguous.
-/// - The since frontier is either 0 or < the trace's sealed frontier.
 /// - Every batch's since frontier is <= the overall trace's since frontier.
 /// - The compaction level of trace_batches is weakly decreasing when iterating
 ///   from oldest to most recent time intervals.
@@ -426,17 +425,6 @@ impl ArrangementMeta {
                 }
             }
             unsealed_prev = Some(&meta)
-        }
-
-        let trace_upper = self.trace_ts_upper();
-        let min = Antichain::from_elem(Timestamp::minimum());
-
-        if self.since != min && !PartialOrder::less_than(&self.since, &self.seal) {
-            return Err(format!(
-                "invalid trace since {:?} at or in advance of trace seal {:?}",
-                self.since, trace_upper
-            )
-            .into());
         }
 
         let mut trace_prev: Option<&TraceBatchMeta> = None;
@@ -1262,7 +1250,7 @@ mod tests {
             seal: Antichain::from_elem(3),
             ..Default::default()
         };
-        assert_eq!(b.validate(), Err(Error::from("invalid trace since Antichain { elements: [3] } at or in advance of trace seal Antichain { elements: [3] }")));
+        assert_eq!(b.validate(), Ok(()));
 
         // Trace since in advance of nonzero trace seal
         let b = ArrangementMeta {
@@ -1272,7 +1260,7 @@ mod tests {
             seal: Antichain::from_elem(3),
             ..Default::default()
         };
-        assert_eq!(b.validate(), Err(Error::from("invalid trace since Antichain { elements: [4] } at or in advance of trace seal Antichain { elements: [3] }")));
+        assert_eq!(b.validate(), Ok(()));
 
         // Normal case: batch since at or before trace since
         let b = ArrangementMeta {

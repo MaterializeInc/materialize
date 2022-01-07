@@ -208,30 +208,17 @@ impl ReqGenerator {
     fn allow_compaction(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         let stream = state.rng_stream(rng);
         let bonus = rng.gen_range(0..5);
-        let ts = if rng.gen_bool(0.5) {
-            let base = state
-                .since_frontier
-                .get(&stream)
-                .copied()
-                .unwrap_or_default();
-            let ts = base + bonus;
-            // This allow_compaction request might end up failing if (e.g.
-            // storage is down), but, unlike in Validator, optimistically
-            // updating the since frontier here does no harm, it just bumps up
-            // the time at which we'll issue future allow_compaction requests.
-            state.since_frontier.insert(stream.to_string(), ts);
-            ts
-        } else {
-            let base = state
-                .seal_frontier
-                .get(&stream)
-                .copied()
-                .unwrap_or_default();
-            let ts = base + bonus;
-            // This allow_compaction request is expected to fail, so don't
-            // update the since frontier.
-            ts
-        };
+        let base = state
+            .since_frontier
+            .get(&stream)
+            .copied()
+            .unwrap_or_default();
+        let ts = base + bonus;
+        // This allow_compaction request might end up failing if (e.g.
+        // storage is down), but, unlike in Validator, optimistically
+        // updating the since frontier here does no harm, it just bumps up
+        // the time at which we'll issue future allow_compaction requests.
+        state.since_frontier.insert(stream.to_string(), ts);
         Req::AllowCompaction(AllowCompactionReq { stream, ts })
     }
 
