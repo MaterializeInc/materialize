@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="CPP_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/src/avro-derive/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/aws-util/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/http-proxy/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/demo/billing/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/test/test-util/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/kafka-util/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/ccsr/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/ccsr/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/ore/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/avro/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/avro/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/avro/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/avro/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/repr/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/repr/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/repr/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/lowertest/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/lowertest/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/lowertest-derive/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/persist/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/persist/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/persist/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/protoc/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/protoc/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/build-info/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/test/chaos/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/coord/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/coord/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/sql/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/sql-parser/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/sql-parser/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/walkabout/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/walkabout/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/postgres-util/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/interchange/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/interchange/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/dataflow-types/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/expr/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/expr/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/expr-test-util/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/expr-test-util/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/repr-test-util/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/repr-test-util/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/pgrepr/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/dataflow/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/symbiosis/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/transform/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/transform/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/coordtest/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/dataflow-bin/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/play/json-flattened-view-gen/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/materialized/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/materialized/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/pid-file/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/pid-file/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/mz-process-collector/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/prof/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/pgtest/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/pgwire/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/play/mbta/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/play/mbta/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/metabase/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/test/metabase/smoketest/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/mzcloud-cli/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/peeker/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/test/performance/perf-kinesis/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/test/performance/perf-upsert/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/test/performance/s3-datagen/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/test/smith/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/sqllogictest/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/sqllogictest/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/testdrive/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/testdrive/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/persist-types/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/dataflowd/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/sql/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/s3-datagen/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/test/perf-kinesis/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>
