@@ -58,7 +58,7 @@ fn test_threads() {
         .assert()
         .failure()
         .stderr(predicate::str::starts_with(
-            "error: Invalid value for '--workers <N>': invalid digit found in string",
+            "error: Invalid UTF-8 was detected in one or more arguments",
         ));
 
     // NOTE: we don't test the successful case, where `MZ_WORKERS` or `-w` is

@@ -9,10 +9,10 @@
 
 from typing import List
 
-from materialize.mzcompose import Service, Workflow
+from materialize.mzcompose import Composition, Service
 from materialize.mzcompose.services import Materialized, PrometheusSQLExporter
 
-services = [
+SERVICES = [
     Materialized(),
     PrometheusSQLExporter(),
     Service(
@@ -31,19 +31,19 @@ services = [
 ]
 
 
-def workflow_ci(w: Workflow) -> None:
+def workflow_ci(c: Composition) -> None:
     """Run the load generator for one minute as a smoke test."""
     args = ["--total-records=6000", "--records-per-second=100", "--shard-count=2"]
-    run(w, args, daemon=False)
+    run(c, args, detach=False)
 
 
-def workflow_load_test(w: Workflow) -> None:
+def workflow_load_test(c: Composition) -> None:
     """Run the load generator with a hefty load in the background."""
-    w.start_services(services=["prometheus-sql-exporter"])
-    run(w, args=[], daemon=True)
+    c.up("prometheus-sql-exporter")
+    run(c, args=[], detach=True)
 
 
-def run(w: Workflow, args: List[str], daemon: bool) -> None:
-    w.start_services(services=["materialized"])
-    w.wait_for_mz()
-    w.run_service(service="perf-kinesis", command=args, daemon=daemon)
+def run(c: Composition, args: List[str], detach: bool) -> None:
+    c.up("materialized")
+    c.wait_for_materialized()
+    c.run("perf-kinesis", *args, detach=detach)

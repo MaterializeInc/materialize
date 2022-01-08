@@ -12,7 +12,7 @@ import random
 import string
 from unittest.mock import patch
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Debezium,
     Kafka,
@@ -30,7 +30,7 @@ sa_password = "AAbb!@" + "".join(
     random.choices(string.ascii_uppercase + string.digits, k=10)
 )
 
-services = [
+SERVICES = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
@@ -42,20 +42,20 @@ services = [
 ]
 
 
-def workflow_debezium_avro(w: Workflow) -> None:
-    w.start_and_wait_for_tcp(services=prerequisites)
-    w.start_and_wait_for_tcp(services=["postgres"])
+def workflow_debezium_avro(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=prerequisites)
+    c.start_and_wait_for_tcp(services=["postgres"])
 
-    w.wait_for_postgres(service="postgres")
-    w.wait_for_mz(service="materialized")
+    c.wait_for_postgres(service="postgres")
+    c.wait_for_materialized("materialized")
 
-    w.run_service(service="testdrive-svc", command="debezium-postgres.td.initialize")
-    w.run_service(service="testdrive-svc", command="*.td")
+    c.run("testdrive-svc", "debezium-postgres.td.initialize")
+    c.run("testdrive-svc", "*.td")
 
 
 @patch.dict(os.environ, {"SA_PASSWORD": sa_password})
-def workflow_debezium_sql_server(w: Workflow) -> None:
-    w.start_and_wait_for_tcp(services=prerequisites)
-    w.start_and_wait_for_tcp(services=["sql-server"])
+def workflow_debezium_sql_server(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=prerequisites)
+    c.start_and_wait_for_tcp(services=["sql-server"])
 
-    w.run_service(service="testdrive-svc", command="sql-server/*.td")
+    c.run("testdrive-svc", "sql-server/*.td")

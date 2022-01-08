@@ -714,7 +714,7 @@ class Repository:
 
     Attributes:
         images: A mapping from image name to `Image` for all contained images.
-        compose_dirs: The set of directories containing an `mzcompose.yml` or `mzworkflows.py` file.
+        compose_dirs: The set of directories containing an `mzcompose.yml` or `mzcompose.py` file.
     """
 
     def __init__(
@@ -738,7 +738,7 @@ class Repository:
                 if image.name in self.images:
                     raise ValueError(f"image {image.name} exists twice")
                 self.images[image.name] = image
-            if "mzcompose.yml" in files or "mzworkflows.py" in files:
+            if "mzcompose.yml" in files or "mzcompose.py" in files:
                 name = Path(path).name
                 if name in self.compositions:
                     raise ValueError(f"composition {name} exists twice")

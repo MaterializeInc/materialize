@@ -21,13 +21,11 @@ import importlib
 import importlib.abc
 import importlib.util
 import inspect
-import ipaddress
-import json
 import os
 import re
-import shlex
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from inspect import getmembers, isfunction
 from pathlib import Path
@@ -42,6 +40,7 @@ from typing import (
     Literal,
     Optional,
     Sequence,
+    Tuple,
     TypedDict,
     TypeVar,
     Union,
@@ -77,15 +76,15 @@ class LintError:
         return (self.file, self.message) < (other.file, other.message)
 
 
-def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
+def _lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
     if "services" not in composition:
         return
 
     for (name, service) in composition["services"].items():
         if service.get("mzbuild") == "materialized":
-            lint_materialized_service(path, name, service, errors)
+            _lint_materialized_service(path, name, service, errors)
         elif "mzbuild" not in service and "image" in service:
-            lint_image_name(path, service["image"], errors)
+            _lint_image_name(path, service["image"], errors)
 
         if isinstance(service.get("environment"), dict):
             errors.append(
@@ -95,7 +94,7 @@ def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> N
             )
 
 
-def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
+def _lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
     from materialize.mzcompose.services import (
         DEFAULT_CONFLUENT_PLATFORM_VERSION,
         LINT_DEBEZIUM_VERSIONS,
@@ -146,7 +145,7 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
         )
 
 
-def lint_materialized_service(
+def _lint_materialized_service(
     path: Path, name: str, service: Any, errors: List[LintError]
 ) -> None:
     # command may be a string that is passed to the shell, or a list of
@@ -172,7 +171,7 @@ def lint_materialized_service(
 
 
 class Composition:
-    """A parsed mzcompose.yml with a loaded mzworkflows.py file."""
+    """A parsed mzcompose.yml with a loaded mzcompose.py file."""
 
     def __init__(
         self, repo: mzbuild.Repository, name: str, preserve_ports: bool = False
@@ -180,7 +179,7 @@ class Composition:
         self.name = name
         self.repo = repo
         self.images: List[mzbuild.Image] = []
-        self.workflows: Dict[str, Callable[[Composition], None]] = {}
+        self.workflows: Dict[str, Callable[..., None]] = {}
 
         default_tag = os.getenv(f"MZBUILD_TAG", None)
 
@@ -203,10 +202,10 @@ class Composition:
         if "services" not in compose:
             compose["services"] = {}
 
-        # Load the mzworkflows.py file, if one exists
-        mzworkflows_py = self.path / "mzworkflows.py"
-        if mzworkflows_py.exists():
-            spec = importlib.util.spec_from_file_location("mzworkflows", mzworkflows_py)
+        # Load the mzcompose.py file, if one exists
+        mzcompose_py = self.path / "mzcompose.py"
+        if mzcompose_py.exists():
+            spec = importlib.util.spec_from_file_location("mzcompose", mzcompose_py)
             assert spec
             module = importlib.util.module_from_spec(spec)
             assert isinstance(spec.loader, importlib.abc.Loader)
@@ -219,7 +218,7 @@ class Composition:
                     name = name[len("workflow_") :].replace("_", "-")
                     self.workflows[name] = fn
 
-            for python_service in getattr(module, "services", []):
+            for python_service in getattr(module, "SERVICES", []):
                 compose["services"][python_service.name] = python_service.config
 
         # Resolve all services that reference an `mzbuild` image to a specific
@@ -300,17 +299,6 @@ class Composition:
         yaml.dump(self.compose, self.file, encoding="utf-8")  # type: ignore
         self.file.flush()
 
-    def get_workflow(self, workflow_name: str) -> "Workflow":
-        """Return sub-workflow."""
-        if workflow_name not in self.workflows:
-            raise KeyError(f"No workflow called {workflow_name} in {self.name}")
-
-        return Workflow(
-            name=workflow_name,
-            func=self.workflows[workflow_name],
-            composition=self,
-        )
-
     @classmethod
     def lint(cls, repo: mzbuild.Repository, name: str) -> List[LintError]:
         """Checks a composition for common errors."""
@@ -325,46 +313,24 @@ class Composition:
             with open(path) as f:
                 composition = yaml.safe_load(f) or {}
 
-            lint_composition(path, composition, errs)
+            _lint_composition(path, composition, errs)
         return errs
 
-    def run(
-        self,
-        args: List[str],
-        env: Optional[Dict[str, str]] = None,
-        capture: bool = False,
-        capture_combined: bool = False,
-        check: bool = True,
-    ) -> "subprocess.CompletedProcess[str]":
-        """Invokes docker-compose on the composition.
-
-        Arguments to specify the files in the composition and the project
-        directory are added automatically.
+    def invoke(self, *args: str, capture: bool = False) -> subprocess.CompletedProcess:
+        """Invoke `docker-compose` on the rendered composition.
 
         Args:
-            args: Additional arguments to pass to docker-compose.
-            env: Additional environment variables to set for the child process.
-                These are merged with the current environment.
-            capture: Whether to capture the child's stdout and stderr, or
-                whether to emit directly to the current stdout/stderr streams.
-            capture_combined: capture stdout and stderr, and direct all output
-                to the stdout property on the returned object
-            check: Whether to raise an error if the child process exits with
-                a failing exit code.
+            args: The arguments to pass to `docker-compose`.
+            capture: Whether to capture the child's stdout stream.
         """
         print(f"$ docker-compose {' '.join(args)}", file=sys.stderr)
 
         self.file.seek(0)
-        if env is not None:
-            env = dict(os.environ, **env)
 
-        stdout = 1
-        stderr = 2
+        stdout = None
         if capture:
-            stdout = stderr = subprocess.PIPE
-        if capture_combined:
             stdout = subprocess.PIPE
-            stderr = subprocess.STDOUT
+
         try:
             return subprocess.run(
                 [
@@ -374,154 +340,68 @@ class Composition:
                     self.path,
                     *args,
                 ],
-                env=env,
                 close_fds=False,
-                check=check,
+                check=True,
                 stdout=stdout,
-                stderr=stderr,
-                encoding="utf-8",
+                text=True,
             )
         except subprocess.CalledProcessError as e:
+            if e.stdout:
+                print(e.stdout)
             raise UIError(f"running docker-compose failed (exit status {e.returncode})")
 
-    def find_host_ports(self, service: str) -> List[str]:
-        """Find all ports open on the host for a given service"""
-        # Parsing the output of `docker-compose ps` directly is fraught, as the
-        # output depends on terminal width (!). Using the `-q` flag is safe,
-        # however, and we can pipe the container IDs into `docker inspect`,
-        # which supports machine-readable output.
-        if service not in self.compose["services"]:
-            raise UIError(f"unknown service {service!r}")
-        ports = []
-        for info in self.inspect_service_containers(service):
-            for (name, port_entry) in info["NetworkSettings"]["Ports"].items():
-                for p in port_entry or []:
-                    # When IPv6 is enabled, Docker will bind each port twice. Consider
-                    # only IPv4 address to avoid spurious warnings about duplicate
-                    # ports.
-                    if p["HostPort"] not in ports and isinstance(
-                        ipaddress.ip_address(p["HostIp"]), ipaddress.IPv4Address
-                    ):
-                        ports.append(p["HostPort"])
-        return ports
+    def port(self, service: str, private_port: Union[int, str]) -> int:
+        """Get the public port for a service's private port.
 
-    def inspect_service_containers(
-        self, service: str, include_stopped: bool = False
-    ) -> Iterable[Dict[str, Any]]:
+        Delegates to `docker-compose port`. See that command's help for details.
+
+        Args:
+            service: The name of a service in the composition.
+            private_port: A private port exposed by the service.
         """
-        Return the JSON from `docker inspect` for each container in the given compose service
-
-        There is no explicit documentation of the structure of the returned
-        fields, but you can see them in the docker core repo:
-        https://github.com/moby/moby/blob/91dc595e9648318/api/types/types.go#L345-L379
-        """
-        cmd = ["ps", "-q"]
-        if include_stopped:
-            cmd.append("-a")
-        containers = self.run(cmd, capture=True).stdout.splitlines()
-        if not containers:
-            return
-        metadata = spawn.capture(["docker", "inspect", "-f", "{{json .}}", *containers])
-        for line in metadata.splitlines():
-            info = json.loads(line)
-            labels = info["Config"].get("Labels")
-            if (
-                labels is not None
-                and labels.get("com.docker.compose.service") == service
-                and labels.get("com.docker.compose.project") == self.name
-            ):
-                yield info
-
-    def service_logs(self, service_name: str, tail: int = 20) -> str:
-        proc = self.run(
-            [
-                "logs",
-                "--tail",
-                str(tail),
-                service_name,
-            ],
-            check=True,
-            capture_combined=True,
-        )
-        return proc.stdout
-
-    def get_container_id(self, service: str, running: bool = False) -> str:
-        """Given a service name, tries to find a unique matching container id
-        If running is True, only return running containers.
-        """
-        try:
-            if running:
-                cmd = f"docker ps".split()
-            else:
-                cmd = f"docker ps -a".split()
-            list_containers = spawn.capture(cmd, unicode=True)
-
-            pattern = re.compile(f"^(?P<c_id>[^ ]+).*{service}")
-            matches = []
-            for line in list_containers.splitlines():
-                m = pattern.search(line)
-                if m:
-                    matches.append(m.group("c_id"))
-            if len(matches) != 1:
-                raise UIError(
-                    f"failed to get a unique container id for service {service}, found: {matches}"
-                )
-
-            return matches[0]
-        except subprocess.CalledProcessError as e:
-            raise UIError(f"failed to get container id for {service}: {e}")
-
-    def docker_inspect(self, format: str, container_id: str) -> str:
-        try:
-            cmd = f"docker inspect -f '{format}' {container_id}".split()
-            output = spawn.capture(cmd, unicode=True, stderr_too=True).splitlines()[0]
-        except subprocess.CalledProcessError as e:
-            ui.log_in_automation(
-                "docker inspect ({}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
-                    container_id, ui.shell_quote(cmd), e, e.stdout, e.stderr
-                )
+        proc = self.invoke("port", service, str(private_port), capture=True)
+        if not proc.stdout.strip():
+            raise UIError(
+                f"service f{service!r} is not exposing port {private_port!r}",
+                hint="is the service running?",
             )
-            raise UIError(f"failed to inspect Docker container: {e}")
+        return int(proc.stdout.split(":")[1])
+
+    def default_port(self, service: str) -> int:
+        """Get the default public port for a service.
+
+        Args:
+            service: The name of a service in the composition.
+        """
+        ports = self.compose["services"][service]["ports"]
+        if not ports:
+            raise UIError(f"service f{service!r} does not expose any ports")
+        private_port = str(ports[0]).split(":")[0]
+        return self.port(service, private_port)
+
+    def workflow(self, name: str, *args: str) -> None:
+        """Run a workflow in the composition.
+
+        Raises a `KeyError` if the workflow does not exist.
+
+        Args:
+            name: The name of the workflow to run.
+            args: The arguments to pass to the workflow function.
+        """
+        ui.header(f"Running workflow {name}")
+        func = self.workflows[name]
+        parser = WorkflowArgumentParser(name, inspect.getdoc(func), list(args))
+        if len(inspect.signature(func).parameters) > 1:
+            func(self, parser)
         else:
-            return output
-
-    def docker_container_is_running(self, container_id: str) -> bool:
-        return self.docker_inspect("{{.State.Running}}", container_id) == "'true'"
-
-
-class Workflow:
-    """
-    A workflow is a collection of WorkflowSteps and some context
-
-    It is possible to specify additional compose files for specific workflows, and all
-    their child workflows will have access to services defined in those files.
-    """
-
-    def __init__(
-        self,
-        name: str,
-        func: Callable,
-        composition: Composition,
-    ) -> None:
-        self.name = name
-        self.func = func
-        self.composition = composition
-        self.takes_args = len(inspect.signature(func).parameters) > 1
-
-    def run(self, args: List[str]) -> None:
-        print("Running Python function {}".format(self.name))
-        if self.takes_args:
-            self.func(self, args)
-        else:
-            # If the workflow doesn't have an `args` parameter, construct
-            # an empty parser to reject bogus arguments and to handle the
+            # If the workflow doesn't have an `args` parameter, parse them here
+            # with an empty parser to reject bogus arguments and to handle the
             # trivial help message.
-            parser = WorkflowArgumentParser(self)
-            parser.parse_args(args)
-            self.func(self)
+            parser.parse_args()
+            func(self)
 
     @contextmanager
-    def with_services(self, services: List["Service"]) -> Iterator[None]:
+    def override(self, *services: "Service") -> Iterator[None]:
         """Temporarily update the composition with the specified services.
 
         The services must already exist in the composition. They restored to
@@ -536,35 +416,30 @@ class Workflow:
         challenging.
         """
         # Remember the old composition.
-        old_compose = copy.deepcopy(self.composition.compose)
+        old_compose = copy.deepcopy(self.compose)
 
         # Update the composition with the new service definitions.
         for service in services:
-            if service.name not in self.composition.compose["services"]:
+            if service.name not in self.compose["services"]:
                 raise RuntimeError(
                     "programming error in call to Workflow.with_services: "
                     f"{service.name!r} does not exist"
                 )
-            self.composition.compose["services"][service.name] = service.config
-        self.composition._write_compose()
+            self.compose["services"][service.name] = service.config
+        self._write_compose()
 
         try:
             # Run the next composition.
             yield
         finally:
             # Restore the old composition.
-            self.composition.compose = old_compose
-            self.composition._write_compose()
+            self.compose = old_compose
+            self._write_compose()
 
-    def run_compose(
-        self, args: List[str], capture: bool = False
-    ) -> subprocess.CompletedProcess:
-        return self.composition.run(args, capture=capture)
-
-    def run_sql(self, sql: str) -> None:
+    def sql(self, sql: str) -> None:
         """Run a batch of SQL statements against the materialized service."""
-        ports = self.composition.find_host_ports("materialized")
-        conn = pg8000.connect(host="localhost", user="materialize", port=int(ports[0]))
+        port = self.default_port("materialized")
+        conn = pg8000.connect(host="localhost", user="materialize", port=port)
         conn.autocommit = True
         cursor = conn.cursor()
         for statement in sqlparse.split(sql):
@@ -573,117 +448,112 @@ class Workflow:
     def start_and_wait_for_tcp(self, services: List[str]) -> None:
         """Sequentially start the named services, waiting for eaach to become
         available via TCP before moving on to the next."""
-        # TODO(benesch): once the workflow API is a proper Python API,
-        # remove the `type: ignore` comments below.
         for service in services:
-            self.start_services(services=[service])
-            for port in self.composition.compose["services"][service].get("ports", []):
+            self.up(service)
+            for port in self.compose["services"][service].get("ports", []):
                 self.wait_for_tcp(host=service, port=port)
 
-    def run_service(
+    def run(
         self,
         service: str,
-        command: Optional[Union[str, list]] = None,
-        *,
+        *args: str,
+        detach: bool = False,
+        rm: bool = False,
         env: Dict[str, str] = {},
         capture: bool = False,
-        daemon: bool = False,
-        entrypoint: Optional[str] = None,
-    ) -> Any:
-        """Run a service using `mzcompose run`.
+    ) -> subprocess.CompletedProcess:
+        """Run a one-off command in a service.
 
-        Running a service behaves slightly differently than making it come up, importantly it
-        is not an _error_ if it ends at all.
+        Delegates to `docker-compose run`. See that command's help for details.
+        Note that unlike `docker compose run`, any services whose definitions
+        have changed are rebuilt (like `docker-compose up` would do) before the
+        command is executed.
 
         Args:
-            service: (required) the name of the service, from the mzcompose file
-            entrypoint: Overwrite the entrypoint with this
-            command: the command to run. These are the arguments to the entrypoint
-            capture: Capture and return output (default: False)
-            daemon: run as a daemon (default: False)
+            service: The name of a service in the composition.
+            args: Arguments to pass to the service's entrypoint.
+            detach: Run the container in the background.
+            env: Additional environment variables to set in the container.
+            rm: Remove container after run.
+            capture: Capture the stdout of the `docker-compose` invocation.
         """
-
-        cmd = []
-        if daemon:
-            cmd.append("-d")
-        if entrypoint:
-            cmd.append(f"--entrypoint={entrypoint}")
-        cmd.append(service)
-        if isinstance(command, str):
-            cmd.extend(shlex.split(command))
-        elif isinstance(command, list):
-            cmd.extend(command)
-        return self.run_compose(
-            args=[
-                "run",
-                *(f"-e{k}={v}" for k, v in env.items()),
-                *cmd,
-            ],
+        # Restart any dependencies whose definitions have changed. The trick,
+        # taken from Buildkite's Docker Compose plugin, is to run an `up`
+        # command that requests zero instances of the requested service.
+        self.invoke("up", "--detach", "--scale", f"{service}=0", service)
+        return self.invoke(
+            "run",
+            *(f"-e{k}={v}" for k, v in env.items()),
+            *(["--detach"] if detach else []),
+            *(["--rm"] if rm else []),
+            service,
+            *args,
             capture=capture,
-        ).stdout
-
-    def start_services(self, services: List[str]) -> None:
-        """Start a service.
-
-        This method delegates to `docker-compose start`. See that command's help
-        for details.
-
-        Args:
-            services: The names of services in the workflow.
-        """
-        self.run_compose(["up", "-d", *services])
-
-    def kill_services(self, services: List[str], signal: Optional[str] = None) -> None:
-        """Kill a service.
-
-        This method delegates to `docker-compose kill`. See that command's help
-        for details.
-
-        Args:
-            services: The names of services in the workflow.
-            signal: The signal to send. The default is SIGKILL.
-        """
-        self.run_compose(
-            [
-                "kill",
-                *(["-s", signal] if signal else []),
-                *services,
-            ]
         )
 
-    def remove_services(
-        self, services: List[str], destroy_volumes: bool = False
+    def up(self, *services: str, detach: bool = True) -> None:
+        """Build, (re)create, and start the named services.
+
+        Delegates to `docker-compose up`. See that command's help for details.
+
+        Args:
+            services: The names of services in the composition.
+            detach: Run containers in the background.
+        """
+        self.invoke("up", *(["--detach"] if detach else []), *services)
+
+    def kill(self, *services: str, signal: str = "SIGKILL") -> None:
+        """Force stop service containers.
+
+        Delegates to `docker-compose kill`. See that command's help for details.
+
+        Args:
+            services: The names of services in the composition.
+            signal: The signal to deliver.
+        """
+        self.invoke("kill", f"-s{signal}", *services)
+
+    def rm(
+        self, *services: str, stop: bool = True, destroy_volumes: bool = True
     ) -> None:
-        """Remove a stopped service.
+        """Remove stopped service containers.
 
-        This method delegates to `docker-compose rm`. See that command's help
-        for details.
+        Delegates to `docker-compose rm`. See that command's help for details.
 
         Args:
-            services: The names of services in the workflow.
-            destroy_volumes: Whether to destroy any anonymous volumes associated
-                with the service. Note that named volumes are not removed even
-                when this option is enabled.
+            services: The names of services in the composition.
+            stop: Stop the containers if necessary.
+            destroy_volumes: Destroy any anonymous volumes associated with the
+                service. Note that this does not destroy any named volumes
+                attached to the service.
         """
-        self.run_compose(
-            [
-                "rm",
-                "-f",
-                "-s",
-                *(["-v"] if destroy_volumes else []),
-                *services,
-            ],
+        self.invoke(
+            "rm",
+            "--force",
+            *(["--stop"] if stop else []),
+            *(["-v"] if destroy_volumes else []),
+            *services,
         )
 
-    def remove_volumes(self, volumes: List[str]) -> None:
+    def rm_volumes(self, *volumes: str, force: bool = False) -> None:
         """Remove the named volumes.
 
         Args:
-            volumes: The volumes to remove.
+            volumes: The names of volumes in the composition.
+            force: Whether to force the removal (i.e., don't error if the
+                volume does not exist).
         """
-        volumes = (f"{self.composition.name}_{v}" for v in volumes)
-        spawn.runv(["docker", "volume", "rm", *volumes])
+        volumes = (f"{self.name}_{v}" for v in volumes)
+        spawn.runv(
+            ["docker", "volume", "rm", *(["--force"] if force else []), *volumes]
+        )
 
+    def sleep(self, duration: float) -> None:
+        """Sleep for the specified duration in seconds."""
+        print(f"Sleeping for {duration} seconds...")
+        time.sleep(duration)
+
+    # TODO(benesch): replace with Docker health checks.
     def wait_for_tcp(
         self,
         *,
@@ -693,7 +563,7 @@ class Workflow:
     ) -> None:
         ui.progress(f"waiting for {host}:{port}", "C")
         for remaining in ui.timeout_loop(timeout_secs):
-            cmd = f"docker run --rm -t --network {self.composition.name}_default ubuntu:focal-20210723".split()
+            cmd = f"docker run --rm -t --network {self.name}_default ubuntu:focal-20210723".split()
 
             try:
                 _check_tcp(cmd[:], host, port, timeout_secs)
@@ -704,13 +574,9 @@ class Workflow:
                 return
 
         ui.progress(" error!", finish=True)
-        try:
-            logs = self.composition.service_logs(host)
-        except Exception as e:
-            logs = f"unable to determine logs: {e}"
+        raise UIError(f"unable to connect to {host}:{port}")
 
-        raise UIError(f"Unable to connect to {host}:{port}\nService logs:\n{logs}")
-
+    # TODO(benesch): replace with Docker health checks.
     def wait_for_postgres(
         self,
         *,
@@ -736,25 +602,10 @@ class Workflow:
             user: The chosen user (this is only relevant for postgres)
             service: The service that postgres is running as (Default: postgres)
         """
-        if port is None:
-            ports = self.composition.find_host_ports(service)
-            if len(ports) != 1:
-                logs = self.composition.service_logs(service)
-                if ports:
-                    msg = (
-                        f"Unable to unambiguously determine port for {service},"
-                        f"found ports: {','.join(ports)}\nService logs:\n{logs}"
-                    )
-                else:
-                    msg = f"No ports found for {service}\nService logs:\n{logs}"
-                raise UIError(msg)
-            port = int(ports[0])
-        else:
-            port = port
         _wait_for_pg(
             dbname=dbname,
             host=host,
-            port=port,
+            port=port or self.default_port(service),
             timeout_secs=timeout_secs,
             query=query,
             user=user,
@@ -763,8 +614,10 @@ class Workflow:
             print_result=print_result,
         )
 
-    def wait_for_mz(
+    # TODO(benesch): replace with Docker health checks.
+    def wait_for_materialized(
         self,
+        service: str = "materialized",
         *,
         user: str = "materialize",
         dbname: str = "materialize",
@@ -774,9 +627,8 @@ class Workflow:
         query: str = "SELECT 1",
         expected: Union[Iterable[Any], Literal["any"]] = [[1]],
         print_result: bool = False,
-        service: str = "materialized",
     ) -> None:
-        """Like `Workflow.wait_for_mz`, but with Materialize defaults."""
+        """Like `Workflow.wait_for_postgres`, but with Materialize defaults."""
         self.wait_for_postgres(
             user=user,
             dbname=dbname,
@@ -791,24 +643,87 @@ class Workflow:
 
 
 class ServiceConfig(TypedDict, total=False):
+    """The definition of a service in Docker Compose.
+
+    This object corresponds directly to the YAML definition in a
+    docker-compose.yml file, plus two mzcompose-specific attributes. Full
+    details are available in [Services top-level element][ref] chapter of the
+    Compose Specification.
+
+    [ref]: https://github.com/compose-spec/compose-spec/blob/master/spec.md#services-top-level-element
+    """
+
     mzbuild: str
-    image: str
-    hostname: str
-    command: str
-    ports: Sequence[Union[int, str]]
-    environment: List[str]
-    depends_on: List[str]
-    entrypoint: List[str]
-    volumes: List[str]
-    networks: Dict[str, Dict[str, List[str]]]
-    deploy: Dict[str, Dict[str, Dict[str, str]]]
+    """The name of an mzbuild image to dynamically acquire before invoking
+    Docker Compose.
+
+    This is a mzcompose-extension to Docker Compose. The image must exist in
+    the repository. If `mzbuild` is set, neither `build` nor `image` should be
+    set.
+    """
+
     propagate_uid_gid: bool
+    """Request that the Docker image be run with the user ID and group ID of the
+    host user.
+
+    This is an mzcompose extension to Docker Compose. It is equivalent to
+    passing `--user $(id -u):$(id -g)` to `docker run`. The defualt is `False`.
+    """
+
+    image: str
+    """The name and tag of an image on Docker Hub."""
+
+    hostname: str
+    """The hostname to use.
+
+    By default, the name of the service is used as the hostname.
+    """
+
+    entrypoint: List[str]
+    """Override the entrypoint specified in the image."""
+
+    command: str
+    """Override the command specified in the image."""
+
     init: bool
+    """Whether to run an init process in the container."""
+
+    ports: Sequence[Union[int, str]]
+    """Service ports to expose to the host."""
+
+    environment: List[str]
+    """Additional environment variables to set.
+
+    Each entry must be in the form `NAME=VALUE`.
+
+    TODO(benesch): this should accept a `Dict[str, str]` instead.
+    """
+
+    depends_on: List[str]
+    """The list of other services that must be started before this one."""
+
+    volumes: List[str]
+    """Volumes to attach to the service."""
+
+    networks: Dict[str, Dict[str, List[str]]]
+    """Additional networks to join.
+
+    TODO(benesch): this should use a nested TypedDict.
+    """
+
+    deploy: Dict[str, Dict[str, Dict[str, str]]]
+    """Additional deployment configuration, like resource limits.
+
+    TODO(benesch): this should use a nested TypedDict.
+    """
 
 
 class Service:
-    """
-    A Service is a service that has been specified in the 'services' variable of mzworkflows.py
+    """A Docker Compose service in a `Composition`.
+
+    Attributes:
+        name: The name of the service.
+        config: The definition of the service.
     """
 
     def __init__(self, name: str, config: ServiceConfig) -> None:
@@ -817,14 +732,29 @@ class Service:
 
 
 class WorkflowArgumentParser(argparse.ArgumentParser):
-    """An argument parser that takes its name and description from a `Workflow`."""
+    """An argument parser provided to a workflow in a `Composition`.
 
-    def __init__(self, w: Workflow):
-        super().__init__(
-            prog=f"mzcompose run {w.name}", description=inspect.getdoc(w.func)
-        )
+    You can call `add_argument` and other methods on this argument parser like
+    usual. When you are ready to parse arguments, call `parse_args` or
+    `parse_known_args` like usual; the argument parser will automatically use
+    the arguments that the user provided to the workflow.
+    """
+
+    def __init__(self, name: str, description: Optional[str], args: List[str]):
+        self.args = args
+        super().__init__(prog=f"mzcompose run {name}", description=description)
+
+    def parse_known_args(
+        self,
+        args: Optional[Sequence[str]] = None,
+        namespace: Optional[argparse.Namespace] = None,
+    ) -> Tuple[argparse.Namespace, List[str]]:
+        if args is None:
+            args = self.args
+        return super().parse_known_args(args, namespace)
 
 
+# TODO(benesch): replace with Docker health checks.
 def _check_tcp(
     cmd: List[str], host: str, port: int, timeout_secs: int, kind: str = ""
 ) -> List[str]:
@@ -849,6 +779,7 @@ def _check_tcp(
     return cmd
 
 
+# TODO(benesch): replace with Docker health checks.
 def _wait_for_pg(
     timeout_secs: int,
     query: str,

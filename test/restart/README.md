@@ -1,2 +1,2 @@
-Contains mzworkflows that want to bring up and bring down Materialize under
-different conditions.
+Contains mzcompose workflows that want to bring up and bring down Materialize
+under different conditions.

@@ -291,39 +291,6 @@ services:
     image: zookeeper:3.4.13
 ```
 
-A common complaint with Docker Compose is the lack of proper service
-orchestration. It is not possible to express, for exaple, that the `fancy`
-service cannot be started until `materialized` has booted successfully.
-
-`mzcompose` therefore provides a feature called "workflows" that orchestrate
-interacting with the defined services. The following `load-test` workflow waits
-for `materialized` to start listening on port 6875 before launching the `fancy`
-service.
-
-```
-version: "3.7"
-
-services:
-  fancy:
-    mzbuild: fancy-loadgen
-  materialized:
-    mzbuild: materialized
-
-mzworkflows:
-  load-test:
-    steps:
-    - step: start-services
-      services: [materialized]
-    - step: wait-for-tcp
-      host: materialized
-      port: 6875
-    - step: start-services
-      services: [fancy-loadgen]
-```
-
-To run the workflow, run `./mzcompose run load-test`, just like you would if
-`load-test` were a normal service.
-
 #### Release vs development builds
 
 Via `mzbuild`, `mzcompose` supports building binaries in either release or
@@ -483,14 +450,6 @@ services:
   materialized:
     mzbuild: materialized
     propagate_uid_gid: true
-
-mzworkflows:
-  NAME:
-    env:
-      KEY: VALUE
-    steps:
-    - step: STEP-NAME
-      STEP-OPTION: STEP-OPTION-VALUE
 ```
 
 #### Fields

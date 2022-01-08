@@ -7,12 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
-
-from materialize.mzcompose import Workflow, WorkflowArgumentParser
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Materialized, Postgres, TestCerts, Testdrive
 
-services = [
+SERVICES = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),
     Testdrive(volumes_extra=["secrets:/share/secrets"]),
     TestCerts(),
@@ -20,19 +18,16 @@ services = [
 ]
 
 
-def workflow_pg_cdc(w: Workflow, args: List[str]) -> None:
-    parser = WorkflowArgumentParser(w)
+def workflow_pg_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "filter",
         nargs="*",
         default="*.td",
         help="limit to only the files matching filter",
     )
-    args = parser.parse_args(args)
+    args = parser.parse_args()
 
-    w.start_services(
-        services=["materialized", "test-certs", "testdrive-svc", "postgres"]
-    )
-    w.wait_for_mz()
-    w.wait_for_postgres()
-    w.run_service(service="testdrive-svc", command=args.filter)
+    c.up("materialized", "test-certs", "testdrive-svc", "postgres")
+    c.wait_for_materialized()
+    c.wait_for_postgres()
+    c.run("testdrive-svc", args.filter)

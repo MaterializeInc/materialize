@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
@@ -25,7 +25,7 @@ CONFLUENT_PLATFORM_VERSIONS = [
     "latest",
 ]
 
-services = [
+SERVICES = [
     Materialized(),
     Testdrive(),
     Zookeeper(),
@@ -34,7 +34,7 @@ services = [
 ]
 
 
-def workflow_kafka_matrix(w: Workflow) -> None:
+def workflow_kafka_matrix(c: Composition) -> None:
     for version in CONFLUENT_PLATFORM_VERSIONS:
         print(f"==> Testing Confluent Platform {version}")
         confluent_platform_services = [
@@ -42,16 +42,16 @@ def workflow_kafka_matrix(w: Workflow) -> None:
             Kafka(tag=version),
             SchemaRegistry(tag=version),
         ]
-        with w.with_services(confluent_platform_services):
-            w.start_and_wait_for_tcp(
+        with c.override(*confluent_platform_services):
+            c.start_and_wait_for_tcp(
                 services=["zookeeper", "kafka", "schema-registry", "materialized"]
             )
-            w.wait_for_mz()
-            w.run_service(
-                service="testdrive-svc",
-                command="kafka-matrix.td",
-            )
-            w.remove_services(
-                services=["zookeeper", "kafka", "schema-registry", "materialized"],
+            c.wait_for_materialized()
+            c.run("testdrive-svc", "kafka-matrix.td")
+            c.rm(
+                "zookeeper",
+                "kafka",
+                "schema-registry",
+                "materialized",
                 destroy_volumes=True,
             )

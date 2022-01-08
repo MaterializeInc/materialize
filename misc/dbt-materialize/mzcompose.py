@@ -9,10 +9,10 @@
 
 from typing import Dict
 
-from materialize.mzcompose import Workflow
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized, Service, TestCerts
 
-services = [
+SERVICES = [
     TestCerts(),
     Materialized(),
     Materialized(
@@ -37,21 +37,21 @@ services = [
 ]
 
 
-def workflow_ci(w: Workflow) -> None:
+def workflow_ci(c: Composition) -> None:
     """Runs the dbt adapter test suite against Materialize with and without TLS."""
-    workflow_no_tls(w)
-    workflow_tls(w)
+    workflow_no_tls(c)
+    workflow_tls(c)
 
 
-def workflow_no_tls(w: Workflow) -> None:
+def workflow_no_tls(c: Composition) -> None:
     """Runs the dbt adapter test suite against Materialize with TLS disabled."""
-    run_test(w, "materialized", {"DBT_HOST": "materialized"})
+    run_test(c, "materialized", {"DBT_HOST": "materialized"})
 
 
-def workflow_tls(w: Workflow) -> None:
+def workflow_tls(c: Composition) -> None:
     """Runs the dbt adapter test suite against Materialize with TLS enabled."""
     run_test(
-        w,
+        c,
         "materialized-tls",
         {
             "DBT_HOST": "materialized-tls",
@@ -62,11 +62,12 @@ def workflow_tls(w: Workflow) -> None:
     )
 
 
-def run_test(w: Workflow, materialized: str, env: Dict[str, str]) -> None:
-    w.start_services(services=[materialized])
-    w.wait_for_tcp(host=materialized, port=6875)
-    w.run_service(
-        service="dbt-test",
-        command=["pytest", "dbt-materialize/test"],
+def run_test(c: Composition, materialized: str, env: Dict[str, str]) -> None:
+    c.up(materialized)
+    c.wait_for_tcp(host=materialized, port=6875)
+    c.run(
+        "dbt-test",
+        "pytest",
+        "dbt-materialize/test",
         env=env,
     )
