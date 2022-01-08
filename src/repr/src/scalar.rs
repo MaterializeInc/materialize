@@ -1549,7 +1549,16 @@ impl<'a> ScalarType {
                     custom_oid: oid_b,
                     custom_name: name_b,
                 },
-            ) => fields_a.eq(fields_b) && oid_a == oid_b && name_a == name_b,
+            ) => {
+                oid_a == oid_b
+                    && name_a == name_b
+                    && fields_a.len() == fields_b.len()
+                    && fields_a
+                        .iter()
+                        .zip(fields_b)
+                        // Compare field names and scalar types, but ignore nullability.
+                        .all(|(a, b)| a.0 == b.0 && a.1.scalar_type.base_eq(&b.1.scalar_type))
+            }
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
     }
@@ -1579,6 +1588,39 @@ impl Datum<'static> {
     pub fn empty_list() -> Datum<'static> {
         EMPTY_LIST_ROW.unpack_first()
     }
+}
+
+#[test]
+fn verify_base_eq_record_nullability() {
+    let s1 = ScalarType::Record {
+        fields: vec![(
+            "c".into(),
+            ColumnType {
+                scalar_type: ScalarType::Bool,
+                nullable: true,
+            },
+        )],
+        custom_oid: None,
+        custom_name: None,
+    };
+    let s2 = ScalarType::Record {
+        fields: vec![(
+            "c".into(),
+            ColumnType {
+                scalar_type: ScalarType::Bool,
+                nullable: false,
+            },
+        )],
+        custom_oid: None,
+        custom_name: None,
+    };
+    let s3 = ScalarType::Record {
+        fields: vec![],
+        custom_oid: None,
+        custom_name: None,
+    };
+    assert!(s1.base_eq(&s2));
+    assert!(!s1.base_eq(&s3));
 }
 
 // Verify that bytes for static datums with manually stuffed bytes are correct.
