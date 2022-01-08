@@ -75,9 +75,9 @@ pub enum MirRelationExpr {
     Let {
         /// The identifier to be used in `Get` variants to retrieve `value`.
         id: LocalId,
-        /// The collection to be bound to `name`.
+        /// The collection to be bound to `id`.
         value: Box<MirRelationExpr>,
-        /// The result of the `Let`, evaluated with `name` bound to `value`.
+        /// The result of the `Let`, evaluated with `id` bound to `value`.
         body: Box<MirRelationExpr>,
     },
     /// Project out some columns from a dataflow
