@@ -918,11 +918,7 @@ impl MirScalarExpr {
             MirScalarExpr::If { cond: _, then, els } => {
                 let then_type = then.typ(relation_type);
                 let else_type = els.typ(relation_type);
-                debug_assert!(then_type.scalar_type.base_eq(&else_type.scalar_type));
-                ColumnType {
-                    nullable: then_type.nullable || else_type.nullable,
-                    scalar_type: then_type.scalar_type,
-                }
+                then_type.union(&else_type).unwrap()
             }
         }
     }
