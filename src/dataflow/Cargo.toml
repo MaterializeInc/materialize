@@ -16,7 +16,7 @@ bincode = "1.3.3"
 byteorder = "1.4.3"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-crossbeam-channel = "0.5.1"
+crossbeam-channel = "0.5.2"
 csv-core = "0.1.10"
 dataflow-types = { path = "../dataflow-types" }
 dec = { version = "0.4.5", features = ["serde"] }

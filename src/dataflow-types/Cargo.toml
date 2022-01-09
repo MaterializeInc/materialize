@@ -12,7 +12,7 @@ aws-config = { version = "0.3.0", default-features = false, features = ["default
 aws-types = { version = "0.3.0", features = ["hardcoded-credentials"] }
 aws-smithy-http = "0.33.1"
 ccsr = { path = "../ccsr" }
-crossbeam-channel = "0.5.1"
+crossbeam-channel = "0.5.2"
 enum-iterator = "0.7.0"
 enum-kinds = "0.5.1"
 expr = { path = "../expr" }

@@ -38,7 +38,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.0.0", features = ["wrap_help", "env", "derive"] }
 compile-time-run = "0.2.12"
 coord = { path = "../coord" }
-crossbeam-channel = "0.5.1"
+crossbeam-channel = "0.5.2"
 dataflow = { path = "../dataflow" }
 dataflowd = { path = "../dataflowd" }
 dataflow-types = { path = "../dataflow-types" }
