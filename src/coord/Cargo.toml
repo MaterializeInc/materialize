@@ -13,7 +13,7 @@ build-info = { path = "../build-info" }
 byteorder = "1.4.3"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-crossbeam-channel = "0.5.1"
+crossbeam-channel = "0.5.2"
 dataflow-types = { path = "../dataflow-types" }
 derivative = "2.2.0"
 dec = "0.4.5"
