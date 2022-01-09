@@ -24,7 +24,7 @@ scipy==1.7.3
 twine==3.7.1
 types-prettytable==2.1.1
 types-psutil==5.8.17
-types-PyMYSQL==1.0.8
+types-PyMYSQL==1.0.10
 types-PyYAML==6.0.1
 types-requests==2.26.3
 types-toml==0.10.1
