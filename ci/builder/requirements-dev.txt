@@ -22,7 +22,7 @@ pydantic==1.9.0
 pytest==6.2.5
 scipy==1.7.3
 twine==3.7.1
-types-prettytable==2.1.1
+types-prettytable==2.1.2
 types-psutil==5.8.17
 types-PyMYSQL==1.0.8
 types-PyYAML==6.0.1
