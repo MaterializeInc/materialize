@@ -27,5 +27,5 @@ types-psutil==5.8.18
 types-PyMYSQL==1.0.10
 types-PyYAML==6.0.3
 types-requests==2.26.3
-types-toml==0.10.1
+types-toml==0.10.3
 types-pkg-resources==0.1.3
