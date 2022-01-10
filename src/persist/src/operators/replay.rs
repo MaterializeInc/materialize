@@ -116,3 +116,63 @@ where
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::{Capture, OkErr};
+    use timely::progress::Antichain;
+
+    use crate::error::Error;
+    use crate::mem::MemRegistry;
+    use crate::operators::split_ok_err;
+
+    use super::*;
+
+    #[test]
+    fn compaction_beyond_seal() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+        let p = registry.runtime_no_reentrance()?;
+
+        let (write, _) = p.create_or_load::<String, String>("1");
+
+        write
+            .write(&[
+                (("k1".into(), "v1".into()), 1, 1),
+                (("k2".into(), "v2".into()), 2, 1),
+            ])
+            .recv()?;
+
+        write.seal(3).recv().expect("seal was successful");
+        write.allow_compaction(Antichain::from_elem(10)).recv()?;
+
+        let oks = timely::execute_directly(move |worker| {
+            let (oks, _errs) = worker.dataflow(|scope| {
+                let (_write, read) = p.create_or_load::<String, String>("1");
+                let snapshot = read.snapshot();
+                let (ok_stream, err_stream) = scope.replay(snapshot).ok_err(split_ok_err);
+                (ok_stream.capture(), err_stream.capture())
+            });
+
+            oks
+        });
+
+        let mut actual = oks
+            .extract()
+            .into_iter()
+            .flat_map(|(_, xs)| xs.into_iter())
+            .collect::<Vec<_>>();
+
+        let mut expected = vec![
+            (("k1".into(), "v1".into()), 10, 1),
+            (("k2".into(), "v2".into()), 10, 1),
+        ];
+        actual.sort();
+        expected.sort();
+
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+}

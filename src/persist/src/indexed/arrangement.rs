@@ -1459,4 +1459,74 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn compaction_beyond_upper() -> Result<(), Error> {
+        let mut blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
+            Metrics::default(),
+            MemRegistry::new().blob_no_reentrance()?,
+        );
+        let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
+
+        t.update_seal(10);
+
+        // Add updates to both the trace and the unsealeds.
+        let batch = BlobTraceBatch {
+            desc: desc_from(0, 2, 0),
+            updates: vec![
+                (("k1".into(), "v1".into()), 0, 1),
+                (("k2".into(), "v2".into()), 1, 1),
+            ],
+        };
+        t.trace_append(batch, &mut blob)?;
+
+        let unsealed_updates = vec![
+            (("k3".into(), "v3".into()), 10, 1),
+            (("k4".into(), "v4".into()), 11, 1),
+        ];
+        let batch = BlobUnsealedBatch {
+            desc: SeqNo(0)..SeqNo(1),
+            updates: vec![columnar_records(unsealed_updates.clone())],
+        };
+
+        t.unsealed_append(batch, &mut blob)?;
+
+        // Allow compaction beyond the seal frontier of [10].
+        t.validate_allow_compaction(&Antichain::from_elem(30))?;
+        t.allow_compaction(Antichain::from_elem(30));
+
+        // The updated compaction since and seal frontier should hold even if we did not yet step
+        // for compaction.
+
+        let expected = vec![
+            (("k1".into(), "v1".into()), 30, 1),
+            (("k2".into(), "v2".into()), 30, 1),
+            (("k3".into(), "v3".into()), 30, 1),
+            (("k4".into(), "v4".into()), 30, 1),
+        ];
+
+        let snapshot = t.snapshot(SeqNo(42) /* this is unused */, &blob)?;
+        assert_eq!(snapshot.since(), Antichain::from_elem(30));
+        assert_eq!(snapshot.get_seal(), Antichain::from_elem(10));
+
+        let updates = snapshot.read_to_end()?;
+
+        assert_eq!(updates, expected,);
+
+        // The yielded updates must be the same after compaction.
+
+        t.trace_step(&maintainer)?;
+
+        let snapshot = t.snapshot(SeqNo(42) /* this is unused */, &blob)?;
+        assert_eq!(snapshot.since(), Antichain::from_elem(30));
+        assert_eq!(snapshot.get_seal(), Antichain::from_elem(10));
+
+        let updates = snapshot.read_to_end()?;
+
+        assert_eq!(updates, expected,);
+
+        Ok(())
+    }
 }
