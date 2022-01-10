@@ -15,32 +15,32 @@ bin/pyactivate --dev
 To run all benchmarks:
 ```
 cd test/feature-benchmark
-OTHER_IMAGE=materialize/materialized:unstable ./mzcompose run feature-benchmark
+./mzcompose run feature-benchmark --other-tag unstable
 ```
 
 This is going to benchmark the current source against the `materialize/materialized:unstable` container from DockerHub.
 
-To run one benchmark or a subset:
+To run one benchmark or a named subset:
 
 ```
-FB_SCENARIO=FastPath ./mzcompose run feature-benchmark
+./mzcompose run feature-benchmark --root-scenario=FastPath
 ```
 
 To use specific Mz command-line options:
 
 ```
-THIS_OPTIONS="--workers 16" OTHER_OPTIONS="--workers 1" ./mzcompose run feature-benchmark
+ ./mzcompose run feature-benchmark --this-options "--workers 16" --other-options "--workers 1"
 ```
 
 To compare specific Mz versions:
 
 ```
-THIS_IMAGE=materialize/materialized:v1.2.3 OTHER_IMAGE=materialize/materialized:v2.3.4 ./mzcompose ...
+./mzcompose run feature-benchmark --this-tag v1.2.3 --other-tag v2.3.4 ...
 ```
 
 To compare specific Mz git revisions:
 ```
-THIS_IMAGE=materialize/materialized:unstable-42ad7432657d3e5c1a3492fa76985cd6b79fcab6 OTHER_IMAGE=... ./mzcompose ...
+./mzcompose run feature-benchmark --this-tag unstable-42ad7432657d3e5c1a3492fa76985cd6b79fcab6 ...
 ```
 
 # Output
@@ -218,13 +218,9 @@ The `bisect.sh` can be something along the following lines:
 ```
 #!/bin/bash
 THIS_SHA=$(git rev-parse HEAD)
-export THIS_IMAGE="materialize/materialized:unstable-$THIS_SHA"
-
 GOOD_MZ_VERSION="vX.Y.Z"
-export OTHER_IMAGE="materialize/materialized:$GOOD_MZ_VERSION"
 
-export FB_SCENARIO=...
 pushd /path/to/test/feature-benchmark
 ./mzcompose down -v
-./mzcompose run feature-benchmark
+./mzcompose run feature-benchmark --this-tag unstable-$THIS_SHA --other-tag $GOOD_MZ_VERSION --root-scenario=...
 ```

@@ -13,7 +13,6 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Callable
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Materialized, Testdrive
 
 
 class Executor:
@@ -52,18 +51,14 @@ class Docker(Executor):
     def __init__(
         self,
         composition: Composition,
-        mz_service: Materialized,
-        td_service: Testdrive,
         seed: int,
     ) -> None:
         self._composition = composition
-        self._mz_service = mz_service
-        self._td_service = td_service
         self._seed = seed
 
     def RestartMz(self) -> Any:
-        self._composition.kill(self._mz_service.name)
-        self._composition.up(self._mz_service.name)
+        self._composition.kill("materialized")
+        self._composition.up("materialized")
         return 0.0
 
     def Td(self, input: str) -> Any:
@@ -77,7 +72,7 @@ class Docker(Executor):
             td_file.flush()
             dirname, basename = os.path.split(td_file.name)
             return self._composition.run(
-                self._td_service.name,
+                "testdrive-svc",
                 "--no-reset",
                 f"--seed={self._seed}",
                 "--initial-backoff=0ms",
