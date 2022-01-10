@@ -156,6 +156,15 @@ impl DirectCore {
                 Ok(ingest.clone())
             }
             Entry::Vacant(x) => {
+                let description = self.runtime.get_description(name);
+                let compaction_since = match description {
+                    Ok(description) => description.since().clone(),
+                    Err(e) => {
+                        // Stream has not yet been created.
+                        Antichain::from_elem(0)
+                    }
+                };
+
                 let (write, read) = self.runtime.create_or_load(name);
                 let stream_id = write.stream_id()?;
                 let dataflow_read = read.clone();
@@ -174,8 +183,7 @@ impl DirectCore {
                                 .lock()
                                 .expect("clone doesn't panic and poison lock")
                                 .clone();
-                            let data =
-                                scope.persisted_source(dataflow_read, &Antichain::from_elem(0));
+                            let data = scope.persisted_source(dataflow_read, &compaction_since);
                             data.probe_with(&mut probe).capture_into(output_tx);
                         });
                         while worker.step_or_park(None) {
