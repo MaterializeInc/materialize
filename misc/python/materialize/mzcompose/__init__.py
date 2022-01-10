@@ -181,7 +181,7 @@ class Composition:
         self.images: List[mzbuild.Image] = []
         self.workflows: Dict[str, Callable[..., None]] = {}
 
-        default_tag = os.getenv(f"MZBUILD_TAG", None)
+        self.default_tag = os.getenv(f"MZBUILD_TAG", None)
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -195,6 +195,8 @@ class Composition:
                 compose = yaml.safe_load(f) or {}
         else:
             compose = {}
+
+        self.compose = compose
 
         if "version" not in compose:
             compose["version"] = "3.7"
@@ -221,32 +223,10 @@ class Composition:
             for python_service in getattr(module, "SERVICES", []):
                 compose["services"][python_service.name] = python_service.config
 
-        # Resolve all services that reference an `mzbuild` image to a specific
-        # `image` reference.
         for name, config in compose["services"].items():
-            if "mzbuild" in config:
-                image_name = config["mzbuild"]
-
-                if image_name not in self.repo.images:
-                    raise UIError(f"mzcompose: unknown image {image_name}")
-
-                image = self.repo.images[image_name]
-                override_tag = os.getenv(
-                    f"MZBUILD_{image.env_var_name()}_TAG", default_tag
-                )
-                if override_tag is not None:
-                    config["image"] = image.docker_name(override_tag)
-                    print(
-                        f"mzcompose: warning: overriding {image_name} image to tag {override_tag}",
-                        file=sys.stderr,
-                    )
-                    del config["mzbuild"]
-                else:
-                    self.images.append(image)
-
-                if "propagate_uid_gid" in config:
-                    config["user"] = f"{os.getuid()}:{os.getgid()}"
-                    del config["propagate_uid_gid"]
+            if "propagate_uid_gid" in config:
+                config["user"] = f"{os.getuid()}:{os.getgid()}"
+                del config["propagate_uid_gid"]
 
             ports = config.setdefault("ports", [])
             for i, port in enumerate(ports):
@@ -279,19 +259,43 @@ class Composition:
             }
         )
 
-        deps = self.repo.resolve_dependencies(self.images)
-        for config in compose["services"].values():
-            if "mzbuild" in config:
-                config["image"] = deps[config["mzbuild"]].spec()
-                del config["mzbuild"]
-
-        self.compose = compose
+        self._resolve_mzbuild_references()
 
         # Emit the munged configuration to a temporary file so that we can later
         # pass it to Docker Compose.
         self.file = TemporaryFile()
         os.set_inheritable(self.file.fileno(), True)
         self._write_compose()
+
+    def _resolve_mzbuild_references(self) -> None:
+        # Resolve all services that reference an `mzbuild` image to a specific
+        # `image` reference.
+        for name, config in self.compose["services"].items():
+            if "mzbuild" in config:
+                image_name = config["mzbuild"]
+
+                if image_name not in self.repo.images:
+                    raise UIError(f"mzcompose: unknown image {image_name}")
+
+                image = self.repo.images[image_name]
+                override_tag = os.getenv(
+                    f"MZBUILD_{image.env_var_name()}_TAG", self.default_tag
+                )
+                if override_tag is not None:
+                    config["image"] = image.docker_name(override_tag)
+                    print(
+                        f"mzcompose: warning: overriding {image_name} image to tag {override_tag}",
+                        file=sys.stderr,
+                    )
+                    del config["mzbuild"]
+                else:
+                    self.images.append(image)
+
+        deps = self.repo.resolve_dependencies(self.images)
+        for config in self.compose["services"].values():
+            if "mzbuild" in config:
+                config["image"] = deps[config["mzbuild"]].spec()
+                del config["mzbuild"]
 
     def _write_compose(self) -> None:
         self.file.seek(0)
@@ -426,6 +430,7 @@ class Composition:
                     f"{service.name!r} does not exist"
                 )
             self.compose["services"][service.name] = service.config
+            self._resolve_mzbuild_references()
         self._write_compose()
 
         try:

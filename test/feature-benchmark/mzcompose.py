@@ -7,11 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import argparse
 import os
 import sys
 import time
 from typing import List
 
+# mzcompose may start this script from the root of the Mz repository,
+# so we need to explicitly add this directory to the Python module search path
+sys.path.append(os.path.dirname(__file__))
 from scenarios import *
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
@@ -27,7 +31,7 @@ from materialize.feature_benchmark.termination import (
     ProbForMin,
     TerminationCondition,
 )
-from materialize.mzcompose import Composition
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
@@ -60,95 +64,133 @@ def make_comparator(name: str) -> Comparator:
     return RelativeThresholdComparator(name, threshold=0.10)
 
 
-this_image = os.getenv("THIS_IMAGE", None)
-this_options = os.getenv("THIS_OPTIONS", None)
-
-other_image = os.getenv("OTHER_IMAGE", None)
-other_options = os.getenv("OTHER_OPTIONS", None)
-
 default_timeout = "5m"
-
-mzs = {
-    "this": Materialized(
-        name="materialized_this", image=this_image, options=this_options
-    ),
-    "other": Materialized(
-        name="materialized_other", image=other_image, options=other_options
-    ),
-}
-
-
-tds = {
-    "this": Testdrive(
-        name="testdrive_this",
-        materialized_url=f"postgres://materialize@materialized_this:6875",
-        validate_catalog=False,
-        default_timeout=default_timeout,
-    ),
-    "other": Testdrive(
-        name="testdrive_other",
-        materialized_url=f"postgres://materialize@materialized_other:6875",
-        validate_catalog=False,
-        default_timeout=default_timeout,
-    ),
-}
 
 SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    *mzs.values(),
-    *tds.values(),
+    # We are going to override this service definition during the actual benchmark
+    # we put "latest" here so that we avoid recompiling the current source unless
+    # we will actually be benchmarking it.
+    Materialized(image="latest"),
+    Testdrive(
+        validate_catalog=False,
+        default_timeout=default_timeout,
+    ),
 ]
 
 
-def run_one_scenario(c: Composition, scenario: Scenario) -> Comparator:
+def run_one_scenario(
+    c: Composition, scenario: Scenario, args: argparse.Namespace
+) -> Comparator:
     name = scenario.__name__
     print(f"Now benchmarking {name} ...")
     comparator = make_comparator(name)
     common_seed = round(time.time())
 
-    for mz_id, revision in enumerate(["this", "other"]):
+    mzs = {
+        "this": Materialized(
+            image=f"materialize/materialized:{args.this_tag}"
+            if args.this_tag
+            else None,
+            options=args.this_options,
+        ),
+        "other": Materialized(
+            image=f"materialize/materialized:{args.other_tag}"
+            if args.other_tag
+            else None,
+            options=args.other_options,
+        ),
+    }
 
-        mz_service_name = mzs[revision].name
-        td_service_name = tds[revision].name
+    for mz_id, instance in enumerate(["this", "other"]):
+        with c.override(mzs[instance]):
+            c.start_and_wait_for_tcp(services=["materialized"])
+            c.wait_for_materialized()
 
-        c.start_and_wait_for_tcp(services=[mzs[revision].name])
-        c.wait_for_materialized(mz_service_name)
+            executor = Docker(
+                composition=c,
+                seed=common_seed,
+            )
 
-        executor = Docker(
-            composition=c,
-            mz_service=mzs[revision],
-            td_service=tds[revision],
-            seed=common_seed,
-        )
+            benchmark = Benchmark(
+                mz_id=mz_id,
+                scenario=scenario,
+                executor=executor,
+                filter=make_filter(),
+                termination_conditions=make_termination_conditions(),
+                aggregation=make_aggregation(),
+            )
 
-        benchmark = Benchmark(
-            mz_id=mz_id,
-            scenario=scenario,
-            executor=executor,
-            filter=make_filter(),
-            termination_conditions=make_termination_conditions(),
-            aggregation=make_aggregation(),
-        )
+            outcome, iterations = benchmark.run()
+            comparator.append(outcome)
 
-        outcome, iterations = benchmark.run()
-        comparator.append(outcome)
-
-        c.kill(mz_service_name)
-        c.rm(mz_service_name, td_service_name)
-        c.rm_volumes("mzdata")
+            c.kill("materialized")
+            c.rm("materialized", "testdrive-svc")
+            c.rm_volumes("mzdata")
 
     return comparator
 
 
-def workflow_feature_benchmark(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+def workflow_feature_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Feature benchmark framework."""
 
-    report = Report()
-    has_regressions = False
+    parser.add_argument(
+        "--this-tag",
+        metavar="TAG",
+        type=str,
+        default=os.getenv("THIS_TAG", None),
+        help="'This' Materialize container tag to benchmark. If not provided, the current source will be used.",
+    )
 
-    root_scenario = globals()[os.getenv("FB_SCENARIO", "Scenario")]
+    parser.add_argument(
+        "--this-options",
+        metavar="OPTIONS",
+        type=str,
+        default=os.getenv("THIS_OPTIONS", None),
+        help="Options to pass to the 'This' instance.",
+    )
+
+    parser.add_argument(
+        "--other-tag",
+        metavar="TAG",
+        type=str,
+        default=os.getenv("OTHER_TAG", None),
+        help="'Other' Materialize container tag to benchmark. If not provided, the current source will be used.",
+    )
+
+    parser.add_argument(
+        "--other-options",
+        metavar="OPTIONS",
+        type=str,
+        default=os.getenv("OTHER_OPTIONS", None),
+        help="Options to pass to the 'Other' instance.",
+    )
+
+    parser.add_argument(
+        "--root-scenario",
+        metavar="SCENARIO",
+        type=str,
+        default="Scenario",
+        help="Scenario or scenario family to benchmark. See scenarios.py for available scenarios.",
+    )
+
+    args = parser.parse_args()
+
+    print(
+        f"""
+this_tag: {args.this_tag}
+this_options: {args.this_options}
+
+other_tag: {args.other_tag}
+other_options: {args.other_options}
+
+root_scenario: {args.root_scenario}"""
+    )
+
+    # Build the list of scenarios to run
+    root_scenario = globals()[args.root_scenario]
     scenarios = []
 
     if root_scenario.__subclasses__():
@@ -163,12 +205,15 @@ def workflow_feature_benchmark(c: Composition) -> None:
     else:
         scenarios.append(root_scenario)
 
-    print(
-        f"will run the following scenarios: {', '.join([scenario.__name__ for scenario in scenarios])}"
-    )
+    print(f"scenarios: {', '.join([scenario.__name__ for scenario in scenarios])}")
+
+    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+
+    report = Report()
+    has_regressions = False
 
     for scenario in scenarios:
-        comparison = run_one_scenario(c, scenario)
+        comparison = run_one_scenario(c, scenario, args)
         report.append(comparison)
 
         if comparison.is_regression():

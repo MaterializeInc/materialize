@@ -100,3 +100,36 @@
     - ./ci/plugins/mzcompose:
         composition: testdrive
         run: persistence-testdrive
+
+- id: feature-benchmark
+  label: "Feature benchmark against latest release"
+  timeout_in_minutes: 120
+    - ./ci/plugins/mzcompose:
+        composition: feature-benchmark
+        run: feature-benchmark --other-tag latest
+
+- id: feature-benchmark
+  label: "Feature benchmark against latest release"
+  timeout_in_minutes: 120
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: feature-benchmark
+        run: feature-benchmark
+        args:
+          - --other-tag
+          - latest
+
+- id: feature-benchmark-persistence
+  label: "Feature benchmark against latest release with persistence"
+  timeout_in_minutes: 120
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: feature-benchmark
+        run: feature-benchmark
+        args:
+          - --other-tag
+          - latest
+          - --this-options
+          - "--persistent-user-tables --persistent-kafka-upsert-source"
+          - --other-options
+          - "--persistent-user-tables --persistent-kafka-upsert-source"

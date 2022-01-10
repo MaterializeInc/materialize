@@ -571,11 +571,11 @@ true
     )
 
 
-class KafkaBenchmark(Scenario):
+class KafkaScenario(Scenario):
     pass
 
 
-class KafkaRaw(KafkaBenchmark):
+class KafkaRaw(KafkaScenario):
     SHARED = Td(
         """
 $ set count=1000000
@@ -617,7 +617,7 @@ true
     )
 
 
-class KafkaUpsert(KafkaBenchmark):
+class KafkaUpsert(KafkaScenario):
     SHARED = Td(
         """
 $ set count=1000000
@@ -664,7 +664,7 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${keysc
     )
 
 
-class KafkaUpsertUnique(KafkaBenchmark):
+class KafkaUpsertUnique(KafkaScenario):
     SHARED = Td(
         """
 $ set keyschema={"type": "record", "name": "Key", "fields": [ {"name": "f1", "type": "long"} ] }
@@ -692,7 +692,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${keys
     )
 
 
-class KafkaRecovery(KafkaBenchmark):
+class KafkaRecovery(KafkaScenario):
     SHARED = Td(
         """
 $ set keyschema={
