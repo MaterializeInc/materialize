@@ -13,6 +13,7 @@
 #[macro_use]
 mod async_ext;
 pub mod input;
+pub mod native;
 pub mod replay;
 pub mod source;
 pub mod stream;
