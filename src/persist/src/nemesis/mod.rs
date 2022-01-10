@@ -383,6 +383,6 @@ pub fn run<R: Runtime>(steps: usize, config: GeneratorConfig, runtime: R) {
         for err in errors.iter() {
             log::warn!("invariant violation: {}", err)
         }
-        assert!(errors.is_empty());
+        assert_eq!(errors, Vec::<String>::new());
     }
 }
