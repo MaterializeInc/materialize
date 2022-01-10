@@ -97,13 +97,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
-use std::{fmt, thread};
+use std::{fmt, hint, thread};
 
 use timely::communication::WorkerGuards;
 use timely::dataflow::operators::capture::{Capture, Event as TimelyCaptureEvent};
 use timely::dataflow::operators::Probe;
 use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
+use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::indexed::encoding::Id;
@@ -146,6 +147,7 @@ struct DirectCore {
     unreliable: UnreliableHandle,
     runtime: RuntimeClient,
     streams: HashMap<String, (Ingest, Dataflow)>,
+    compaction_frontiers: HashMap<String, Antichain<u64>>,
 }
 
 impl DirectCore {
@@ -156,16 +158,14 @@ impl DirectCore {
                 Ok(ingest.clone())
             }
             Entry::Vacant(x) => {
-                let description = self.runtime.get_description(name);
-                let compaction_since = match description {
-                    Ok(description) => description.since().clone(),
-                    Err(e) => {
-                        // Stream has not yet been created.
-                        Antichain::from_elem(0)
-                    }
-                };
+                let compaction_since = self
+                    .compaction_frontiers
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| Antichain::from_elem(0));
 
                 let (write, read) = self.runtime.create_or_load(name);
+
                 let stream_id = write.stream_id()?;
                 let dataflow_read = read.clone();
                 let (output_tx, output_rx) = mpsc::channel();
@@ -173,6 +173,10 @@ impl DirectCore {
 
                 let (progress_tx, progress_rx) = DataflowProgress::new();
                 let progress_handle = progress_tx.clone();
+                let name = name.to_string();
+                let workers_latch = Arc::new(AtomicUsize::new(NUM_DATAFLOW_WORKER_THREADS));
+                let workers_latch_for_worker = Arc::clone(&workers_latch);
+
                 let workers = timely::execute(
                     timely::Config::process(NUM_DATAFLOW_WORKER_THREADS),
                     move |worker| {
@@ -183,9 +187,26 @@ impl DirectCore {
                                 .lock()
                                 .expect("clone doesn't panic and poison lock")
                                 .clone();
-                            let data = scope.persisted_source(dataflow_read, &compaction_since);
+                            let data =
+                                scope.persisted_source(dataflow_read.clone(), &compaction_since);
+
                             data.probe_with(&mut probe).capture_into(output_tx);
+
+                            match dataflow_read.snapshot() {
+                                Ok(snapshot) => {
+                                    let snapshot_since = snapshot.since();
+                                    if PartialOrder::less_than(&compaction_since, &snapshot_since) {
+                                        panic!("Mismatch for {}, snapshot_since {:?} != compaction since {:?}", name, snapshot_since, compaction_since);
+                                    }
+                                }
+                                _ => (),
+                            }
                         });
+
+                        // We release the latch once we know that we got the snapshot, which
+                        // "locks" in the expected since.
+                        workers_latch_for_worker.fetch_sub(1, Ordering::SeqCst);
+
                         while worker.step_or_park(None) {
                             probe.with_frontier(|frontier| {
                                 progress_tx.maybe_progress(frontier);
@@ -194,6 +215,13 @@ impl DirectCore {
                         progress_tx.close();
                     },
                 )?;
+
+                // Keep the implicit lock on `DirectCore` until all workers got their snapshot.
+                // Although in reality only one worker will read from a snapshot.
+                while workers_latch.load(Ordering::SeqCst) > 0 {
+                    hint::spin_loop();
+                }
+
                 let input = Ingest {
                     write,
                     read,
@@ -259,6 +287,7 @@ impl DirectShared {
             unreliable: unreliable.clone(),
             runtime,
             streams: HashMap::new(),
+            compaction_frontiers: HashMap::new(),
         };
         let initial_generation = 0;
         let shared = DirectShared {
@@ -531,7 +560,20 @@ impl DirectWorker {
 
     fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<PFuture<SeqNo>, Error> {
         let stream = self.stream(&req.stream)?;
-        Ok(stream.write.allow_compaction(Antichain::from_elem(req.ts)))
+
+        let mut direct_core = self.shared.core.lock()?;
+        direct_core
+            .compaction_frontiers
+            .insert(req.stream.clone(), Antichain::from_elem(req.ts));
+
+        println!("allow compaction on {} to {:?}", req.stream, req.ts);
+        println!("got frontiers: {:?}", direct_core.compaction_frontiers);
+
+        let result = Ok(stream.write.allow_compaction(Antichain::from_elem(req.ts)));
+
+        drop(direct_core);
+
+        result
     }
 
     fn take_snapshot(&mut self, req: TakeSnapshotReq) -> Result<SeqNo, Error> {
