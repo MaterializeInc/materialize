@@ -102,7 +102,7 @@ of PRs and adds release notes for any features or bugs that were missed.
   complete. Then launch the load tests using the `bin/scratch` script:
 
   ```
-  bin/scratch create < misc/load-tests/release.json
+  bin/scratch create < misc/scratch/release.json
   ```
 
 [slts]: https://buildkite.com/materialize/sql-logic-tests
