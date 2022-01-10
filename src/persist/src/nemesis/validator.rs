@@ -194,6 +194,16 @@ impl Validator {
         let require_succeed = true;
         self.check_success(meta, &res, require_succeed);
 
+        let latest_seal = self.seal_frontier.get(&req.stream).copied();
+        let latest_compaction_since = self.since_frontier.get(&req.stream).copied();
+        if latest_compaction_since >= latest_seal {
+            // TODO: We cannot currently verify cases where the compaction frontier is beyond the
+            // since, because we cannot determine anymore (based on the latest seal timestamp)
+            // which records (both from the expected writes and the writes we get from timely) are
+            // eligible for verification.
+            return;
+        }
+
         if let Ok(res) = res {
             let all_stream_output = self.output_by_stream.entry(req.stream.clone()).or_default();
             all_stream_output.extend(res.contents);
