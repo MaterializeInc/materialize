@@ -3172,7 +3172,6 @@ dependencies = [
  "ctor",
  "either",
  "futures",
- "futures-util",
  "lazy_static",
  "openssl",
  "pin-project",
@@ -4920,7 +4919,6 @@ dependencies = [
 name = "timely-util"
 version = "0.0.0"
 dependencies = [
- "futures",
  "futures-util",
  "timely",
  "tokio",

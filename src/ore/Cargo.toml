@@ -29,7 +29,6 @@ clap = { version = "3.0.0", optional = true }
 ctor = { version = "0.1.21", optional = true }
 either = "1.6.1"
 futures = { version = "0.3.19", optional = true }
-futures-util = "0.3.19"
 lazy_static = "1.4.0"
 # This isn't directly imported by anything, but it's required at link time. The
 # vendored feature is transitively depended upon by tokio-openssl.

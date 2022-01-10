@@ -809,6 +809,9 @@ where
                 s.ready_rows.push_back((ts, rows));
             });
 
+            // TODO: #9980.  Rewrite this to take advantage of the fact that we're now within an
+            //       async op and don't need to explicitly yield in order to not block timely.
+            //
             // Send a bounded number of records to Kafka from the ready queue.
             // This loop has explicitly been designed so that each iteration sends
             // at most one record to Kafka

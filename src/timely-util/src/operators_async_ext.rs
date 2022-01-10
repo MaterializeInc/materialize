@@ -24,7 +24,6 @@ use timely::PartialOrder;
 
 /// A type that is not inhabited by any value. Should be redefined as the
 /// [never](https://doc.rust-lang.org/std/primitive.never.html) type once it stabilizes
-#[derive(Debug)]
 pub enum Never {}
 
 /// A helper type to integrate timely notifications with async futures. Its intended to be used
@@ -93,7 +92,7 @@ pub trait OperatorBuilderExt<G: Scope> {
     /// follows the following pattern:
     ///
     /// ```ignore
-    /// op.build_async(scope, move |capabilities, frontier, scheduler, reschedule_flag| async move {
+    /// op.build_async(scope, move |capabilities, frontier, scheduler| async move {
     ///     while scheduler.yield_now().await {
     ///         // async operator logic here
     ///     }
@@ -111,7 +110,7 @@ pub trait OperatorBuilderExt<G: Scope> {
             Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
             Scheduler,
         ) -> Fut,
-        Fut: Future<Output = ()> + 'static;
+        Fut: Future + 'static;
 }
 
 impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
@@ -122,7 +121,7 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
             Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
             Scheduler,
         ) -> Fut,
-        Fut: Future<Output = ()> + 'static,
+        Fut: Future + 'static,
     {
         let activator = scope.sync_activator_for(&self.operator_info().address[..]);
         let waker = futures_util::task::waker(Arc::new(activator));
