@@ -107,8 +107,17 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
+{{< comment >}}
+Only add new release notes above this line.
+
+The presence of this comment ensures that PRs that are alive across a release
+boundary don't silently merge their release notes into the wrong place.
+{{</ comment >}}
+
+{{% version-header v0.16.0 %}}
+
 - **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
-  is called with a [`time`] value but a date-related field (e.g., `YEAR`).
+  is called with a [`time`] value but a date-related field (e.g., `YEAR`) {{% gh 9839 %}}.
 
   Previous versions of Materialize would incorrectly return `0` in these cases.
   The new behavior matches PostgreSQL.
@@ -116,20 +125,13 @@ changes that have not yet been documented.
 - **Breaking change.** Disallow the string `'sNaN'` (in any casing) as a valid
   [`numeric`] value.
 
-- Add the `array_remove` and `list_remove` functions.
+- Add the [`array_remove`](https://materialize.com/docs/sql/functions/#array-func) and [`list_remove`](https://materialize.com/docs/sql/functions/#list-func) functions.
 
-- Allow `SET NAMES ____` special case as per: https://www.postgresql.org/docs/9.1/sql-set.html.
-  Errors if the value is not `"UTF8"`.
+- Support the `NAMES` and `SCHEMA` aliases in `SET` to [match the behavior](https://www.postgresql.org/docs/9.1/sql-set.html) of PostgreSQL, under the following conditions:
 
-- Correctly parse `SET SCHEMA ____` special case as per: https://www.postgresql.org/docs/9.1/sql-set.html,
-  but it remains unsettable.
+  - `SET NAMES ____` is allowed, but errors if the value is not `"UTF8"`.
 
-{{< comment >}}
-Only add new release notes above this line.
-
-The presence of this comment ensures that PRs that are alive across a release
-boundary don't silently merge their release notes into the wrong place.
-{{</ comment >}}
+  - `SET SCHEMA ____` is correctly parsed, but remains unsettable.
 
 {{% version-header v0.15.0 %}}
 
@@ -182,7 +184,7 @@ boundary don't silently merge their release notes into the wrong place.
   because `t1.a` does not appear in the `GROUP BY` clause:
 
   ```sql
-  SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t2.a
+  SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t2.a;
   ```
 
   Previous versions of Materialize permitted this query by noticing that the
@@ -193,7 +195,7 @@ boundary don't silently merge their release notes into the wrong place.
   BY` clause and the `SELECT` list:
 
   ```sql
-  SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t1.a
+  SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t1.a;
   ```
 
 - **Breaking change.** When using an arbitrary expression in an `ORDER BY` or
@@ -921,7 +923,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   To maintain the old behavior, explicitly set the timeout to `0s`, as in:
 
   ```sql
-  FETCH ... WITH (timeout = '0s')
+  FETCH ... WITH (timeout = '0s');
   ```
 
 - **Backwards-incompatible change.** Consider the following keywords to be fully
@@ -1323,7 +1325,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   [Kafka sources](/sql/create-source/avro-kafka/), as in
 
   ```sql
-  CREATE SOURCE ... FROM KAFKA BROKER 'host1:9092,host2:9092' ...
+  CREATE SOURCE ... FROM KAFKA BROKER 'host1:9092,host2:9092' ...;
   ```
 
   is incorrectly prohibited in this version. This change was unintentional and
@@ -1374,14 +1376,14 @@ a problem with PostgreSQL JDBC 42.3.0.
     `SELECT` list that are formed from arbitrary expressions, as in:
 
     ```sql
-    SELECT a + 1, sum(b) FROM ... GROUP BY 1
+    SELECT a + 1, sum(b) FROM ... GROUP BY 1;
     ```
 
     Previously, Materialize only handled ordinal references to items that were
     simple column references, as in:
 
     ```sql
-    SELECT a, sum(b) FROM ... GROUP BY 1
+    SELECT a, sum(b) FROM ... GROUP BY 1;
     ```
 
 - Fix two PostgreSQL compatibility issues:
@@ -1512,7 +1514,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   in a `SELECT` query, as in:
 
   ```sql
-  SELECT col1_alias, col2_alias FROM rel AS rel_alias (col1_alias, col2_alias)
+  SELECT col1_alias, col2_alias FROM rel AS rel_alias (col1_alias, col2_alias);
   ```
 
 - Add the [`abs`](/sql/functions/#numbers-func) function for the

@@ -111,7 +111,7 @@
 
     - signature: 'list_remove(l: listany, e: listelementany) -> listany'
       description: >-
-        '[Experimental](/cli/#experimental-mode)––Returns the list `l` without
+        [Experimental](/cli/#experimental-mode)––Returns the list `l` without
         any elements equal to the given value `e`. Comparisons are done using
         IS NOT DISTINCT FROM semantics, so it is possible to remove NULLs.
 
