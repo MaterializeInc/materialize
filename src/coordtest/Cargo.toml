@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.52"
 async-trait = "0.1.52"
 build-info = { path = "../build-info" }
-clap = { version = "3.0.0", features = ["derive"] }
+clap = { version = "3.0.5", features = ["derive"] }
 coord = { path = "../coord" }
 datadriven = "0.6.0"
 dataflow = { path = "../dataflow" }
