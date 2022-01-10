@@ -726,6 +726,7 @@ impl Timestamper {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &kc.addrs.to_string());
 
+        // TODO(guswynn): replace this when https://github.com/tokio-rs/tracing/pull/1821 is merged
         if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
             config.set("debug", "all");
         }

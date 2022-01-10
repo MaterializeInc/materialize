@@ -534,6 +534,7 @@ fn create_kafka_config(
     // This is a very simple integration at the moment; enabling `debug`-level
     // logs for the `librdkafka` target enables the full firehouse of librdkafka
     // debug logs. We may want to investigate finer-grained control.
+    // TODO(guswynn): replace this when https://github.com/tokio-rs/tracing/pull/1821 is merged
     if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
         kafka_config.set("debug", "all");
     }
