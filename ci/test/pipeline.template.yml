@@ -52,6 +52,39 @@ steps:
           composition: testdrive
           run: testdrive-ci
 
+  - id: testdrive1
+    label: ":racing_car: testdrive1"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [test/testdrive]
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          run: testdrive-ci
+
+  - id: testdrive2  
+    label: ":racing_car: testdrive2"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [test/testdrive]
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          run: testdrive-ci
+
+  - id: testdrive3
+    label: ":racing_car: testdrive3"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [test/testdrive]
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          run: testdrive-ci
+
   - id: kafka-exactly-once
     label: "Test for the Kafka exactly-once sink"
     depends_on: build-x86_64
