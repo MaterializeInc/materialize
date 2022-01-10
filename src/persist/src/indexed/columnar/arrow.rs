@@ -26,7 +26,7 @@ use crate::error::Error;
 use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
-    decode_trace_inline, decode_unsealed_inline, encode_trace_inline_meta,
+    decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
     encode_unsealed_inline_meta, BlobTraceBatch, BlobUnsealedBatch,
 };
 use crate::storage::SeqNo;
@@ -72,6 +72,9 @@ lazy_static! {
 const INLINE_METADATA_KEY: &'static str = "MZ:meta";
 
 /// Encodes an BlobUnsealedBatch into the Arrow file format.
+///
+/// NB: This is currently unused, but it's here because we may want to use it
+/// for the local cache and so we can easily compare arrow vs parquet.
 pub fn encode_unsealed_arrow<W: Write>(w: &mut W, batch: &BlobUnsealedBatch) -> Result<(), Error> {
     let mut metadata = HashMap::with_capacity(1);
     metadata.insert(
@@ -89,6 +92,9 @@ pub fn encode_unsealed_arrow<W: Write>(w: &mut W, batch: &BlobUnsealedBatch) -> 
 }
 
 /// Encodes an BlobTraceBatch into the Arrow file format.
+///
+/// NB: This is currently unused, but it's here because we may want to use it
+/// for the local cache and so we can easily compare arrow vs parquet.
 pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Result<(), Error> {
     let mut metadata = HashMap::with_capacity(1);
     metadata.insert(
@@ -105,10 +111,13 @@ pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Result
 }
 
 /// Decodes a BlobUnsealedBatch from the Arrow file format.
+///
+/// NB: This is currently unused, but it's here because we may want to use it
+/// for the local cache and so we can easily compare arrow vs parquet.
 pub fn decode_unsealed_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBatch, Error> {
     let file_meta = read_file_metadata(r)?;
     let (format, meta) =
-        decode_unsealed_inline(file_meta.schema().metadata().get(INLINE_METADATA_KEY))?;
+        decode_unsealed_inline_meta(file_meta.schema().metadata().get(INLINE_METADATA_KEY))?;
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
@@ -127,10 +136,13 @@ pub fn decode_unsealed_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBa
 }
 
 /// Decodes a BlobTraceBatch from the Arrow file format.
+///
+/// NB: This is currently unused, but it's here because we may want to use it
+/// for the local cache and so we can easily compare arrow vs parquet.
 pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, Error> {
     let file_meta = read_file_metadata(r)?;
     let (format, meta) =
-        decode_trace_inline(file_meta.schema().metadata().get(INLINE_METADATA_KEY))?;
+        decode_trace_inline_meta(file_meta.schema().metadata().get(INLINE_METADATA_KEY))?;
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),

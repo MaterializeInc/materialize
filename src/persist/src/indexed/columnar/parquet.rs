@@ -17,6 +17,7 @@ use differential_dataflow::trace::Description;
 use parquet2::compression::Compression;
 use parquet2::encoding::Encoding;
 use parquet2::metadata::KeyValue;
+use parquet2::read::read_metadata;
 use parquet2::write::{write_file, Version, WriteOptions};
 use timely::progress::{Antichain, Timestamp};
 
@@ -27,7 +28,7 @@ use crate::indexed::columnar::arrow::{
 };
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
-    decode_trace_inline, decode_unsealed_inline, encode_trace_inline_meta,
+    decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
     encode_unsealed_inline_meta, BlobTraceBatch, BlobUnsealedBatch,
 };
 use crate::storage::SeqNo;
@@ -62,26 +63,19 @@ pub fn encode_trace_parquet<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Resu
 
 /// Decodes a BlobUnsealedBatch from the Parquet format.
 pub fn decode_unsealed_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBatch, Error> {
-    let reader = RecordReader::try_new(r, None, None, None, None)?;
-    let metadata = reader
-        .metadata()
+    let metadata = read_metadata(r).map_err(|err| err.to_string())?;
+    let metadata = metadata
         .key_value_metadata()
         .as_ref()
         .and_then(|x| x.iter().find(|x| x.key == INLINE_METADATA_KEY));
-    let (format, meta) = decode_unsealed_inline(metadata.and_then(|x| x.value.as_ref()))?;
+    let (format, meta) = decode_unsealed_inline_meta(metadata.and_then(|x| x.value.as_ref()))?;
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
         ProtoBatchFormat::ArrowKVTD => {
             return Err("ArrowKVTD format not supported in parquet".into())
         }
-        ProtoBatchFormat::ParquetKVTD => {
-            let mut updates = Vec::new();
-            for batch in reader {
-                updates.push(decode_arrow_batch_kvtd(&batch?)?);
-            }
-            updates
-        }
+        ProtoBatchFormat::ParquetKVTD => decode_parquet_file_kvtd(r)?,
     };
 
     let ret = BlobUnsealedBatch {
@@ -94,29 +88,28 @@ pub fn decode_unsealed_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealed
 
 /// Decodes a BlobTraceBatch from the Parquet format.
 pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, Error> {
-    let reader = RecordReader::try_new(r, None, None, None, None)?;
-    let metadata = reader
-        .metadata()
+    let metadata = read_metadata(r).map_err(|err| err.to_string())?;
+    let metadata = metadata
         .key_value_metadata()
         .as_ref()
         .and_then(|x| x.iter().find(|x| x.key == INLINE_METADATA_KEY));
-    let (format, meta) = decode_trace_inline(metadata.and_then(|x| x.value.as_ref()))?;
+    let (format, meta) = decode_trace_inline_meta(metadata.and_then(|x| x.value.as_ref()))?;
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
         ProtoBatchFormat::ArrowKVTD => {
             return Err("ArrowKVTD format not supported in parquet".into())
         }
-        ProtoBatchFormat::ParquetKVTD => {
-            let mut updates = Vec::new();
-            for batch in reader {
-                for ((k, v), t, d) in decode_arrow_batch_kvtd(&batch?)?.iter() {
-                    updates.push(((k.to_vec(), v.to_vec()), t, d));
-                }
-            }
-            updates
-        }
+        ProtoBatchFormat::ParquetKVTD => decode_parquet_file_kvtd(r)?,
     };
+
+    let updates = updates
+        .iter()
+        .flat_map(|x| {
+            x.iter()
+                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
+        })
+        .collect();
 
     let ret = BlobTraceBatch {
         desc: meta.desc.into_option().map_or_else(
@@ -169,4 +162,25 @@ fn encode_parquet_kvtd<W: Write>(
         .map_err(|err| err.to_string())?;
 
     Ok(())
+}
+
+fn decode_parquet_file_kvtd<R: Read + Seek>(r: &mut R) -> Result<Vec<ColumnarRecords>, Error> {
+    let reader = RecordReader::try_new(r, None, None, None, None)?;
+
+    let file_schema = reader.schema().fields().as_slice();
+    // We're not trying to accept any sort of user created data, so be strict.
+    if file_schema != SCHEMA_ARROW_KVTD.fields() {
+        return Err(format!(
+            "expected arrow schema {:?} got: {:?}",
+            SCHEMA_ARROW_KVTD.fields(),
+            file_schema
+        )
+        .into());
+    }
+
+    let mut ret = Vec::new();
+    for batch in reader {
+        ret.push(decode_arrow_batch_kvtd(&batch?)?);
+    }
+    Ok(ret)
 }

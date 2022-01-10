@@ -83,6 +83,31 @@ message ProtoBatchInline {
 
 enum ProtoBatchFormat {
     Unknown = 0;
+    // Arrow, which we'd use for the local blob cache if we use it, gets a
+    // structure like `[(K, V, T, D)]` so that we could mmap it and use it
+    // direction as our in-mem batches (which have this structure).
     ArrowKVTD = 1;
+    // We have more flexibility with Parquet. Initially we'll start with the
+    // same `[(K, V, T, D)]` as our in-mem batches. Another option would be
+    // something like `[(K, [(V, [(T, D)])])]`, which would only store each
+    // key's and each val's data once (this is similar to the
+    // [differential_dataflow::trace::layers::Trie] structure of
+    // [differential_dataflow::trace::implementations::ord::OrdValBatch]).
+    //
+    // Which is better probably comes down to how much duplication we expect of
+    // keys and vals in a batch as well as how big the batches are (the trie
+    // structure introduces more columns, so has some amount of overhead).
+    //
+    // For unsealed batches, we have a better chance of duplicates than trace,
+    // but we probably don't want to pay the cost of converting between the
+    // in-mem `[(K, V, T, D)]` representation and anything else (to keep the hot
+    // path clean). Unsealed batches are also likely to be our smallest. For
+    // this reason, they'll probably always stay as ParquetKVTD.
+    //
+    // For trace batches, we consolicate them before writing them out, so we're
+    // guaranteed to get nothing from the V level of the trie. For duplicate
+    // keys, we'll probably get a good amount of benefit from column specific
+    // compression, and I'd like to exhaust that direction first before dealing
+    // with a trie-like column structure.
     ParquetKVTD = 2;
 }

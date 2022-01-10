@@ -920,7 +920,7 @@ pub fn encode_trace_inline_meta(batch: &BlobTraceBatch, format: ProtoBatchFormat
 }
 
 /// Decodes the inline metadata for an unsealed batch from a base64 string.
-pub fn decode_unsealed_inline(
+pub fn decode_unsealed_inline_meta(
     inline_base64: Option<&String>,
 ) -> Result<(ProtoBatchFormat, ProtoUnsealedBatchMeta), Error> {
     let inline_base64 = inline_base64.ok_or("missing batch metadata")?;
@@ -939,7 +939,7 @@ pub fn decode_unsealed_inline(
 }
 
 /// Decodes the inline metadata for a trace batch from a base64 string.
-pub fn decode_trace_inline(
+pub fn decode_trace_inline_meta(
     inline_base64: Option<&String>,
 ) -> Result<(ProtoBatchFormat, ProtoTraceBatchMeta), Error> {
     let inline_base64 = inline_base64.ok_or("missing batch metadata")?;
