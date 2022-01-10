@@ -58,7 +58,7 @@ where
         let new = listen_source(self, snapshot_seal, listen_rx);
 
         // Replay the previously persisted data, if any.
-        let previous = self.replay(snapshot, as_of_frontier);
+        let previous = self.replay_core(read.stream_name().to_string(), snapshot, as_of_frontier);
 
         previous.concat(&new)
     }

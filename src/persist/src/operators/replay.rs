@@ -27,6 +27,16 @@ pub trait Replay<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
         &self,
         snapshot: Result<DecodedSnapshot<K, V>, Error>,
         as_of_frontier: &Antichain<u64>,
+    ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
+        self.replay_core("noname".to_string(), snapshot, as_of_frontier)
+    }
+
+    /// Emits each record in a snapshot.
+    fn replay_core(
+        &self,
+        name: String,
+        snapshot: Result<DecodedSnapshot<K, V>, Error>,
+        as_of_frontier: &Antichain<u64>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)>;
 }
 
@@ -36,8 +46,9 @@ where
     K: TimelyData + Codec,
     V: TimelyData + Codec,
 {
-    fn replay(
+    fn replay_core(
         &self,
+        name: String,
         snapshot: Result<DecodedSnapshot<K, V>, Error>,
         as_of_frontier: &Antichain<u64>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
@@ -76,8 +87,6 @@ where
                                     "replaying persisted data: snapshot since ({:?}) is beyond expected as_of ({:?})",
                                     snapshot_since, as_of_frontier
                                 ))));
-
-                                return;
                             }
 
                             // TODO: Periodically yield to let the rest of the dataflow
