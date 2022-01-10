@@ -15,10 +15,10 @@ use anyhow::{anyhow, bail, Context};
 use interchange::avro::get_debezium_transaction_schema;
 use mz_avro::types::Value;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
-use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::{Message, Offset, TopicPartitionList};
 
+use ::kafka_util::client::MzClientContext;
 use dataflow_types::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
     KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkConsistencyConnector,
@@ -192,7 +192,7 @@ fn maybe_decode_consistency_end_record(
 }
 
 async fn register_kafka_topic(
-    client: &AdminClient<DefaultClientContext>,
+    client: &AdminClient<MzClientContext>,
     topic: &str,
     mut partition_count: i32,
     mut replication_factor: i32,
@@ -383,8 +383,9 @@ async fn build_kafka(
             config.set(k, v);
         }
     }
-    let client = config
-        .create::<AdminClient<_>>()
+
+    let client: AdminClient<_> = config
+        .create_with_context(MzClientContext)
         .context("creating admin client failed")?;
 
     register_kafka_topic(

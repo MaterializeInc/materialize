@@ -24,7 +24,7 @@ use dataflow_types::{
     ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
-use kafka_util::KafkaAddrs;
+use kafka_util::{client::MzClientContext, KafkaAddrs};
 use repr::adt::jsonb::Jsonb;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -620,6 +620,14 @@ impl ClientContext for GlueConsumerContext {
             }
             Err(e) => error!("failed decoding librdkafka statistics JSON: {}", e),
         };
+    }
+
+    // rdkafka's ClientContext is a bit weird, so we are forced to forward here awkwardly
+    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        MzClientContext.log(level, fac, log_message)
+    }
+    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+        MzClientContext.error(error, reason)
     }
 }
 
