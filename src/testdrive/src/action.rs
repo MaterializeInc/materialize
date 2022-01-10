@@ -22,6 +22,7 @@ use aws_sdk_kinesis::Client as KinesisClient;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
 use futures::future::FutureExt;
+use kafka_util::client::MzClientContext;
 use lazy_static::lazy_static;
 use ore::result::ResultExt as _;
 use rand::Rng;
@@ -108,10 +109,10 @@ pub struct State {
     schema_registry_url: Url,
     ccsr_client: ccsr::Client,
     kafka_addr: String,
-    kafka_admin: rdkafka::admin::AdminClient<rdkafka::client::DefaultClientContext>,
+    kafka_admin: rdkafka::admin::AdminClient<MzClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
     kafka_config: ClientConfig,
-    kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
+    kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
     kafka_topics: HashMap<String, usize>,
     aws_account: String,
     aws_config: AwsConfig,
@@ -691,7 +692,6 @@ pub async fn create_state(
 
     let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics, kafka_config) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
-        use rdkafka::client::DefaultClientContext;
         use rdkafka::producer::FutureProducer;
 
         let mut kafka_config = ClientConfig::new();
@@ -710,7 +710,7 @@ pub async fn create_state(
             kafka_config.set(key, value);
         }
 
-        let admin: AdminClient<DefaultClientContext> = kafka_config.create().err_hint(
+        let admin: AdminClient<_> = kafka_config.create_with_context(MzClientContext).err_hint(
             "opening Kafka connection",
             &[format!("connection string: {}", config.kafka_addr)],
         )?;
@@ -718,10 +718,11 @@ pub async fn create_state(
         let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
         kafka_config.set("message.max.bytes", "15728640");
-        let producer: FutureProducer = kafka_config.create().err_hint(
-            "opening Kafka producer connection",
-            &[format!("connection string: {}", config.kafka_addr)],
-        )?;
+        let producer: FutureProducer<_> =
+            kafka_config.create_with_context(MzClientContext).err_hint(
+                "opening Kafka producer connection",
+                &[format!("connection string: {}", config.kafka_addr)],
+            )?;
 
         let topics = HashMap::new();
 

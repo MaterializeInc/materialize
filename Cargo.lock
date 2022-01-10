@@ -2457,6 +2457,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -4484,6 +4485,7 @@ dependencies = [
  "globset",
  "interchange",
  "itertools",
+ "kafka-util",
  "lazy_static",
  "lowertest",
  "mz-avro",

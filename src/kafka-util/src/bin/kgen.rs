@@ -23,7 +23,7 @@ use rand::distributions::{
 use rand::prelude::{Distribution, ThreadRng};
 use rand::thread_rng;
 use rdkafka::error::KafkaError;
-use rdkafka::producer::{BaseRecord, DefaultProducerContext, Producer, ThreadedProducer};
+use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::util::Timeout;
 use rdkafka::ClientConfig;
@@ -694,10 +694,11 @@ async fn main() -> anyhow::Result<()> {
             let topic = &args.topic;
             let mut key_gen = key_gen.clone();
             let mut value_gen = value_gen.clone();
-            let producer: ThreadedProducer<DefaultProducerContext> = ClientConfig::new()
-                .set("bootstrap.servers", args.bootstrap_server.to_string())
-                .create()
-                .unwrap();
+            let producer: ThreadedProducer<kafka_util::client::MzClientContext> =
+                ClientConfig::new()
+                    .set("bootstrap.servers", args.bootstrap_server.to_string())
+                    .create_with_context(kafka_util::client::MzClientContext)
+                    .unwrap();
             let mut key_buf = vec![];
             let mut value_buf = vec![];
             let mut n = args.num_records / threads;

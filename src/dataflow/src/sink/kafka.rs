@@ -43,6 +43,7 @@ use dataflow_types::{
 use expr::GlobalId;
 use interchange::avro::{self, AvroEncoder, AvroSchemaGenerator};
 use interchange::encode::Encode;
+use kafka_util::client::MzClientContext;
 use ore::cast::CastFrom;
 use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 
@@ -209,7 +210,15 @@ impl SinkProducerContext {
     }
 }
 
-impl ClientContext for SinkProducerContext {}
+impl ClientContext for SinkProducerContext {
+    // rdkafka's ClientContext is a bit weird, so we are forced to forward here awkwardly
+    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        MzClientContext.log(level, fac, log_message)
+    }
+    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+        MzClientContext.error(error, reason)
+    }
+}
 impl ProducerContext for SinkProducerContext {
     type DeliveryOpaque = ();
 

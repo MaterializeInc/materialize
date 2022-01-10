@@ -32,6 +32,7 @@ postgres-util = { path = "../postgres-util" }
 protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 mz-protoc = { path = "../../src/protoc" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
+kafka-util = { path = "../kafka-util" }
 regex = "1.5.4"
 repr = { path = "../repr" }
 reqwest = "0.11.8"
