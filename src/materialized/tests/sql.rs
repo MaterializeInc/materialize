@@ -812,9 +812,12 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     let verify_rw_pair = move |rows: &[Row], expected_data: &str| -> bool {
         for (i, row) in rows.iter().enumerate() {
             match row.get::<_, Option<String>>("data") {
-                // Ensure all rows with data have the expected data, and that rows
-                // without data are only ever the last row.
-                Some(inner) => assert_eq!(inner, expected_data.to_owned()),
+                // Only verify if all rows have expected data
+                Some(inner) => {
+                    if &inner != expected_data {
+                        return false;
+                    }
+                }
                 // Only verify if row without data is last row
                 None => {
                     if i + 1 != rows.len() {
