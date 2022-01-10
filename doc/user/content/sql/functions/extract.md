@@ -8,13 +8,15 @@ menu:
 
 `EXTRACT` returns some time component from a time-based value, such as the year from a Timestamp.
 
+See [`date_part`](../date_part) for the traditional Ingres equivalent function.
+
 ## Signatures
 
 {{< diagram "func-extract.svg" >}}
 
-Parameter | Type                                                                                                                                                | Description
-----------|-----------------------------------------------------------------------------------------------------------------------------------------------------|------------
-_val_ | [`date`](../../types/date), [`time`](../../types/time), [`timestamp`](../../types/timestamp), [`timestamp with time zone`](../../types/timestamptz) | The value from which you want to extract a component.
+Parameter | Type                                                                                                                                                                                    | Description
+----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
+_val_ | [`date`](../../types/date), [`time`](../../types/time), [`timestamp`](../../types/timestamp), [`timestamp with time zone`](../../types/timestamptz), [`interval`](../../types/interval) | The value from which you want to extract a component.
 
 ### Arguments
 
@@ -42,7 +44,7 @@ decade  |  `DEC`, `DECS`, `DECADE`, `DECADES`
 
 ### Return value
 
-`EXTRACT` returns a [`float`](../../types/float) value.
+`EXTRACT` returns a [`numeric`](../../types/numeric) value.
 
 ## Examples
 

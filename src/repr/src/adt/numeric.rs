@@ -616,3 +616,22 @@ pub fn extract_typ_mod(typ_mod: &[u64]) -> Result<Option<u8>, anyhow::Error> {
         _ => unreachable!(),
     })
 }
+
+/// Used to do potentially lossy value-to-value conversions while consuming the input value. Useful
+/// for interoperability between Numeric and f64.
+pub trait LossyFrom<T>: Sized {
+    fn lossy_from(_: T) -> Self;
+}
+
+impl LossyFrom<i64> for f64 {
+    fn lossy_from(i: i64) -> Self {
+        i as f64
+    }
+}
+
+impl LossyFrom<i64> for Numeric {
+    // This is not actually lossy but has to conform to the f64 impl
+    fn lossy_from(i: i64) -> Self {
+        Numeric::from(i)
+    }
+}

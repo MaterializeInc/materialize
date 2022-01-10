@@ -16,6 +16,7 @@ use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
+use crate::adt::numeric::LossyFrom;
 
 /// An interval of time meant to express SQL intervals.
 ///
@@ -145,102 +146,111 @@ impl Interval {
     /// Computes the millennium part of the interval.
     ///
     /// The millennium part is the number of whole millennia in the interval. For example,
-    /// this function returns `3.0` for the interval `3400 years`.
-    pub fn millennia(&self) -> f64 {
-        (self.months / 12_000) as f64
+    /// this function returns `3` for the interval `3400 years`.
+    pub fn millennia(&self) -> i32 {
+        self.months / 12_000
     }
 
     /// Computes the century part of the interval.
     ///
     /// The century part is the number of whole centuries in the interval. For example,
-    /// this function returns `3.0` for the interval `340 years`.
-    pub fn centuries(&self) -> f64 {
-        (self.months / 1_200) as f64
+    /// this function returns `3` for the interval `340 years`.
+    pub fn centuries(&self) -> i32 {
+        self.months / 1_200
     }
 
     /// Computes the decade part of the interval.
     ///
     /// The decade part is the number of whole decades in the interval. For example,
-    /// this function returns `3.0` for the interval `34 years`.
-    pub fn decades(&self) -> f64 {
-        (self.months / 120) as f64
+    /// this function returns `3` for the interval `34 years`.
+    pub fn decades(&self) -> i32 {
+        self.months / 120
     }
 
     /// Computes the year part of the interval.
     ///
     /// The year part is the number of whole years in the interval. For example,
-    /// this function returns `3.0` for the interval `3 years 4 months`.
-    pub fn years(&self) -> f64 {
-        (self.months / 12) as f64
+    /// this function returns `3` for the interval `3 years 4 months`.
+    pub fn years(&self) -> i32 {
+        self.months / 12
     }
 
     /// Computes the quarter part of the interval.
     ///
     /// The quarter part is obtained from taking the number of whole months modulo 12,
     /// and assigning quarter #1 for months 0-2, #2 for 3-5, #3 for 6-8 and #4 for 9-11.
-    /// For example, this function returns `4.0` for the interval `11 months`.
-    pub fn quarters(&self) -> f64 {
-        ((self.months % 12) / 3 + 1) as f64
+    /// For example, this function returns `4` for the interval `11 months`.
+    pub fn quarters(&self) -> i32 {
+        (self.months % 12) / 3 + 1
     }
 
     /// Computes the month part of the interval.
     ///
     /// The month part is the number of whole months in the interval, modulo 12.
-    /// For example, this function returns `4.0` for the interval `3 years 4
+    /// For example, this function returns `4` for the interval `3 years 4
     /// months`.
-    pub fn months(&self) -> f64 {
-        (self.months % 12) as f64
+    pub fn months(&self) -> i32 {
+        self.months % 12
     }
 
     /// Computes the day part of the interval.
     ///
     /// The day part is the number of whole days in the interval. For example,
-    /// this function returns `5.0` for the interval `5 days 4 hours 3 minutes
+    /// this function returns `5` for the interval `5 days 4 hours 3 minutes
     /// 2.1 seconds`.
-    pub fn days(&self) -> f64 {
-        (self.dur_as_secs() / (60 * 60 * 24)) as f64
+    pub fn days(&self) -> i64 {
+        self.dur_as_secs() / (60 * 60 * 24)
     }
 
     /// Computes the hour part of the interval.
     ///
     /// The hour part is the number of whole hours in the interval, modulo 24.
-    /// For example, this function returns `4.0` for the interval `5 days 4
+    /// For example, this function returns `4` for the interval `5 days 4
     /// hours 3 minutes 2.1 seconds`.
-    pub fn hours(&self) -> f64 {
-        ((self.dur_as_secs() / (60 * 60)) % 24) as f64
+    pub fn hours(&self) -> i64 {
+        (self.dur_as_secs() / (60 * 60)) % 24
     }
 
     /// Computes the minute part of the interval.
     ///
     /// The minute part is the number of whole minutes in the interval, modulo
-    /// 60. For example, this function returns `3.0` for the interval `5 days 4
+    /// 60. For example, this function returns `3` for the interval `5 days 4
     /// hours 3 minutes 2.1 seconds`.
-    pub fn minutes(&self) -> f64 {
-        ((self.dur_as_secs() / 60) % 60) as f64
+    pub fn minutes(&self) -> i64 {
+        (self.dur_as_secs() / 60) % 60
     }
 
     /// Computes the second part of the interval.
     ///
     /// The second part is the number of fractional seconds in the interval,
     /// modulo 60.0.
-    pub fn seconds(&self) -> f64 {
-        (self.duration % 60_000_000_000) as f64 / 1e9
+    pub fn seconds<T>(&self) -> T
+    where
+        T: From<f64> + LossyFrom<i64> + std::ops::Div<Output = T>,
+    {
+        T::lossy_from((self.duration % 60_000_000_000) as i64) / T::from(1e9)
     }
 
     /// Computes the second part of the interval displayed in milliseconds.
     ///
     /// The second part is the number of fractional seconds in the interval,
     /// modulo 60.0.
-    pub fn milliseconds(&self) -> f64 {
-        (self.duration % 60_000_000_000) as f64 / 1e6
+    pub fn milliseconds<T>(&self) -> T
+    where
+        T: From<f64> + LossyFrom<i64> + std::ops::Div<Output = T>,
+    {
+        T::lossy_from((self.duration % 60_000_000_000) as i64) / T::from(1e6)
     }
 
     /// Computes the second part of the interval displayed in microseconds.
     ///
     /// The second part is the number of fractional seconds in the interval,
     /// modulo 60.0.
-    pub fn microseconds(&self) -> f64 {
-        (self.duration % 60_000_000_000) as f64 / 1e3
+    pub fn microseconds<T>(&self) -> T
+    where
+        T: From<f64> + LossyFrom<i64> + std::ops::Div<Output = T>,
+    {
+        T::lossy_from((self.duration % 60_000_000_000) as i64) / T::from(1e3)
     }
 
     /// Computes the nanosecond part of the interval.
@@ -249,11 +259,19 @@ impl Interval {
     }
 
     /// Computes the total number of seconds in the interval.
-    pub fn as_seconds(&self) -> f64 {
-        self.years() * 60.0 * 60.0 * 24.0 * 365.25
-            + self.months() * 60.0 * 60.0 * 24.0 * 30.0
-            + (self.dur_as_secs() as f64)
-            + f64::from(self.nanoseconds()) / 1e9
+    pub fn as_seconds<T>(&self) -> T
+    where
+        T: From<i32>
+            + From<f64>
+            + LossyFrom<i64>
+            + std::ops::Mul<Output = T>
+            + std::ops::Div<Output = T>
+            + std::ops::Add<Output = T>,
+    {
+        T::from(self.years() * 60 * 60 * 24) * T::from(365.25)
+            + T::from(self.months() * 60 * 60 * 24 * 30)
+            + T::lossy_from(self.dur_as_secs())
+            + T::from(self.nanoseconds()) / T::from(1e9)
     }
 
     /// Truncate the "head" of the interval, removing all time units greater than `f`.

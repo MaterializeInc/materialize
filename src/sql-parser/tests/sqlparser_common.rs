@@ -208,7 +208,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
                 AND CASE a27 WHEN a28 THEN a29 ELSE a30 END
                 AND a31 BETWEEN a32 AND a33
                 AND a34 COLLATE a35 = a36
-                AND EXTRACT(YEAR FROM a37)
+                AND DATE_PART('YEAR', a37)
                 AND (SELECT a38)
                 AND EXISTS (SELECT a39)
             FROM a40(a41) AS a42

@@ -554,7 +554,7 @@ ORDER BY
 | |   delta %0 %4.(#3) %3.(#1) %2.(#0) %1.(#0) %0.(#0)
 | Filter (#17 <= 1996-12-31), (#17 >= 1995-01-01), (((#41 = "FRANCE") && (#45 = "GERMANY")) || ((#41 = "GERMANY") && (#45 = "FRANCE")))
 | Project (#12, #13, #17, #41, #45)
-| Reduce group=(#3, #4, date_part_year_tstz(datetotstz(#2)))
+| Reduce group=(#3, #4, extract_year_d(#2))
 | | agg sum((#0 * (1 - #1)))
 
 Finish order_by=(#0 asc, #1 asc, #2 asc) limit=none offset=0 project=(#0..#3)
@@ -647,7 +647,7 @@ ORDER BY
 | |   delta %7 %5.(#2) %4.(#3) %3.(#1) %2.(#0) %0.(#0) %1.(#0) %6.(#0)
 | Filter (#58 = "AMERICA"), (#36 <= 1996-12-31), (#36 >= 1995-01-01), ("ECONOMY ANODIZED STEEL" = varchartostr(#4))
 | Project (#21, #22, #36, #54)
-| Reduce group=(date_part_year_tstz(datetotstz(#2)))
+| Reduce group=(extract_year_d(#2))
 | | agg sum(if (#3 = "BRAZIL") then {(#0 * (1 - #1))} else {0})
 | | agg sum((#0 * (1 - #1)))
 | Map (#1 / #2)
@@ -728,7 +728,7 @@ ORDER BY
 | |   delta %5 %1.(#3) %2.(#2) %3.(#0, #1) %0.(#0) %4.(#0)
 | Filter "^.*green.*$" ~(varchartostr(#1))
 | Project (#20..#22, #35, #41, #47)
-| Reduce group=(#5, date_part_year_tstz(datetotstz(#4)))
+| Reduce group=(#5, extract_year_d(#4))
 | | agg sum(((#1 * (1 - #2)) - (#3 * #0)))
 
 Finish order_by=(#0 asc, #1 desc) limit=none offset=0 project=(#0..#2)

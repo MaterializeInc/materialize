@@ -69,7 +69,7 @@ impl fmt::Display for DateTimeUnits {
             Self::IsoDayOfWeek => f.write_str("isodow"),
             Self::IsoDayOfYear => f.write_str("isodoy"),
             Self::Minute => f.write_str("minute"),
-            Self::Second => f.write_str(""),
+            Self::Second => f.write_str("seconds"),
             Self::Milliseconds => f.write_str("milliseconds"),
             Self::Microseconds => f.write_str("microseconds"),
             Self::Timezone => f.write_str("timezone"),

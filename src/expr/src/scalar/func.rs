@@ -36,7 +36,7 @@ use repr::adt::array::ArrayDimension;
 use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
-use repr::adt::numeric::{self, Numeric};
+use repr::adt::numeric::{self, LossyFrom, Numeric};
 use repr::adt::regex::Regex;
 use repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
@@ -1365,49 +1365,100 @@ fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
-/// A timestamp with only a time component.
+/// Common set of methods for time component.
 pub trait TimeLike: chrono::Timelike {
-    fn extract_hour(&self) -> f64 {
-        f64::from(self.hour())
+    fn extract_epoch<T>(&self) -> T
+    where
+        T: From<u32> + From<f64> + std::ops::Div<Output = T> + std::ops::Add<Output = T>,
+    {
+        T::from(self.hour() * 60 * 60 + self.minute() * 60) + self.extract_second::<T>()
     }
 
-    fn extract_minute(&self) -> f64 {
-        f64::from(self.minute())
-    }
-
-    fn extract_second(&self) -> f64 {
-        let s = f64::from(self.second());
-        let ns = f64::from(self.nanosecond()) / 1e9;
+    fn extract_second<T>(&self) -> T
+    where
+        T: From<u32> + From<f64> + std::ops::Div<Output = T> + std::ops::Add<Output = T>,
+    {
+        let s = T::from(self.second());
+        let ns = T::from(self.nanosecond()) / T::from(1e9);
         s + ns
     }
 
-    fn extract_millisecond(&self) -> f64 {
-        let s = f64::from(self.second() * 1_000);
-        let ns = f64::from(self.nanosecond()) / 1e6;
+    fn extract_millisecond<T>(&self) -> T
+    where
+        T: From<u32> + From<f64> + std::ops::Div<Output = T> + std::ops::Add<Output = T>,
+    {
+        let s = T::from(self.second() * 1_000);
+        let ns = T::from(self.nanosecond()) / T::from(1e6);
         s + ns
     }
 
-    fn extract_microsecond(&self) -> f64 {
-        let s = f64::from(self.second() * 1_000_000);
-        let ns = f64::from(self.nanosecond()) / 1e3;
+    fn extract_microsecond<T>(&self) -> T
+    where
+        T: From<u32> + From<f64> + std::ops::Div<Output = T> + std::ops::Add<Output = T>,
+    {
+        let s = T::from(self.second() * 1_000_000);
+        let ns = T::from(self.nanosecond()) / T::from(1e3);
         s + ns
     }
 }
 
 impl<T> TimeLike for T where T: chrono::Timelike {}
 
+/// Common set of methods for date component.
+pub trait DateLike: chrono::Datelike {
+    fn extract_epoch(&self) -> i64 {
+        let naive_date =
+            NaiveDate::from_ymd(self.year(), self.month(), self.day()).and_hms(0, 0, 0);
+        naive_date.timestamp() + naive_date.timestamp_subsec_micros() as i64
+    }
+
+    fn millennium(&self) -> i32 {
+        (self.year() + if self.year() > 0 { 999 } else { -1_000 }) / 1_000
+    }
+
+    fn century(&self) -> i32 {
+        (self.year() + if self.year() > 0 { 99 } else { -100 }) / 100
+    }
+
+    fn decade(&self) -> i32 {
+        self.year().div_euclid(10)
+    }
+
+    fn quarter(&self) -> f64 {
+        (f64::from(self.month()) / 3.0).ceil()
+    }
+
+    /// Extract the iso week of the year
+    ///
+    /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
+    /// 1 about half of the time
+    fn week(&self) -> u32 {
+        self.iso_week().week()
+    }
+
+    fn day_of_week(&self) -> u32 {
+        self.weekday().num_days_from_sunday()
+    }
+
+    fn iso_day_of_week(&self) -> u32 {
+        self.weekday().number_from_monday()
+    }
+}
+
+impl<T> DateLike for T where T: chrono::Datelike {}
+
 /// A timestamp with both a date and a time component, but not necessarily a
 /// timezone component.
 pub trait TimestampLike:
     Clone
     + PartialOrd
-    + chrono::Datelike
     + std::ops::Add<Duration, Output = Self>
     + std::ops::Sub<Duration, Output = Self>
     + std::ops::Sub<Output = Duration>
     + for<'a> Into<Datum<'a>>
     + for<'a> TryFrom<Datum<'a>, Error = ()>
     + TimeLike
+    + DateLike
 {
     fn new(date: NaiveDate, time: NaiveTime) -> Self;
 
@@ -1431,56 +1482,15 @@ pub trait TimestampLike:
 
     fn timestamp_subsec_micros(&self) -> u32;
 
-    fn extract_epoch(&self) -> f64 {
-        self.timestamp() as f64 + (self.timestamp_subsec_micros() as f64) / 1e6
-    }
-
-    fn extract_year(&self) -> f64 {
-        f64::from(self.year())
-    }
-
-    fn extract_quarter(&self) -> f64 {
-        (f64::from(self.month()) / 3.0).ceil()
-    }
-
-    fn extract_month(&self) -> f64 {
-        f64::from(self.month())
-    }
-
-    fn extract_day(&self) -> f64 {
-        f64::from(self.day())
-    }
-
-    fn extract_millennium(&self) -> f64 {
-        f64::from((self.year() + if self.year() > 0 { 999 } else { -1_000 }) / 1_000)
-    }
-
-    fn extract_century(&self) -> f64 {
-        f64::from((self.year() + if self.year() > 0 { 99 } else { -100 }) / 100)
-    }
-
-    fn extract_decade(&self) -> f64 {
-        f64::from(self.year().div_euclid(10))
-    }
-
-    /// Extract the iso week of the year
-    ///
-    /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
-    /// 1 about half of the time
-    fn extract_week(&self) -> f64 {
-        f64::from(self.iso_week().week())
-    }
-
-    fn extract_dayofyear(&self) -> f64 {
-        f64::from(self.ordinal())
-    }
-
-    fn extract_dayofweek(&self) -> f64 {
-        f64::from(self.weekday().num_days_from_sunday())
-    }
-
-    fn extract_isodayofweek(&self) -> f64 {
-        f64::from(self.weekday().number_from_monday())
+    fn extract_epoch<T>(&self) -> T
+    where
+        T: From<u32>
+            + From<f64>
+            + LossyFrom<i64>
+            + std::ops::Div<Output = T>
+            + std::ops::Add<Output = T>,
+    {
+        T::lossy_from(self.timestamp()) + T::from(self.timestamp_subsec_micros()) / T::from(1e6)
     }
 
     fn truncate_microseconds(&self) -> Self {
@@ -1715,32 +1725,50 @@ impl TimestampLike for chrono::DateTime<chrono::Utc> {
     }
 }
 
-fn date_part_interval<'a>(a: Datum<'a>, interval: Interval) -> Result<Datum<'a>, EvalError> {
+fn extract_interval(a: Datum, interval: Interval) -> Result<Datum, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_part_interval_inner(units, interval),
+        Ok(units) => date_part_interval_inner::<Numeric>(units, interval),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
 
-fn date_part_interval_inner(
+fn date_part_interval(a: Datum, interval: Interval) -> Result<Datum, EvalError> {
+    let units = a.unwrap_str();
+    match units.parse() {
+        Ok(units) => date_part_interval_inner::<f64>(units, interval),
+        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
+    }
+}
+
+fn date_part_interval_inner<T>(
     units: DateTimeUnits,
     interval: Interval,
-) -> Result<Datum<'static>, EvalError> {
+) -> Result<Datum<'static>, EvalError>
+where
+    T: From<u32>
+        + From<f64>
+        + From<i32>
+        + LossyFrom<i64>
+        + std::ops::Mul<Output = T>
+        + std::ops::Div<Output = T>
+        + std::ops::Add<Output = T>
+        + Into<Datum<'static>>,
+{
     match units {
-        DateTimeUnits::Epoch => Ok(interval.as_seconds().into()),
-        DateTimeUnits::Year => Ok(interval.years().into()),
-        DateTimeUnits::Day => Ok(interval.days().into()),
-        DateTimeUnits::Hour => Ok(interval.hours().into()),
-        DateTimeUnits::Minute => Ok(interval.minutes().into()),
-        DateTimeUnits::Second => Ok(interval.seconds().into()),
-        DateTimeUnits::Millennium => Ok(interval.millennia().into()),
-        DateTimeUnits::Century => Ok(interval.centuries().into()),
-        DateTimeUnits::Decade => Ok(interval.decades().into()),
-        DateTimeUnits::Quarter => Ok(interval.quarters().into()),
-        DateTimeUnits::Month => Ok(interval.months().into()),
-        DateTimeUnits::Milliseconds => Ok(interval.milliseconds().into()),
-        DateTimeUnits::Microseconds => Ok(interval.microseconds().into()),
+        DateTimeUnits::Epoch => Ok(interval.as_seconds::<T>().into()),
+        DateTimeUnits::Millennium => Ok(T::from(interval.millennia()).into()),
+        DateTimeUnits::Century => Ok(T::from(interval.centuries()).into()),
+        DateTimeUnits::Decade => Ok(T::from(interval.decades()).into()),
+        DateTimeUnits::Year => Ok(T::from(interval.years()).into()),
+        DateTimeUnits::Quarter => Ok(T::from(interval.quarters()).into()),
+        DateTimeUnits::Month => Ok(T::from(interval.months()).into()),
+        DateTimeUnits::Day => Ok(T::lossy_from(interval.days()).into()),
+        DateTimeUnits::Hour => Ok(T::lossy_from(interval.hours()).into()),
+        DateTimeUnits::Minute => Ok(T::lossy_from(interval.minutes()).into()),
+        DateTimeUnits::Second => Ok(interval.seconds::<T>().into()),
+        DateTimeUnits::Milliseconds => Ok(interval.milliseconds::<T>().into()),
+        DateTimeUnits::Microseconds => Ok(interval.microseconds::<T>().into()),
         DateTimeUnits::Week
         | DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
@@ -1755,40 +1783,56 @@ fn date_part_interval_inner(
     }
 }
 
-fn date_part_time<'a, T>(a: Datum<'a>, time: T) -> Result<Datum<'a>, EvalError>
+fn extract_time<T>(a: Datum, time: T) -> Result<Datum, EvalError>
 where
     T: TimeLike,
 {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_part_time_inner(units, time),
+        Ok(units) => date_part_time_inner::<_, Numeric>(units, time),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
 
-fn date_part_time_inner<'a, T>(units: DateTimeUnits, time: T) -> Result<Datum<'a>, EvalError>
+fn date_part_time<T>(a: Datum, time: T) -> Result<Datum, EvalError>
 where
     T: TimeLike,
 {
+    let units = a.unwrap_str();
+    match units.parse() {
+        Ok(units) => date_part_time_inner::<_, f64>(units, time),
+        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
+    }
+}
+
+fn date_part_time_inner<'a, T, U>(units: DateTimeUnits, time: T) -> Result<Datum<'a>, EvalError>
+where
+    T: TimeLike,
+    U: From<u32>
+        + From<f64>
+        + std::ops::Div<Output = U>
+        + std::ops::Add<Output = U>
+        + Into<Datum<'a>>,
+{
     match units {
-        DateTimeUnits::Hour => Ok(time.extract_hour().into()),
-        DateTimeUnits::Minute => Ok(time.extract_minute().into()),
-        DateTimeUnits::Second => Ok(time.extract_second().into()),
-        DateTimeUnits::Milliseconds => Ok(time.extract_millisecond().into()),
-        DateTimeUnits::Microseconds => Ok(time.extract_microsecond().into()),
-        DateTimeUnits::Epoch
-        | DateTimeUnits::Year
-        | DateTimeUnits::Week
-        | DateTimeUnits::Day
-        | DateTimeUnits::Millennium
+        DateTimeUnits::Epoch => Ok(time.extract_epoch::<U>().into()),
+        DateTimeUnits::Hour => Ok(U::from(time.hour()).into()),
+        DateTimeUnits::Minute => Ok(U::from(time.minute()).into()),
+        DateTimeUnits::Second => Ok(time.extract_second::<U>().into()),
+        DateTimeUnits::Milliseconds => Ok(time.extract_millisecond::<U>().into()),
+        DateTimeUnits::Microseconds => Ok(time.extract_microsecond::<U>().into()),
+        DateTimeUnits::Millennium
         | DateTimeUnits::Century
         | DateTimeUnits::Decade
+        | DateTimeUnits::Year
         | DateTimeUnits::Quarter
         | DateTimeUnits::Month
-        | DateTimeUnits::DayOfWeek
+        | DateTimeUnits::Week
+        | DateTimeUnits::Day
         | DateTimeUnits::DayOfYear
-        | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedUnits(
+        | DateTimeUnits::DayOfWeek
+        | DateTimeUnits::IsoDayOfYear
+        | DateTimeUnits::IsoDayOfWeek => Err(EvalError::UnsupportedUnits(
             format!("{}", units),
             "time".to_string(),
         )),
@@ -1801,39 +1845,103 @@ where
     }
 }
 
-fn date_part_timestamp<'a, T>(a: Datum<'a>, ts: T) -> Result<Datum<'a>, EvalError>
+fn extract_timestamp<T>(a: Datum, ts: T) -> Result<Datum, EvalError>
 where
     T: TimestampLike,
 {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => date_part_timestamp_inner(units, ts),
+        Ok(units) => date_part_timestamp_inner::<_, Numeric>(units, ts),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
 
-fn date_part_timestamp_inner<'a, T>(units: DateTimeUnits, ts: T) -> Result<Datum<'a>, EvalError>
+fn date_part_timestamp<T>(a: Datum, ts: T) -> Result<Datum, EvalError>
 where
     T: TimestampLike,
 {
+    let units = a.unwrap_str();
+    match units.parse() {
+        Ok(units) => date_part_timestamp_inner::<_, f64>(units, ts),
+        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
+    }
+}
+
+fn date_part_timestamp_inner<'a, T, U>(units: DateTimeUnits, ts: T) -> Result<Datum<'a>, EvalError>
+where
+    T: TimestampLike,
+    U: From<u32>
+        + From<f64>
+        + From<i32>
+        + LossyFrom<i64>
+        + std::ops::Div<Output = U>
+        + std::ops::Add<Output = U>
+        + Into<Datum<'a>>,
+{
     match units {
-        DateTimeUnits::Epoch => Ok(ts.extract_epoch().into()),
-        DateTimeUnits::Year => Ok(ts.extract_year().into()),
-        DateTimeUnits::Quarter => Ok(ts.extract_quarter().into()),
-        DateTimeUnits::Week => Ok(ts.extract_week().into()),
-        DateTimeUnits::Day => Ok(ts.extract_day().into()),
-        DateTimeUnits::DayOfWeek => Ok(ts.extract_dayofweek().into()),
-        DateTimeUnits::DayOfYear => Ok(ts.extract_dayofyear().into()),
-        DateTimeUnits::IsoDayOfWeek => Ok(ts.extract_isodayofweek().into()),
-        DateTimeUnits::Hour => Ok(ts.extract_hour().into()),
-        DateTimeUnits::Minute => Ok(ts.extract_minute().into()),
-        DateTimeUnits::Second => Ok(ts.extract_second().into()),
-        DateTimeUnits::Month => Ok(ts.extract_month().into()),
-        DateTimeUnits::Milliseconds => Ok(ts.extract_millisecond().into()),
-        DateTimeUnits::Microseconds => Ok(ts.extract_microsecond().into()),
-        DateTimeUnits::Millennium => Ok(ts.extract_millennium().into()),
-        DateTimeUnits::Century => Ok(ts.extract_century().into()),
-        DateTimeUnits::Decade => Ok(ts.extract_decade().into()),
+        DateTimeUnits::Epoch => Ok(TimestampLike::extract_epoch::<U>(&ts).into()),
+        DateTimeUnits::Millennium => Ok(U::from(ts.millennium()).into()),
+        DateTimeUnits::Century => Ok(U::from(ts.century()).into()),
+        DateTimeUnits::Decade => Ok(U::from(ts.decade()).into()),
+        DateTimeUnits::Year => Ok(U::from(ts.year()).into()),
+        DateTimeUnits::Quarter => Ok(U::from(ts.quarter()).into()),
+        DateTimeUnits::Week => Ok(U::from(ts.week()).into()),
+        DateTimeUnits::Month => Ok(U::from(ts.month()).into()),
+        DateTimeUnits::Day => Ok(U::from(ts.day()).into()),
+        DateTimeUnits::DayOfWeek => Ok(U::from(ts.day_of_week()).into()),
+        DateTimeUnits::DayOfYear => Ok(U::from(ts.ordinal()).into()),
+        DateTimeUnits::IsoDayOfWeek => Ok(U::from(ts.iso_day_of_week()).into()),
+        DateTimeUnits::Hour => Ok(U::from(ts.hour()).into()),
+        DateTimeUnits::Minute => Ok(U::from(ts.minute()).into()),
+        DateTimeUnits::Second => Ok(ts.extract_second::<U>().into()),
+        DateTimeUnits::Milliseconds => Ok(ts.extract_millisecond::<U>().into()),
+        DateTimeUnits::Microseconds => Ok(ts.extract_microsecond::<U>().into()),
+        DateTimeUnits::Timezone
+        | DateTimeUnits::TimezoneHour
+        | DateTimeUnits::TimezoneMinute
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+            feature: format!("'{}' timestamp units", units),
+            issue_no: None,
+        }),
+    }
+}
+
+fn extract_date<T>(a: Datum, date: T) -> Result<Datum, EvalError>
+where
+    T: DateLike,
+{
+    let units = a.unwrap_str();
+    match units.parse() {
+        Ok(units) => extract_date_inner(units, date),
+        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
+    }
+}
+
+fn extract_date_inner<'a, T>(units: DateTimeUnits, date: T) -> Result<Datum<'a>, EvalError>
+where
+    T: DateLike,
+{
+    match units {
+        DateTimeUnits::Epoch => Ok(Numeric::from(date.extract_epoch()).into()),
+        DateTimeUnits::Millennium => Ok(Numeric::from(date.millennium()).into()),
+        DateTimeUnits::Century => Ok(Numeric::from(date.century()).into()),
+        DateTimeUnits::Decade => Ok(Numeric::from(date.decade()).into()),
+        DateTimeUnits::Year => Ok(Numeric::from(date.year()).into()),
+        DateTimeUnits::Quarter => Ok(Numeric::from(date.quarter()).into()),
+        DateTimeUnits::Week => Ok(Numeric::from(date.week()).into()),
+        DateTimeUnits::Month => Ok(Numeric::from(date.month()).into()),
+        DateTimeUnits::Day => Ok(Numeric::from(date.day()).into()),
+        DateTimeUnits::DayOfWeek => Ok(Numeric::from(date.day_of_week()).into()),
+        DateTimeUnits::DayOfYear => Ok(Numeric::from(date.ordinal()).into()),
+        DateTimeUnits::IsoDayOfWeek => Ok(Numeric::from(date.iso_day_of_week()).into()),
+        DateTimeUnits::Hour
+        | DateTimeUnits::Minute
+        | DateTimeUnits::Second
+        | DateTimeUnits::Milliseconds
+        | DateTimeUnits::Microseconds => Err(EvalError::UnsupportedUnits(
+            format!("{}", units),
+            "date".to_string(),
+        )),
         DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
@@ -2147,6 +2255,11 @@ pub enum BinaryFunc {
     ToCharTimestampTz,
     DateBinTimestamp,
     DateBinTimestampTz,
+    ExtractInterval,
+    ExtractTime,
+    ExtractTimestamp,
+    ExtractTimestampTz,
+    ExtractDate,
     DatePartInterval,
     DatePartTime,
     DatePartTimestamp,
@@ -2348,6 +2461,21 @@ impl BinaryFunc {
                     DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
                 ))
             }
+            BinaryFunc::ExtractInterval => {
+                eager!(|a, b: Datum| extract_interval(a, b.unwrap_interval()))
+            }
+            BinaryFunc::ExtractTime => {
+                eager!(|a, b: Datum| extract_time(a, b.unwrap_time()))
+            }
+            BinaryFunc::ExtractTimestamp => {
+                eager!(|a, b: Datum| extract_timestamp(a, b.unwrap_timestamp()))
+            }
+            BinaryFunc::ExtractTimestampTz => {
+                eager!(|a, b: Datum| extract_timestamp(a, b.unwrap_timestamptz()))
+            }
+            BinaryFunc::ExtractDate => {
+                eager!(|a, b: Datum| extract_date(a, b.unwrap_date()))
+            }
             BinaryFunc::DatePartInterval => {
                 eager!(|a, b: Datum| date_part_interval(a, b.unwrap_interval()))
             }
@@ -2521,6 +2649,10 @@ impl BinaryFunc {
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
                 ScalarType::Timestamp.nullable(in_nullable)
+            }
+
+            ExtractInterval | ExtractTime | ExtractTimestamp | ExtractTimestampTz | ExtractDate => {
+                ScalarType::Numeric { scale: None }.nullable(true)
             }
 
             DatePartInterval | DatePartTime | DatePartTimestamp | DatePartTimestampTz => {
@@ -2804,6 +2936,11 @@ impl BinaryFunc {
             | ToCharTimestampTz
             | DateBinTimestamp
             | DateBinTimestampTz
+            | ExtractInterval
+            | ExtractTime
+            | ExtractTimestamp
+            | ExtractTimestampTz
+            | ExtractDate
             | DatePartInterval
             | DatePartTime
             | DatePartTimestamp
@@ -2944,6 +3081,11 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
             BinaryFunc::DateBinTimestamp => f.write_str("bin_unix_epoch_timestamp"),
             BinaryFunc::DateBinTimestampTz => f.write_str("bin_unix_epoch_timestamptz"),
+            BinaryFunc::ExtractInterval => f.write_str("extractiv"),
+            BinaryFunc::ExtractTime => f.write_str("extractt"),
+            BinaryFunc::ExtractTimestamp => f.write_str("extractts"),
+            BinaryFunc::ExtractTimestampTz => f.write_str("extracttstz"),
+            BinaryFunc::ExtractDate => f.write_str("extractd"),
             BinaryFunc::DatePartInterval => f.write_str("date_partiv"),
             BinaryFunc::DatePartTime => f.write_str("date_partt"),
             BinaryFunc::DatePartTimestamp => f.write_str("date_partts"),
@@ -3256,6 +3398,11 @@ pub enum UnaryFunc {
     CharLength,
     IsRegexpMatch(Regex),
     RegexpMatch(Regex),
+    ExtractInterval(DateTimeUnits),
+    ExtractTime(DateTimeUnits),
+    ExtractTimestamp(DateTimeUnits),
+    ExtractTimestampTz(DateTimeUnits),
+    ExtractDate(DateTimeUnits),
     DatePartInterval(DateTimeUnits),
     DatePartTime(DateTimeUnits),
     DatePartTimestamp(DateTimeUnits),
@@ -3632,10 +3779,25 @@ impl UnaryFunc {
             CharLength => char_length(a),
             IsRegexpMatch(regex) => Ok(is_regexp_match_static(a, &regex)),
             RegexpMatch(regex) => regexp_match_static(a, temp_storage, &regex),
-            DatePartInterval(units) => date_part_interval_inner(*units, a.unwrap_interval()),
-            DatePartTime(units) => date_part_time_inner(*units, a.unwrap_time()),
-            DatePartTimestamp(units) => date_part_timestamp_inner(*units, a.unwrap_timestamp()),
-            DatePartTimestampTz(units) => date_part_timestamp_inner(*units, a.unwrap_timestamptz()),
+            ExtractInterval(units) => {
+                date_part_interval_inner::<Numeric>(*units, a.unwrap_interval())
+            }
+            ExtractTime(units) => date_part_time_inner::<_, Numeric>(*units, a.unwrap_time()),
+            ExtractTimestamp(units) => {
+                date_part_timestamp_inner::<_, Numeric>(*units, a.unwrap_timestamp())
+            }
+            ExtractTimestampTz(units) => {
+                date_part_timestamp_inner::<_, Numeric>(*units, a.unwrap_timestamptz())
+            }
+            ExtractDate(units) => extract_date_inner(*units, a.unwrap_date()),
+            DatePartInterval(units) => date_part_interval_inner::<f64>(*units, a.unwrap_interval()),
+            DatePartTime(units) => date_part_time_inner::<_, f64>(*units, a.unwrap_time()),
+            DatePartTimestamp(units) => {
+                date_part_timestamp_inner::<_, f64>(*units, a.unwrap_timestamp())
+            }
+            DatePartTimestampTz(units) => {
+                date_part_timestamp_inner::<_, f64>(*units, a.unwrap_timestamptz())
+            }
             DateTruncTimestamp(units) => date_trunc_inner(*units, a.unwrap_timestamp()),
             DateTruncTimestampTz(units) => date_trunc_inner(*units, a.unwrap_timestamptz()),
             TimezoneTimestamp(tz) => timezone_timestamp(*tz, a.unwrap_timestamp()),
@@ -3852,6 +4014,12 @@ impl UnaryFunc {
             CastList1ToList2 { return_ty, .. } => {
                 return_ty.default_embedded_value().nullable(false)
             }
+
+            ExtractInterval(_)
+            | ExtractTime(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | ExtractDate(_) => ScalarType::Numeric { scale: None }.nullable(nullable),
 
             DatePartInterval(_)
             | DatePartTime(_)
@@ -4075,6 +4243,11 @@ impl UnaryFunc {
             TimezoneTimestamp(_) => false,
             CastList1ToList2 { .. } | CastInPlace { .. } => false,
             JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
+            ExtractInterval(_)
+            | ExtractTime(_)
+            | ExtractTimestamp(_)
+            | ExtractTimestampTz(_)
+            | ExtractDate(_) => false,
             DatePartInterval(_)
             | DatePartTime(_)
             | DatePartTimestamp(_)
@@ -4320,6 +4493,11 @@ impl UnaryFunc {
             ByteLengthString => f.write_str("octet_length"),
             IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
             RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
+            ExtractInterval(units) => write!(f, "extract_{}_iv", units),
+            ExtractTime(units) => write!(f, "extract_{}_t", units),
+            ExtractTimestamp(units) => write!(f, "extract_{}_ts", units),
+            ExtractTimestampTz(units) => write!(f, "extract_{}_tstz", units),
+            ExtractDate(units) => write!(f, "extract_{}_d", units),
             DatePartInterval(units) => write!(f, "date_part_{}_iv", units),
             DatePartTime(units) => write!(f, "date_part_{}_t", units),
             DatePartTimestamp(units) => write!(f, "date_part_{}_ts", units),
