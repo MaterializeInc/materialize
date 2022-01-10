@@ -144,6 +144,10 @@ enum DeploymentsCommand {
         #[clap(long)]
         disable_user_indexes: Option<bool>,
 
+        /// Disable materialized entirely, for recovering from catalog backups.
+        #[clap(long, hide = true)]
+        catalog_restore_mode: Option<bool>,
+
         /// Extra arguments to provide to materialized.
         #[clap(long, allow_hyphen_values = true, multiple_values = true)]
         materialized_extra_args: Option<Vec<String>>,
@@ -179,6 +183,10 @@ enum DeploymentsCommand {
         /// Disable user-created indexes (used for debugging).
         #[clap(long)]
         disable_user_indexes: Option<bool>,
+
+        /// Disable materialized entirely, for recovering from catalog backups.
+        #[clap(long, hide = true)]
+        catalog_restore_mode: Option<bool>,
 
         /// Extra arguments to provide to materialized. Defaults to the
         /// currently set extra arguments.
@@ -304,6 +312,7 @@ async fn handle_deployment_operations(
             size,
             storage_mb,
             disable_user_indexes,
+            catalog_restore_mode,
             materialized_extra_args,
             mz_version,
             tailscale_auth_key,
@@ -316,6 +325,7 @@ async fn handle_deployment_operations(
                     size: size.map(Box::new),
                     storage_mb,
                     disable_user_indexes,
+                    catalog_restore_mode,
                     materialized_extra_args,
                     mz_version,
                     enable_tailscale: Some(tailscale_auth_key.is_some()),
@@ -334,6 +344,7 @@ async fn handle_deployment_operations(
             name,
             size,
             disable_user_indexes,
+            catalog_restore_mode,
             materialized_extra_args,
             mz_version,
             remove_tailscale,
@@ -352,6 +363,7 @@ async fn handle_deployment_operations(
                     size: size.map(Box::new),
                     storage_mb: None,
                     disable_user_indexes,
+                    catalog_restore_mode,
                     materialized_extra_args,
                     mz_version,
                     enable_tailscale,
