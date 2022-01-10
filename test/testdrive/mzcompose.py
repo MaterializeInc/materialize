@@ -38,7 +38,7 @@ SERVICES = [
     Testdrive(),
 ]
 
-tests = os.getenv("TD_TEST", "*.td esoteric/*.td")
+tests = "kafka-exactly-once-sink.td" #os.getenv("TD_TEST", "*.td esoteric/*.td")
 tests_ci = tests + " esoteric/pubnub/pubnub.td"
 aws_localstack = "--aws-endpoint=http://localstack:4566"
 aws_amazon = "--aws-region=us-east-2"
