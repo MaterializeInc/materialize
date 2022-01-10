@@ -264,7 +264,7 @@ impl Action for AddBucketNotifications {
             .sqs_client
             .get_queue_attributes()
             .queue_url(&queue_url)
-            .attribute_names("QueueArn")
+            .attribute_names(QueueAttributeName::QueueArn)
             .send()
             .await
             .map_err(|e| format!("getting queue {} attributes: {}", queue, e))?
@@ -279,7 +279,7 @@ impl Action for AddBucketNotifications {
             .set_queue_attributes()
             .queue_url(&queue_url)
             .attributes(
-                "Policy",
+                QueueAttributeName::Policy,
                 allow_s3_policy(&queue_arn, &bucket, &state.aws_account),
             )
             .send()
