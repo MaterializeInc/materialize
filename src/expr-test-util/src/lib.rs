@@ -23,6 +23,8 @@ use mz_ore::str::separated;
 use mz_repr::{ColumnType, GlobalId, RelationType, Row, ScalarType};
 use mz_repr_test_util::*;
 
+/// Contains the type information required to build a [MirRelationExpr] and
+/// all types it depends on.
 pub static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
     let mut rti = ReflectedTypeInfo::default();
     EvalError::add_to_reflected_type_info(&mut rti);
@@ -30,7 +32,7 @@ pub static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
     rti
 });
 
-/// Builds a `MirScalarExpr` from a string.
+/// Builds a [MirScalarExpr] from a string.
 ///
 /// See [mz_lowertest::to_json] for the syntax.
 pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
@@ -42,7 +44,7 @@ pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
     )
 }
 
-/// Builds a `MirRelationExpr` from a string.
+/// Builds a [MirRelationExpr] from a string.
 ///
 /// See [mz_lowertest::to_json] for the syntax.
 pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, String> {
@@ -54,10 +56,10 @@ pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, Stri
     )
 }
 
-/// Pretty-print the MirRelationExpr.
+/// Pretty-print the [MirRelationExpr].
 ///
 /// If format contains "types", then add types to the pretty-printed
-/// `MirRelationExpr`.
+/// [MirRelationExpr].
 pub fn generate_explanation(
     humanizer: &dyn ExprHumanizer,
     rel: &MirRelationExpr,
@@ -72,12 +74,12 @@ pub fn generate_explanation(
     explanation.to_string()
 }
 
-/// Turns the json version of a MirRelationExpr into the [mz_lowertest::to_json]
+/// Turns the json version of a [MirRelationExpr] into the [mz_lowertest::to_json]
 /// syntax.
 ///
 /// The return value is a tuple of:
-/// 1. The translated MirRelationExpr.
-/// 2. The commands to register sources referenced by the MirRelationExpr with
+/// 1. The translated [MirRelationExpr].
+/// 2. The commands to register sources referenced by the [MirRelationExpr] with
 ///    the test catalog.
 pub fn json_to_spec(rel_json: &str, catalog: &TestCatalog) -> (String, Vec<String>) {
     let mut ctx = MirRelationExprDeserializeContext::new(&catalog);
@@ -156,7 +158,7 @@ impl<'a> TestCatalog {
     /// Handles instructions to modify the catalog.
     ///
     /// Currently supported commands:
-    /// * `(defsource [types_of_cols] [[optional_sets_of_key_cols]])`
+    /// * `(defsource [types_of_cols] [[optional_sets_of_key_cols]])` -
     ///   insert a source into the catalog.
     pub fn handle_test_command(&mut self, spec: &str) -> Result<(), String> {
         let mut stream_iter = tokenize(spec)?.into_iter();
@@ -389,16 +391,16 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
     }
 }
 
-/// Extends the test case syntax to support `MirRelationExpr`s
+/// Extends the test case syntax to support [MirRelationExpr]s
 ///
 /// A new context should be created for the deserialization of each
-/// `MirRelationExpr` because the context stores state local to
-/// each `MirRelationExpr`.
+/// [MirRelationExpr] because the context stores state local to
+/// each [MirRelationExpr].
 ///
 /// Includes all the test case syntax extensions to support
-/// `MirScalarExpr`s.
+/// [MirScalarExpr]s.
 ///
-/// The following variants of `MirRelationExpr` have non-standard syntax:
+/// The following variants of [MirRelationExpr] have non-standard syntax:
 /// Let -> the syntax is `(let x <value> <body>)` where x is an ident that
 ///        should not match any existing ident in any Let statement in
 ///        `<value>`.
