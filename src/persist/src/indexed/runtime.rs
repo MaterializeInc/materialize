@@ -92,7 +92,7 @@ where
 {
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
-    let metrics = Metrics::register_with(reg);
+    let metrics = Arc::new(Metrics::register_with(reg));
 
     // Any usage of S3Blob requires a runtime context to be set. `Indexed::new`
     // use the blob impl to start the recovery process, so make sure this stays
@@ -183,7 +183,7 @@ struct RuntimeHandles {
 struct RuntimeCore {
     handles: Mutex<Option<RuntimeHandles>>,
     tx: crossbeam_channel::Sender<Cmd>,
-    metrics: Metrics,
+    metrics: Arc<Metrics>,
 }
 
 impl RuntimeCore {
@@ -815,7 +815,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
 struct RuntimeImpl<L: Log, B: Blob> {
     indexed: Indexed<L, B>,
     rx: crossbeam_channel::Receiver<Cmd>,
-    metrics: Metrics,
+    metrics: Arc<Metrics>,
     prev_step: Instant,
     min_step_interval: Duration,
 }
@@ -857,7 +857,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         config: RuntimeConfig,
         indexed: Indexed<L, B>,
         rx: crossbeam_channel::Receiver<Cmd>,
-        metrics: Metrics,
+        metrics: Arc<Metrics>,
     ) -> Self {
         RuntimeImpl {
             indexed,

@@ -194,7 +194,7 @@ mod tests {
     fn compact_trace() -> Result<(), Error> {
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
-            Metrics::default(),
+            Arc::new(Metrics::default()),
             MemRegistry::new().blob_no_reentrance()?,
         );
         let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
@@ -263,7 +263,7 @@ mod tests {
     fn compact_trace_errors() -> Result<(), Error> {
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
-            Metrics::default(),
+            Arc::new(Metrics::default()),
             MemRegistry::new().blob_no_reentrance()?,
         );
         let maintainer = Maintainer::new(blob, Arc::new(Runtime::new()?));

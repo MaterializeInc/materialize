@@ -23,6 +23,7 @@ use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::ops::Range;
+use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::trace::Description;
@@ -143,7 +144,7 @@ pub struct Indexed<L: Log, B: Blob> {
     blob: BlobCache<B>,
     maintainer: Maintainer<B>,
     listeners: HashMap<Id, Vec<crossbeam_channel::Sender<ListenEvent>>>,
-    metrics: Metrics,
+    metrics: Arc<Metrics>,
     state: AppliedState,
     pending: Option<Pending>,
 }
@@ -171,7 +172,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         mut log: L,
         mut blob: BlobCache<B>,
         maintainer: Maintainer<B>,
-        metrics: Metrics,
+        metrics: Arc<Metrics>,
     ) -> Result<Self, Error> {
         let meta = blob
             .get_meta()
