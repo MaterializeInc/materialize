@@ -160,7 +160,12 @@ impl DeltaJoinPlan {
                     })
                     .collect::<Vec<_>>();
 
-                let thinned_stream_arity = unthinned_stream_arity - stream_key.iter().filter_map(MirScalarExpr::as_column).collect::<HashSet<_>>().len();
+                let thinned_stream_arity = unthinned_stream_arity
+                    - stream_key
+                        .iter()
+                        .filter_map(MirScalarExpr::as_column)
+                        .collect::<HashSet<_>>()
+                        .len();
 
                 // Introduce new columns and expressions they enable. Form a new closure.
                 let closure = join_build_state.add_columns(
