@@ -331,7 +331,7 @@ where
                         let mut time = cap.time().clone();
                         time.advance_by(as_of_frontier.borrow());
                         if key.is_none() {
-                            error!("Encountered empty key for value {:?}", new_value);
+                            error!(?new_value, "Encountered empty key for value");
                             continue;
                         }
 
