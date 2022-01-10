@@ -258,13 +258,9 @@ impl<R: AvroRead> Reader<R> {
     fn fill_buf(&mut self, n: usize) -> Result<(), AvroError> {
         // We don't have enough space in the buffer, need to grow it.
         if n >= self.buf.capacity() {
-            self.buf.reserve(n);
+            self.buf.resize(n, 0);
         }
 
-        unsafe {
-            self.buf.set_len(n);
-        }
-        // TODO[btv] This is UB if `self.inner` looks at the contents of the buf before writing them.
         self.inner.read_exact(&mut self.buf[..n])?;
         self.buf_idx = 0;
         Ok(())
