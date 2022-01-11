@@ -127,7 +127,7 @@ boundary don't silently merge their release notes into the wrong place.
 
 - Add the [`array_remove`](https://materialize.com/docs/sql/functions/#array-func) and [`list_remove`](https://materialize.com/docs/sql/functions/#list-func) functions.
 
-- Support the special PostgreSQL syntax [`SET NAMES` and `SET SCHEMA`](https://www.postgresql.org/docs/14/sql-set.html#id-1.9.3.173.6) for setting the `client_encoding` and `search_path parameters`, respectively.
+- Support the special PostgreSQL syntax [`SET NAMES` and `SET SCHEMA`](https://www.postgresql.org/docs/14/sql-set.html#id-1.9.3.173.6) for setting the `client_encoding` and `search_path` parameters, respectively.
 
 - Fix a crash in the optimizer when the branches of a `CASE` statement involved record types whose fields had differing nullability {{% gh 9931 %}}.
 
@@ -171,7 +171,7 @@ boundary don't silently merge their release notes into the wrong place.
   [`jsonb`](/sql/types/jsonb) {{% gh 5919 9669 %}}. Previously, JSON numbers
   were stored as either [`int8`](/sql/types/int8) or
   [`float8`](/sql/types/float8) values; now they are always stored as
-  [`numeric`](/sql/types/numeric) values.
+  [`numeric`] values.
 
   The upshot is that the `jsonb` type has a wider range for integers but a
   smaller range for floats. We expect this to cause very little practical
@@ -1796,6 +1796,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 [`interval`]: /sql/types/interval
 [`list`]: /sql/types/list/
 [`map`]: /sql/types/map/
+[`numeric`]: /sql/types/numeric
 [`oid`]: /sql/types/oid/
 [`real`]: /sql/types/float4
 [`pgcrypto`]: https://www.postgresql.org/docs/current/pgcrypto.html
