@@ -150,7 +150,7 @@ impl<B: Blob> Maintainer<B> {
         };
 
         let merged_key = Arrangement::new_blob_key();
-        let size_bytes = blob.set_trace_batch(merged_key.clone(), new_batch)?;
+        let (format, size_bytes) = blob.set_trace_batch(merged_key.clone(), new_batch)?;
 
         // Only upgrade the compaction level if we know this new batch represents
         // an increase in data over both of its parents so that we know we need
@@ -164,6 +164,7 @@ impl<B: Blob> Maintainer<B> {
 
         let merged = TraceBatchMeta {
             key: merged_key,
+            format,
             desc,
             level: merged_level,
             size_bytes,
@@ -177,6 +178,7 @@ mod tests {
     use differential_dataflow::trace::Description;
     use tokio::runtime::Runtime;
 
+    use crate::gen::persist::ProtoBatchFormat;
     use crate::indexed::metrics::Metrics;
     use crate::mem::MemRegistry;
 
@@ -206,7 +208,7 @@ mod tests {
                 (("k2".into(), "v2".into()), 0, 1),
             ],
         };
-        let b0_size_bytes = blob.set_trace_batch("b0".into(), b0.clone())?;
+        let (b0_format, b0_size_bytes) = blob.set_trace_batch("b0".into(), b0.clone())?;
 
         let b1 = BlobTraceBatch {
             desc: desc_from(1, 3, 0),
@@ -215,17 +217,19 @@ mod tests {
                 (("k3".into(), "v3".into()), 2, 1),
             ],
         };
-        let b1_size_bytes = blob.set_trace_batch("b1".into(), b1.clone())?;
+        let (b1_format, b1_size_bytes) = blob.set_trace_batch("b1".into(), b1.clone())?;
 
         let req = CompactTraceReq {
             b0: TraceBatchMeta {
                 key: "b0".into(),
+                format: b0_format,
                 desc: b0.desc,
                 level: 0,
                 size_bytes: b0_size_bytes,
             },
             b1: TraceBatchMeta {
                 key: "b1".into(),
+                format: b1_format,
                 desc: b1.desc,
                 level: 0,
                 size_bytes: b1_size_bytes,
@@ -237,6 +241,7 @@ mod tests {
             req: req.clone(),
             merged: TraceBatchMeta {
                 key: "MERGED_KEY".into(),
+                format: ProtoBatchFormat::ParquetKVTD,
                 desc: desc_from(0, 3, 2),
                 level: 1,
                 size_bytes: 0,
@@ -272,48 +277,54 @@ mod tests {
         let req = CompactTraceReq {
             b0: TraceBatchMeta {
                 key: "".into(),
+                format: ProtoBatchFormat::Unknown,
                 desc: desc_from(0, 2, 0),
                 level: 0,
                 size_bytes: 0,
             },
             b1: TraceBatchMeta {
                 key: "".into(),
+                format: ProtoBatchFormat::Unknown,
                 desc: desc_from(3, 4, 0),
                 level: 0,
                 size_bytes: 0,
             },
             since: Antichain::from_elem(0),
         };
-        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [3] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
+        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { key: \"\", format: Unknown, desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { key: \"\", format: Unknown, desc: Description { lower: Antichain { elements: [3] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
 
         // Overlapping batch descs
         let req = CompactTraceReq {
             b0: TraceBatchMeta {
                 key: "".into(),
+                format: ProtoBatchFormat::Unknown,
                 desc: desc_from(0, 2, 0),
                 level: 0,
                 size_bytes: 0,
             },
             b1: TraceBatchMeta {
                 key: "".into(),
+                format: ProtoBatchFormat::Unknown,
                 desc: desc_from(1, 4, 0),
                 level: 0,
                 size_bytes: 0,
             },
             since: Antichain::from_elem(0),
         };
-        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { key: \"\", desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
+        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { key: \"\", format: Unknown, desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { key: \"\", format: Unknown, desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
 
         // Since not at or in advance of b0's since
         let req = CompactTraceReq {
             b0: TraceBatchMeta {
                 key: "".into(),
+                format: ProtoBatchFormat::Unknown,
                 desc: desc_from(0, 2, 1),
                 level: 0,
                 size_bytes: 0,
             },
             b1: TraceBatchMeta {
                 key: "".into(),
+                format: ProtoBatchFormat::Unknown,
                 desc: desc_from(2, 4, 0),
                 level: 0,
                 size_bytes: 0,
@@ -326,12 +337,14 @@ mod tests {
         let req = CompactTraceReq {
             b0: TraceBatchMeta {
                 key: "".into(),
+                format: ProtoBatchFormat::Unknown,
                 desc: desc_from(0, 2, 0),
                 level: 0,
                 size_bytes: 0,
             },
             b1: TraceBatchMeta {
                 key: "".into(),
+                format: ProtoBatchFormat::Unknown,
                 desc: desc_from(2, 4, 1),
                 level: 0,
                 size_bytes: 0,

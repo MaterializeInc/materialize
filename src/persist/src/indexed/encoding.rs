@@ -15,13 +15,14 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::io::Cursor;
 use std::ops::Range;
 use std::{fmt, io};
 
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use persist_types::Codec;
-use protobuf::MessageField;
+use protobuf::{Message, MessageField};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
@@ -29,10 +30,14 @@ use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::gen::persist::{
-    ProtoArrangement, ProtoMeta, ProtoStreamRegistration, ProtoTraceBatchMeta, ProtoU64Antichain,
-    ProtoU64Description, ProtoUnsealedBatchMeta,
+    proto_batch_inline, ProtoArrangement, ProtoBatchFormat, ProtoBatchInline, ProtoMeta,
+    ProtoStreamRegistration, ProtoTraceBatchInline, ProtoTraceBatchMeta, ProtoU64Antichain,
+    ProtoU64Description, ProtoUnsealedBatchInline, ProtoUnsealedBatchMeta,
 };
-use crate::indexed::ColumnarRecords;
+use crate::indexed::columnar::parquet::{
+    decode_trace_parquet, decode_unsealed_parquet, encode_trace_parquet, encode_unsealed_parquet,
+};
+use crate::indexed::columnar::ColumnarRecords;
 use crate::storage::SeqNo;
 
 /// An internally unique id for a persisted stream. External users identify
@@ -150,6 +155,8 @@ pub struct ArrangementMeta {
 pub struct UnsealedBatchMeta {
     /// The key to retrieve the [BlobUnsealedBatch] from blob storage.
     pub key: String,
+    /// The format of the stored batch data.
+    pub format: ProtoBatchFormat,
     /// Half-open interval [lower, upper) of sequence numbers that this batch
     /// contains updates for.
     pub desc: Range<SeqNo>,
@@ -170,6 +177,8 @@ pub struct UnsealedBatchMeta {
 pub struct TraceBatchMeta {
     /// The key to retrieve the batch's data from the blob store.
     pub key: String,
+    /// The format of the stored batch data.
+    pub format: ProtoBatchFormat,
     /// The half-open time interval `[lower, upper)` this batch contains data
     /// for.
     pub desc: Description<u64>,
@@ -185,7 +194,7 @@ pub struct TraceBatchMeta {
 /// Invariants:
 /// - The [lower, upper) interval of sequence numbers in desc is non-empty.
 /// - The updates field is non-empty.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct BlobUnsealedBatch {
     /// Which updates are included in this batch.
     pub desc: Range<SeqNo>,
@@ -226,7 +235,7 @@ pub struct BlobUnsealedBatch {
 /// put multiple small batches in a single blob but also break a very large
 /// batch over multiple blobs. We also may want to break the latter into chunks
 /// for checksum and encryption?
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BlobTraceBatch {
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
@@ -558,18 +567,16 @@ impl BlobUnsealedBatch {
 // interface for this.
 impl Codec for BlobUnsealedBatch {
     fn codec_name() -> String {
-        "bincode[BlobUnsealedBatch]".into()
+        "parquet[UnsealedBatch]".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-        // See https://github.com/bincode-org/bincode/issues/293 for why this is
-        // infallible.
-        bincode::serialize_into(&mut ExtendWriteAdapter(buf), self)
-            .expect("infallible for BlobUnsealedBatch");
+        encode_unsealed_parquet(&mut ExtendWriteAdapter(buf), &self)
+            .expect("writes to ExtendWriteAdapter are infallible");
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        bincode::deserialize(buf).map_err(|err| err.to_string())
+        decode_unsealed_parquet(&mut Cursor::new(&buf)).map_err(|err| err.to_string())
     }
 }
 
@@ -639,18 +646,16 @@ impl BlobTraceBatch {
 // for this.
 impl Codec for BlobTraceBatch {
     fn codec_name() -> String {
-        "bincode[BlobTraceBatch]".into()
+        "parquet[TraceBatch]".into()
     }
 
     fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-        // See https://github.com/bincode-org/bincode/issues/293 for why this is
-        // infallible.
-        bincode::serialize_into(&mut ExtendWriteAdapter(buf), self)
-            .expect("infallible for BlobTraceBatch");
+        encode_trace_parquet(&mut ExtendWriteAdapter(buf), self)
+            .expect("writes to ExtendWriteAdapter are infallible");
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        bincode::deserialize(buf).map_err(|err| err.to_string())
+        decode_trace_parquet(&mut Cursor::new(&buf)).map_err(|err| err.to_string())
     }
 }
 
@@ -726,6 +731,7 @@ impl From<ProtoUnsealedBatchMeta> for UnsealedBatchMeta {
     fn from(x: ProtoUnsealedBatchMeta) -> Self {
         UnsealedBatchMeta {
             key: x.key,
+            format: x.format.enum_value_or_default(),
             desc: SeqNo(x.seqno_lower)..SeqNo(x.seqno_upper),
             ts_upper: x.ts_upper,
             ts_lower: x.ts_lower,
@@ -738,6 +744,7 @@ impl From<ProtoTraceBatchMeta> for TraceBatchMeta {
     fn from(x: ProtoTraceBatchMeta) -> Self {
         TraceBatchMeta {
             key: x.key,
+            format: x.format.enum_value_or_default(),
             desc: x.desc.into_option().map_or_else(
                 || {
                     Description::new(
@@ -820,6 +827,7 @@ impl From<&UnsealedBatchMeta> for ProtoUnsealedBatchMeta {
     fn from(x: &UnsealedBatchMeta) -> Self {
         ProtoUnsealedBatchMeta {
             key: x.key.clone(),
+            format: x.format.into(),
             seqno_upper: x.desc.end.0,
             seqno_lower: x.desc.start.0,
             ts_upper: x.ts_upper,
@@ -835,6 +843,7 @@ impl From<&TraceBatchMeta> for ProtoTraceBatchMeta {
     fn from(x: &TraceBatchMeta) -> Self {
         ProtoTraceBatchMeta {
             key: x.key.clone(),
+            format: x.format.into(),
             desc: MessageField::some((&x.desc).into()),
             level: x.level,
             size_bytes: x.size_bytes,
@@ -866,6 +875,87 @@ impl From<&Description<u64>> for ProtoU64Description {
     }
 }
 
+/// Encodes the inline metadata for an unsealed batch into a base64 string.
+pub fn encode_unsealed_inline_meta(batch: &BlobUnsealedBatch, format: ProtoBatchFormat) -> String {
+    let inline = ProtoBatchInline {
+        batch_type: Some(proto_batch_inline::Batch_type::unsealed(
+            ProtoUnsealedBatchInline {
+                format: format.into(),
+                seqno_lower: batch.desc.start.0,
+                seqno_upper: batch.desc.end.0,
+                unknown_fields: Default::default(),
+                cached_size: Default::default(),
+            },
+        )),
+        unknown_fields: Default::default(),
+        cached_size: Default::default(),
+    };
+    let inline_encoded = inline
+        .write_to_bytes()
+        .expect("no required fields means no initialization errors");
+    base64::encode(inline_encoded)
+}
+
+/// Encodes the inline metadata for a trace batch into a base64 string.
+pub fn encode_trace_inline_meta(batch: &BlobTraceBatch, format: ProtoBatchFormat) -> String {
+    let inline = ProtoBatchInline {
+        batch_type: Some(proto_batch_inline::Batch_type::trace(
+            ProtoTraceBatchInline {
+                format: format.into(),
+                desc: MessageField::some((&batch.desc).into()),
+                unknown_fields: Default::default(),
+                cached_size: Default::default(),
+            },
+        )),
+        unknown_fields: Default::default(),
+        cached_size: Default::default(),
+    };
+    let inline_encoded = inline
+        .write_to_bytes()
+        .expect("no required fields means no initialization errors");
+    base64::encode(inline_encoded)
+}
+
+/// Decodes the inline metadata for an unsealed batch from a base64 string.
+pub fn decode_unsealed_inline_meta(
+    inline_base64: Option<&String>,
+) -> Result<(ProtoBatchFormat, ProtoUnsealedBatchInline), Error> {
+    let inline_base64 = inline_base64.ok_or("missing batch metadata")?;
+    let inline_encoded = base64::decode(&inline_base64).map_err(|err| err.to_string())?;
+    let inline =
+        ProtoBatchInline::parse_from_bytes(&inline_encoded).map_err(|err| err.to_string())?;
+    match inline.batch_type {
+        Some(proto_batch_inline::Batch_type::unsealed(x)) => {
+            let format = x
+                .format
+                .enum_value()
+                .map_err(|x| Error::from(format!("unknown format: {}", x)))?;
+            Ok((format, x))
+        }
+        x => return Err(format!("incorrect batch type: {:?}", x).into()),
+    }
+}
+
+/// Decodes the inline metadata for a trace batch from a base64 string.
+pub fn decode_trace_inline_meta(
+    inline_base64: Option<&String>,
+) -> Result<(ProtoBatchFormat, ProtoTraceBatchInline), Error> {
+    let inline_base64 = inline_base64.ok_or("missing batch metadata")?;
+    let inline_encoded = base64::decode(&inline_base64).map_err(|err| err.to_string())?;
+    let inline =
+        ProtoBatchInline::parse_from_bytes(&inline_encoded).map_err(|err| err.to_string())?;
+    match inline.batch_type {
+        Some(proto_batch_inline::Batch_type::trace(x)) => {
+            let format = x
+                .format
+                .enum_value()
+                .map_err(|x| Error::from(format!("unknown format: {}", x)))?;
+            Ok((format, x))
+        }
+        x => return Err(format!("incorrect batch type: {:?}", x).into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::error::Error;
@@ -892,6 +982,7 @@ mod tests {
     fn batch_meta(lower: u64, upper: u64) -> TraceBatchMeta {
         TraceBatchMeta {
             key: "".to_string(),
+            format: ProtoBatchFormat::Unknown,
             desc: u64_desc(lower, upper),
             level: 1,
             size_bytes: 0,
@@ -901,6 +992,7 @@ mod tests {
     fn batch_meta_full(lower: u64, upper: u64, since: u64, level: u64) -> TraceBatchMeta {
         TraceBatchMeta {
             key: "".to_string(),
+            format: ProtoBatchFormat::Unknown,
             desc: u64_desc_since(lower, upper, since),
             level,
             size_bytes: 0,
@@ -918,6 +1010,7 @@ mod tests {
     fn unsealed_batch_meta(lower: u64, upper: u64) -> UnsealedBatchMeta {
         UnsealedBatchMeta {
             key: "".to_string(),
+            format: ProtoBatchFormat::Unknown,
             desc: SeqNo(lower)..SeqNo(upper),
             ts_upper: 0,
             ts_lower: 0,
@@ -1571,7 +1664,7 @@ mod tests {
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000)),
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000 / 100)),
             ),
-            "1/1=(176, 136) 25/1=(2096, 2056) 1000/1=(80096, 80056) 1000/100=(87224, 80056)"
+            "1/1=(481, 497) 25/1=(2229, 2245) 1000/1=(72468, 72484) 1000/100=(106557, 72484)"
         );
     }
 }

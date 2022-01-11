@@ -44,6 +44,7 @@ wrappers = [
     "aws-http",
     "aws-smithy-xml",
     "aws-sig-auth",
+    "flatbuffers",
     "pprof",
     "proc-macro-crate",
     "prometheus",
@@ -118,4 +119,6 @@ allow-git = [
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",
+    # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
+    "https://github.com/MaterializeInc/parquet-format-rs.git",
 ]

@@ -13,6 +13,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::{error, fmt, io, sync};
 
+use arrow2::error::ArrowError;
+
 use crate::storage::{Log, SeqNo};
 
 /// A persistence related error.
@@ -83,6 +85,12 @@ impl From<String> for Error {
 impl<'a> From<&'a str> for Error {
     fn from(e: &'a str) -> Self {
         Error::String(e.into())
+    }
+}
+
+impl From<ArrowError> for Error {
+    fn from(e: ArrowError) -> Self {
+        Error::String(e.to_string())
     }
 }
 
