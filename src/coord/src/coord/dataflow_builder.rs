@@ -121,16 +121,8 @@ impl<'a> DataflowBuilder<'a> {
                     }
                     CatalogItem::Source(source) => {
                         if source.connector.requires_single_materialization() {
-                            let source_type = match &source.connector {
-                                SourceConnector::External { connector, .. } => match connector {
-                                    ExternalSourceConnector::S3(_) => RematerializedSourceType::S3,
-                                    ExternalSourceConnector::Postgres(_) => {
-                                        RematerializedSourceType::Postgres
-                                    }
-                                    _ => unreachable!(),
-                                },
-                                _ => unreachable!(),
-                            };
+                            let source_type =
+                                RematerializedSourceType::for_connector(&source.connector);
                             let dependent_indexes = self.catalog.dependent_indexes(*id);
                             // If this source relies on any pre-existing indexes (i.e., indexes
                             // that we're not building as part of this `DataflowBuilder`), we're

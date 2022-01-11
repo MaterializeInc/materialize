@@ -10,6 +10,7 @@
 use std::error::Error;
 use std::fmt;
 
+use dataflow_types::{ExternalSourceConnector, SourceConnector};
 use expr::EvalError;
 use ore::stack::RecursionLimitError;
 use ore::str::StrExt;
@@ -398,8 +399,27 @@ impl From<RecursionLimitError> for CoordError {
 
 impl Error for CoordError {}
 
+/// Represent a source that is not allowed to be rematerialized
 #[derive(Debug)]
 pub enum RematerializedSourceType {
     Postgres,
     S3,
+}
+
+impl RematerializedSourceType {
+    /// Create a RematerializedSourceType error helper
+    ///
+    /// # Panics
+    ///
+    /// If the source is of a type that is allowed to be rematerialized
+    pub fn for_connector(connector: &SourceConnector) -> RematerializedSourceType {
+        match &connector {
+            SourceConnector::External { connector, .. } => match connector {
+                ExternalSourceConnector::S3(_) => RematerializedSourceType::S3,
+                ExternalSourceConnector::Postgres(_) => RematerializedSourceType::Postgres,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
 }
