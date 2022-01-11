@@ -21,7 +21,16 @@ mod test {
         let mut scalar: MirScalarExpr =
             deserialize(&mut input_stream, "MirScalarExpr", &RTI, &mut ctx)?;
         let typ: RelationType = deserialize(&mut input_stream, "RelationType", &RTI, &mut ctx)?;
+        let before = scalar.typ(&typ);
         scalar.reduce(&typ);
+        let after = scalar.typ(&typ);
+        // Verify that `reduce` did not change the type of the scalar.
+        if before.scalar_type != after.scalar_type {
+            return Err(format!(
+                "FAIL: Type of scalar has changed:\nbefore: {:?}\nafter: {:?}\n",
+                before, after
+            ));
+        }
         Ok(scalar)
     }
 

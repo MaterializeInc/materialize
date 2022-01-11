@@ -582,7 +582,14 @@ impl MirScalarExpr {
                             match literal {
                                 Ok(Datum::True) => *e = then.take(),
                                 Ok(Datum::False) | Ok(Datum::Null) => *e = els.take(),
-                                Err(_) => *e = cond.take(),
+                                Err(err) => {
+                                    *e = MirScalarExpr::Literal(
+                                        Err(err.clone()),
+                                        then.typ(relation_type)
+                                            .union(&els.typ(relation_type))
+                                            .unwrap(),
+                                    )
+                                }
                                 _ => unreachable!(),
                             }
                         } else if then == els {
