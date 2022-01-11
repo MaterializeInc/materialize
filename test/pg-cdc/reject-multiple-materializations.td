@@ -53,11 +53,6 @@ Cannot re-materialize source mz_source
 
 > DROP VIEW t1_mat;
 
-> CREATE MATERIALIZED VIEW t1_mat AS SELECT * FROM t1
-
-! SELECT * FROM t1_mat;
-must be dropped and recreated
-
 > DROP SOURCE mz_source CASCADE;
 
 # verify that dropping things allows recreation
