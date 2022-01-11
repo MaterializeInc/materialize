@@ -116,8 +116,8 @@ use dataflow_types::{
 };
 use dataflow_types::{SinkAsOf, Timeline};
 use expr::{
-    ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr, RowSetFinishing,
+    ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr, NullaryFunc, OptimizedMirRelationExpr,
+    RowSetFinishing,
 };
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, NowFn};
@@ -2169,9 +2169,6 @@ where
                 materialized,
                 ..
             } = plan;
-            let optimized_expr = self.view_optimizer.optimize(source.expr)?;
-            let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
-
             let source_id = self.catalog.allocate_id()?;
             let source_oid = self.catalog.allocate_oid()?;
 
@@ -2195,10 +2192,8 @@ where
 
             let source = catalog::Source {
                 create_sql: source.create_sql,
-                optimized_expr,
                 connector: source.connector,
-                bare_desc: source.bare_desc,
-                desc: transformed_desc,
+                desc: source.desc,
             };
             ops.push(catalog::Op::CreateItem {
                 id: source_id,

@@ -24,7 +24,7 @@ use mz_avro::{
 };
 use std::{cell::RefCell, rc::Rc};
 
-use super::RowWrapper;
+use super::decode::RowWrapper;
 
 pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode<'a>> {
     let data_name = FullName::from_parts("data", Some("com.materialize.cdc"), "");

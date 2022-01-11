@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use ::regex::Regex;
@@ -19,7 +17,6 @@ use differential_dataflow::{AsCollection, Collection};
 use expr::PartitionId;
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use prometheus::UIntGauge;
 use repr::MessagePayload;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
@@ -28,8 +25,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, DataEncoding, DecodeError, IncludedColumnSource,
-    LinearOperator, RegexEncoding, SourceEnvelope,
+    AvroEncoding, AvroOcfEncoding, DataEncoding, DecodeError, IncludedColumnSource, LinearOperator,
+    RegexEncoding, SourceEnvelope,
 };
 use interchange::avro::ConfluentAvroResolver;
 use log::error;
@@ -45,69 +42,6 @@ use crate::source::{DecodeResult, SourceOutput};
 mod avro;
 mod csv;
 mod protobuf;
-
-/// Update row to blank out retractions of rows that we have never seen
-pub fn rewrite_for_upsert(
-    val: Result<Row, DecodeError>,
-    metadata: Row,
-    keys: &mut HashMap<Row, Row>,
-    key: Row,
-    metrics: &UIntGauge,
-) -> Result<Row, DecodeError> {
-    if let Ok(row) = val {
-        // often off by one, but is only tracked every N seconds so it will always be off
-        metrics.set(keys.len() as u64);
-
-        let entry = keys.entry(key);
-
-        // Upsert-shaped data must be of shape Row[[before_row_as_list], [after_row_as_list]]
-        let mut rowiter = row.iter();
-        let before = rowiter.next().expect("must have a before list");
-        let after = rowiter.next().expect("must have an after list");
-
-        let mut arena = Row::default();
-        let after_md = concat_datum_list(&mut arena, after, metadata);
-
-        assert!(
-            matches!(before, Datum::List { .. } | Datum::Null),
-            "[customer-data] Debezium logic should be a List or absent, got {:?}",
-            before
-        );
-
-        match entry {
-            Entry::Vacant(vacant) => {
-                // if the key is new, then we know that we always need to ignore the "before" part,
-                // so zero it out
-                vacant.insert(Row::pack_slice(&[after_md]));
-
-                Ok(Row::pack_slice(&[Datum::Null, after_md]))
-            }
-            Entry::Occupied(mut occupied) => {
-                let previous_insert = if after.is_null() {
-                    // We are trying to retract something that doesn't exist, so just assume
-                    // that the key is supposed to be empty at this point
-                    let (_k, v) = occupied.remove_entry();
-                    v
-                } else {
-                    occupied.insert(Row::pack_slice(&[after_md]))
-                };
-
-                Ok(Row::pack_slice(&[previous_insert.unpack_first(), after_md]))
-            }
-        }
-    } else {
-        val
-    }
-}
-
-fn concat_datum_list<'a, 'b: 'a>(arena: &'a mut Row, left: Datum<'b>, extra: Row) -> Datum<'a> {
-    if left.is_null() {
-        return left;
-    }
-    let left = left.unwrap_list();
-    arena.push_list(left.into_iter().chain(extra.into_iter()));
-    arena.into_iter().next().unwrap()
-}
 
 pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
@@ -475,6 +409,7 @@ where
                             key,
                             value,
                             position: *position,
+                            upstream_time_millis: *upstream_time_millis,
                             metadata: to_metadata_row(
                                 &metadata_items,
                                 partition.clone(),
@@ -586,6 +521,7 @@ where
                                         key: None,
                                         value: Some(value),
                                         position,
+                                        upstream_time_millis: *upstream_time_millis,
                                         metadata,
                                     });
                                 }
@@ -614,6 +550,7 @@ where
                             key: None,
                             value: None,
                             position: None,
+                            upstream_time_millis: *upstream_time_millis,
                             metadata,
                         });
                     } else {
@@ -658,6 +595,7 @@ where
                                     key: None,
                                     value: Some(value),
                                     position,
+                                    upstream_time_millis: *upstream_time_millis,
                                     metadata,
                                 });
                                 value_buf = vec![];
@@ -667,6 +605,7 @@ where
                                     key: None,
                                     value: Some(value),
                                     position,
+                                    upstream_time_millis: *upstream_time_millis,
                                     metadata,
                                 });
                             }
