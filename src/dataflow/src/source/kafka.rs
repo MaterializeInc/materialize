@@ -26,7 +26,7 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::{client::MzClientContext, KafkaAddrs};
 use repr::adt::jsonb::Jsonb;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::logging::materialized::{Logger, MaterializedEvent};
@@ -536,6 +536,7 @@ fn create_kafka_config(
     // debug logs. We may want to investigate finer-grained control.
     // TODO(guswynn): replace this when https://github.com/tokio-rs/tracing/pull/1821 is merged
     if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
+        debug!("Enabling 'debug' for rdkafka");
         kafka_config.set("debug", "all");
     }
 

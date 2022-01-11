@@ -729,6 +729,7 @@ impl Timestamper {
 
         // TODO(guswynn): replace this when https://github.com/tokio-rs/tracing/pull/1821 is merged
         if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
+            debug!("Enabling 'debug' for rdkafka");
             config.set("debug", "all");
         }
 
