@@ -43,12 +43,14 @@ class Benchmark:
         if self._mz_id == 0 and shared is not None:
             print(f"Running the SHARED section for {name} ...")
             shared.run(executor=self._executor, measure=False)
+            print("SHARED done")
 
         # Run the SHARED section once for each Mz
         init = self._scenario.INIT
         if init is not None:
             print(f"Running the INIT section for {name} ...")
             init.run(executor=self._executor, measure=False)
+            print("INIT done")
 
         before = self._scenario.BEFORE(executor=self._executor)
         benchmark = self._scenario.BENCHMARK(executor=self._executor)
