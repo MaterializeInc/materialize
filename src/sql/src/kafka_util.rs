@@ -497,15 +497,24 @@ pub fn generate_ccsr_client_config(
 ) -> Result<ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = ccsr::ClientConfig::new(csr_url);
 
-    if let Some(ca_path) = kafka_options.get("ssl.ca.location") {
+    if let Some(ca_path) = match ccsr_options.get("ssl_ca_location") {
+        Some(Value::String(path)) => Some(path),
+        _ => kafka_options.get("ssl.ca.location"),
+    } {
         let mut ca_buf = Vec::new();
         File::open(ca_path)?.read_to_end(&mut ca_buf)?;
         let cert = Certificate::from_pem(&ca_buf)?;
         client_config = client_config.add_root_certificate(cert);
     }
 
-    let key_path = kafka_options.get("ssl.key.location");
-    let cert_path = kafka_options.get("ssl.certificate.location");
+    let key_path = match ccsr_options.get("ssl_key_location") {
+        Some(Value::String(path)) => Some(path),
+        _ => kafka_options.get("ssl.key.location"),
+    };
+    let cert_path = match ccsr_options.get("ssl_certificate_location") {
+        Some(Value::String(path)) => Some(path),
+        _ => kafka_options.get("ssl.certificate.location"),
+    };
     match (key_path, cert_path) {
         (Some(key_path), Some(cert_path)) => {
             // `reqwest` expects identity `pem` files to contain one key and
