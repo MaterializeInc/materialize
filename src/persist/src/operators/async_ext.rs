@@ -7,21 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Extensions for `OperatorBuilder` to create async operators.
-
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
+use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use futures_util::future::FusedFuture;
-use futures_util::FutureExt;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
+use timely::progress::Timestamp;
 use timely::PartialOrder;
 
 /// A type that is not inhabited by any value. Should be redefined as the
@@ -86,7 +84,6 @@ impl Future for Notified<'_> {
     }
 }
 
-/// Extension trait for `OperatorBuilder`.
 pub trait OperatorBuilderExt<G: Scope> {
     /// Creates an operator implementation from supplied async logic constructor.
     ///
@@ -112,7 +109,7 @@ pub trait OperatorBuilderExt<G: Scope> {
             Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
             Scheduler,
         ) -> Fut,
-        Fut: Future + 'static;
+        Fut: Future<Output = Never> + 'static;
 }
 
 impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
@@ -123,7 +120,7 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
             Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
             Scheduler,
         ) -> Fut,
-        Fut: Future + 'static,
+        Fut: Future<Output = Never> + 'static,
     {
         let activator = scope.sync_activator_for(&self.operator_info().address[..]);
         let waker = futures_util::task::waker(Arc::new(activator));
@@ -132,16 +129,13 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
             self.shape().inputs()
         ]));
 
-        self.build_reschedule(move |capabilities| {
+        self.build(move |capabilities| {
             let scheduler = Scheduler::default();
-            let mut logic_fut = Box::pin(
-                constructor(
-                    capabilities,
-                    Rc::clone(&shared_frontiers),
-                    scheduler.clone(),
-                )
-                .fuse(),
-            );
+            let mut logic_fut = Box::pin(constructor(
+                capabilities,
+                Rc::clone(&shared_frontiers),
+                scheduler.clone(),
+            ));
             move |frontiers| {
                 // Attempt to update the shared frontier before polling the future.  This operation
                 // can fail if the future also borrowed the frontier and kept the borrow active
@@ -157,14 +151,8 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
                     }
                 }
 
-                if logic_fut.is_terminated() {
-                    return false;
-                }
-
                 let had_pending_notify = scheduler.notify();
-                let operator_incomplete = Pin::new(&mut logic_fut)
-                    .poll(&mut Context::from_waker(&waker))
-                    .is_pending();
+                let _ = Pin::new(&mut logic_fut).poll(&mut Context::from_waker(&waker));
                 // Here we check that:
                 //   1. the scheduler had been notified in some previous run of the closure
                 //   2. the future just went past a `scheduler.notified().await` point
@@ -178,15 +166,12 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
                 if had_pending_notify && !scheduler.is_notified() {
                     waker.wake_by_ref();
                 }
-
-                operator_incomplete
             }
         });
     }
 }
 
-/// Convenience macro used to wrap what might otherwise be the argument to `build_reschedule`.
-#[macro_export]
+#[allow(unused_macros)]
 macro_rules! async_op {
     (|$capabilities:ident, $frontiers:ident| $body:block) => {
         move |mut capabilities, mut frontiers, scheduler| async move {
@@ -197,10 +182,7 @@ macro_rules! async_op {
                 let mut $capabilities = &mut capabilities;
                 #[allow(unused_mut)]
                 let mut $frontiers = &mut frontiers;
-
-                if !async { $body }.await && frontiers.borrow().iter().all(|f| f.is_empty()) {
-                    break;
-                }
+                let _: () = async { $body }.await;
             }
         }
     };
@@ -242,7 +224,6 @@ mod test {
                                 session.give(item);
                             }
                         }
-                        false
                     }),
                 );
 
