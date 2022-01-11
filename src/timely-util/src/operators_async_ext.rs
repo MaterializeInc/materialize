@@ -16,8 +16,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use futures_util::future::FusedFuture;
-use futures_util::FutureExt;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
@@ -134,14 +132,11 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
 
         self.build_reschedule(move |capabilities| {
             let scheduler = Scheduler::default();
-            let mut logic_fut = Box::pin(
-                constructor(
-                    capabilities,
-                    Rc::clone(&shared_frontiers),
-                    scheduler.clone(),
-                )
-                .fuse(),
-            );
+            let mut logic_fut = Box::pin(constructor(
+                capabilities,
+                Rc::clone(&shared_frontiers),
+                scheduler.clone(),
+            ));
             move |frontiers| {
                 // Attempt to update the shared frontier before polling the future.  This operation
                 // can fail if the future also borrowed the frontier and kept the borrow active
@@ -155,10 +150,6 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
                             *shared = new.frontier().to_owned();
                         }
                     }
-                }
-
-                if logic_fut.is_terminated() {
-                    return false;
                 }
 
                 let had_pending_notify = scheduler.notify();
