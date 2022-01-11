@@ -1038,18 +1038,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
             },
         ) = (&record, &outcome)
         {
-            // Output everything before this record.
-            let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
-            buf.flush_to(offset);
-            buf.skip_to(offset + expected_output.len());
-
-            // Attempt to install the result separator (----), if it does
-            // not already exist.
-            if buf.peek_last(5) == "\n----" {
-                buf.append("\n");
-            } else if buf.peek_last(6) != "\n----\n" {
-                buf.append("\n----\n");
-            }
+            buf.append_header(&input, expected_output);
 
             for (i, row) in actual_output.chunks(types.len()).enumerate() {
                 match mode {
@@ -1074,6 +1063,25 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
                 }
             }
         } else if let (
+            Record::Query {
+                output:
+                    Ok(QueryOutput {
+                        output: Output::Hashed { .. },
+                        output_str: expected_output,
+                        ..
+                    }),
+                ..
+            },
+            Outcome::OutputFailure {
+                actual_output: Output::Hashed { num_values, md5 },
+                ..
+            },
+        ) = (&record, &outcome)
+        {
+            buf.append_header(&input, expected_output);
+
+            buf.append(format!("{} values hashing to {}\n", num_values, md5).as_str())
+        } else if let (
             Record::Simple {
                 output_str: expected_output,
                 ..
@@ -1084,18 +1092,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
             },
         ) = (&record, &outcome)
         {
-            // Output everything before this record.
-            let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
-            buf.flush_to(offset);
-            buf.skip_to(offset + expected_output.len());
-
-            // Attempt to install the result separator (----), if it does
-            // not already exist.
-            if buf.peek_last(5) == "\n----" {
-                buf.append("\n");
-            } else if buf.peek_last(6) != "\n----\n" {
-                buf.append("\n----\n");
-            }
+            buf.append_header(&input, expected_output);
 
             for (i, row) in actual_output.iter().enumerate() {
                 if i != 0 {
@@ -1106,7 +1103,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
         } else if let Outcome::Success = outcome {
             // Ok.
         } else {
-            bail!("unexpected: {}", outcome);
+            bail!("unexpected: {:?} {:?}", record, outcome);
         }
     }
 
@@ -1146,6 +1143,21 @@ impl<'a> RewriteBuffer<'a> {
 
     fn append(&mut self, s: &str) {
         self.output.push_str(s);
+    }
+
+    fn append_header(&mut self, input: &String, expected_output: &str) {
+        // Output everything before this record.
+        let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
+        self.flush_to(offset);
+        self.skip_to(offset + expected_output.len());
+
+        // Attempt to install the result separator (----), if it does
+        // not already exist.
+        if self.peek_last(5) == "\n----" {
+            self.append("\n");
+        } else if self.peek_last(6) != "\n----\n" {
+            self.append("\n----\n");
+        }
     }
 
     fn peek_last(&self, n: usize) -> &str {
