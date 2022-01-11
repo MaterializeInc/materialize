@@ -88,12 +88,6 @@ pub struct AvroStringDecoder<'a> {
     pub buf: &'a mut Vec<u8>,
 }
 
-impl<'a> AvroStringDecoder<'a> {
-    pub fn with_buf(buf: &'a mut Vec<u8>) -> Self {
-        Self { buf }
-    }
-}
-
 impl<'a> AvroDecode for AvroStringDecoder<'a> {
     type Out = ();
     fn string<'b, R: AvroRead>(

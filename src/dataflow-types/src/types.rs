@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use chrono::NaiveDateTime;
 use globset::Glob;
 use http::Uri;
 use regex::Regex;
@@ -29,7 +30,7 @@ use url::Url;
 use uuid::Uuid;
 
 use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, PartitionId};
-use interchange::avro::{self, DebeziumDeduplicationStrategy};
+use interchange::avro;
 use interchange::protobuf::{self, NormalizedProtobufMessageName};
 use kafka_util::KafkaAddrs;
 use repr::{ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
@@ -240,7 +241,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
     pub fn arity_of(&self, id: &GlobalId) -> usize {
         for (source_id, (desc, _orig_id)) in self.source_imports.iter() {
             if source_id == id {
-                return desc.bare_desc.arity();
+                return desc.desc.arity();
             }
         }
         for (_index_id, (desc, typ)) in self.index_imports.iter() {
@@ -517,7 +518,7 @@ pub struct SourceDesc {
     /// Optionally, filtering and projection that may optimistically be applied
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
-    pub bare_desc: RelationDesc,
+    pub desc: RelationDesc,
 }
 
 /// A sink for updates to a relational collection.
@@ -546,9 +547,99 @@ pub struct SinkAsOf {
 pub enum SourceEnvelope {
     /// If present, include the key columns as an output column of the source with the given properties.
     None(KeyEnvelope),
-    Debezium(DebeziumDeduplicationStrategy, DebeziumMode),
+    Debezium(DebeziumEnvelope),
     Upsert(KeyEnvelope),
     CdcV2,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DebeziumEnvelope {
+    /// The column index containing the `before` row
+    pub before_idx: usize,
+    /// The column index containing the `after` row
+    pub after_idx: usize,
+    pub mode: DebeziumMode,
+}
+
+/// Ordered means we can trust Debezium high water marks
+///
+/// In standard operation, Debezium should always emit messages in position order, but
+/// messages may be duplicated.
+///
+/// For example, this is a legal stream of Debezium event positions:
+///
+/// ```text
+/// 1 2 3 2
+/// ```
+///
+/// Note that `2` appears twice, but the *first* time it appeared it appeared in order.
+/// Any position below the highest-ever seen position is guaranteed to be a duplicate,
+/// and can be ignored.
+///
+/// Now consider this stream:
+///
+/// ```text
+/// 1 3 2
+/// ```
+///
+/// In this case, `2` is sent *out* of order, and if it is ignored we will miss important
+/// state.
+///
+/// It is possible for users to do things with multiple databases and multiple Debezium
+/// instances pointing at the same Kafka topic that mean that the Debezium guarantees do
+/// not hold, in which case we are required to track individual messages, instead of just
+/// the highest-ever-seen message.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum DebeziumMode {
+    /// Do not perform any deduplication
+    None,
+    /// Keep track of keys from upstream and discard retractions for new keys
+    Upsert,
+    /// We can trust high water mark
+    Ordered(DebeziumDedupProjection),
+    /// We need to store some piece of state for every message
+    Full(DebeziumDedupProjection),
+    FullInRange {
+        projection: DebeziumDedupProjection,
+        pad_start: Option<NaiveDateTime>,
+        start: NaiveDateTime,
+        end: NaiveDateTime,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DebeziumDedupProjection {
+    /// The column index containing the debezium source metadata
+    pub source_idx: usize,
+    /// The record index of the `source.snapshot` field
+    pub snapshot_idx: usize,
+    /// The upstream database specific fields
+    pub source_projection: DebeziumSourceProjection,
+    /// The column index containing the debezium transaction metadata
+    pub transaction_idx: usize,
+    /// The record index of the `transaction.total_order` field
+    pub total_order_idx: usize,
+}
+
+/// Debezium generates records that contain metadata about the upstream database. The structure of
+/// this metadata depends on the type of connector used. This struct records the relevant indices
+/// in the record, calculated during planning, so that the dataflow operator can unpack the
+/// structure and extract the relevant information.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum DebeziumSourceProjection {
+    MySql {
+        file: usize,
+        pos: usize,
+        row: usize,
+    },
+    Postgres {
+        sequence: Option<usize>,
+        lsn: usize,
+    },
+    SqlServer {
+        change_lsn: usize,
+        event_serial_no: usize,
+    },
 }
 
 /// Computes the indices of the value's relation description that appear in the key.
@@ -556,7 +647,7 @@ pub enum SourceEnvelope {
 /// Returns an error if it detects a common columns between the two relations that has the same
 /// name but a different type, if a key column is missing from the value, and if the key relation
 /// has a column with no name.
-pub fn match_key_indices(
+fn match_key_indices(
     key_desc: &RelationDesc,
     value_desc: &RelationDesc,
 ) -> anyhow::Result<Vec<usize>> {
@@ -580,14 +671,6 @@ pub fn match_key_indices(
 }
 
 impl SourceEnvelope {
-    pub fn get_avro_envelope_type(&self) -> avro::EnvelopeType {
-        match self {
-            SourceEnvelope::None(_) => avro::EnvelopeType::None,
-            SourceEnvelope::Debezium { .. } => avro::EnvelopeType::Debezium,
-            SourceEnvelope::Upsert(_) => avro::EnvelopeType::Upsert,
-            SourceEnvelope::CdcV2 => avro::EnvelopeType::CdcV2,
-        }
-    }
     /// Computes the output relation of this envelope when applied on top of the decoded key and
     /// value relation desc
     pub fn desc(
@@ -647,35 +730,24 @@ impl SourceEnvelope {
                 };
                 keyed.concat(metadata_desc)
             }
-            SourceEnvelope::Debezium(..) => {
-                // TODO [btv] - Get rid of this, when we can. Right now source processing is still
-                // not fully orthogonal, so we have some special logic in the debezium processor
-                // that only passes on the first two columns ("before" and "after"), and uses the
-                // information in the other ones itself
-                let mut diter = value_desc.into_iter();
-                let mut key = diter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Spec does not contain key"))?;
-                match &mut key.1.scalar_type {
+            SourceEnvelope::Debezium(envelope) => {
+                match &value_desc.typ().column_types[envelope.after_idx].scalar_type {
                     ScalarType::Record { fields, .. } => {
-                        fields.extend(metadata_desc.iter().map(|(k, v)| (k.clone(), v.clone())))
+                        let mut desc = RelationDesc::from_names_and_types(fields.clone());
+                        if let Some(key) = key_desc.map(|k| match_key_indices(&k, &desc)) {
+                            desc = desc.with_key(key?);
+                        }
+
+                        match envelope.mode {
+                            DebeziumMode::Upsert => desc.concat(metadata_desc),
+                            _ => desc,
+                        }
                     }
                     ty => bail!(
                         "Incorrect type for Debezium value, expected Record, got {:?}",
                         ty
                     ),
                 }
-                let mut value = diter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Spec does not contain value"))?;
-                match &mut value.1.scalar_type {
-                    ScalarType::Record { fields, .. } => fields.extend(metadata_desc),
-                    ty => bail!(
-                        "Incorrect type for Debezium value, expected Record, got {:?}",
-                        ty
-                    ),
-                }
-                RelationDesc::from_names_and_types([key, value].into_iter())
             }
             SourceEnvelope::CdcV2 => {
                 // TODO: Validate that the value schema has an `updates` and `progress` column of
@@ -707,16 +779,16 @@ impl SourceEnvelope {
 /// Eventually we will require `INCLUDE <metadata>` for everything.
 pub fn provide_default_metadata(envelope: &SourceEnvelope, encoding: &DataEncoding) -> bool {
     let is_avro = matches!(encoding, DataEncoding::Avro(_));
-    let is_stateless_dbz = matches!(envelope, SourceEnvelope::Debezium(_, DebeziumMode::Plain));
+    let is_stateless_dbz = match envelope {
+        SourceEnvelope::Debezium(DebeziumEnvelope {
+            mode: DebeziumMode::Upsert,
+            ..
+        }) => false,
+        SourceEnvelope::Debezium(_) => true,
+        _ => false,
+    };
 
     !is_avro && !is_stateless_dbz
-}
-
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum DebeziumMode {
-    Plain,
-    /// Keep track of keys from upstream and discard retractions for new keys
-    Upsert,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

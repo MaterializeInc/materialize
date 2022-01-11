@@ -1205,6 +1205,7 @@ dependencies = [
  "aws-smithy-http",
  "aws-types",
  "ccsr",
+ "chrono",
  "crossbeam-channel",
  "enum-iterator",
  "enum-kinds",

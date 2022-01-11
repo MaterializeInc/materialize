@@ -9,7 +9,6 @@
 
 //! Logic related to the creation of dataflow sources.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
@@ -29,12 +28,11 @@ use expr::{GlobalId, Id, SourceInstanceId};
 use ore::cast::CastFrom;
 use ore::now::NowFn;
 use ore::result::ResultExt;
-use repr::{RelationDesc, Row, ScalarType, Timestamp};
+use repr::{Row, Timestamp};
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
 use crate::decode::render_decode_delimited;
-use crate::decode::rewrite_for_upsert;
 use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
@@ -86,7 +84,7 @@ where
 
         // Blank out trivial linear operators.
         if let Some(operator) = &linear_operators {
-            if operator.is_trivial(src.bare_desc.arity()) {
+            if operator.is_trivial(src.desc.arity()) {
                 linear_operators = None;
             }
         }
@@ -226,11 +224,8 @@ where
                     base_metrics,
                 };
 
-                let (mut collection, capability) = if let ExternalSourceConnector::PubNub(
-                    pubnub_connector,
-                ) = connector
-                {
-                    let source = PubNubSourceReader::new(src.name.clone(), pubnub_connector);
+                let (mut collection, cap) = if let ExternalSourceConnector::PubNub(c) = connector {
+                    let source = PubNubSourceReader::new(src.name.clone(), c);
                     let ((ok_stream, err_stream), capability) =
                         source::create_source_simple(source_config, source);
 
@@ -386,78 +381,21 @@ where
 
                             // render envelopes
                             match &envelope {
-                                SourceEnvelope::Debezium(dedupe_strategy, mode) => {
-                                    // TODO: this needs to happen separately from trackstate
-                                    let results = match mode {
-                                        DebeziumMode::Upsert => {
-                                            let mut trackstate = (
-                                                HashMap::new(),
-                                                render_state.metrics.debezium_upsert_count_for(
-                                                    src_id,
-                                                    self.dataflow_id,
-                                                ),
-                                            );
-                                            results.flat_map(move |data| {
-                                                let DecodeResult {
-                                                    key,
-                                                    value,
-                                                    metadata,
-                                                    position: _,
-                                                } = data;
-                                                let (keys, metrics) = &mut trackstate;
-                                                value.map(|value| match key {
-                                                    None => Err(DecodeError::Text(
-                                                        "All upsert keys should decode to a value."
-                                                            .into(),
-                                                    )),
-                                                    Some(Err(e)) => Err(e),
-                                                    Some(Ok(key)) => rewrite_for_upsert(
-                                                        value, metadata, keys, key, metrics,
-                                                    ),
-                                                })
-                                            })
-                                        }
-                                        DebeziumMode::Plain => results.flat_map(|data| {
-                                            data.value.map(|res| {
-                                                res.map(|mut val| {
-                                                    val.extend(data.metadata.into_iter());
-                                                    val
-                                                })
-                                            })
-                                        }),
-                                    };
-
-                                    let (stream, errors) = results.ok_err(ResultExt::err_into);
-                                    let stream = stream.pass_through("decode-ok").as_collection();
-                                    let errors =
-                                        errors.pass_through("decode-errors").as_collection();
-
-                                    let dbz_key_indices = if let Some(key_desc) = key_desc {
-                                        let fields = match &src.bare_desc.typ().column_types[0]
-                                            .scalar_type
-                                        {
-                                            ScalarType::Record { fields, .. } => fields.clone(),
-                                            _ => unreachable!(),
-                                        };
-                                        let row_desc = RelationDesc::from_names_and_types(fields);
-                                        // these must be available because the DDL parsing logic already
-                                        // checks this and bails in case the key is not correct
-                                        Some(dataflow_types::match_key_indices(&key_desc, &row_desc).expect("Invalid key schema, this indicates a bug in Materialize"))
-                                    } else {
-                                        None
-                                    };
-
-                                    let stream = dedupe_strategy.clone().render(
-                                        stream,
-                                        self.debug_name.to_string(),
-                                        scope.index(),
-                                        // Debezium decoding has produced two extra fields, with the
-                                        // dedupe information and the upstream time in millis
-                                        src.bare_desc.arity() + 2,
-                                        dbz_key_indices,
-                                    );
-
-                                    (stream, Some(errors))
+                                SourceEnvelope::Debezium(dbz_envelope) => {
+                                    let (stream, errors) = super::debezium::render(
+                                        dbz_envelope,
+                                        &results,
+                                        self.debug_name.clone(),
+                                        render_state.metrics.clone(),
+                                        src_id,
+                                        self.dataflow_id,
+                                    )
+                                    .inner
+                                    .ok_err(|(res, time, diff)| match res {
+                                        Ok(v) => Ok((v, time, diff)),
+                                        Err(e) => Err((e, time, diff)),
+                                    });
+                                    (stream.as_collection(), Some(errors.as_collection()))
                                 }
                                 SourceEnvelope::Upsert(_key_envelope) => {
                                     // TODO: use the key envelope to figure out when to add keys.
@@ -472,7 +410,9 @@ where
                                         self.as_of_frontier.clone(),
                                         &mut linear_operators,
                                         key_arity,
-                                        src.bare_desc.typ().arity(),
+                                        //TODO(petrosagg): Envelopes need to be told how to access
+                                        // the fields they need from the previous stage
+                                        src.desc.typ().arity(),
                                         source_persist_config
                                             .as_ref()
                                             .map(|config| config.upsert_config.clone()),
@@ -546,7 +486,7 @@ where
                             .inner
                             .flat_map_fallible("SourceLinearOperators", {
                                 // Produce an executable plan reflecting the linear operators.
-                                let source_type = src.bare_desc.typ();
+                                let source_type = src.desc.typ();
                                 let linear_op_mfp =
                                     crate::render::plan::linear_to_mfp(operators, source_type)
                                         .into_plan()
@@ -611,7 +551,7 @@ where
                     crate::render::CollectionBundle::from_collections(collection, err_collection),
                 );
 
-                let token = Rc::new(capability);
+                let token = Rc::new(cap);
                 tokens.source_tokens.insert(src_id, token.clone());
 
                 // We also need to keep track of this mapping globally to activate sources
@@ -777,6 +717,7 @@ fn raise_key_value_errors(KV { key, val }: KV) -> Option<Result<(Row, Row), Deco
             (Err(e), _) => Some(Err(e)),
         },
         (None, None) => None,
+        // TODO(petrosagg): this is an envelope error
         _ => Some(Err(DecodeError::Text(
             "Key and/or Value are not present for message".to_string(),
         ))),
