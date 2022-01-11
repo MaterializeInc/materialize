@@ -127,11 +127,9 @@ boundary don't silently merge their release notes into the wrong place.
 
 - Add the [`array_remove`](https://materialize.com/docs/sql/functions/#array-func) and [`list_remove`](https://materialize.com/docs/sql/functions/#list-func) functions.
 
-- Support the `NAMES` and `SCHEMA` aliases in `SET` to [match the behavior](https://www.postgresql.org/docs/9.1/sql-set.html) of PostgreSQL, under the following conditions:
+- Support the special PostgreSQL syntax [`SET NAMES` and `SET SCHEMA`](https://www.postgresql.org/docs/14/sql-set.html#id-1.9.3.173.6) for setting the `client_encoding` and `search_path parameters`, respectively.
 
-  - `SET NAMES ____` is allowed, but errors if the value is not `"UTF8"`.
-
-  - `SET SCHEMA ____` is correctly parsed, but remains unsettable.
+- Fix a crash in the optimizer when the branches of a `CASE` statement involved record types whose fields had differing nullability {{% gh 9931 %}}.
 
 {{% version-header v0.15.0 %}}
 
