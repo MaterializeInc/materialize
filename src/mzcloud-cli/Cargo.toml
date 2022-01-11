@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-clap = { version = "3.0.0", features = ["derive", "env"] }
+clap = { version = "3.0.6", features = ["derive", "env"] }
 mzcloud = { git = "https://github.com/MaterializeInc/cloud-sdks" }
 ore = { path = "../ore", features = ["cli"] }
 reqwest = "0.11"
