@@ -139,7 +139,7 @@ use sql::plan::{
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
     ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
     MutationKind, Params, PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, TailPlan,
+    SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
 use sql::plan::{OptimizerConfig, StatementDesc, View};
 use transform::Optimizer;
@@ -2357,7 +2357,7 @@ where
             }),
         };
 
-        match self
+        let transact_result = self
             .catalog_transact(vec![op], |mut builder| -> Result<(), CoordError> {
                 // Insert a dummy dataflow to trigger validation before we try to actually create
                 // the external sink resources (e.g. Kafka Topics)
@@ -2383,8 +2383,8 @@ where
                     )
                     .map(|_ok| ())
             })
-            .await
-        {
+            .await;
+        match transact_result {
             Ok(()) => (),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
