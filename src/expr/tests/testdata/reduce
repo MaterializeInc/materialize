@@ -318,7 +318,7 @@ reduce
     (call_variadic coalesce
         [
             (call_variadic (record_create ["f1" "f2"]) [#0 #1])
-            (call_variadic (record_create ["f1" "f2"]) [null null])
+            (call_variadic (record_create ["f1" "f2"]) [(null int32) (null int32)])
         ]
     )
 )
@@ -515,6 +515,25 @@ reduce
 [bool]
 ----
 #0
+
+### Regression test for #9995.
+### The inner if statement can be replaced by its `condition`, but we must
+### ensure that we keep the type of the `then` and `els` clauses.
+### The type of the error should be int32 instead of bool.
+
+reduce
+(if
+    (call_binary eq #0 1)
+    1
+    (if
+        (call_binary eq #0 (call_binary div_int64 1 0))
+        1
+        1
+    )
+)
+[int64]
+----
+if (#0 = 1) then {1} else {(err: division by zero)}
 
 ## undistribute_and/or works despite multiple copies of the same expression in
 ## the intersection

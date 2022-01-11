@@ -152,6 +152,8 @@ changes that have not yet been documented.
 - Correctly parse `SET SCHEMA ____` special case as per: https://www.postgresql.org/docs/9.1/sql-set.html,
   but it remains unsettable.
 
+- Fix a crash when a condition of a `CASE` statement evaluates to an error. {{% gh 9995 %}}
+
 {{< comment >}}
 Only add new release notes above this line.
 
