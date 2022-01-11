@@ -179,8 +179,8 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
                     waker.wake_by_ref();
                 }
 
-                !frontiers.iter().all(|f| f.is_empty())
-                //operator_incomplete
+                // !frontiers.iter().all(|f| f.is_empty())
+                operator_incomplete
             }
         });
     }
@@ -199,10 +199,11 @@ macro_rules! async_op {
                 #[allow(unused_mut)]
                 let mut $frontiers = &mut frontiers;
 
-                async { $body }.await;
-                //if !async { $body }.await && frontiers.borrow().iter().all(|f| f.is_empty()) {
-                //    break;
-                //}
+                let empty = frontiers.borrow().iter().all(|f| f.is_empty());
+                //async { $body }.await;
+                if !async { $body }.await && empty {
+                    break;
+                }
             }
         }
     };
