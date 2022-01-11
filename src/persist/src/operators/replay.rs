@@ -13,7 +13,8 @@ use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::Map;
 use timely::dataflow::{Scope, Stream};
-use timely::Data as TimelyData;
+use timely::progress::Antichain;
+use timely::{Data as TimelyData, PartialOrder};
 
 use crate::error::Error;
 use crate::indexed::runtime::DecodedSnapshot;
@@ -25,6 +26,7 @@ pub trait Replay<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     fn replay(
         &self,
         snapshot: Result<DecodedSnapshot<K, V>, Error>,
+        as_of_frontier: &Antichain<u64>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)>;
 }
 
@@ -37,6 +39,7 @@ where
     fn replay(
         &self,
         snapshot: Result<DecodedSnapshot<K, V>, Error>,
+        as_of_frontier: &Antichain<u64>,
     ) -> Stream<G, (Result<(K, V), String>, u64, isize)> {
         // TODO: This currently works by only emitting the persisted
         // data on worker 0 because that was the simplest thing to do
@@ -44,8 +47,12 @@ where
         // between all the workers.
         let active_worker = self.index() == 0;
 
-        let result_stream: Stream<G, Result<((K, V), u64, isize), Error>> =
-            operator::source(self, "Replay", move |cap, _info| {
+        let as_of_frontier = as_of_frontier.clone();
+
+        let result_stream: Stream<G, Result<((K, V), u64, isize), Error>> = operator::source(
+            self,
+            "Replay",
+            move |cap, _info| {
                 let mut snapshot_cap = if active_worker {
                     Some((snapshot, cap))
                 } else {
@@ -63,6 +70,16 @@ where
                     match snapshot {
                         Ok(snapshot) => {
                             let snapshot_since = snapshot.since();
+
+                            if PartialOrder::less_than(&as_of_frontier, &snapshot_since) {
+                                session.give(Err(Error::String(format!(
+                                    "replaying persisted data: snapshot since ({:?}) is beyond expected as_of ({:?})",
+                                    snapshot_since, as_of_frontier
+                                ))));
+
+                                return;
+                            }
+
                             // TODO: Periodically yield to let the rest of the dataflow
                             // reduce this down.
                             for x in snapshot.into_iter() {
@@ -85,7 +102,8 @@ where
                         }
                     }
                 }
-            });
+            },
+        );
         result_stream.map(|x| {
             match x {
                 Ok((kv, ts, diff)) => (Ok(kv), ts, diff),
@@ -114,5 +132,113 @@ where
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::{Capture, OkErr};
+
+    use crate::error::Error;
+    use crate::mem::MemRegistry;
+    use crate::operators::split_ok_err;
+
+    use super::*;
+
+    #[test]
+    fn replay() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+        let p = registry.runtime_no_reentrance()?;
+
+        let (write, _) = p.create_or_load("1");
+        for i in 1..=5 {
+            write
+                .write(&[((i.to_string(), ()), i, 1)])
+                .recv()
+                .expect("write was successful");
+        }
+        write.seal(6).recv().expect("seal was successful");
+
+        let (oks, errs) = timely::execute_directly(move |worker| {
+            let (oks, errs) = worker.dataflow(|scope| {
+                let (_write, read) = p.create_or_load::<String, ()>("1");
+                let (ok_stream, err_stream) = scope
+                    .replay(read.snapshot(), &Antichain::from_elem(0))
+                    .ok_err(split_ok_err);
+                (ok_stream.capture(), err_stream.capture())
+            });
+
+            (oks, errs)
+        });
+
+        assert!(errs
+            .extract()
+            .into_iter()
+            .flat_map(|(_time, data)| data.into_iter().map(|(err, _ts, _diff)| err))
+            .collect::<Vec<_>>()
+            .is_empty());
+
+        let mut actual = oks
+            .extract()
+            .into_iter()
+            .flat_map(|(_, xs)| xs.into_iter().map(|((k, _), _, _)| k))
+            .collect::<Vec<_>>();
+        actual.sort();
+
+        let expected = (1usize..=5usize).map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn replay_invalid_as_of() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+        let p = registry.runtime_no_reentrance()?;
+
+        let (write, _) = p.create_or_load("1");
+        for i in 1..=5 {
+            write
+                .write(&[((i.to_string(), ()), i, 1)])
+                .recv()
+                .expect("write was successful");
+        }
+        write.seal(6).recv().expect("seal was successful");
+        write
+            .allow_compaction(Antichain::from_elem(5))
+            .recv()
+            .expect("compaction was successful");
+
+        let (oks, errs) = timely::execute_directly(move |worker| {
+            let (oks, errs) = worker.dataflow(|scope| {
+                let (_write, read) = p.create_or_load::<String, ()>("1");
+                let (ok_stream, err_stream) = scope
+                    .replay(read.snapshot(), &Antichain::from_elem(0))
+                    .ok_err(split_ok_err);
+                (ok_stream.capture(), err_stream.capture())
+            });
+
+            (oks, errs)
+        });
+
+        assert!(oks
+            .extract()
+            .into_iter()
+            .flat_map(|(_time, data)| data.into_iter().map(|(data, _ts, _diff)| data))
+            .collect::<Vec<_>>()
+            .is_empty());
+
+        let errs = errs
+            .extract()
+            .into_iter()
+            .flat_map(|(_time, data)| data.into_iter().map(|(err, _ts, _diff)| err))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            errs,
+            vec!["replaying persisted data: snapshot since (Antichain { elements: [5] }) is beyond expected as_of (Antichain { elements: [0] })".to_string()]);
+
+        Ok(())
     }
 }
