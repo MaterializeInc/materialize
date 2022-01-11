@@ -2373,7 +2373,7 @@ fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<HirScalarExpr
             Datum::from(pcx.wall_time),
             ScalarType::TimestampTz,
         )),
-        QueryLifetime::Static => sql_bail!("{} cannot be used in static queries", name),
+        QueryLifetime::Static => sql_bail!("{} cannot be used in static queries; see: https://materialize.com/docs/sql/functions/now_and_mz_logical_timestamp/", name),
     }
 }
 
