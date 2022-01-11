@@ -7,16 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Helpers for working with Kafka's API
+//! Helpers for working with Kafka's client API.
 
-use rdkafka::{
-    consumer::ConsumerContext,
-    producer::{DefaultProducerContext, DeliveryResult, ProducerContext},
-    ClientContext,
-};
+use rdkafka::consumer::ConsumerContext;
+use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
+use rdkafka::ClientContext;
 use tracing::{debug, error, info, warn};
 
-/// A `ClientContext` implementation that correctly uses `tracing` instead of `log` macros
+/// A `ClientContext` implementation that uses `tracing` instead of `log` macros.
+///
+/// All code in Materialize that constructs Kafka clients should use this context or
+/// a custom context that delegates the `log` and `error` methods to this implementation.
 pub struct MzClientContext;
 
 impl ClientContext for MzClientContext {
@@ -40,8 +41,9 @@ impl ClientContext for MzClientContext {
     }
 }
 
-// Default implementation's of ConsumerContext and ProducerContext that uses the above log impl for
-// the super traits
+// Implement `ConsumerContext` and `ProducerContext` for `MzClientContext`, so that it can be used
+// in place of `DefaultProducerContext` and `DefaultConsumerContext`, but use tracing for logging.
+// (These trait have a `: ClientContext` super-trait bound)
 impl ConsumerContext for MzClientContext {}
 impl ProducerContext for MzClientContext {
     type DeliveryOpaque = <DefaultProducerContext as ProducerContext>::DeliveryOpaque;

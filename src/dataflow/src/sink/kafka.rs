@@ -211,7 +211,8 @@ impl SinkProducerContext {
 }
 
 impl ClientContext for SinkProducerContext {
-    // rdkafka's ClientContext is a bit weird, so we are forced to forward here awkwardly
+    // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
+    // implementation.
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
         MzClientContext.log(level, fac, log_message)
     }
