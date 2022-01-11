@@ -228,7 +228,7 @@ Below are the recommended ways to work around this.
 ### Tailing with `FETCH`
 
 The recommended way to use `TAIL` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
-These must be used within a transaction.
+These must be used within a transaction, with [only one `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
 This allows you to limit the number of rows and the time window of your requests. First, declare a `TAIL` cursor:
 
 ```sql
