@@ -43,7 +43,6 @@ members = [
     "src/sql",
     "src/sqllogictest",
     "src/testdrive",
-    "src/timely-util",
     "src/transform",
     "src/walkabout",
     "test/metabase/smoketest",
