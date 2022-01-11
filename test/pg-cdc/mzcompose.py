@@ -22,7 +22,7 @@ def workflow_pg_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "filter",
         nargs="*",
-        default="*.td",
+        default=["*.td"],
         help="limit to only the files matching filter",
     )
     args = parser.parse_args()
@@ -30,4 +30,4 @@ def workflow_pg_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized", "test-certs", "testdrive-svc", "postgres")
     c.wait_for_materialized()
     c.wait_for_postgres()
-    c.run("testdrive-svc", args.filter)
+    c.run("testdrive-svc", *args.filter)
