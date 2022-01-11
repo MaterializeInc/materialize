@@ -795,7 +795,6 @@ pub fn plan_mutation_query_inner(
                     allow_windows: false,
                 };
                 let expr = plan_expr(&ecx, &value)?.cast_to(
-                    "SET clause",
                     ecx,
                     CastContext::Assignment,
                     &typ.scalar_type,
@@ -957,7 +956,7 @@ where
         // We plan every cast and check the evaluated expressions rather than
         // checking the types directly because of some complex casting rules
         // between types not expressed in `ScalarType` equality.
-        match typeconv::plan_cast("relation cast", ecx, ccx, expr.clone(), target_typ) {
+        match typeconv::plan_cast(ecx, ccx, expr.clone(), target_typ) {
             Ok(cast_expr) => {
                 if expr == cast_expr {
                     // Cast between types was unnecessary
@@ -1042,7 +1041,7 @@ pub fn plan_default_expr(
         allow_subqueries: false,
         allow_windows: false,
     };
-    let hir = plan_expr(ecx, &expr)?.cast_to(ecx.name, ecx, CastContext::Assignment, target_ty)?;
+    let hir = plan_expr(ecx, &expr)?.cast_to(ecx, CastContext::Assignment, target_ty)?;
     Ok((hir, qcx.ids.into_iter().collect()))
 }
 
@@ -2376,6 +2375,13 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
 fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ColumnName> {
     match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
+        Expr::Value(v) => match v {
+            // Per PostgreSQL, `bool` and `interval` literals take on the name
+            // of their type, but not other literal types.
+            Value::Boolean(_) => Some("bool".into()),
+            Value::Interval(_) => Some("interval".into()),
+            _ => None,
+        },
         Expr::Function(func) => {
             let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
             if name.schema.as_deref() == Some("mz_internal") {
@@ -2388,9 +2394,20 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ColumnName>
         Expr::NullIf { .. } => Some("nullif".into()),
         Expr::Array { .. } => Some("array".into()),
         Expr::List { .. } => Some("list".into()),
-        Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
+        Expr::Cast { expr, data_type } => match invent_column_name(ecx, expr) {
+            Some(name) => Some(name),
+            None => {
+                let ty = scalar_type_from_sql(&ecx.qcx.scx, data_type).ok()?;
+                let pgrepr_type = pgrepr::Type::from(&ty);
+                let entry = ecx.catalog().get_item_by_oid(&pgrepr_type.oid());
+                Some(entry.name().item.clone().into())
+            }
+        },
         Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
         Expr::Exists { .. } => Some("exists".into()),
+        Expr::SubscriptScalar { expr, .. } | Expr::SubscriptSlice { expr, .. } => {
+            invent_column_name(ecx, expr)
+        }
         Expr::Subquery(query) | Expr::ListSubquery(query) => {
             // A bit silly to have to plan the query here just to get its column
             // name, since we throw away the planned expression, but fixing this
@@ -2777,7 +2794,7 @@ fn plan_expr_inner<'a>(
         .into()),
         Expr::FieldAccess { expr, field } => plan_field_access(ecx, expr, field),
         Expr::WildcardAccess(expr) => plan_expr(ecx, expr),
-        Expr::SubscriptIndex { expr, subscript } => plan_subscript_index(ecx, expr, subscript),
+        Expr::SubscriptScalar { expr, subscript } => plan_subscript_scalar(ecx, expr, subscript),
         Expr::SubscriptSlice { expr, positions } => plan_subscript_slice(ecx, expr, positions),
 
         // Subqueries.
@@ -2848,7 +2865,9 @@ fn plan_cast(
         expr => typeconv::plan_coerce(ecx, expr, &to_scalar_type)?,
     };
 
-    Ok(typeconv::plan_cast("CAST", ecx, CastContext::Explicit, expr, &to_scalar_type)?.into())
+    let ecx = &ecx.with_name("CAST");
+    let expr = typeconv::plan_cast(ecx, CastContext::Explicit, expr, &to_scalar_type)?;
+    Ok(expr.into())
 }
 
 fn plan_not(ecx: &ExprContext, expr: &Expr<Aug>) -> Result<CoercibleScalarExpr, PlanError> {
@@ -2922,27 +2941,24 @@ fn plan_field_access(
     }
 }
 
-fn plan_subscript_index(
+fn plan_subscript_scalar(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
     subscript: &Expr<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
+    let ecx = &ecx.with_name("subscript (indexing)");
     let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
     let ty = ecx.scalar_type(&expr);
     let func = match &ty {
         ScalarType::List { .. } => BinaryFunc::ListIndex,
         ScalarType::Array(_) => BinaryFunc::ArrayIndex,
+        ScalarType::Jsonb => return plan_subscript_jsonb(ecx, expr, subscript),
         ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
     };
 
     Ok(expr
         .call_binary(
-            plan_expr(ecx, subscript)?.cast_to(
-                "subscript (indexing)",
-                ecx,
-                CastContext::Explicit,
-                &ScalarType::Int64,
-            )?,
+            plan_expr(ecx, subscript)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?,
             func,
         )
         .into())
@@ -2961,6 +2977,7 @@ fn plan_subscript_slice(
     if positions.len() > 1 {
         ecx.require_experimental_mode("layered/multidimensional slicing")?;
     }
+    let ecx = &ecx.with_name("subscript (slicing)");
     let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
     let ty = ecx.scalar_type(&expr);
     match &ty {
@@ -2976,26 +2993,21 @@ fn plan_subscript_slice(
                 )
             }
         }
+        ScalarType::Jsonb => sql_bail!("jsonb subscript does not support slices"),
         ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
     };
 
     let mut exprs = vec![expr];
-    let op_str = "subscript (slicing)";
 
     for p in positions {
         let start = if let Some(start) = &p.start {
-            plan_expr(ecx, start)?.cast_to(
-                op_str,
-                ecx,
-                CastContext::Explicit,
-                &ScalarType::Int64,
-            )?
+            plan_expr(ecx, start)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?
         } else {
             HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)
         };
 
         let end = if let Some(end) = &p.end {
-            plan_expr(ecx, end)?.cast_to(op_str, ecx, CastContext::Explicit, &ScalarType::Int64)?
+            plan_expr(ecx, end)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?
         } else {
             HirScalarExpr::literal(Datum::Int64(i64::MAX - 1), ScalarType::Int64)
         };
@@ -3009,6 +3021,40 @@ fn plan_subscript_slice(
         exprs,
     }
     .into())
+}
+
+fn plan_subscript_jsonb(
+    ecx: &ExprContext,
+    expr: HirScalarExpr,
+    subscript: &Expr<Aug>,
+) -> Result<CoercibleScalarExpr, PlanError> {
+    use CastContext::Implicit;
+    use ScalarType::{Int64, String};
+
+    let subscript = plan_expr(ecx, subscript)?;
+    let subscript = if let Ok(subscript) = subscript.clone().cast_to(ecx, Implicit, &String) {
+        subscript
+    } else if let Ok(subscript) = subscript.cast_to(ecx, Implicit, &Int64) {
+        // Integers are converted to a string here and then re-parsed as an
+        // integer by `JsonbGetPath`. Weird, but this is how PostgreSQL says to
+        // do it.
+        typeconv::to_string(ecx, subscript)
+    } else {
+        sql_bail!("jsonb subscript type must be coercible to integer or text");
+    };
+
+    // Subscripting works like `expr #> ARRAY[subscript]` rather than
+    // `expr->subscript` as you might expect.
+    let expr = expr.call_binary(
+        HirScalarExpr::CallVariadic {
+            func: VariadicFunc::ArrayCreate {
+                elem_type: ScalarType::String,
+            },
+            exprs: vec![subscript],
+        },
+        BinaryFunc::JsonbGetPath { stringify: false },
+    );
+    Ok(expr.into())
 }
 
 fn plan_exists(ecx: &ExprContext, query: &Query<Aug>) -> Result<CoercibleScalarExpr, PlanError> {
@@ -3268,6 +3314,8 @@ pub fn coerce_homogeneous_exprs(
 ) -> Result<Vec<HirScalarExpr>, PlanError> {
     assert!(!exprs.is_empty());
 
+    let ecx = &ecx.with_name(name);
+
     let types: Vec<_> = exprs.iter().map(|e| ecx.scalar_type(e)).collect();
 
     let target = match typeconv::guess_best_common_type(&types, type_hint) {
@@ -3278,8 +3326,8 @@ pub fn coerce_homogeneous_exprs(
     // Try to cast all expressions to `target`.
     let mut out = Vec::new();
     for expr in exprs {
-        let arg = typeconv::plan_coerce(ecx, expr, &target)?;
-        match typeconv::plan_cast(name, ecx, CastContext::Implicit, arg.clone(), &target) {
+        let arg = typeconv::plan_coerce(&ecx, expr, &target)?;
+        match typeconv::plan_cast(ecx, CastContext::Implicit, arg.clone(), &target) {
             Ok(expr) => out.push(expr),
             Err(_) => sql_bail!(
                 "{} cannot be cast to uniform type: {} vs {}",
@@ -4147,7 +4195,7 @@ impl<'a> QueryContext<'a> {
 pub struct ExprContext<'a> {
     pub qcx: &'a QueryContext<'a>,
     /// The name of this kind of expression eg "WHERE clause". Used only for error messages.
-    pub name: &'static str,
+    pub name: &'a str,
     /// The context for the `Query` that contains this `Expr`.
     /// The current scope.
     pub scope: &'a Scope,
@@ -4173,7 +4221,7 @@ impl<'a> ExprContext<'a> {
         self.qcx.scx.catalog
     }
 
-    fn with_name(&self, name: &'static str) -> ExprContext<'a> {
+    pub fn with_name(&self, name: &'a str) -> ExprContext<'a> {
         let mut ecx = self.clone();
         ecx.name = name;
         ecx

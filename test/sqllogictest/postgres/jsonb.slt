@@ -1,0 +1,185 @@
+# Copyright 1994, Regents of the University of California.
+# Copyright 1996-2019 PostgreSQL Global Development Group.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the regression test suite in PostgreSQL.
+# The original file was retrieved on January 7, 2021 from:
+#
+#     https://github.com/postgres/postgres/blob/5940ffb221316ab73e6fdc780dfe9a07d4221ebb/src/test/regress/expected/join.out
+#
+# The original source code is subject to the terms of the PostgreSQL
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# At the time of writing this file contains only PostgreSQL's subscript-related
+# jsonb tests, which constitute only a small fraction of the available jsonb
+# tests upstream.
+
+query T colnames
+select ('123'::jsonb)['a']
+----
+jsonb
+NULL
+
+query T colnames
+select ('123'::jsonb)[0]
+----
+jsonb
+NULL
+
+query T colnames
+select ('123'::jsonb)[NULL]
+----
+jsonb
+NULL
+
+query T colnames
+select ('{"a": 1}'::jsonb)['a']
+----
+jsonb
+1
+
+query T colnames
+select ('{"a": 1}'::jsonb)[0]
+----
+jsonb
+NULL
+
+query T colnames
+select ('{"a": 1}'::jsonb)['not_exist']
+----
+jsonb
+NULL
+
+query T colnames
+select ('{"a": 1}'::jsonb)[NULL]
+----
+jsonb
+NULL
+
+query T colnames
+select ('[1, "2", null]'::jsonb)['a']
+----
+jsonb
+NULL
+
+query T colnames
+select ('[1, "2", null]'::jsonb)[0]
+----
+jsonb
+1
+
+query T colnames
+select ('[1, "2", null]'::jsonb)['1']
+----
+jsonb
+"2"
+
+query error jsonb subscript type must be coercible to integer or text
+select ('[1, "2", null]'::jsonb)[1.0]
+
+query T colnames
+select ('[1, "2", null]'::jsonb)[2]
+----
+jsonb
+null
+
+query T colnames
+select ('[1, "2", null]'::jsonb)[3]
+----
+jsonb
+NULL
+
+query T colnames
+select ('[1, "2", null]'::jsonb)[-2]
+----
+jsonb
+"2"
+
+query T colnames
+select ('[1, "2", null]'::jsonb)[1]['a']
+----
+jsonb
+NULL
+
+query T colnames
+select ('[1, "2", null]'::jsonb)[1][0]
+----
+jsonb
+NULL
+
+query T colnames
+select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['b']
+----
+jsonb
+"c"
+
+query T colnames
+select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['d'];
+----
+jsonb
+[1,2,3]
+
+query T colnames
+select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['d'][1]
+----
+jsonb
+2
+
+query T colnames
+select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['d']['a'];
+----
+jsonb
+NULL
+
+query T colnames
+select ('{"a": {"a1": {"a2": "aaa"}}, "b": "bbb", "c": "ccc"}'::jsonb)['a']['a1']
+----
+jsonb
+{"a2":"aaa"}
+
+query T colnames
+select ('{"a": {"a1": {"a2": "aaa"}}, "b": "bbb", "c": "ccc"}'::jsonb)['a']['a1']['a2']
+----
+jsonb
+"aaa"
+
+query T colnames
+select ('{"a": {"a1": {"a2": "aaa"}}, "b": "bbb", "c": "ccc"}'::jsonb)['a']['a1']['a2']['a3']
+----
+jsonb
+NULL
+
+query T colnames
+select ('{"a": ["a1", {"b1": ["aaa", "bbb", "ccc"]}], "b": "bb"}'::jsonb)['a'][1]['b1']
+----
+jsonb
+["aaa","bbb","ccc"]
+
+query T colnames
+select ('{"a": ["a1", {"b1": ["aaa", "bbb", "ccc"]}], "b": "bb"}'::jsonb)['a'][1]['b1'][2]
+----
+jsonb
+"ccc"
+
+# slices are not supported
+query error jsonb subscript does not support slices
+select ('{"a": 1}'::jsonb)['a':'b']
+
+query error jsonb subscript does not support slices
+select ('[1, "2", null]'::jsonb)[1:2]
+
+query error jsonb subscript does not support slices
+select ('[1, "2", null]'::jsonb)[:2]
+
+query error jsonb subscript does not support slices
+select ('[1, "2", null]'::jsonb)[1:]

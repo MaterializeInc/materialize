@@ -9,9 +9,10 @@
 
 mode cockroach
 
-query T
+query T colnames
 SELECT INTERVAL '1';
 ----
+interval
 00:00:01
 
 ## SQL Standard

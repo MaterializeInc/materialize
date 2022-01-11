@@ -151,7 +151,6 @@ struct Operation<R>(
     Box<
         dyn Fn(
                 &ExprContext,
-                FuncSpec,
                 Vec<CoercibleScalarExpr>,
                 &ParamList,
                 Vec<ColumnOrder>,
@@ -173,7 +172,6 @@ impl<R> Operation<R> {
     where
         F: Fn(
                 &ExprContext,
-                FuncSpec,
                 Vec<CoercibleScalarExpr>,
                 &ParamList,
                 Vec<ColumnOrder>,
@@ -212,8 +210,8 @@ impl<R> Operation<R> {
             + Sync
             + 'static,
     {
-        Self::new(move |ecx, spec, cexprs, params, order_by| {
-            let exprs = coerce_args_to_types(ecx, spec, cexprs, params)?;
+        Self::new(move |ecx, cexprs, params, order_by| {
+            let exprs = coerce_args_to_types(ecx, cexprs, params)?;
             f(ecx, exprs.into_element(), order_by)
         })
     }
@@ -243,8 +241,8 @@ impl<R> Operation<R> {
             + Sync
             + 'static,
     {
-        Self::new(move |ecx, spec, cexprs, params, order_by| {
-            let exprs = coerce_args_to_types(ecx, spec, cexprs, params)?;
+        Self::new(move |ecx, cexprs, params, order_by| {
+            let exprs = coerce_args_to_types(ecx, cexprs, params)?;
             assert_eq!(exprs.len(), 2);
             let mut exprs = exprs.into_iter();
             let left = exprs.next().unwrap();
@@ -258,8 +256,8 @@ impl<R> Operation<R> {
     where
         F: Fn(&ExprContext, Vec<HirScalarExpr>) -> Result<R, PlanError> + Send + Sync + 'static,
     {
-        Self::new(move |ecx, spec, cexprs, params, _order_by| {
-            let exprs = coerce_args_to_types(ecx, spec, cexprs, params)?;
+        Self::new(move |ecx, cexprs, params, _order_by| {
+            let exprs = coerce_args_to_types(ecx, cexprs, params)?;
             f(ecx, exprs)
         })
     }
@@ -947,8 +945,10 @@ pub fn select_impl<R>(
 where
     R: fmt::Debug,
 {
+    let name = spec.to_string();
+    let ecx = &ecx.with_name(&name);
     let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
-    select_impl_inner(ecx, spec, impls, args, &types, order_by).map_err(|e| {
+    select_impl_inner(ecx, impls, args, &types, order_by).map_err(|e| {
         let types: Vec<_> = types
             .into_iter()
             .map(|ty| match ty {
@@ -972,7 +972,6 @@ where
 
 fn select_impl_inner<R>(
     ecx: &ExprContext,
-    spec: FuncSpec,
     impls: &[FuncImpl<R>],
     cexprs: Vec<CoercibleScalarExpr>,
     types: &[Option<ScalarType>],
@@ -992,7 +991,7 @@ where
 
     let f = find_match(ecx, types, impls)?;
 
-    (f.op.0)(ecx, spec, cexprs, &f.params, order_by)
+    (f.op.0)(ecx, cexprs, &f.params, order_by)
 }
 
 /// Finds an exact match based on the arguments, or, if no exact match, finds
@@ -1211,7 +1210,6 @@ fn find_match<'a, R: std::fmt::Debug>(
 /// verified that the `args` are valid for `params`.
 fn coerce_args_to_types(
     ecx: &ExprContext,
-    spec: FuncSpec,
     args: Vec<CoercibleScalarExpr>,
     params: &ParamList,
 ) -> Result<Vec<HirScalarExpr>, PlanError> {
@@ -1222,9 +1220,8 @@ fn coerce_args_to_types(
             .expect("function selection verifies that polymorphic types successfully resolved")
     };
 
-    let do_convert = |arg: CoercibleScalarExpr, ty: &ScalarType| {
-        arg.cast_to(&spec.to_string(), ecx, CastContext::Implicit, ty)
-    };
+    let do_convert =
+        |arg: CoercibleScalarExpr, ty: &ScalarType| arg.cast_to(ecx, CastContext::Implicit, ty);
 
     let mut exprs = Vec::new();
     for (i, arg) in args.into_iter().enumerate() {
@@ -1688,7 +1685,7 @@ lazy_static! {
                 ), 2080;
             },
             "pg_typeof" => Scalar {
-                params!(Any) => Operation::new(|ecx, spec, exprs, params, _order_by| {
+                params!(Any) => Operation::new(|ecx, exprs, params, _order_by| {
                     // pg_typeof reports the type *before* coercion.
                     let name = match ecx.scalar_type(&exprs[0]) {
                         None => "unknown".to_string(),
@@ -1698,7 +1695,7 @@ lazy_static! {
                     // For consistency with other functions, verify that
                     // coercion is possible, though we don't actually care about
                     // the coerced results.
-                    coerce_args_to_types(ecx, spec, exprs, params)?;
+                    coerce_args_to_types(ecx, exprs, params)?;
 
                     // TODO(benesch): make this function have return type
                     // regtype, when we support that type. Document the function
@@ -2327,14 +2324,12 @@ lazy_static! {
                 params!(Float64) => Operation::identity(), oid::FUNC_MZ_AVG_PROMOTION_F64_OID;
                 params!(Int16) => Operation::unary(|ecx, e| {
                       typeconv::plan_cast(
-                          "internal.avg_promotion", ecx, CastContext::Explicit,
-                          e, &ScalarType::Numeric {scale: None},
+                          ecx, CastContext::Explicit, e, &ScalarType::Numeric {scale: None},
                       )
                 }), oid::FUNC_MZ_AVG_PROMOTION_I16_OID;
                 params!(Int32) => Operation::unary(|ecx, e| {
                       typeconv::plan_cast(
-                          "internal.avg_promotion", ecx, CastContext::Explicit,
-                          e, &ScalarType::Numeric {scale: None},
+                          ecx, CastContext::Explicit, e, &ScalarType::Numeric {scale: None},
                       )
                 }), oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
             },
@@ -2460,7 +2455,7 @@ lazy_static! {
 
             // ARITHMETIC
             "+" => Scalar {
-                params!(Any) => Operation::new(|ecx, _spec, exprs, _params, _order_by| {
+                params!(Any) => Operation::new(|ecx, exprs, _params, _order_by| {
                     // Unary plus has unusual compatibility requirements.
                     //
                     // In PostgreSQL, it is only defined for numeric types, so
@@ -2680,7 +2675,6 @@ lazy_static! {
             "||" => Scalar {
                 params!(String, NonVecAny) => Operation::binary(|ecx, lhs, rhs| {
                     let rhs = typeconv::plan_cast(
-                        "text_concat",
                         ecx,
                         CastContext::Explicit,
                         rhs,
@@ -2690,7 +2684,6 @@ lazy_static! {
                 }), 2779;
                 params!(NonVecAny, String) =>  Operation::binary(|ecx, lhs, rhs| {
                     let lhs = typeconv::plan_cast(
-                        "text_concat",
                         ecx,
                         CastContext::Explicit,
                         lhs,

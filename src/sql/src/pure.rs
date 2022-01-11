@@ -313,7 +313,7 @@ pub fn purify(
                             for (i, column) in columns.iter().enumerate() {
                                 projection.push(SelectItem::Expr {
                                     expr: Expr::Cast {
-                                        expr: Box::new(Expr::SubscriptIndex {
+                                        expr: Box::new(Expr::SubscriptScalar {
                                             expr: Box::new(Expr::Identifier(vec![Ident::new(
                                                 "row_data",
                                             )])),

@@ -1116,7 +1116,7 @@ impl<'a> Parser<'a> {
             assert!(
                 positions.len() == 1 && positions[0].start.is_some() && positions[0].end.is_none(),
             );
-            Expr::SubscriptIndex {
+            Expr::SubscriptScalar {
                 expr: Box::new(expr),
                 subscript: Box::new(positions.remove(0).start.unwrap()),
             }
