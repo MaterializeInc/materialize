@@ -225,7 +225,8 @@ class Composition:
 
         for name, config in compose["services"].items():
             if "propagate_uid_gid" in config:
-                config["user"] = f"{os.getuid()}:{os.getgid()}"
+                if config["propagate_uid_gid"]:
+                    config["user"] = f"{os.getuid()}:{os.getgid()}"
                 del config["propagate_uid_gid"]
 
             ports = config.setdefault("ports", [])
