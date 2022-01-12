@@ -407,12 +407,12 @@ impl LocalClient {
 #[async_trait::async_trait]
 impl Client for LocalClient {
     async fn send(&mut self, cmd: Command) {
-        log::trace!("SEND dataflow command: {:?}", cmd);
+        tracing::trace!("SEND dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
     async fn recv(&mut self) -> Option<Response> {
         let response = self.client.recv().await;
-        log::trace!("RECV dataflow response: {:?}", response);
+        tracing::trace!("RECV dataflow response: {:?}", response);
         response
     }
 }
@@ -520,7 +520,7 @@ pub mod partitioned {
             for id in cease.into_iter() {
                 let previous = self.uppers.remove(&id);
                 if previous.is_none() {
-                    log::debug!("Protocol error: ceasing frontier tracking for absent identifier {:?} due to command {:?}", id, command);
+                    tracing::debug!("Protocol error: ceasing frontier tracking for absent identifier {:?} due to command {:?}", id, command);
                 }
             }
         }

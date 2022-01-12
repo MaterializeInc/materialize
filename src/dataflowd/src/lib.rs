@@ -37,7 +37,7 @@ impl RemoteClient {
 #[async_trait::async_trait]
 impl Client for RemoteClient {
     async fn send(&mut self, cmd: Command) {
-        log::trace!("Broadcasting dataflow command: {:?}", cmd);
+        tracing::trace!("Broadcasting dataflow command: {:?}", cmd);
         self.client.send(cmd).await
     }
     async fn recv(&mut self) -> Option<Response> {

@@ -17,9 +17,9 @@ use anyhow::{Context, Error};
 use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{EventMask, Inotify, WatchMask};
-use log::error;
 use repr::MessagePayload;
 use timely::scheduling::SyncActivator;
+use tracing::error;
 
 use dataflow_types::{
     AvroOcfEncoding, Compression, DataEncoding, ExternalSourceConnector, MzOffset,
@@ -77,7 +77,7 @@ impl SourceReader for FileSourceReader {
     ) -> Result<(FileSourceReader, Option<PartitionId>), anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {
-                log::debug!("creating FileSourceReader worker_id={}", worker_id);
+                tracing::debug!("creating FileSourceReader worker_id={}", worker_id);
                 let ctor = |fi| {
                     let mut br = std::io::BufReader::new(fi);
                     Ok(std::iter::from_fn(move || {
@@ -113,7 +113,7 @@ impl SourceReader for FileSourceReader {
                 rx
             }
             ExternalSourceConnector::AvroOcf(fc) => {
-                log::debug!("creating Avro FileSourceReader worker_id={}", worker_id);
+                tracing::debug!("creating Avro FileSourceReader worker_id={}", worker_id);
                 let value_encoding = match &encoding {
                     SourceDataEncoding::Single(enc) => enc,
                     SourceDataEncoding::KeyValue { .. } => {
@@ -202,7 +202,7 @@ pub fn read_file_task<Ctor, I, Err>(
     Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
     Err: Into<anyhow::Error>,
 {
-    log::trace!("reading file {}", path.display());
+    tracing::trace!("reading file {}", path.display());
     let file = match std::fs::File::open(&path).with_context(|| {
         format!(
             "file source: unable to open file at path {}",
@@ -418,5 +418,5 @@ fn send_records<I, Out, Err>(
             activator.activate().expect("activation failed");
         }
     }
-    log::trace!("sent {} records to reader", records);
+    tracing::trace!("sent {} records to reader", records);
 }

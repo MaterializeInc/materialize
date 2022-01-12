@@ -21,10 +21,10 @@ use timely::progress::Antichain;
 
 use dataflow_types::{DataflowError, DecodeError, LinearOperator, SourceError, SourceErrorDetails};
 use expr::{EvalError, MirScalarExpr};
-use log::error;
 use ore::result::ResultExt;
 use persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
 use repr::{Datum, Diff, Row, RowArena, Timestamp};
+use tracing::error;
 
 use crate::operator::StreamExt;
 use crate::source::{DecodeResult, SourceData};
@@ -331,7 +331,7 @@ where
                         let mut time = cap.time().clone();
                         time.advance_by(as_of_frontier.borrow());
                         if key.is_none() {
-                            error!("Encountered empty key for value {:?}", new_value);
+                            error!(?new_value, "Encountered empty key for value");
                             continue;
                         }
 

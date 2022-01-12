@@ -16,7 +16,8 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
-use log::{debug, error, info, warn};
+
+use kafka_util::client::MzClientContext;
 use ore::collections::CollectionExt;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -471,20 +472,17 @@ impl ClientContext for KafkaErrCheckContext {
                 if error.is_none() {
                     *error = Some(log_message.to_string());
                 }
-                error!(target: "librdkafka", "{} {}", fac, log_message);
             }
-            Warning => warn!(target: "librdkafka", "{} {}", fac, log_message),
-            Notice => info!(target: "librdkafka", "{} {}", fac, log_message),
-            Info => info!(target: "librdkafka", "{} {}", fac, log_message),
-            Debug => debug!(target: "librdkafka", "{} {}", fac, log_message),
+            _ => {}
         }
+        MzClientContext.log(level, fac, log_message)
     }
     // Refer to the comment on the `log` callback.
     fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
         // Allow error to overwrite value irrespective of other conditions
         // (i.e. logging).
         *self.error.lock().expect("lock poisoned") = Some(reason.to_string());
-        error!("librdkafka: {}: {}", error, reason);
+        MzClientContext.error(error, reason)
     }
 }
 

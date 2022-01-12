@@ -184,10 +184,10 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 //
                 // TODO: Regression test for this.
                 if let Err(err) = log.close() {
-                    log::warn!("error closing log: {}", err);
+                    tracing::warn!("error closing log: {}", err);
                 }
                 if let Err(err) = blob.close() {
-                    log::warn!("error closing blob: {}", err);
+                    tracing::warn!("error closing blob: {}", err);
                 }
                 err
             })?
@@ -519,9 +519,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                     // This is a test and we've almost certainly used
                     // UnreliableBlob to make storage unavailable, log it at a
                     // lower level to keep test output a little less spammy.
-                    log::trace!("unable to read back persisted metadata: {:?}", e);
+                    tracing::trace!("unable to read back persisted metadata: {:?}", e);
                 } else {
-                    log::error!("unable to read back persisted metadata: {:?}", e);
+                    tracing::error!("unable to read back persisted metadata: {:?}", e);
                 }
             }
         }
@@ -557,9 +557,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                     // This is a test and we've almost certainly used
                     // UnreliableBlob to make storage unavailable, log it at a
                     // lower level to keep test output a little less spammy.
-                    log::trace!("unable to read back persisted metadata: {:?}", e);
+                    tracing::trace!("unable to read back persisted metadata: {:?}", e);
                 } else {
-                    log::error!("unable to read back persisted metadata: {:?}", e);
+                    tracing::error!("unable to read back persisted metadata: {:?}", e);
                 }
             }
         }

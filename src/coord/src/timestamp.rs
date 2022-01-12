@@ -21,7 +21,6 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{debug, error, info, log_enabled, warn};
 use mz_avro::schema::Schema;
 use mz_avro::types::Value;
 use ore::metric;
@@ -31,6 +30,7 @@ use rdkafka::message::BorrowedMessage;
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use tokio::sync::mpsc;
+use tracing::{debug, error, info, warn};
 
 use dataflow_types::{
     Consistency, DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
@@ -38,6 +38,7 @@ use dataflow_types::{
     SourceEnvelope, TimestampSourceUpdate,
 };
 use expr::{GlobalId, PartitionId};
+use kafka_util::client::MzClientContext;
 use ore::collections::CollectionExt;
 
 use crate::coord;
@@ -161,7 +162,7 @@ struct TimestampingState {
 
 /// Data consumer for Kafka source with BYO consistency
 struct ByoKafkaConnector {
-    consumer: BaseConsumer,
+    consumer: BaseConsumer<MzClientContext>,
 
     /// Offset of the last consistency record we received and processed. We use
     /// this to filter out messages that we have seen already.
@@ -174,7 +175,7 @@ struct ByoKafkaConnector {
 }
 
 impl ByoKafkaConnector {
-    fn new(consumer: BaseConsumer) -> ByoKafkaConnector {
+    fn new(consumer: BaseConsumer<MzClientContext>) -> ByoKafkaConnector {
         ByoKafkaConnector {
             consumer,
             last_offset: None,
@@ -229,7 +230,7 @@ fn byo_query_source(
 
 /// Polls a message from a Kafka Source
 fn kafka_get_next_message(
-    consumer: &mut BaseConsumer,
+    consumer: &mut BaseConsumer<MzClientContext>,
 ) -> Result<Option<BorrowedMessage>, anyhow::Error> {
     if let Some(result) = consumer.poll(Duration::from_millis(60)) {
         match result {
@@ -246,7 +247,7 @@ fn kafka_get_next_message(
 
 /// Return the list of partition ids associated with a specific topic
 fn get_kafka_partitions(
-    consumer: &BaseConsumer,
+    consumer: &BaseConsumer<MzClientContext>,
     topic: &str,
     timeout: Duration,
 ) -> Result<Vec<i32>, anyhow::Error> {
@@ -568,7 +569,10 @@ impl Timestamper {
                     {
                         (connector, encoding, envelope, consistency)
                     } else {
-                        log::debug!("Local source {} cannot be timestamped. Ignoring", source_id);
+                        tracing::debug!(
+                            "Local source {} cannot be timestamped. Ignoring",
+                            source_id
+                        );
                         continue;
                     };
 
@@ -723,7 +727,9 @@ impl Timestamper {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &kc.addrs.to_string());
 
-        if log_enabled!(target: "librdkafka", log::Level::Debug) {
+        // TODO(guswynn): replace this when https://github.com/tokio-rs/tracing/pull/1821 is merged
+        if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
+            debug!("Enabling 'debug' for rdkafka");
             config.set("debug", "all");
         }
 
@@ -733,13 +739,14 @@ impl Timestamper {
             }
         }
 
-        let consumer = match config.create::<BaseConsumer>() {
-            Ok(consumer) => consumer,
-            Err(e) => {
-                error!("Failed to create Kafka Consumer {}", e);
-                return None;
-            }
-        };
+        let consumer =
+            match config.create_with_context::<_, BaseConsumer<MzClientContext>>(MzClientContext) {
+                Ok(consumer) => consumer,
+                Err(e) => {
+                    error!("Failed to create Kafka Consumer {}", e);
+                    return None;
+                }
+            };
 
         let connector = RtKafkaConnector {
             coordination_state: Arc::new(TimestampingState {
@@ -869,7 +876,7 @@ impl Timestamper {
             }
         }
 
-        match config.create() {
+        match config.create_with_context(MzClientContext) {
             Ok(consumer) => {
                 let consumer = ByoKafkaConnector::new(consumer);
                 consumer.consumer.subscribe(&[&timestamp_topic]).unwrap();
@@ -917,7 +924,7 @@ impl Timestamper {
 
 fn rt_kafka_metadata_fetch_loop(
     c: RtKafkaConnector,
-    consumer: BaseConsumer,
+    consumer: BaseConsumer<MzClientContext>,
     wait: Duration,
     metrics: &Metrics,
 ) {

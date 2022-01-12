@@ -153,7 +153,7 @@ impl Drop for MemLog {
         // MemLog should have been closed gracefully; this drop is only here
         // as a failsafe. If it actually did anything, that's surprising.
         if did_work {
-            log::warn!("MemLog dropped without close");
+            tracing::warn!("MemLog dropped without close");
         }
     }
 }
@@ -339,7 +339,7 @@ impl Drop for MemBlob {
         // MemLog should have been closed gracefully; this drop is only here
         // as a failsafe. If it actually did anything, that's surprising.
         if did_work {
-            log::warn!("MemBlob dropped without close");
+            tracing::warn!("MemBlob dropped without close");
         }
     }
 }

@@ -229,7 +229,7 @@ impl FutureStep {
     pub fn recv(self) -> Step {
         let res = self.res.recv();
         let after = Instant::now();
-        log::debug!("{:?} res: {:?}", self.req_id, &res);
+        tracing::debug!("{:?} res: {:?}", self.req_id, &res);
         let meta = StepMeta {
             req_id: self.req_id,
             before: self.before,
@@ -341,7 +341,7 @@ impl<R: Runtime> Runner<R> {
                                 let step = step_fut.recv();
                                 steps.push(step);
                             }
-                            log::debug!("{:?} req: {:?}", input.req_id, &input.req);
+                            tracing::debug!("{:?} req: {:?}", input.req_id, &input.req);
                             outstanding.push_back(worker.run(input));
                         }
 
@@ -375,13 +375,13 @@ pub fn run<R: Runtime>(steps: usize, config: GeneratorConfig, runtime: R) {
     let seed =
         env::var("MZ_NEMESIS_SEED").map_or_else(|_| OsRng.next_u64(), |s| s.parse().unwrap());
     let steps = env::var("MZ_NEMESIS_STEPS").map_or(steps, |s| s.parse().unwrap());
-    log::info!("MZ_NEMESIS_SEED={} MZ_NEMESIS_STEPS={}", seed, steps);
+    tracing::info!("MZ_NEMESIS_SEED={} MZ_NEMESIS_STEPS={}", seed, steps);
     let generator = Generator::new(seed, config);
     let runner = Runner::new(generator, runtime);
     let history = runner.run(steps);
     if let Err(errors) = Validator::validate(history) {
         for err in errors.iter() {
-            log::warn!("invariant violation: {}", err)
+            tracing::warn!("invariant violation: {}", err)
         }
         assert!(errors.is_empty());
     }

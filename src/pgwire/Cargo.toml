@@ -18,7 +18,7 @@ expr = { path = "../expr" }
 futures = "0.3.19"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-log = "0.4.13"
+tracing = "0.1.29"
 openssl = { version = "0.10.38", features = ["vendored"] }
 ordered-float = { version = "2.10.0", features = ["serde"] }
 ore = { path = "../ore" }

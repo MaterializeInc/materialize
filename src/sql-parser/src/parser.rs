@@ -24,7 +24,7 @@ use std::error::Error;
 use std::fmt;
 
 use itertools::Itertools;
-use log::warn;
+use tracing::warn;
 
 use ore::collections::CollectionExt;
 use ore::option::OptionExt;

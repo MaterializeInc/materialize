@@ -13,13 +13,14 @@ use std::time::Duration;
 
 use anyhow::Context;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};
 
+use kafka_util::client::MzClientContext;
+
 pub struct KafkaClient {
-    producer: FutureProducer<DefaultClientContext>,
+    producer: FutureProducer<MzClientContext>,
     kafka_url: String,
 }
 
@@ -36,7 +37,7 @@ impl KafkaClient {
             config.set(*key, *val);
         }
 
-        let producer: FutureProducer = config.create()?;
+        let producer = config.create_with_context(MzClientContext)?;
 
         Ok(KafkaClient {
             producer,

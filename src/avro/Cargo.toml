@@ -20,7 +20,7 @@ digest = "0.10.0"
 enum-kinds = "0.5.1"
 flate2 = "1.0.22"
 itertools = "0.10.3"
-log = "0.4.13"
+tracing = "0.1.29"
 rand = "0.8.4"
 regex = "1.5.4"
 serde = { version = "1.0.133", features = ["derive"] }

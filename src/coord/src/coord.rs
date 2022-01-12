@@ -779,7 +779,7 @@ where
                     // EDIT: On further consideration, I think it doesn't
                     // affect correctness if this fails, just availability
                     // of the table.
-                    log::error!(
+                    tracing::error!(
                         "failed to seal persisted stream to ts {}: {}",
                         advance_to,
                         err
@@ -1479,7 +1479,7 @@ where
             let persist_multi = match self.catalog.persist_multi_details() {
                 Some(multi) => multi,
                 None => {
-                    log::error!("internal error: persist_multi_details invariant violated");
+                    tracing::error!("internal error: persist_multi_details invariant violated");
                     return;
                 }
             };
@@ -1490,7 +1490,7 @@ where
             let _ = tokio::spawn(async move {
                 if let Err(err) = compaction_fut.await {
                     // TODO: Do something smarter here
-                    log::error!("failed to compact persisted tables: {}", err);
+                    tracing::error!("failed to compact persisted tables: {}", err);
                 }
             });
         }

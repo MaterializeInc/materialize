@@ -23,7 +23,6 @@ use std::time::{Duration, Instant};
 
 use build_info::BuildInfo;
 use differential_dataflow::trace::Description;
-use log;
 use ore::metrics::MetricsRegistry;
 use persist_types::Codec;
 use timely::progress::Antichain;
@@ -226,10 +225,10 @@ impl RuntimeCore {
                 // stopped, so we can return an Ok. This is surprising, though,
                 // so log a message. Unfortunately, there isn't really a way to
                 // put the panic message in this log.
-                log::error!("persist runtime thread panic'd");
+                tracing::error!("persist runtime thread panic'd");
             }
             if let Err(err) = block_on(handles.ticker_handle) {
-                log::error!("persist ticker thread error'd: {:?}", err);
+                tracing::error!("persist ticker thread error'd: {:?}", err);
             }
             // Thread a copy of the Arc<Runtime> being used to drive
             // ticker_handle to make sure the runtime doesn't shut down before
@@ -245,7 +244,7 @@ impl RuntimeCore {
 impl Drop for RuntimeCore {
     fn drop(&mut self) {
         if let Err(err) = self.stop() {
-            log::error!("error while stopping dropped persist runtime: {}", err);
+            tracing::error!("error while stopping dropped persist runtime: {}", err);
         }
     }
 }
@@ -909,7 +908,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                     // Finish up any pending work that we can before closing.
                     if let Err(e) = self.indexed.step() {
                         self.metrics.cmd_step_error_count.inc();
-                        log::warn!("error running step: {:?}", e);
+                        tracing::warn!("error running step: {:?}", e);
                     }
                     res.fill(self.indexed.close());
                     return false;
@@ -1004,7 +1003,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 // TODO: revisit whether we need to move this to a different log level
                 // depending on how spammy it ends up being. Alternatively, we
                 // may want to rate-limit our logging here.
-                log::warn!("error running step: {:?}", e);
+                tracing::warn!("error running step: {:?}", e);
             }
 
             self.metrics

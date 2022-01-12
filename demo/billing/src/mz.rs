@@ -45,7 +45,7 @@ pub async fn create_proto_source(
         message = message_name,
     );
 
-    log::debug!("creating source=> {}", query);
+    tracing::debug!("creating source=> {}", query);
 
     mz_client::execute(&mz_client, &query).await?;
     Ok(())
@@ -67,7 +67,7 @@ pub async fn create_kafka_sink(
              schema_registry = schema_registry_url
          );
 
-    log::debug!("creating sink=> {}", query);
+    tracing::debug!("creating sink=> {}", query);
     mz_client::execute(&mz_client, &query).await?;
 
     // Get the topic for the newly-created sink.
@@ -120,7 +120,7 @@ pub async fn create_csv_source(
         file = absolute_path.display(),
     );
 
-    log::debug!("creating csv source=> {}", query);
+    tracing::debug!("creating csv source=> {}", query);
     mz_client::execute(&mz_client, &query).await?;
     Ok(())
 }
@@ -139,7 +139,7 @@ pub async fn reingest_sink(
                     topic_name = topic_name,
                     schema_registry = schema_registry_url);
 
-    log::debug!("creating materialized source to reingest sink=> {}", query);
+    tracing::debug!("creating materialized source to reingest sink=> {}", query);
     mz_client::execute(&mz_client, &query).await?;
 
     Ok(())
@@ -182,7 +182,7 @@ pub async fn validate_sink(
         .await?;
 
     let query = format!("SELECT * FROM {}", invalid_rows_view);
-    log::debug!("validating sinks=> {}", query);
+    tracing::debug!("validating sinks=> {}", query);
     let rows = mz_client.query(&*query, &[]).await?;
 
     if rows.len() != 0 {

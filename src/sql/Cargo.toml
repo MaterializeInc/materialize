@@ -21,7 +21,7 @@ globset = "0.4.8"
 interchange = { path = "../interchange" }
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-log = "0.4.13"
+tracing = "0.1.29"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = [ "sts" ] }
 ore = { path = "../ore" }
@@ -32,6 +32,7 @@ postgres-util = { path = "../postgres-util" }
 protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 mz-protoc = { path = "../../src/protoc" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
+kafka-util = { path = "../kafka-util" }
 regex = "1.5.4"
 repr = { path = "../repr" }
 reqwest = "0.11.8"

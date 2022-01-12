@@ -170,7 +170,7 @@ where
                     state_input.for_each(|_time, data| {
                         data.swap(&mut state_input_buffer);
                         for state_update in state_input_buffer.drain(..) {
-                            log::trace!(
+                            tracing::trace!(
                                 "In {}, restored upsert: {:?}",
                                 operator_name,
                                 state_update
@@ -194,7 +194,7 @@ where
                             .finish();
                         current_values.extend(initial_state.into_iter());
 
-                        log::trace!(
+                        tracing::trace!(
                             "In {}, initial (restored) upsert state: {:?}",
                             operator_name,
                             current_values.iter().take(10).collect::<Vec<_>>()

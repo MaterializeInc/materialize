@@ -50,10 +50,10 @@ mod test {
     use std::collections::HashMap;
 
     use super::MetricsRecorderLayer;
-    use log::{error, info, warn};
     use ore::metric;
     use ore::metrics::raw::IntCounterVec;
     use ore::metrics::{MetricsRegistry, ThirdPartyMetric};
+    use tracing::{error, info, warn};
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 

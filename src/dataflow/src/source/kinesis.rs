@@ -16,9 +16,9 @@ use aws_sdk_kinesis::error::GetRecordsError;
 use aws_sdk_kinesis::output::GetRecordsOutput;
 use aws_sdk_kinesis::{Client as KinesisClient, SdkError};
 use futures::executor::block_on;
-use log::error;
 use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
+use tracing::error;
 
 use dataflow_types::{
     ExternalSourceConnector, KinesisSourceConnector, MzOffset, SourceDataEncoding,

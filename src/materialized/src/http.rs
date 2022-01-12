@@ -19,12 +19,12 @@ use std::pin::Pin;
 use futures::future::TryFutureExt;
 use hyper::{service, Body, Method, Request, Response, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
-use log::error;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use ore::metrics::MetricsRegistry;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
+use tracing::error;
 
 use coord::session::Session;
 use ore::future::OreFutureExt;

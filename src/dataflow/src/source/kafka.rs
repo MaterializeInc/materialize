@@ -24,9 +24,9 @@ use dataflow_types::{
     ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
-use kafka_util::KafkaAddrs;
-use log::{error, info, log_enabled, warn};
+use kafka_util::{client::MzClientContext, KafkaAddrs};
 use repr::adt::jsonb::Jsonb;
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::logging::materialized::{Logger, MaterializedEvent};
@@ -534,7 +534,9 @@ fn create_kafka_config(
     // This is a very simple integration at the moment; enabling `debug`-level
     // logs for the `librdkafka` target enables the full firehouse of librdkafka
     // debug logs. We may want to investigate finer-grained control.
-    if log_enabled!(target: "librdkafka", log::Level::Debug) {
+    // TODO(guswynn): replace this when https://github.com/tokio-rs/tracing/pull/1821 is merged
+    if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
+        debug!("Enabling 'debug' for rdkafka");
         kafka_config.set("debug", "all");
     }
 
@@ -619,6 +621,15 @@ impl ClientContext for GlueConsumerContext {
             }
             Err(e) => error!("failed decoding librdkafka statistics JSON: {}", e),
         };
+    }
+
+    // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
+    // implementation.
+    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        MzClientContext.log(level, fac, log_message)
+    }
+    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+        MzClientContext.error(error, reason)
     }
 }
 

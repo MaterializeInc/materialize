@@ -80,7 +80,7 @@ impl SimpleSource for PubNubSourceReader {
                 }
             }
 
-            log::info!(
+            tracing::info!(
                 "pubnub channel {:?} disconnected. reconnecting",
                 channel.to_string()
             );

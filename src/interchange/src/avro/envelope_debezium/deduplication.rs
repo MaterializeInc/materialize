@@ -16,12 +16,12 @@ use anyhow::bail;
 use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
 use differential_dataflow::Collection;
-use log::{debug, error, info, warn};
 use repr::Diff;
 use repr::Timestamp;
 use repr::{Datum, Row};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
+use tracing::{debug, error, info, warn};
 
 /// Ordered means we can trust Debezium high water marks
 ///

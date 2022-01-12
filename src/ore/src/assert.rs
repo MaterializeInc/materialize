@@ -91,7 +91,7 @@ macro_rules! soft_assert_or_log {
         if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
             assert!($cond, $($arg)+);
         } else if !$cond {
-            ::log::error!($($arg)+)
+            ::tracing::error!($($arg)+)
         }
     }}
 }
@@ -104,7 +104,7 @@ macro_rules! soft_panic_or_log {
         if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
             panic!($($arg)+);
         } else {
-            ::log::error!($($arg)+)
+            ::tracing::error!($($arg)+)
         }
     }}
 }

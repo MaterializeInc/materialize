@@ -54,7 +54,7 @@ async fn run() -> Result<(), anyhow::Error> {
     let stream_name = format!("{}-{}", args.stream_prefix, seed);
 
     // todo: make queries per second configurable. (requires mz_client changes)
-    log::info!("Starting kinesis load test with mzd={}:{} \
+    tracing::info!("Starting kinesis load test with mzd={}:{} \
                stream={} shard_count={} total_records={} records_per_second={} queries_per_second={}",
     args.materialized_host, args.materialized_port, &stream_name, args.shard_count, args.total_records, args.records_per_second, 1);
 
@@ -64,7 +64,7 @@ async fn run() -> Result<(), anyhow::Error> {
 
     let stream_arn =
         kinesis::create_stream(&kinesis_client, &stream_name, args.shard_count).await?;
-    log::info!("Created Kinesis stream {}", stream_name);
+    tracing::info!("Created Kinesis stream {}", stream_name);
 
     // Push records to Kinesis.
     let kinesis_task = tokio::spawn({
@@ -90,7 +90,7 @@ async fn run() -> Result<(), anyhow::Error> {
 
     // Create Kinesis source and materialized view.
     mz::create_source_and_views(&client, stream_arn).await?;
-    log::info!("Created source and materialized views");
+    tracing::info!("Created source and materialized views");
 
     // Query materialized view for all pushed Kinesis records.
     let materialize_task = tokio::spawn({
@@ -104,7 +104,7 @@ async fn run() -> Result<(), anyhow::Error> {
 
     kinesis_result?.context("kinesis thread failed")?;
     materialize_result.context("materialize thread failed")??;
-    log::info!(
+    tracing::info!(
         "Completed load test in {} milliseconds",
         timer.elapsed().as_millis()
     );

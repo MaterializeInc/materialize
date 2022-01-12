@@ -12,9 +12,9 @@
 // WARNING: The code in this module must be tested manually. Please see
 // misc/python/cli/mock_telemetry_server.py for details.
 
-use log::{debug, log, Level};
 use serde::Deserialize;
 use tokio::time::{self, Duration};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use ore::retry::Retry;
@@ -59,15 +59,23 @@ pub async fn report_loop(config: Config) {
             // We assume users running development builds are sophisticated, and
             // may be intentionally not running the latest release, so downgrade
             // the message from warn to info level.
-            let level = match BUILD_INFO.semver_version().pre.as_str() {
-                "dev" => Level::Info,
-                _ => Level::Warn,
+            //
+            // TODO: avoid duplicating the message if tokio-rs/tracing#372
+            // is resolved.
+            match BUILD_INFO.semver_version().pre.as_str() {
+                "dev" => {
+                    debug!(
+                        "a new version of materialized is available: {}",
+                        latest_version
+                    );
+                }
+                _ => {
+                    warn!(
+                        "a new version of materialized is available: {}",
+                        latest_version
+                    );
+                }
             };
-            log!(
-                level,
-                "a new version of materialized is available: {}",
-                latest_version
-            );
             reported_version = latest_version;
         }
     }

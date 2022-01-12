@@ -27,12 +27,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use log::error;
 use persist_types::{Codec, ExtendWriteAdapter};
 use protobuf::Message;
 use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::{ChangeBatch, Timestamp as TimelyTimestamp};
+use tracing::error;
 
 use dataflow_types::MzOffset;
 use expr::PartitionId;
@@ -347,7 +347,7 @@ impl TimestampBindingBox {
             .entry(partition.clone())
             .and_modify(|existing_offset| {
                 if existing_offset.is_some() {
-                    log::debug!(
+                    tracing::debug!(
                         "Already have offset {} for partition {}, ignoring.",
                         existing_offset.expect("known to exist"),
                         partition

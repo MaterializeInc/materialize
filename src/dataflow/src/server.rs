@@ -877,28 +877,28 @@ where
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {
-                            log::error!("BYO timestamping not supported for Kinesis sources");
+                            tracing::error!("BYO timestamping not supported for Kinesis sources");
                             None
                         }
                         (ExternalSourceConnector::S3(_), Consistency::BringYourOwn(_)) => {
-                            log::error!("BYO timestamping not supported for S3 sources");
+                            tracing::error!("BYO timestamping not supported for S3 sources");
                             None
                         }
                         (ExternalSourceConnector::Postgres(_), _) => {
-                            log::debug!(
+                            tracing::debug!(
                                 "Postgres sources do not communicate with the timestamper thread"
                             );
                             None
                         }
                         (ExternalSourceConnector::PubNub(_), _) => {
-                            log::debug!(
+                            tracing::debug!(
                                 "PubNub sources do not communicate with the timestamper thread"
                             );
                             None
                         }
                     }
                 } else {
-                    log::debug!(
+                    tracing::debug!(
                         "Timestamping not supported for local sources {}. Ignoring",
                         id
                     );
@@ -983,12 +983,12 @@ where
                 let prev = self.render_state.ts_histories.remove(&id);
 
                 if prev.is_none() {
-                    log::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
+                    tracing::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
                 }
 
                 let prev = self.render_state.ts_source_mapping.remove(&id);
                 if prev.is_none() {
-                    log::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
+                    tracing::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
 
                 self.reported_frontiers.remove(&id);

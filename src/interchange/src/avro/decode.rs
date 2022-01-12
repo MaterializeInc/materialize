@@ -179,7 +179,7 @@ impl Decoder {
             if let Err(()) = push_coords(coords, &mut self.packer) {
                 if !self.warned_on_unknown {
                     self.warned_on_unknown = true;
-                    log::warn!(
+                    tracing::warn!(
                         "Record with unrecognized source coordinates in {}. \
                          You might be using an unsupported upstream database.",
                         self.debug_name
@@ -214,7 +214,7 @@ impl Decoder {
             dsr.deserialize(bytes, dec)?;
             self.packer.finish_and_reuse()
         };
-        log::trace!(
+        tracing::trace!(
             "[customer-data] Decoded row {:?} in {}",
             result,
             self.debug_name

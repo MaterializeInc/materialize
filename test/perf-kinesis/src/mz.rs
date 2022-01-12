@@ -24,14 +24,14 @@ pub async fn create_source_and_views(
          FORMAT BYTES",
         stream_arn = stream_arn,
     );
-    log::info!("creating source=> {}", query);
+    tracing::info!("creating source=> {}", query);
     client
         .batch_execute(&query)
         .await
         .context("Creating source")?;
 
     let query = "CREATE VIEW foo_view AS SELECT CONVERT_FROM(data, 'utf8') AS data FROM foo";
-    log::info!("creating view=> {}", query);
+    tracing::info!("creating view=> {}", query);
     client
         .batch_execute(query)
         .await
@@ -39,7 +39,7 @@ pub async fn create_source_and_views(
 
     // Only materialize the count.
     let query = "CREATE MATERIALIZED VIEW foo_count AS SELECT count(*) FROM foo";
-    log::info!("creating materialized view=> {}", query);
+    tracing::info!("creating materialized view=> {}", query);
     client
         .batch_execute(query)
         .await
@@ -54,12 +54,12 @@ pub async fn query_materialized_view_until(
     expected_total_records: u64,
 ) -> Result<(), anyhow::Error> {
     let query = format!("SELECT * FROM {view_name};", view_name = view_name);
-    log::info!("querying view=> {}", query);
+    tracing::info!("querying view=> {}", query);
 
     let row = mz_client::try_query_one(&client, &*query, Duration::from_secs(1)).await?;
     let count: i64 = row.get("count");
     if count as u64 == expected_total_records {
-        log::info!(
+        tracing::info!(
             "Found all {} records, done querying.",
             expected_total_records
         );

@@ -23,9 +23,9 @@ use async_trait::async_trait;
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
 use futures::{sink, SinkExt, TryStreamExt};
-use log::trace;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, Interest, Ready};
 use tokio_util::codec::{Decoder, Encoder, Framed};
+use tracing::trace;
 
 use ore::cast::CastFrom;
 use ore::future::OreSinkExt;

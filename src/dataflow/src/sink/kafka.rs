@@ -19,7 +19,6 @@ use std::time::Duration;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use interchange::json::JsonEncoder;
 use itertools::Itertools;
-use log::{debug, error, info};
 use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
@@ -36,6 +35,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
+use tracing::{debug, error, info};
 
 use dataflow_types::{
     KafkaSinkConnector, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkAsOf, SinkDesc,
@@ -43,6 +43,7 @@ use dataflow_types::{
 use expr::GlobalId;
 use interchange::avro::{self, AvroEncoder, AvroSchemaGenerator};
 use interchange::encode::Encode;
+use kafka_util::client::MzClientContext;
 use ore::cast::CastFrom;
 use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 
@@ -209,7 +210,16 @@ impl SinkProducerContext {
     }
 }
 
-impl ClientContext for SinkProducerContext {}
+impl ClientContext for SinkProducerContext {
+    // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
+    // implementation.
+    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        MzClientContext.log(level, fac, log_message)
+    }
+    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+        MzClientContext.error(error, reason)
+    }
+}
 impl ProducerContext for SinkProducerContext {
     type DeliveryOpaque = ();
 
