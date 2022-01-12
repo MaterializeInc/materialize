@@ -712,17 +712,28 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         Ok(())
     }
 
-    /// Drains writes from the log into the unsealed and does any necessary
-    /// resulting compaction work.
-    ///
-    /// In production, step should just be called in a loop (probably with some
-    /// smarts about waiting to call it only after there have been some writes),
-    /// but it's exposed this way so we can write deterministic tests.
-    pub fn step(&mut self) -> Result<(), Error> {
+    fn step(&mut self) -> Result<(), Error> {
         self.drain_pending()?;
         self.apply_unbatched_cmd(|state, blob, _| state.drain_unsealed(blob))?;
         self.compact()?;
         Ok(())
+    }
+
+    /// Drains writes from the log into the unsealed and does any necessary
+    /// resulting compaction work.
+    ///
+    /// In production, step_or_log should just be called in a loop (probably
+    /// with some smarts about waiting to call it only after there have been
+    /// some writes), but it's exposed this way so we can write deterministic
+    /// tests.
+    pub fn step_or_log(&mut self) {
+        if let Err(e) = self.step() {
+            self.metrics.cmd_step_error_count.inc();
+            // TODO: revisit whether we need to move this to a different log level
+            // depending on how spammy it ends up being. Alternatively, we
+            // may want to rate-limit our logging here.
+            tracing::warn!("error running step: {:?}", e);
+        }
     }
 }
 
@@ -961,31 +972,35 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     }
 }
 
+impl AppliedState {
+    fn do_get_description(&self, name: &str) -> Result<Description<u64>, Error> {
+        let registration = self.id_mapping.iter().find(|s| s.name == name);
+        match registration {
+            Some(registration) => {
+                let arrangement = self
+                    .arrangements
+                    .get(&registration.id)
+                    .expect("missing trace");
+                let upper = arrangement.get_seal();
+                let since = arrangement.since();
+                let lower = Antichain::from_elem(u64::minimum());
+                Ok(Description::new(lower, upper, since))
+            }
+            None => Err(Error::UnknownRegistration(name.to_string())),
+        }
+    }
+}
+
 impl<L: Log, B: Blob> Indexed<L, B> {
     /// Returns a [Description] of the stream identified by `id_str`.
     // TODO: We might want to think about returning only the compaction frontier (since) and seal
     // timestamp (upper) here. Description seems more oriented towards describing batches, and in
     // our case the lower is always `Antichain::from_elem(Timestamp::minimum())`. We could return a
     // tuple or create our own Description-like return type for this.
-    pub fn get_description(&mut self, id_str: &str, res: PFutureHandle<Description<u64>>) {
+    pub fn get_description(&mut self, name: &str, res: PFutureHandle<Description<u64>>) {
         res.fill((|| {
             self.drain_pending()?;
-            self.apply_unbatched_cmd(|state, _, _| {
-                let registration = state.id_mapping.iter().find(|s| s.name == id_str);
-                match registration {
-                    Some(registration) => {
-                        let arrangement = state
-                            .arrangements
-                            .get(&registration.id)
-                            .expect("missing trace");
-                        let upper = arrangement.get_seal();
-                        let since = arrangement.since();
-                        let lower = Antichain::from_elem(u64::minimum());
-                        Ok(Description::new(lower, upper, since))
-                    }
-                    None => Err(Error::UnknownRegistration(id_str.to_string())),
-                }
-            })
+            self.apply_unbatched_cmd(|state, _, _| state.do_get_description(&name))
         })());
     }
 }

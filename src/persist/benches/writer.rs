@@ -146,7 +146,7 @@ fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, PFutureHandle<T>), L: Log, B:
 ) -> Result<T, Error> {
     let (tx, rx) = PFuture::new();
     f(index, tx);
-    index.step()?;
+    index.step_or_log();
     rx.recv()
 }
 
