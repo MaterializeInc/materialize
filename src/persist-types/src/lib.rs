@@ -16,6 +16,8 @@
     clippy::cast_sign_loss
 )]
 
+use std::io;
+
 mod codec_impls;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
@@ -45,4 +47,21 @@ pub trait Codec: Sized + 'static {
     // TODO: Mechanically, this could return a ref to the original bytes
     // without any copies, see if we can make the types work out for that.
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String>;
+}
+
+/// An adaptor to implement [io::Write] for Extend<&u8>.
+///
+/// This is a helper for implementations of Codec that internally need a
+/// [io::Write]. Writes and flushes are guaranteed to succeed.
+pub struct ExtendWriteAdapter<'e, E>(pub &'e mut E);
+
+impl<'e, E: for<'a> Extend<&'a u8>> io::Write for ExtendWriteAdapter<'e, E> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
+        self.0.extend(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> Result<(), io::Error> {
+        Ok(())
+    }
 }
