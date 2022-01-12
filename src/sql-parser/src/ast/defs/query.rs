@@ -461,7 +461,7 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                 alias,
                 with_ordinality,
             } => {
-                f.write_str("ROWS FROM(");
+                f.write_str("ROWS FROM (");
                 f.write_node(&display::comma_separated(functions));
                 f.write_str(")");
                 if let Some(alias) = alias {
