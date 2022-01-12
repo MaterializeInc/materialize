@@ -243,10 +243,12 @@ class Kafka(Service):
             "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
         ],
         depends_on: List[str] = ["zookeeper"],
+        volumes: List[str] = [],
+        listener_type: str = "PLAINTEXT",
     ) -> None:
         environment = [
             *environment,
-            f"KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://{name}:9092",
+            f"KAFKA_ADVERTISED_LISTENERS={listener_type}://{name}:9092",
             f"KAFKA_BROKER_ID={broker_id}",
         ]
         config: ServiceConfig = {
@@ -258,6 +260,7 @@ class Kafka(Service):
                 f"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR={offsets_topic_replication_factor}",
             ],
             "depends_on": depends_on,
+            "volumes": volumes,
         }
         super().__init__(name=name, config=config)
 
@@ -320,6 +323,7 @@ class SchemaRegistry(Service):
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 8081,
         kafka_servers: List[str] = ["kafka"],
+        bootstrap_server_type: str = "PLAINTEXT",
         environment: List[str] = [
             # NOTE(guswynn): under docker, kafka *can* be really slow, which means
             # the default of 500ms won't work, so we give it PLENTY of time
@@ -327,9 +331,10 @@ class SchemaRegistry(Service):
             "SCHEMA_REGISTRY_HOST_NAME=localhost",
         ],
         depends_on: Optional[List[str]] = None,
+        volumes: List[str] = [],
     ) -> None:
         bootstrap_servers = ",".join(
-            f"PLAINTEXT://{kafka}:9092" for kafka in kafka_servers
+            f"{bootstrap_server_type}://{kafka}:9092" for kafka in kafka_servers
         )
         environment = [
             *environment,
@@ -342,6 +347,7 @@ class SchemaRegistry(Service):
                 "ports": [port],
                 "environment": environment,
                 "depends_on": depends_on or [*kafka_servers, "zookeeper"],
+                "volumes": volumes,
             },
         )
 
@@ -493,6 +499,7 @@ class Testdrive(Service):
         volumes: Optional[List[str]] = None,
         volumes_extra: Optional[List[str]] = None,
         volume_workdir: str = ".:/workdir",
+        propagate_uid_gid: bool = True,
     ) -> None:
         if environment is None:
             environment = [
@@ -557,7 +564,7 @@ class Testdrive(Service):
                 ],
                 "environment": environment,
                 "volumes": volumes,
-                "propagate_uid_gid": True,
+                "propagate_uid_gid": propagate_uid_gid,
                 "init": True,
             },
         )
