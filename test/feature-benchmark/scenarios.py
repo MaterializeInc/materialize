@@ -263,6 +263,67 @@ class Dataflow(Scenario):
     pass
 
 
+class OrderBy(Dataflow):
+    """Benchmark ORDER BY as executed by the dataflow layer,
+    in contrast with an ORDER BY executed using a Finish step in the coordinator"""
+
+    INIT = Td(
+        """
+> CREATE TABLE ten (f1 INTEGER);
+
+> CREATE MATERIALIZED VIEW v1 AS
+  SELECT
+  a1.f1 +
+  (a2.f1 * 10) +
+  (a3.f1 * 100) +
+  (a4.f1 * 1000) +
+  (a5.f1 * 10000) +
+  (a6.f1 * 100000) AS f1
+  FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4, ten AS a5, ten AS a6;
+
+# Just to spice things up a bit, we perform individual
+# inserts here so that the rows are assigned separate timestamps
+
+> INSERT INTO ten VALUES (0);
+
+> INSERT INTO ten VALUES (1);
+
+> INSERT INTO ten VALUES (2);
+
+> INSERT INTO ten VALUES (3);
+
+> INSERT INTO ten VALUES (4);
+
+> INSERT INTO ten VALUES (5);
+
+> INSERT INTO ten VALUES (6);
+
+> INSERT INTO ten VALUES (7);
+
+> INSERT INTO ten VALUES (8);
+
+> INSERT INTO ten VALUES (9);
+
+> SELECT COUNT(*) = 1000000 FROM v1;
+true
+"""
+    )
+
+    BENCHMARK = Td(
+        """
+> DROP VIEW IF EXISTS v2
+  /* A */
+
+# explicit LIMIT is needed for the ORDER BY to not be optimized away
+> CREATE MATERIALIZED VIEW v2 AS SELECT * FROM v1 ORDER BY f1 LIMIT 999999999999
+
+> SELECT COUNT(*) FROM v2
+  /* B */
+1000000
+"""
+    )
+
+
 class CountDistinct(Dataflow):
     INIT = Td(
         """
