@@ -406,7 +406,7 @@ impl Plan {
                     _ => return Err(()),
                 };
                 let mut required_arrangements = vec![HashSet::new(); inputs.len()];
-                // Delta joins should only be planned if a particular set of arrangements exist.
+                // Delta joins should only be planned if a particular set of arrangements exists.
                 // Empirically, we've found that there are sometimes bugs causing them to be planned
                 // anyway. If this is the case, we need to create the arrangements, so we do so here,
                 // and complain with an error message.
