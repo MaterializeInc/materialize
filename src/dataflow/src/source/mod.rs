@@ -1681,13 +1681,13 @@ impl SourceReaderPersistence {
             self.config.upper_data_seal_ts,
         )?;
 
-        tracing::trace!(
+        tracing::debug!(
             "In {}, initial (restored) source offsets: {:?}",
             self.source_name,
             offsets,
         );
 
-        tracing::trace!(
+        tracing::debug!(
             "In {}, initial (restored) timestamp bindings: {:?}",
             self.source_name,
             bindings,
