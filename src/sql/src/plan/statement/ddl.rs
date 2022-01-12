@@ -503,6 +503,7 @@ pub fn plan_create_source(
             conn,
             publication,
             slot,
+            tables: _,
         } => {
             let slot_name = slot
                 .as_ref()

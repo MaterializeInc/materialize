@@ -363,7 +363,7 @@ impl_display!(CreateSchemaStatement);
 pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
-    pub connector: CreateSourceConnector,
+    pub connector: CreateSourceConnector<T>,
     pub with_options: Vec<SqlOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,

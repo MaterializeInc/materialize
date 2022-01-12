@@ -22,6 +22,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::str::FromStr;
 
 use itertools::Itertools;
 use tracing::warn;
@@ -1825,6 +1826,32 @@ impl<'a> Parser<'a> {
         };
         Ok(compression)
     }
+    /// Parse set of table definitions out of literal string from within CREATE SOURCE
+    /// 'tbl1_oid AS tbl1_name (col1_name col1_type, col2_name col2_type), tbl2_oid AS tbl2_name (col1_name col1_type,...)'
+    fn parse_source_tables(&mut self) -> Result<Vec<PgTable<Raw>>, ParserError> {
+        let mut tables: Vec<PgTable<Raw>> = Vec::new();
+        let raw_def = self.parse_literal_string()?;
+        let tokens = lexer::lex(&raw_def)?;
+        let mut parser = Parser::new(&raw_def, tokens);
+        loop {
+            let oid_str = format!("{}",parser.parse_number_value()?);
+            let oid_parse = u32::from_str(&oid_str);
+            let oid = match oid_parse {
+                Ok(i) => i,
+                Err(e) => return Err(ParserError::new(parser.peek_pos(),format!("{}", &e))),
+            };
+            parser.expect_keyword(AS)?;
+            let tbl_name = UnresolvedObjectName::unqualified(parser.parse_identifier()?.as_str());
+            let (col_def, _constraints) = parser.parse_columns(Optional)?;
+            tables.push(PgTable{oid: oid, name: tbl_name, columns: col_def});
+            if parser.consume_token(&Token::Comma) {
+                continue
+            } else {
+                break
+            }
+        }
+        Ok(tables)
+    }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
         let materialized = self.parse_keyword(MATERIALIZED);
@@ -1980,7 +2007,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector, ParserError> {
+    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector<Raw>, ParserError> {
         match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
@@ -1998,6 +2025,11 @@ impl<'a> Parser<'a> {
                 let conn = self.parse_literal_string()?;
                 self.expect_keyword(PUBLICATION)?;
                 let publication = self.parse_literal_string()?;
+                let tables = if self.parse_keyword(TABLES) {
+                    Some(self.parse_source_tables()?)
+                } else {
+                    None
+                };
                 let slot = if self.parse_keyword(SLOT) {
                     Some(self.parse_literal_string()?)
                 } else {
@@ -2008,6 +2040,7 @@ impl<'a> Parser<'a> {
                     conn,
                     publication,
                     slot,
+                    tables,
                 })
             }
             FILE => {

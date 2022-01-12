@@ -456,7 +456,7 @@ impl_display!(DbzMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(ConnectorType)]
-pub enum CreateSourceConnector {
+pub enum CreateSourceConnector<T: AstInfo> {
     File {
         path: String,
         compression: Compression,
@@ -487,6 +487,8 @@ pub enum CreateSourceConnector {
         publication: String,
         /// The replication slot name that will be created upstream
         slot: Option<String>,
+        /// The tables we expect to replicate and their schemas
+        tables: Option<Vec<PgTable<T>>>,
     },
     PubNub {
         /// PubNub's subscribe key
@@ -496,7 +498,7 @@ pub enum CreateSourceConnector {
     },
 }
 
-impl AstDisplay for CreateSourceConnector {
+impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             CreateSourceConnector::File { path, compression } => {
@@ -549,11 +551,16 @@ impl AstDisplay for CreateSourceConnector {
                 conn,
                 publication,
                 slot,
+                tables,
             } => {
                 f.write_str("POSTGRES CONNECTION '");
                 f.write_str(&display::escape_single_quote_string(conn));
                 f.write_str("' PUBLICATION '");
                 f.write_str(&display::escape_single_quote_string(publication));
+                if let Some(tables) = tables {
+                    f.write_str("' TABLES '");
+                    f.write_node(&display::comma_separated(tables));
+                }
                 if let Some(slot) = slot {
                     f.write_str("' SLOT '");
                     f.write_str(&display::escape_single_quote_string(slot));
@@ -573,7 +580,7 @@ impl AstDisplay for CreateSourceConnector {
         }
     }
 }
-impl_display!(CreateSourceConnector);
+impl_display_t!(CreateSourceConnector);
 
 impl<T: AstInfo> From<&CreateSinkConnector<T>> for ConnectorType {
     fn from(connector: &CreateSinkConnector<T>) -> ConnectorType {
@@ -670,19 +677,19 @@ impl AstDisplay for KafkaSinkKey {
 /// Information about upstream Postgres tables used for replication sources
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PgTable<T: AstInfo> {
+    /// The OID of the table in the upstream source
+    pub oid: u32,
     /// The name of the table to sync
     pub name: UnresolvedObjectName,
-    /// The name for the table in Materialize
-    pub alias: T::ObjectName,
     /// The expected column schema of the synced table
     pub columns: Vec<ColumnDef<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for PgTable<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
+        f.write_node(&display::escape_single_quote_string(&self.oid.to_string()));
         f.write_str(" AS ");
-        f.write_str(self.alias.to_ast_string());
+        f.write_node(&self.name);
         if !self.columns.is_empty() {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.columns));

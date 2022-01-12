@@ -22,8 +22,9 @@ use aws_arn::ARN;
 use ccsr::Client;
 use csv::ReaderBuilder;
 use itertools::Itertools;
+
 use reqwest::Url;
-use sql_parser::ast::{CsrSeedCompiledOrLegacy, Op};
+use sql_parser::ast::{CsrSeedCompiledOrLegacy, Op, PgTable};
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
@@ -191,6 +192,7 @@ pub fn purify(
                     conn,
                     publication,
                     slot,
+                    tables,
                 } => {
                     slot.get_or_insert_with(|| {
                         format!(
@@ -198,11 +200,13 @@ pub fn purify(
                             Uuid::new_v4().to_string().replace('-', "")
                         )
                     });
-
-                    // verify that we can connect upstream
-                    // TODO(petrosagg): store this info along with the source for better error
-                    // detection
-                    let _ = postgres_util::publication_info(&conn, &publication).await?;
+                    // verify that we can connect upstream and grab list of tables from the publication
+                    let pub_tables = postgres_util::publication_info(&conn, &publication).await?;
+                    let mut pg_tables: Vec<PgTable<Raw>> = Vec::new();
+                    for tbl in pub_tables {
+                        pg_tables.push(PgTable::<Raw>::try_from(tbl)?);
+                    }
+                    *tables = Some(pg_tables);
                 }
                 CreateSourceConnector::PubNub { .. } => (),
             }
@@ -384,7 +388,7 @@ pub fn purify(
 
 async fn purify_source_format(
     format: &mut CreateSourceFormat<Raw>,
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceConnector<Raw>,
     envelope: &Envelope,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
@@ -461,7 +465,7 @@ async fn purify_source_format(
 
 async fn purify_source_format_single(
     format: &mut Format<Raw>,
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceConnector<Raw>,
     envelope: &Envelope,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
@@ -528,7 +532,7 @@ async fn purify_source_format_single(
 }
 
 async fn purify_csr_connector_proto(
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceConnector<Raw>,
     csr_connector: &mut CsrConnectorProto<Raw>,
     envelope: &Envelope,
     with_options: &Vec<SqlOption<Raw>>,
@@ -579,7 +583,7 @@ async fn purify_csr_connector_proto(
 }
 
 async fn purify_csr_connector_avro(
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceConnector<Raw>,
     csr_connector: &mut CsrConnectorAvro<Raw>,
     envelope: &Envelope,
     connector_options: &BTreeMap<String, String>,
@@ -626,7 +630,7 @@ async fn purify_csr_connector_avro(
 
 pub async fn purify_csv(
     file: Option<File>,
-    connector: &CreateSourceConnector,
+    connector: &CreateSourceConnector<Raw>,
     delimiter: char,
     columns: &mut CsvColumns,
 ) -> anyhow::Result<()> {
