@@ -17,7 +17,7 @@ http://materialize.com/* https://materialize.com/:splat 301!
 # materialized binary that can be updated if we ever switch away from GitHub
 # or change how we want bugs to be filed.
 
-/s/bug https://github.com/MaterializeInc/materialize/issues/new?labels=C-bug&template=bug.md
+/s/bug https://github.com/MaterializeInc/materialize/issues/new?labels=C-bug&template=01-bug.yml
 /s/non-materialized-error https://materialize.com/docs/sql/create-view/#querying-non-materialized-views
 
 # The Slack invitation URL expires every 30 days, so we give it a stable alias.
