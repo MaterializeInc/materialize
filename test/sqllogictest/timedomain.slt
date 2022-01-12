@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Tests for timedomains and timelines.
+
 mode cockroach
 
 statement ok
@@ -16,21 +18,21 @@ CREATE TABLE t (i INT);
 simple
 BEGIN;
 SELECT row(1, 2);
-SELECT 1 FROM mz_types LIMIT 1;
+SELECT 1 FROM t LIMIT 1;
 ----
 COMPLETE 0
 (1,2)
 COMPLETE 1
-1
-COMPLETE 1
+COMPLETE 0
 
-# But we can only change timedomains once.
-query error Transactions can only reference objects in the same timedomain.
-SELECT 3 FROM pg_type LIMIT 1;
+# Even though system catalogs are in a different timeline, they can always be
+# queried.
+statement ok
+SELECT 3 FROM pg_type LIMIT 1
 
 # Referring to the timestamp prevents including sources later.
 simple
-ROLLBACK;
+COMMIT;
 BEGIN;
 SELECT mz_logical_timestamp();
 ----
@@ -40,26 +42,63 @@ COMPLETE 0
 COMPLETE 1
 
 query error Transactions can only reference objects in the same timedomain.
-SELECT 1 FROM mz_types LIMIT 1
+SELECT 1 FROM t LIMIT 1
 
 simple
 ROLLBACK;
 BEGIN;
-SELECT 1 FROM mz_types LIMIT 1;
+SELECT 1 FROM t LIMIT 1;
 -- Use a timestamp-independent statement here, which should not allow
 -- the timedomain to change because the transaction's previous statement
 -- established a timedomain.
 SELECT 2;
+COMMIT;
 ----
 COMPLETE 0
 COMPLETE 0
-1
-COMPLETE 1
+COMPLETE 0
 2
 COMPLETE 1
+COMPLETE 0
 
-query error Transactions can only reference objects in the same timedomain.
-SELECT 3 FROM pg_type LIMIT 1;
+# System tables cannot be joined with user tables.
+query error multiple timelines within one dataflow are not supported
+SELECT * FROM t, pg_type
+
+# System catalogs can be queried even in a write transaction.
+simple
+BEGIN;
+INSERT INTO t VALUES (1);
+SELECT 1 FROM pg_type LIMIT 1;
+COMMIT;
+----
+COMPLETE 0
+COMPLETE 1
+1
+COMPLETE 1
+COMPLETE 0
+
+# System catalogs don't provide snapshot isolation.
+simple conn=1
+BEGIN;
+SELECT 1 FROM t;
+SHOW TABLES;
+----
+COMPLETE 0
+1
+COMPLETE 1
+t
+COMPLETE 1
 
 statement ok
-ROLLBACK
+CREATE TABLE x (a INT)
+
+# New table is visible even though the transaction started before it existed.
+simple conn=1
+SHOW TABLES;
+COMMIT;
+----
+t
+x
+COMPLETE 2
+COMPLETE 0

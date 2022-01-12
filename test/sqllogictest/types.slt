@@ -442,11 +442,10 @@ CREATE TABLE text_to_regproc (a text);
 statement ok
 INSERT INTO text_to_regproc VALUES (NULL), ('array_in');
 
-query I
+# This previously worked but we no longer allow joining catalog tables with
+# user tables. Keep this test to verify we the right thing if we revert that.
+query error multiple timelines within one dataflow are not supported
 SELECT a::regproc FROM text_to_regproc ORDER BY a
-----
-750
-NULL
 
 # Regression for 9194
 query I
@@ -918,11 +917,8 @@ CREATE TABLE text_to_regtype (a text);
 statement ok
 INSERT INTO text_to_regtype VALUES (NULL), ('date');
 
-query I
+query error multiple timelines within one dataflow are not supported
 SELECT a::regtype FROM text_to_regtype ORDER BY a
-----
-1082
-NULL
 
 # Regression for 9194
 query I
@@ -1015,11 +1011,8 @@ CREATE TABLE text_to_regclass (a text);
 statement ok
 INSERT INTO text_to_regclass VALUES (NULL), ('mz_tables');
 
-query T
+query error multiple timelines within one dataflow are not supported
 SELECT a::regclass::text FROM text_to_regclass ORDER BY a
-----
-mz_tables
-NULL
 
 # Regression for 9194
 query B

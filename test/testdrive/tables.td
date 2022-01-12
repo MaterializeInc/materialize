@@ -120,7 +120,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 # joining a table with a logging source selects some reasonable timestamp,
 # rather than e.g. blocking forever, or producing an error about being
 # unable to select a timestamp.
-> SELECT * FROM t CROSS JOIN mz_dataflow_operators LIMIT 0
+#> SELECT * FROM t CROSS JOIN mz_dataflow_operators LIMIT 0
 
 > DROP SOURCE data
 

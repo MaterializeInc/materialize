@@ -157,6 +157,12 @@ changes that have not yet been documented.
 - Fix a bug where using a `ROWS FROM` clause with an alias in a view would cause
   Materialize to fail to reboot {{% gh 10008 %}}.
 
+- **Breaking change.** Change transaction and queriy properties for
+  (system catalog objects)[/sql/system-catalog]. They can no longer be
+  joined with user data. They no longer provide snapshot isolation but
+  instead always return the most recent state. They can always be used in
+  any transaction state or timeline.
+
 {{< comment >}}
 Only add new release notes above this line.
 

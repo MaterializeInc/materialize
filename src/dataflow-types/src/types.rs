@@ -735,9 +735,14 @@ pub enum Compression {
 /// if we need to tell apart more kinds of sources.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum Timeline {
-    /// EpochMilliseconds means the timestamp is the number of milliseconds since
-    /// the Unix epoch.
-    EpochMilliseconds,
+    /// EpochMillisecondsUser means the timestamp is the number of milliseconds
+    /// since the Unix epoch, and the source was created by a user.
+    EpochMillisecondsUser,
+    /// EpochMillisecondsCatalog means the timestamp is the number of milliseconds
+    /// since the Unix epoch, and the source was created by the system. This isn't
+    /// called the System timeline to avoid complication with the term "system
+    /// time".
+    EpochMillisecondsCatalog,
     /// Counter means the timestamp starts at 1 and is incremented for each
     /// transaction. It holds the BYO source so different instantiations can be
     /// differentiated.

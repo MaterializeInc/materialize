@@ -21,7 +21,8 @@ Users can specify custom timelines if they need to join sources that are by defa
 ## Default Timeline
 
 - [CDC sources][cdc-sources] default to their own individual timeline, and cannot be joined with any other source (even other CDC sources).
-- All other sources (and all tables) use the system timeline.
+- User sources user tables use the user timeline.
+- (System catalog)[/sql/system-catalog] objects use the catalog timeline.
 
 ## User Timelines
 
@@ -46,7 +47,7 @@ CREATE MATERIALIZED SOURCE source_2
 
 ## CDC Sources
 
-[CDC sources][cdc-sources] supports a `epoch_ms_timeline` `WITH` option that moves it to the system timeline, making the CDC source joinable to tables and other system timeline sources.
+[CDC sources][cdc-sources] supports a `epoch_ms_timeline` `WITH` option that moves it to the user timeline, making the CDC source joinable to tables and other user timeline sources.
 Users **must** ensure that the `time` field's units are milliseconds since the Unix epoch.
 Joining this source to other system time sources will result in query delays until the timestamps being received are close to wall-clock `now()`.
 

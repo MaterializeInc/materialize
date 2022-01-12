@@ -222,13 +222,15 @@ multiple timelines within one dataflow are not supported
 # System sources, tables, and logs should be joinable with eachother.
 > CREATE VIEW various_system (a, b, c, d, e, f, g, h, i, j, k, l, m) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info;
 
-# System things should be joinable only with system sources.
+# Catalog things should be joinable only with catalog sources.
 ! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_byo;
 multiple timelines within one dataflow are not supported
 ! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_cdcv2;
 multiple timelines within one dataflow are not supported
-> CREATE VIEW various_system_no_byo (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_system;
-> CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k, l, m, n) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, input_table;
+! CREATE VIEW various_system_no_byo (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_system;
+multiple timelines within one dataflow are not supported
+! CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k, l, m, n) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, input_table;
+multiple timelines within one dataflow are not supported
 
 # EXPLAIN should complain too.
 ! EXPLAIN SELECT * FROM source_system, source_byo;

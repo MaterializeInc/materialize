@@ -120,4 +120,29 @@ class SmokeTest {
         stmt.execute("DROP TABLE materialize.public.getpks");
         stmt.close();
     }
+
+    // Verify that if a transaction is started and then an unrecognized type is
+    // requested, the queries on the system catalog will succeed.
+    @Test
+    void testPgJDBCgetPGType() throws SQLException, ClassNotFoundException {
+        Statement stmt = conn.createStatement();
+        stmt = conn.createStatement();
+        stmt.execute("CREATE TABLE materialize.public.typefetch (a INT)");
+        stmt.close();
+
+        // Put the connection into a transaction that doesn't list system catalog in
+        // its first statement.
+        conn.setAutoCommit(false);
+        PreparedStatement ps = conn.prepareStatement("SELECT * FROM materialize.public.typefetch");
+        ResultSet rs = ps.executeQuery();
+        rs.close();
+        ps.close();
+
+        // Fetch type info to force use of the catalog tables.
+        Class.forName("org.postgresql.core.BaseConnection");
+        TypeInfoCache ic = new TypeInfoCache(conn.unwrap(org.postgresql.core.BaseConnection.class), 0);
+        Assertions.assertEquals(ic.getPGType(16384), "list");
+
+        conn.commit();
+    }
 }

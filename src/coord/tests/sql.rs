@@ -58,6 +58,7 @@ async fn datadriven() {
                             conn_id: None,
                             depends_on: vec![],
                             persist: None,
+                            is_builtin: false,
                         }),
                     );
                     id += 1;

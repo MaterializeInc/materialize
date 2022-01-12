@@ -46,6 +46,12 @@ the particulars of Materialize. For example, PostgreSQL has no notion of
 [sinks](/sql/create-sink), and therefore `pg_catalog` does not display
 information about the sinks available in a Materialize.
 
+Objects in the system catalog:
+
+- cannot be joined in a query with user objects
+- can be queried in any [transaction](/sql/begin) (including write-only)
+- do not have snapshot isolation in transactions, but instead always use the most recent state
+
 ## `mz_catalog`
 
 The following sections describe the available objects in the `mz_catalog`

@@ -969,10 +969,10 @@ pub fn plan_create_source(
         match (&consistency, &envelope) {
             (_, SourceEnvelope::CdcV2) => match with_options.remove("epoch_ms_timeline") {
                 None => Timeline::External(name.to_string()),
-                Some(Value::Boolean(true)) => Timeline::EpochMilliseconds,
+                Some(Value::Boolean(true)) => Timeline::EpochMillisecondsUser,
                 Some(v) => bail!("unsupported epoch_ms_timeline value {}", v),
             },
-            (Consistency::RealTime, _) => Timeline::EpochMilliseconds,
+            (Consistency::RealTime, _) => Timeline::EpochMillisecondsUser,
             (Consistency::BringYourOwn(byo), _) => Timeline::Counter(byo.clone()),
         }
     };

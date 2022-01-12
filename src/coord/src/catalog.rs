@@ -517,13 +517,17 @@ pub struct Table {
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
     pub persist: Option<TablePersistDetails>,
+    pub is_builtin: bool,
 }
 
 impl Table {
     // The Coordinator controls insertions for tables (including system tables),
     // so they are realtime.
     pub fn timeline(&self) -> Timeline {
-        Timeline::EpochMilliseconds
+        match self.is_builtin {
+            true => Timeline::EpochMillisecondsCatalog,
+            false => Timeline::EpochMillisecondsUser,
+        }
     }
 }
 
@@ -956,7 +960,7 @@ impl Catalog {
                             create_sql: "TODO".to_string(),
                             optimized_expr,
                             connector: dataflow_types::SourceConnector::Local {
-                                timeline: Timeline::EpochMilliseconds,
+                                timeline: Timeline::EpochMillisecondsCatalog,
                                 persisted_name: None,
                             },
                             bare_desc: log.variant.desc(),
@@ -1019,6 +1023,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![],
                             persist,
+                            is_builtin: true,
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -2267,6 +2272,7 @@ impl Catalog {
                     conn_id: None,
                     depends_on: table.depends_on,
                     persist,
+                    is_builtin: false,
                 })
             }
             Plan::CreateSource(CreateSourcePlan { mut source, .. }) => {

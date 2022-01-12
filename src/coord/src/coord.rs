@@ -2081,6 +2081,7 @@ where
             conn_id,
             depends_on: table.depends_on,
             persist,
+            is_builtin: false,
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
@@ -2935,7 +2936,7 @@ where
                 // If there's no source timeline, we have the option to opt into a timeline,
                 // so optimistically choose epoch ms. This is useful when the first query in a
                 // transaction is on a static view.
-                (Some(id_timeline), None) => id_timeline == &Timeline::EpochMilliseconds,
+                (Some(id_timeline), None) => id_timeline == &Timeline::EpochMillisecondsUser,
                 // Otherwise check if timelines are the same.
                 (Some(id_timeline), Some(source_timeline)) => id_timeline == source_timeline,
             }
@@ -2969,13 +2970,16 @@ where
             session.transaction(),
             &TransactionStatus::InTransaction(_) | &TransactionStatus::InTransactionImplicit(_)
         );
+        // Queries on the system timeline can run in any transaction because they do
+        // not guarantee snapshot isolation.
+        let is_catalog_timeline = matches!(timeline, Some(Timeline::EpochMillisecondsCatalog));
         // For explicit or implicit transactions that do not use AS OF, get the
         // timestamp of the in-progress transaction or create one. If this is an AS OF
         // query, we don't care about any possible transaction timestamp. If this is a
         // single-statement transaction (TransactionStatus::Started), we don't need to
         // worry about preventing compaction or choosing a valid timestamp for future
         // queries.
-        let timestamp = if in_transaction && when == PeekWhen::Immediately {
+        let timestamp = if in_transaction && when == PeekWhen::Immediately && !is_catalog_timeline {
             // Queries are independent of the logical timestamp iff there are no referenced
             // sources or indexes and there is no reference to `mz_logical_timestamp()`
             // which we check by using a Static prep style.

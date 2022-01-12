@@ -53,3 +53,10 @@ The first `SELECT` in a transaction assumes that any object in that `SELECT` and
 If a later `SELECT` references another object, the transaction will fail.
 This can happen if the object is in a schema not referenced by the first `SELECT`.
 It can also happen if a new object (table, view, source, or index) was created after the transaction started, even if the new object is in the same schemas as the first `SELECT`.
+
+### System catalog
+
+Objects in the (system catalog)[/sql/system-catalog]:
+
+- can always be queried in any kind of transaction (read-only or write-only)
+- do not have snapshot isolation in transactions, but instead always use the most recent state
