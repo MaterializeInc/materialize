@@ -21,7 +21,7 @@ use tokio_postgres::{Client, Config};
 use ore::task;
 use repr::adt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
-use sql_parser::ast::Ident;
+use sql_parser::ast::{Ident, DataType, Raw, RawName, UnresolvedObjectName};
 use sql_parser::impl_display;
 
 pub struct PgNumericMod {
@@ -104,6 +104,30 @@ impl AstDisplay for PgScalarType {
     }
 }
 impl_display!(PgScalarType);
+
+// Defining this here prevents circular dependency with the sql-parser crate
+// impl From<PgScalarType> for DataType<Raw> {
+//     fn from(val: PgScalarType) -> Self {
+//         match val {
+//             PgScalarType::Simple(inner) => {
+//                 DataType::Other{ typ_mod: vec![], name: RawName::Name(UnresolvedObjectName(vec![Ident::from(inner.name())])) }
+//             },
+//             PgScalarType::Numeric(numeric_mod) => {
+//                 match numeric_mod {
+//                     Some(mods) => {
+//                         DataType::Other{ typ_mod: }
+//                     },
+//                     None => {},
+//                 }
+//             },
+//             PgScalarType::NumericArray(numeric_mod) => todo!(),
+//             PgScalarType::BPChar { length } => todo!(),
+//             PgScalarType::BPCharArray { length } => todo!(),
+//             PgScalarType::VarChar { length } => todo!(),
+//             PgScalarType::VarCharArray { length } => todo!(),
+//         }
+//     }
+// }
 
 /// The schema of a single column
 pub struct PgColumn {
