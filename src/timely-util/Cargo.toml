@@ -6,6 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures-util = "0.3.19"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 
