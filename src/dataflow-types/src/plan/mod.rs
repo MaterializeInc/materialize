@@ -35,6 +35,10 @@ use expr::{
 use repr::{Datum, Diff, Row};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
+
+use self::join::delta_join::DeltaPathPlan;
+use self::join::delta_join::DeltaStagePlan;
 
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -369,12 +373,16 @@ impl Plan {
                 // be used as part of join planning / to validate the existing
                 // plans / to aid in indexed seeding of update streams.
                 let mut plans = Vec::new();
-                let mut input_keys = Vec::new();
+                let mut input_keys = Vec::<HashSet<_>>::new();
+                let mut input_arities = Vec::new();
                 for input in inputs.iter() {
+                    let arity = input.arity();
                     let (plan, keys) = Plan::from_mir(input, arrangements)?;
                     plans.push(plan);
-                    input_keys.push(keys);
+                    input_keys.push(keys.into_iter().collect());
+                    input_arities.push(arity);
                 }
+
                 // Extract temporal predicates as joins cannot currently absorb them.
                 let plan = match implementation {
                     expr::JoinImplementation::Differential((start, _start_arr), order) => {
@@ -397,6 +405,53 @@ impl Plan {
                     // Other plans are errors, and should be reported as such.
                     _ => return Err(()),
                 };
+                let mut required_arrangements = vec![HashSet::new(); inputs.len()];
+                // Delta joins should only be planned if a particular set of arrangements exist.
+                // Empirically, we've found that there are sometimes bugs causing them to be planned
+                // anyway. If this is the case, we need to create the arrangements, so we do so here,
+                // and complain with an error message.
+                if let JoinPlan::Delta(DeltaJoinPlan { path_plans }) = &plan {
+                    for DeltaPathPlan { stage_plans, .. } in path_plans {
+                        for DeltaStagePlan {
+                            lookup_relation,
+                            lookup_key,
+                            ..
+                        } in stage_plans
+                        {
+                            required_arrangements[*lookup_relation].insert(lookup_key.clone());
+                        }
+                    }
+                } else {
+                    // Linear joins handle rendering all the arrangements they need.
+                }
+                for (((arrangements, plan), required_arrangements), &arity) in input_keys
+                    .iter()
+                    .zip(plans.iter_mut())
+                    .zip(required_arrangements.iter())
+                    .zip(input_arities.iter())
+                {
+                    let missing: Vec<_> = required_arrangements
+                        .difference(arrangements)
+                        .cloned()
+                        .collect();
+                    if !missing.is_empty() {
+                        log::error!("Arrangements depended on by delta join alarmingly absent: {:?}
+This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing);
+                        let base_plan =
+                            std::mem::replace(plan, Plan::Constant { rows: Ok(vec![]) });
+                        *plan = Plan::ArrangeBy {
+                            input: Box::new(base_plan),
+                            ensure_arrangements: missing
+                                .into_iter()
+                                .map(|key| {
+                                    let (permutation, thinning_expression) =
+                                        Permutation::construct_from_expr(&key, arity);
+                                    (key, permutation, thinning_expression)
+                                })
+                                .collect(),
+                        }
+                    }
+                }
                 // Return the plan, and no arrangements.
                 (
                     Plan::Join {
