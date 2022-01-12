@@ -1670,9 +1670,11 @@ impl SourceReaderPersistence {
         )?;
 
         tracing::trace!(
-            "In {}, initial (restored) source offsets: {:?}",
+            "In {}, initial (restored) source offsets: {:?}. upper_bindings_seal_ts = {}, upper_data_seal_ts = {}",
             self.source_name,
             offsets,
+            self.config.upper_bindings_seal_ts,
+            self.config.upper_data_seal_ts,
         );
 
         tracing::trace!(
