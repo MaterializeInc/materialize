@@ -1731,7 +1731,11 @@ impl SourceReaderPersistence {
 
         let buf = snapshot.into_iter().collect::<Result<Vec<_>, _>>()?;
 
+        let mut lowest_bindings_ts = u64::MAX;
         for ((source_timestamp, assigned_timestamp), ts, diff) in buf.into_iter() {
+            if ts < lowest_bindings_ts {
+                lowest_bindings_ts = ts;
+            }
             // Only restore starting offsets that are not beyond the uppser_data_seal_ts. This is the
             // timestamp up to which we have sealed the persistent collection storing the actual source
             // data/updates.
@@ -1767,6 +1771,8 @@ impl SourceReaderPersistence {
                 .entry((source_timestamp, assigned_timestamp))
                 .or_default() += diff;
         }
+
+        log::debug!("Lowest restored bindings ts: {}", lowest_bindings_ts);
 
         let bindings: Vec<_> = bindings
             .drain()
