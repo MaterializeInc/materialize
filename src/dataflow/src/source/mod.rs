@@ -1379,23 +1379,32 @@ where
                     //
                     // Side note: with persistence enabled for the source, we will anyways never
                     // re-emit old data, because we start reading from the persisted offsets.
-                    let current_binding = timestamp_histories
-                        .get_binding(&source_ts.partition, source_ts.offset)
-                        .map(|(binding, _offset)| binding)
-                        .unwrap_or(0);
-                    if current_binding < assigned_ts.0 {
-                        timestamp_histories.add_binding(
-                            source_ts.partition.clone(),
-                            assigned_ts.0,
-                            source_ts.offset,
-                            false,
-                        );
-                    } else {
-                        tracing::debug!(
-                            "Filtered out timestamp binding {:?} from persistence because we already have {}.",
-                            (source_ts, assigned_ts),
-                            current_binding
-                        );
+                    let lower = Antichain::from_elem(assigned_ts.0);
+                    let upper = Antichain::new();
+                    // NOTE: We use get_bindings_in_range() and not the seemingly better
+                    // get_binding(). However, get_binding() does not only consult the actual
+                    // stored bindings but also checks the Proposer, and returns its output as a
+                    // binding if it doesn't have a stored binding. We only care about stored
+                    // bindings here.
+                    let existing_binding = timestamp_histories
+                        .get_bindings_in_range(lower.borrow(), upper.borrow()).into_iter()
+                        .filter(|(pid, _ts, offset)| *pid == source_ts.partition && *offset >= source_ts.offset).next();
+                    match existing_binding {
+                        None => {
+                            timestamp_histories.add_binding(
+                                source_ts.partition.clone(),
+                                assigned_ts.0,
+                                source_ts.offset,
+                                false,
+                            );
+                        },
+                        Some(existing_binding) => {
+                            tracing::debug!(
+                                "Filtered out timestamp binding {:?} from persistence because we already have {:?}.",
+                                (source_ts, assigned_ts),
+                                existing_binding
+                            );
+                        }
                     }
                 }
 
