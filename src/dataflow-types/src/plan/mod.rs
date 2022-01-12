@@ -437,18 +437,24 @@ impl Plan {
                     if !missing.is_empty() {
                         log::error!("Arrangements depended on by delta join alarmingly absent: {:?}
 This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing);
-                        let base_plan =
-                            std::mem::replace(plan, Plan::Constant { rows: Ok(vec![]) });
-                        *plan = Plan::ArrangeBy {
-                            input: Box::new(base_plan),
-                            ensure_arrangements: missing
-                                .into_iter()
-                                .map(|key| {
-                                    let (permutation, thinning_expression) =
-                                        Permutation::construct_from_expr(&key, arity);
-                                    (key, permutation, thinning_expression)
-                                })
-                                .collect(),
+                        let new_ensure_arrangements = missing.into_iter().map(|key| {
+                            let (permutation, thinning_expression) =
+                                Permutation::construct_from_expr(&key, arity);
+                            (key, permutation, thinning_expression)
+                        });
+                        if let Plan::ArrangeBy {
+                            ensure_arrangements,
+                            ..
+                        } = plan
+                        {
+                            ensure_arrangements.extend(new_ensure_arrangements);
+                        } else {
+                            let base_plan =
+                                std::mem::replace(plan, Plan::Constant { rows: Ok(vec![]) });
+                            *plan = Plan::ArrangeBy {
+                                input: Box::new(base_plan),
+                                ensure_arrangements: new_ensure_arrangements.collect(),
+                            }
                         }
                     }
                 }
