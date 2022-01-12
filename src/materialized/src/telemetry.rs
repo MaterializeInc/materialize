@@ -14,7 +14,7 @@
 
 use serde::Deserialize;
 use tokio::time::{self, Duration};
-use tracing::{debug, event, Level};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use ore::retry::Retry;
@@ -59,24 +59,24 @@ pub async fn report_loop(config: Config) {
             // We assume users running development builds are sophisticated, and
             // may be intentionally not running the latest release, so downgrade
             // the message from warn to info level.
+            //
+            // TODO: avoid duplicating the message if tokio-rs/tracing#372
+            // is resolved.
             match BUILD_INFO.semver_version().pre.as_str() {
                 "dev" => {
-                    event!(
-                        Level::DEBUG,
+                    debug!(
                         "a new version of materialized is available: {}",
                         latest_version
                     );
-                    reported_version = latest_version;
                 }
                 _ => {
-                    event!(
-                        Level::WARN,
+                    warn!(
                         "a new version of materialized is available: {}",
                         latest_version
                     );
-                    reported_version = latest_version;
                 }
             };
+            reported_version = latest_version;
         }
     }
 }
