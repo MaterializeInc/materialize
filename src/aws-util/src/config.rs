@@ -9,8 +9,6 @@
 
 //! AWS configuration.
 
-use std::sync::Arc;
-
 use aws_config::{Config, ConfigLoader};
 use aws_smithy_http::endpoint::Endpoint;
 use aws_types::credentials::{Credentials, CredentialsError, ProvideCredentials};
@@ -20,11 +18,12 @@ use aws_types::region::Region;
 ///
 /// This wraps the upstream [`Config`] type to allow additionally configuring
 /// a global endpoint (e.g., LocalStack) to be used for all services.
+// TODO(benesch): this entire type can get deleted if awslabs/aws-sdk-rust#396
+// gets resolved.
 #[derive(Debug, Clone)]
 pub struct AwsConfig {
     endpoint: Option<Endpoint>,
-    // TODO(benesch): drop the `Arc` if awslabs/aws-sdk-rust#352 is resolved.
-    inner: Arc<Config>,
+    inner: Config,
 }
 
 impl AwsConfig {
@@ -32,7 +31,7 @@ impl AwsConfig {
     pub async fn from_loader(loader: ConfigLoader) -> AwsConfig {
         AwsConfig {
             endpoint: None,
-            inner: Arc::new(loader.load().await),
+            inner: loader.load().await,
         }
     }
 
