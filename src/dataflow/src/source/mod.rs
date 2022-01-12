@@ -1331,7 +1331,7 @@ where
                 });
 
                 let result = timestamp_histories.and_then(|timestamp_histories| {
-                let (mut valid_bindings, retractions) = source_persist.restore().map_err(|e| {
+                let (mut valid_bindings, mut retractions) = source_persist.restore().map_err(|e| {
                     SourceError::new(
                         sql_name.clone(),
                         SourceErrorDetails::Persistence(format!(
@@ -1340,6 +1340,24 @@ where
                         )),
                     )
                 })?;
+
+                // Only retain bindings/retractions that this worker is responsible for. If we
+                // weren't doing this, we would get a corrupted bindings updates in the output,
+                // where diffs don't sum up to `1` or older bindings might overwrite newer ones.
+                valid_bindings.retain(|(source_ts, _assigned_ts)| {
+                    crate::source::responsible_for(
+                        &id.source_id,
+                        worker_id,
+                        worker_count,
+                        &source_ts.partition)
+                });
+                retractions.retain(|((source_ts, _assigned_ts), _diff)| {
+                    crate::source::responsible_for(
+                        &id.source_id,
+                        worker_id,
+                        worker_count,
+                        &source_ts.partition)
+                });
 
                 let starting_offsets = source_persist.get_starting_offsets(valid_bindings.iter());
 
