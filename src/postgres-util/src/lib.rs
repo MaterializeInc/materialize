@@ -106,28 +106,53 @@ impl AstDisplay for PgScalarType {
 impl_display!(PgScalarType);
 
 // Defining this here prevents circular dependency with the sql-parser crate
-// impl From<PgScalarType> for DataType<Raw> {
-//     fn from(val: PgScalarType) -> Self {
-//         match val {
-//             PgScalarType::Simple(inner) => {
-//                 DataType::Other{ typ_mod: vec![], name: RawName::Name(UnresolvedObjectName(vec![Ident::from(inner.name())])) }
-//             },
-//             PgScalarType::Numeric(numeric_mod) => {
-//                 match numeric_mod {
-//                     Some(mods) => {
-//                         DataType::Other{ typ_mod: }
-//                     },
-//                     None => {},
-//                 }
-//             },
-//             PgScalarType::NumericArray(numeric_mod) => todo!(),
-//             PgScalarType::BPChar { length } => todo!(),
-//             PgScalarType::BPCharArray { length } => todo!(),
-//             PgScalarType::VarChar { length } => todo!(),
-//             PgScalarType::VarCharArray { length } => todo!(),
-//         }
-//     }
-// }
+impl TryFrom<PgScalarType> for DataType<Raw> {
+    type Error = anyhow::Error;
+    fn try_from(val: PgScalarType) -> Result<Self, anyhow::Error> {
+        let raw_name = |name: &str| RawName::Name(UnresolvedObjectName::unqualified(name));
+        match val {
+            PgScalarType::Simple(inner) => Ok(DataType::Other{ typ_mod: vec![], name: raw_name(inner.name()) }),
+            PgScalarType::Numeric(numeric_mod) => {
+                Ok(DataType::Other{
+                    name: raw_name("numeric"),
+                    typ_mod: match numeric_mod {
+                        Some(mods) => vec![mods.precision.into()],
+                        None => vec![],
+                    },
+                })
+            },
+            PgScalarType::NumericArray(numeric_mod) => {
+                Ok(DataType::Array(
+                    Box::new(DataType::Other{
+                        name: raw_name("numeric"),
+                        typ_mod: match numeric_mod {
+                            Some(mods) => vec![mods.precision.into()],
+                            None => vec![],
+                        }
+                    })
+                ))
+            },
+            PgScalarType::BPChar { length } => Ok(DataType::Other{ name: raw_name("bpchar"), typ_mod: vec![u64::try_from(length)?] }),
+            PgScalarType::BPCharArray { length } => {
+                Ok(DataType::Array(
+                    Box::new(DataType::Other{
+                        name: raw_name("bpchar"),
+                        typ_mod: vec![u64::try_from(length)?],
+                    })
+                ))
+            },
+            PgScalarType::VarChar { length } => Ok(DataType::Other{ name: raw_name("varchar"), typ_mod: vec![u64::try_from(length)?]}),
+            PgScalarType::VarCharArray { length } => {
+                Ok(DataType::Array(
+                    Box::new(DataType::Other{
+                        name: raw_name("varchar"),
+                        typ_mod: vec![u64::try_from(length)?],
+                    })
+                ))
+            },
+        }
+    }
+}
 
 /// The schema of a single column
 pub struct PgColumn {
