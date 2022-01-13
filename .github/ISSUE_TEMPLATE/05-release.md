@@ -153,7 +153,7 @@ of PRs and adds release notes for any features or bugs that were missed.
 - [ ] Remove all load test machines:
 
   ```
-  bin/scratch mine --output-format csv | tail -n +2 | cut -d, -f2 | xargs bin/scratch destroy
+  bin/scratch mine --output-format csv | grep -E 'chbench|kinesis' | tail -n +2 | cut -d, -f2 | xargs bin/scratch destroy
   ```
 
 [teleport cluster]: https://tsh.i.mtrlz.dev/cluster/tsh/nodes
@@ -261,17 +261,6 @@ of PRs and adds release notes for any features or bugs that were missed.
 ## Finish
 
 - (optional) Update the current status at the top of this issue.
-- [ ] If this release ran over a week late, update the repeating slack reminder
-  in the `release` channel.
-
-  you can view and delete existing reminders by typing `/remind list` in
-  `#release`
-
-  I used the following to create the repeating alert, just modify the start date
-  to the correct date:
-
-  > /remind #release "@release-team start the next release" on June 21st every 2 weeks
-
 - Close this issue.
 
 [`doc/user/config.toml`]: https://github.com/MaterializeInc/materialize/blob/main/doc/user/config.toml
