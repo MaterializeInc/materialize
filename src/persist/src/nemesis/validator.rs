@@ -266,6 +266,14 @@ impl Validator {
                     .unwrap_or_default(),
             );
 
+            if !as_of.less_than(&latest_seal) {
+                // TODO: We cannot currently verify cases where the compaction frontier is beyond
+                // the since, because we cannot determine anymore (based on the latest seal
+                // timestamp) which records (both from the expected writes and the writes we get
+                // from timely) are eligible for verification.
+                return;
+            }
+
             // Verify that the output contains all sent writes less than the
             // latest seal it contains.
             //
@@ -332,13 +340,7 @@ impl Validator {
                 .since_frontier
                 .get(&req.stream)
                 .copied()
-                .unwrap_or_default()
-            && req.ts
-                < self
-                    .seal_frontier
-                    .get(&req.stream)
-                    .copied()
-                    .unwrap_or_default();
+                .unwrap_or_default();
         let require_succeed = self.uptime.storage_available(meta.before, meta.after)
             && self.uptime.runtime_available(meta.before, meta.after)
             && req_ok;
