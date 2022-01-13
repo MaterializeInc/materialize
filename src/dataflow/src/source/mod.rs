@@ -34,7 +34,10 @@ use timely::dataflow::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use dataflow_types::{
-    Consistency, ExternalSourceConnector, MzOffset, SourceDataEncoding, SourceError,
+    sources::{
+        encoding::SourceDataEncoding, persistence::Consistency, ExternalSourceConnector, MzOffset,
+    },
+    SourceError,
 };
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use ore::cast::CastFrom;

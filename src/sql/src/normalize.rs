@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail};
 
-use dataflow_types::{AwsConfig, AwsCredentials};
+use dataflow_types::sources::{AwsConfig, AwsCredentials};
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};

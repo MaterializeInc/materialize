@@ -14,7 +14,7 @@
 //! pushdown can be applied across views once we understand the context
 //! in which the views will be executed.
 
-use dataflow_types::{DataflowDesc, LinearOperator, SourceConnector, SourceEnvelope};
+use dataflow_types::{DataflowDesc, LinearOperator};
 use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use ore::id_gen::IdGen;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -348,8 +348,8 @@ where
 pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     let mut monotonic = std::collections::HashSet::new();
     for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
-        if let SourceConnector::External {
-            envelope: SourceEnvelope::None(_),
+        if let dataflow_types::sources::SourceConnector::External {
+            envelope: dataflow_types::sources::SourceEnvelope::None(_),
             ..
         } = source_desc.connector
         {

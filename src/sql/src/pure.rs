@@ -26,8 +26,8 @@ use tokio::io::AsyncBufReadExt;
 use tokio::task;
 use uuid::Uuid;
 
-use dataflow_types::AwsConfig;
-use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
+use dataflow_types::sources::AwsConfig;
+use dataflow_types::sources::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
 use interchange::protobuf::compile_proto_from_subjects;
 use repr::strconv;
 use sql_parser::parser::parse_columns;

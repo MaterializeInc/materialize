@@ -34,8 +34,11 @@ use tokio::sync::mpsc;
 use dataflow_types::client::{Command, LocalClient, Response, TimestampBindingFeedback};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowError, ExternalSourceConnector, PeekResponse, SourceConnector,
-    TimestampSourceUpdate,
+    sources::{
+        persistence::Consistency, persistence::TimestampSourceUpdate, ExternalSourceConnector,
+        SourceConnector,
+    },
+    DataflowError, PeekResponse,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
 use ore::metrics::MetricsRegistry;

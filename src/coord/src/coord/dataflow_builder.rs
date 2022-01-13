@@ -105,7 +105,7 @@ impl<'a> DataflowBuilder<'a> {
                         };
                         dataflow.import_source(
                             *id,
-                            dataflow_types::SourceDesc {
+                            dataflow_types::sources::SourceDesc {
                                 name: entry.name().to_string(),
                                 connector,
                                 operators: None,
@@ -115,7 +115,7 @@ impl<'a> DataflowBuilder<'a> {
                         );
                     }
                     CatalogItem::Source(source) => {
-                        let source_connector = dataflow_types::SourceDesc {
+                        let source_connector = dataflow_types::sources::SourceDesc {
                             name: entry.name().to_string(),
                             connector: source.connector.clone(),
                             operators: None,
@@ -211,7 +211,7 @@ impl<'a> DataflowBuilder<'a> {
         &mut self,
         name: String,
         id: GlobalId,
-        sink_description: dataflow_types::SinkDesc,
+        sink_description: dataflow_types::sinks::SinkDesc,
     ) -> DataflowDesc {
         let mut dataflow = DataflowDesc::new(name);
         dataflow.set_as_of(sink_description.as_of.frontier.clone());

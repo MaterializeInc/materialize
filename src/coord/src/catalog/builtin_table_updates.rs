@@ -9,7 +9,7 @@
 
 use std::os::unix::ffi::OsStringExt;
 
-use dataflow_types::{AvroOcfSinkConnector, KafkaSinkConnector};
+use dataflow_types::sinks::{AvroOcfSinkConnector, KafkaSinkConnector};
 use expr::{GlobalId, MirScalarExpr};
 use ore::collections::CollectionExt;
 use repr::adt::array::ArrayDimension;
@@ -180,10 +180,10 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let persist_name = match &source.connector {
-            dataflow_types::SourceConnector::External { persist, .. } => persist
+            dataflow_types::sources::SourceConnector::External { persist, .. } => persist
                 .as_ref()
                 .map(|persist| persist.primary_stream.name.as_str()),
-            dataflow_types::SourceConnector::Local { .. } => None,
+            dataflow_types::sources::SourceConnector::Local { .. } => None,
         };
         let persisted_name_datum = Datum::from(persist_name);
         vec![BuiltinTableUpdate {

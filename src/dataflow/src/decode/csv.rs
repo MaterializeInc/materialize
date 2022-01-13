@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dataflow_types::{CsvEncoding, DecodeError, LinearOperator};
+use dataflow_types::{sources::encoding::CsvEncoding, DecodeError, LinearOperator};
 use repr::{Datum, Row};
 
 #[derive(Debug)]

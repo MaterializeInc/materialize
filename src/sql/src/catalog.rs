@@ -16,7 +16,7 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
-use dataflow_types::SourceConnector;
+use dataflow_types::sources::SourceConnector;
 use lazy_static::lazy_static;
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};

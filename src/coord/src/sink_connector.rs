@@ -19,7 +19,7 @@ use rdkafka::config::ClientConfig;
 use rdkafka::{Message, Offset, TopicPartitionList};
 
 use ::kafka_util::client::MzClientContext;
-use dataflow_types::{
+use dataflow_types::sinks::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
     KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkConsistencyConnector,
     PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
@@ -399,7 +399,7 @@ async fn build_kafka(
     .await
     .context("error registering kafka topic for sink")?;
     let published_schema_info = match builder.format {
-        dataflow_types::KafkaSinkFormat::Avro {
+        dataflow_types::sinks::KafkaSinkFormat::Avro {
             key_schema,
             value_schema,
             ccsr_config,
@@ -421,11 +421,11 @@ async fn build_kafka(
                 value_schema_id,
             })
         }
-        dataflow_types::KafkaSinkFormat::Json => None,
+        dataflow_types::sinks::KafkaSinkFormat::Json => None,
     };
 
     let consistency = match builder.consistency_format {
-        Some(dataflow_types::KafkaSinkFormat::Avro {
+        Some(dataflow_types::sinks::KafkaSinkFormat::Avro {
             value_schema,
             ccsr_config,
             ..

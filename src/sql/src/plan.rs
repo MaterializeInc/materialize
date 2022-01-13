@@ -34,7 +34,7 @@ use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
-use dataflow_types::{SinkConnectorBuilder, SinkEnvelope, SourceConnector};
+use dataflow_types::{sinks::SinkConnectorBuilder, sinks::SinkEnvelope, sources::SourceConnector};
 use ore::now::{self, NOW_ZERO};
 use repr::{ColumnName, Diff, RelationDesc, Row, ScalarType, Timestamp};
 
