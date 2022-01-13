@@ -230,6 +230,8 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
     if init:
         mssh(i, "git init --bare materialize/.git")
 
+    rev = git.rev_parse(rev)
+
     cmd: List[str] = [
         "git",
         "push",
@@ -237,7 +239,7 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
         f"{instance_host(i)}:materialize/.git",
         # Explicit refspec is required if the host repository is in detached
         # HEAD mode.
-        "HEAD:refs/heads/scratch",
+        f"{rev}:refs/heads/scratch",
     ]
     if force:
         cmd.append("--force")
@@ -247,7 +249,6 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
         cwd=ROOT,
         env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
     )
-    rev = git.rev_parse(rev)
     mssh(
         i,
         f"cd materialize && git config core.bare false && git checkout {rev}",
