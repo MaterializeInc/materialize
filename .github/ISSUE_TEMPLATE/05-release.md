@@ -153,7 +153,7 @@ of PRs and adds release notes for any features or bugs that were missed.
 - [ ] Remove all load test machines:
 
   ```
-  bin/scratch mine --output-format csv | tail -n +2 | cut -d, -f2 | xargs bin/scratch destroy
+  bin/scratch mine --output-format csv | grep -E 'chbench|kinesis' | tail -n +2 | cut -d, -f2 | xargs bin/scratch destroy
   ```
 
 [teleport cluster]: https://tsh.i.mtrlz.dev/cluster/tsh/nodes
