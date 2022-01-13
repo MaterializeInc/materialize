@@ -109,7 +109,7 @@ pub trait OperatorBuilderExt<G: Scope> {
     where
         B: FnOnce(
             Vec<Capability<G::Timestamp>>,
-            Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
+            Vec<Rc<RefCell<Antichain<G::Timestamp>>>>,
             Scheduler,
         ) -> Fut,
         Fut: Future + 'static;
@@ -120,27 +120,23 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
     where
         B: FnOnce(
             Vec<Capability<G::Timestamp>>,
-            Rc<RefCell<Vec<Antichain<G::Timestamp>>>>,
+            Vec<Rc<RefCell<Antichain<G::Timestamp>>>>,
             Scheduler,
         ) -> Fut,
         Fut: Future + 'static,
     {
         let activator = scope.sync_activator_for(&self.operator_info().address[..]);
         let waker = futures_util::task::waker(Arc::new(activator));
-        let shared_frontiers = Rc::new(RefCell::new(vec![
-            Antichain::from_elem(Timestamp::minimum());
-            self.shape().inputs()
-        ]));
+        let mut shared_frontiers =
+            vec![
+                Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
+                self.shape().inputs()
+            ];
 
         self.build_reschedule(move |capabilities| {
             let scheduler = Scheduler::default();
             let mut logic_fut = Box::pin(
-                constructor(
-                    capabilities,
-                    Rc::clone(&shared_frontiers),
-                    scheduler.clone(),
-                )
-                .fuse(),
+                constructor(capabilities, shared_frontiers.clone(), scheduler.clone()).fuse(),
             );
             move |frontiers| {
                 // Attempt to update the shared frontier before polling the future.  This operation
@@ -149,8 +145,8 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
                 // poll the future right afterwards and will come back to this point once the
                 // operator gets rescheduled. At that future moment we will be able to update the
                 // frontier and poll the future with fresh data in the handle.
-                if let Ok(mut shared_frontiers) = shared_frontiers.try_borrow_mut() {
-                    for (shared, new) in shared_frontiers.iter_mut().zip(frontiers) {
+                for (shared, new) in shared_frontiers.iter_mut().zip(frontiers) {
+                    if let Ok(mut shared) = shared.try_borrow_mut() {
                         if !PartialOrder::less_equal(&new.frontier(), &shared.borrow()) {
                             *shared = new.frontier().to_owned();
                         }
@@ -198,7 +194,7 @@ macro_rules! async_op {
                 #[allow(unused_mut)]
                 let mut $frontiers = &mut frontiers;
 
-                if !async { $body }.await && frontiers.borrow().iter().all(|f| f.is_empty()) {
+                if !async { $body }.await && frontiers.iter().all(|f| f.borrow().is_empty()) {
                     break;
                 }
             }

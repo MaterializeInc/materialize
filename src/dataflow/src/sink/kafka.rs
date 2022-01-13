@@ -31,7 +31,6 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{InputHandle, OutputHandle};
 use timely::dataflow::operators::{Capability, Map};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
 use tracing::{debug, error, info};
@@ -519,7 +518,7 @@ impl KafkaSinkState {
     /// write frontier will be advanced regardless.
     async fn maybe_emit_progress<'a>(
         &mut self,
-        input_frontier: AntichainRef<'a, Timestamp>,
+        input_frontier: &Rc<RefCell<Antichain<Timestamp>>>,
     ) -> Result<(), anyhow::Error> {
         // This only looks at the first entry of the antichain.
         // If we ever have multi-dimensional time, this is not correct
@@ -527,6 +526,7 @@ impl KafkaSinkState {
         // We panic, so that future developers introducing multi-dimensional
         // time in Materialize will notice.
         let input_frontier = input_frontier
+            .borrow()
             .iter()
             .at_most_one()
             .expect("more than one element in the frontier")
@@ -747,8 +747,7 @@ where
     builder.build_async(
         stream.scope(),
         async_op!(|_initial_capabilities, frontiers| {
-            let frontiers_refcell = frontiers.borrow();
-            let frontier = frontiers_refcell[0].borrow();
+            let frontier = &frontiers[0];
 
             if s.shutdown_flag.load(Ordering::SeqCst) {
                 debug!("shutting down sink: {}", &s.name);
@@ -810,7 +809,9 @@ where
             let mut closed_ts: Vec<u64> = s
                 .pending_rows
                 .iter()
-                .filter(|(ts, _)| !frontier.less_equal(*ts) && !durability_frontier.less_equal(*ts))
+                .filter(|(ts, _)| {
+                    !frontier.borrow().less_equal(*ts) && !durability_frontier.less_equal(*ts)
+                })
                 .map(|(&ts, _)| ts)
                 .collect();
             closed_ts.sort_unstable();
