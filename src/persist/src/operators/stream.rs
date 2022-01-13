@@ -32,8 +32,8 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::Data as TimelyData;
 use timely::PartialOrder;
 
+use crate::client::StreamWriteHandle;
 use crate::error::Error;
-use crate::indexed::runtime::StreamWriteHandle;
 use crate::storage::SeqNo;
 
 /// Extension trait for [`Stream`].

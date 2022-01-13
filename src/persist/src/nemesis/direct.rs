@@ -105,11 +105,11 @@ use timely::dataflow::operators::Probe;
 use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
 
+use crate::client::{
+    DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
+};
 use crate::error::Error;
 use crate::indexed::encoding::Id;
-use crate::indexed::runtime::{
-    self, DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
-};
 use crate::indexed::SnapshotExt;
 use crate::nemesis::progress::{DataflowProgress, DataflowProgressHandle};
 use crate::nemesis::{
@@ -562,12 +562,12 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::file::{FileBlob, FileLog};
-    use crate::indexed::runtime::RuntimeConfig;
     use crate::mem::MemRegistry;
-    use crate::nemesis;
     use crate::nemesis::generator::GeneratorConfig;
+    use crate::runtime::RuntimeConfig;
     use crate::storage::Blob;
     use crate::unreliable::{UnreliableBlob, UnreliableLog};
+    use crate::{nemesis, runtime};
 
     use super::*;
 

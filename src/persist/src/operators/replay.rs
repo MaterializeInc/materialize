@@ -16,8 +16,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::{Data as TimelyData, PartialOrder};
 
+use crate::client::DecodedSnapshot;
 use crate::error::Error;
-use crate::indexed::runtime::DecodedSnapshot;
 use crate::indexed::Snapshot;
 
 /// Extension trait for [`Stream`].

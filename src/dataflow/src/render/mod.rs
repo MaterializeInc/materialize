@@ -107,7 +107,7 @@ use std::rc::Rc;
 use std::rc::Weak;
 
 use differential_dataflow::AsCollection;
-use persist::indexed::runtime::RuntimeClient;
+use persist::client::RuntimeClient;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;

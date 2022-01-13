@@ -21,12 +21,13 @@ use serde::{Deserialize, Serialize};
 
 use ore::metrics::MetricsRegistry;
 use ore::now::{NowFn, SYSTEM_TIME};
+use persist::client::{RuntimeClient, StreamReadHandle};
 use persist::error::Error as PersistError;
 use persist::file::{FileBlob, FileLog};
-use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamReadHandle};
 use persist::indexed::Snapshot;
 use persist::operators::stream::{AwaitFrontier, Seal};
 use persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
+use persist::runtime::{self, RuntimeConfig};
 use persist::storage::{Blob, LockInfo};
 use persist::Data;
 use persist_types::Codec;

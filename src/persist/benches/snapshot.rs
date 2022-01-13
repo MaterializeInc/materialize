@@ -14,11 +14,12 @@ use criterion::{
 };
 use ore::metrics::MetricsRegistry;
 
+use persist::client::{RuntimeClient, StreamReadHandle};
 use persist::error::{Error, ErrorLog};
 use persist::file::FileBlob;
-use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamReadHandle};
 use persist::indexed::Snapshot;
 use persist::mem::MemRegistry;
+use persist::runtime::{self, RuntimeConfig};
 use persist::storage::{Blob, LockInfo};
 use persist::workload::{self, DataGenerator};
 use persist_types::Codec;

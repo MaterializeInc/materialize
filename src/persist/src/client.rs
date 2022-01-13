@@ -26,6 +26,7 @@ use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use crate::indexed::encoding::Id;
 use crate::indexed::{ListenEvent, Snapshot};
 use crate::pfuture::{PFuture, PFutureHandle};
+use crate::runtime::{Cmd, RuntimeCore, RuntimeId};
 use crate::storage::SeqNo;
 
 /// A clone-able handle to the persistence runtime.
@@ -60,6 +61,10 @@ impl PartialEq for RuntimeClient {
 impl Eq for RuntimeClient {}
 
 impl RuntimeClient {
+    pub(crate) fn new(id: RuntimeId, core: Arc<RuntimeCore>) -> Self {
+        RuntimeClient { id, core }
+    }
+
     /// Synchronously registers a new stream for writes and reads.
     ///
     /// This method is idempotent. Returns read and write handles used to
@@ -602,3 +607,5 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
         Ok(DecodedSnapshot::new(snap))
     }
 }
+
+// NB: All the tests for this are in crate::runtime.
