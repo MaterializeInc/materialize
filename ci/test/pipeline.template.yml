@@ -66,9 +66,14 @@ steps:
 
   - id: lint-docs
     label: ":briefcase: lint docs"
-    command: bin/ci-builder run stable ci/www/lint.sh
-    inputs:
-      - doc/user
+    command: bin/ci-builder run stable ci/test/lint-docs.sh
+    inputs: [doc/user]
+    timeout_in_minutes: 30
+
+  - id: preview-docs
+    label: preview docs
+    command: bin/ci-builder run stable ci/test/preview-docs.sh
+    inputs: [doc/user]
     timeout_in_minutes: 30
 
   - id: cargo-test
