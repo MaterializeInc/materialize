@@ -30,6 +30,8 @@ use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 use dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
 use repr::{Datum, Row};
 
+use super::metrics::SourceBaseMetrics;
+
 lazy_static! {
     /// Postgres epoch is 2000-01-01T00:00:00Z
     static ref PG_EPOCH: SystemTime = UNIX_EPOCH + Duration::from_secs(946_684_800);
@@ -42,6 +44,7 @@ pub struct PostgresSourceReader {
     connector: PostgresSourceConnector,
     /// Our cursor into the WAL
     lsn: PgLsn,
+    metrics: SourceBaseMetrics,
 }
 
 trait ErrorExt {
@@ -117,11 +120,12 @@ macro_rules! try_recoverable {
 
 impl PostgresSourceReader {
     /// Constructs a new instance
-    pub fn new(source_name: String, connector: PostgresSourceConnector) -> Self {
+    pub fn new(source_name: String, connector: PostgresSourceConnector, metrics: SourceBaseMetrics) -> Self {
         Self {
             source_name,
             connector,
             lsn: 0.into(),
+            metrics: metrics,
         }
     }
 
@@ -207,6 +211,7 @@ impl PostgresSourceReader {
                     try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
                 }
             }
+            self.metrics.postgres_source_specific.tables_in_publication.inc();
         }
         client.simple_query("COMMIT;").await?;
         Ok(())
