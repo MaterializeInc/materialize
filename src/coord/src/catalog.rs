@@ -783,7 +783,7 @@ impl CatalogEntry {
         self.item.func(&self.name)
     }
 
-    /// Returns the [`dataflow_types::SourceConnector`] associated with
+    /// Returns the [`dataflow_types::sources::SourceConnector`] associated with
     /// this `CatalogEntry`.
     pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
         self.item.source_connector(&self.name)

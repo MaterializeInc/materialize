@@ -551,7 +551,7 @@ pub mod sources {
             pub topic: String,
         }
 
-        /// The details needed to make a source that uses an external [`SourceConnector`] persistent.
+        /// The details needed to make a source that uses an external [`super::SourceConnector`] persistent.
         #[derive(Clone, Debug, Serialize, Deserialize)]
         pub struct SourcePersistDesc {
             /// Name of the primary persisted stream of this source. This is what a consumer of the
