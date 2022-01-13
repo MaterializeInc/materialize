@@ -110,10 +110,10 @@ changes that have not yet been documented.
 - Detect if the publication slot is missing from the upstream database and
   report an error when using PostgreSQL sources
 
-- For Kafka sources that include `FORMAT`-specific SSL `WITH` options
-  (`ssl_ca_location`, `ssl_key_location`, `ssl_certificate_location`), use said
-  options for Confluent Schema Registry connections instead of Kafka broker SSL
-  options.
+- Allow Confluent Schema Registry SSL `WITH` options
+  (`ssl_ca_location`, `ssl_key_location`, `ssl_certificate_location`),
+  which override the equivalent Kafka options in `CREATE SOURCE` statements,
+  when creating CSR clients.
 
 - **Breaking change.** When inferring a column name for a cast expression, fall
   back to choosing the name of the target type.
