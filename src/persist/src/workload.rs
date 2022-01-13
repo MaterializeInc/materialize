@@ -16,9 +16,9 @@ use std::mem::size_of;
 
 use ore::cast::CastFrom;
 
+use crate::client::StreamWriteHandle;
 use crate::error::Error;
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
-use crate::indexed::runtime::StreamWriteHandle;
 
 /// A configurable data generator for benchmarking.
 #[derive(Clone, Debug)]

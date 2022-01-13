@@ -14,13 +14,14 @@ use ore::test::init_logging;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
+use crate::client::RuntimeClient;
 use crate::error::{Error, ErrorLog};
-use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use crate::indexed::Snapshot;
 use crate::mem::{MemBlob, MemRegistry};
 use crate::nemesis::direct::{Direct, StartRuntime};
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::{Input, Runtime, RuntimeWorker};
+use crate::runtime::{self, RuntimeConfig};
 use crate::storage::{Atomicity, Blob, BlobRead};
 use crate::unreliable::UnreliableBlob;
 

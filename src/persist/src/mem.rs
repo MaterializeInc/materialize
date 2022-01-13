@@ -18,12 +18,13 @@ use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use tokio::runtime::Runtime;
 
+use crate::client::RuntimeClient;
 use crate::error::Error;
 use crate::indexed::background::Maintainer;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use crate::indexed::Indexed;
+use crate::runtime::{self, RuntimeConfig};
 use crate::storage::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 

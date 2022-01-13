@@ -21,7 +21,7 @@ use timely::progress::Antichain;
 use timely::scheduling::ActivateOnDrop;
 use timely::Data as TimelyData;
 
-use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
+use crate::client::{StreamReadHandle, StreamWriteHandle};
 use crate::operators::replay::Replay;
 use crate::operators::split_ok_err;
 use crate::pfuture::PFuture;

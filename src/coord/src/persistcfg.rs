@@ -33,10 +33,9 @@ use tokio::runtime::Runtime;
 use url::Url;
 
 use expr::GlobalId;
+use persist::client::{MultiWriteHandle, RuntimeClient, StreamWriteHandle};
 use persist::file::FileBlob;
-use persist::indexed::runtime::{
-    self, MultiWriteHandle, RuntimeClient, RuntimeConfig, StreamWriteHandle,
-};
+use persist::runtime::{self, RuntimeConfig};
 use uuid::Uuid;
 
 use crate::catalog::{SerializedEnvelopePersistDetails, SerializedSourcePersistDetails};

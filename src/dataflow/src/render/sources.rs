@@ -673,7 +673,7 @@ impl<K: Codec, V: Codec, ST: Codec, AT: Codec> PersistentSourceConfig<K, V, ST, 
 fn get_persist_config(
     source_id: &SourceInstanceId,
     persist_desc: SourcePersistDesc,
-    persist_client: &mut persist::indexed::runtime::RuntimeClient,
+    persist_client: &mut persist::client::RuntimeClient,
 ) -> PersistentSourceConfig<
     Result<Row, DecodeError>,
     Result<Row, DecodeError>,

@@ -17,7 +17,6 @@ pub mod cache;
 pub mod columnar;
 pub mod encoding;
 pub mod metrics;
-pub mod runtime;
 
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -968,7 +967,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     // timestamp (upper) here. Description seems more oriented towards describing batches, and in
     // our case the lower is always `Antichain::from_elem(Timestamp::minimum())`. We could return a
     // tuple or create our own Description-like return type for this.
-    fn get_description(&mut self, id_str: &str, res: PFutureHandle<Description<u64>>) {
+    pub fn get_description(&mut self, id_str: &str, res: PFutureHandle<Description<u64>>) {
         res.fill((|| {
             self.drain_pending()?;
             self.apply_unbatched_cmd(|state, _, _| {

@@ -11,7 +11,7 @@
 
 use dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
 use mz_avro::types::Value;
-use persist::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
+use persist::client::{StreamReadHandle, StreamWriteHandle};
 use persist::indexed::Snapshot;
 use persist::operators::stream::Persist;
 use persist_types::Codec;

@@ -18,7 +18,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::Data as TimelyData;
 
-use crate::indexed::runtime::StreamReadHandle;
+use crate::client::StreamReadHandle;
 use crate::indexed::ListenEvent;
 use crate::operators::replay::Replay;
 

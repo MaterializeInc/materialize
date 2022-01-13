@@ -26,7 +26,7 @@ use lazy_static::lazy_static;
 use ore::collections::CollectionExt;
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, EpochMillis, NowFn};
-use persist::indexed::runtime::MultiWriteHandle;
+use persist::client::MultiWriteHandle;
 use regex::Regex;
 use repr::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -38,8 +38,8 @@ use dataflow_types::{
     sources::{SourceConnector, Timeline},
 };
 use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use persist::client::RuntimeClient as PersistClient;
 use persist::error::Error as PersistError;
-use persist::indexed::runtime::RuntimeClient as PersistClient;
 use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};

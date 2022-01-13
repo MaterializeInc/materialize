@@ -26,7 +26,7 @@ use crate::{
     Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
-use persist::indexed::runtime::RuntimeClient;
+use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
 
 /// Explicit instructions for timely dataflow workers.

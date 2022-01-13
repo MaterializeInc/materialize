@@ -22,7 +22,7 @@ use timely::dataflow::operators::{Delay, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
+use crate::client::{StreamReadHandle, StreamWriteHandle};
 use crate::operators::replay::Replay;
 use crate::operators::split_ok_err;
 use crate::operators::stream::Persist;
