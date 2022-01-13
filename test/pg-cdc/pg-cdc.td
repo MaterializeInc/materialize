@@ -107,12 +107,10 @@ db error: FATAL: password authentication failed for user "postgres"
   PUBLICATION 'mz_source';
 db error: FATAL: database "no_such_dbname" does not exist
 
-> CREATE MATERIALIZED SOURCE "no_such_publication"
+! CREATE MATERIALIZED SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'no_such_publication';
-# TODO: This should produce an error
-
-> DROP SOURCE "no_such_publication"
+publication "no_such_publication" does not exist
 
 > CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
