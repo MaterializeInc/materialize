@@ -28,8 +28,32 @@ openssl req \
     -passin pass:$SSL_SECRET \
     -passout pass:$SSL_SECRET
 
-for i in kafka kafka1 kafka2 schema-registry materialized producer postgres certuser
+# Create an alternative CA, used for certain tests
+openssl req \
+    -x509 \
+    -days 36500 \
+    -newkey rsa:4096 \
+    -keyout secrets/ca-selective.key \
+    -out secrets/ca-selective.crt \
+    -sha256 \
+    -batch \
+    -subj "/CN=MZ RSA CA" \
+    -passin pass:$SSL_SECRET \
+    -passout pass:$SSL_SECRET
+
+
+for i in kafka kafka1 kafka2 schema-registry materialized producer postgres certuser materialized-kafka materialized-sr
 do
+
+    if [ "$i" = "materialized-kafka" ] || [ "$i" = "materialized-sr" ];
+    then
+        ca="ca-selective"
+        cn="materialized"
+    else
+        ca="ca"
+        cn="$i"
+    fi
+
     # Create key & csr
     openssl req -nodes \
         -newkey rsa:2048 \
@@ -37,14 +61,14 @@ do
         -out tmp/$i.csr \
         -sha256 \
         -batch \
-        -subj "/CN=$i" \
+        -subj "/CN=$cn" \
         -passin pass:$SSL_SECRET \
         -passout pass:$SSL_SECRET \
 
     # Sign the CSR.
     openssl x509 -req \
-        -CA secrets/ca.crt \
-        -CAkey secrets/ca.key \
+        -CA secrets/"$ca".crt \
+        -CAkey secrets/"$ca".key \
         -in tmp/$i.csr \
         -out secrets/$i.crt \
         -sha256 \
@@ -59,7 +83,7 @@ do
         -name $i \
         -inkey secrets/$i.key \
         -passin pass:$SSL_SECRET \
-        -certfile secrets/ca.crt \
+        -certfile secrets/"$ca".crt \
         -out tmp/$i.p12 \
         -passout pass:$SSL_SECRET
 
@@ -73,7 +97,7 @@ do
         -name $i \
         -inkey secrets/$i.key \
         -passin pass:$SSL_SECRET \
-        -certfile secrets/ca.crt \
+        -certfile secrets/"$ca".crt \
         -out secrets/$i.p12 \
         -passout pass:$SSL_SECRET
 
@@ -90,7 +114,7 @@ do
     keytool \
         -alias CARoot \
         -import \
-        -file secrets/ca.crt \
+        -file secrets/"$ca".crt \
         -keystore secrets/$i.keystore.jks \
         -noprompt -storepass $SSL_SECRET -keypass $SSL_SECRET
 
@@ -99,10 +123,27 @@ do
         -keystore secrets/$i.truststore.jks \
         -alias CARoot \
         -import \
-        -file secrets/ca.crt \
+        -file secrets/"$ca".crt \
         -noprompt -storepass $SSL_SECRET -keypass $SSL_SECRET
 
 done
+
+# Create truststore and import a cert using the alternative CA
+keytool \
+    -keystore secrets/kafka.truststore.jks \
+    -alias Selective \
+    -import \
+    -file secrets/materialized-kafka.crt \
+    -noprompt -storepass $SSL_SECRET -keypass $SSL_SECRET
+
+# Create truststore and import a cert using the alternative CA
+keytool \
+    -keystore secrets/schema-registry.truststore.jks \
+    -alias Selective \
+    -import \
+    -file secrets/materialized-sr.crt \
+    -noprompt -storepass $SSL_SECRET -keypass $SSL_SECRET
+
 
 echo $SSL_SECRET > secrets/cert_creds
 
