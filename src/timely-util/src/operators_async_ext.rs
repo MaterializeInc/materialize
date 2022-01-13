@@ -185,41 +185,24 @@ impl<G: Scope> OperatorBuilderExt<G> for OperatorBuilder<G> {
     }
 }
 
-use differential_dataflow::lattice::Lattice;
-#[doc(hidden)]
-pub fn multi_meet<T: Lattice + Clone>(antichains: &[Antichain<T>]) -> Antichain<T> {
-    antichains
-        .iter()
-        .fold(Antichain::new(), |acc, x| acc.meet(&x))
-}
-
 /// Convenience macro used to wrap what might otherwise be the argument to `build_reschedule`.
 #[macro_export]
 macro_rules! async_op {
-    (|$capabilities:ident, $frontier:ident| $body:block) => {
+    (|$capabilities:ident, $frontiers:ident| $body:block) => {
         move |mut capabilities, frontiers, scheduler| async move {
             loop {
                 scheduler.notified().await;
 
-                // We simplify into one single Antichain because no current users of `async_op`
-                // require treating multiple input frontiers separately and this is the easiest
-                // way we can ensure that the `$body` does not hold a borrow to the frontier at
-                // all times
-                //
-                // Pull out to function so we don't require import from differential_dataflow for
-                // user of macro.
-                let __frontier = $crate::operators_async_ext::multi_meet(&frontiers.borrow());
-                let $frontier = __frontier.borrow();
                 #[allow(unused_mut)]
                 let mut $capabilities = &mut capabilities;
+                let $frontiers = (*frontiers.borrow()).clone();
 
-                if !async { $body }.await && $frontier.is_empty() {
+                if !async { $body }.await && $frontiers.iter().all(|f| f.is_empty()) {
                     break;
                 }
             }
 
-            // Make sure they can't be accidentally dropped in `$body`
-            drop(capabilities);
+            // Make sure can't be accidentally dropped in `$body`
             drop(frontiers);
         }
     };

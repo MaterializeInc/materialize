@@ -746,7 +746,9 @@ where
 
     builder.build_async(
         stream.scope(),
-        async_op!(|_initial_capabilities, frontier| {
+        async_op!(|_initial_capabilities, frontiers| {
+            let frontier = frontiers[0].borrow();
+
             if s.shutdown_flag.load(Ordering::SeqCst) {
                 debug!("shutting down sink: {}", &s.name);
                 // Indicate that the sink is closed to everyone else who

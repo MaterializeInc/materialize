@@ -4937,7 +4937,6 @@ dependencies = [
 name = "timely-util"
 version = "0.0.0"
 dependencies = [
- "differential-dataflow",
  "futures-util",
  "timely",
  "tokio",
