@@ -122,7 +122,7 @@ changes that have not yet been documented.
   This version of Materialize will infer the column name `text`, while previous
   versions of Materialize would fall back to the default column name `?column?`.
 
-- **Breaking change.** When inferring a column name for a [`bool`] or
+- **Breaking change.** When inferring a column name for a [`boolean`] or
   [`interval`] literal, fall back to choosing `bool` or `interval`,
   respectively.
 
@@ -1827,6 +1827,7 @@ a problem with PostgreSQL JDBC 42.3.0.
 
 [`array`]: /sql/types/array/
 [`bigint`]: /sql/types/integer#bigint-info
+[`boolean`]: /sql/types/boolean
 [`bytea`]: /sql/types/bytea
 [`ALTER INDEX`]: /sql/alter-index
 [`COPY FROM`]: /sql/copy-from
