@@ -897,7 +897,7 @@ impl TimestampBindingUpdater {
 
 #[cfg(test)]
 mod tests {
-    use dataflow_types::MzOffset;
+    use dataflow_types::sources::MzOffset;
     use expr::PartitionId;
     use ore::now::NOW_ZERO;
     use persist_types::Codec;
