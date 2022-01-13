@@ -498,7 +498,9 @@ pub fn generate_ccsr_client_config(
     // If provided, prefer SSL options from the schema registry configuration
     if let Some(ca_path) = match ccsr_options.get("ssl_ca_location") {
         Some(Value::String(path)) => Some(path),
-        Some(_) => { bail!("ssl_ca_location must be a string"); },
+        Some(_) => {
+            bail!("ssl_ca_location must be a string");
+        }
         None => kafka_options.get("ssl.ca.location"),
     } {
         let mut ca_buf = Vec::new();
@@ -509,12 +511,16 @@ pub fn generate_ccsr_client_config(
 
     let key_path = match ccsr_options.get("ssl_key_location") {
         Some(Value::String(path)) => Some(path),
-        Some(_) => { bail!("ssl_key_location must be a string"); },
+        Some(_) => {
+            bail!("ssl_key_location must be a string");
+        }
         None => kafka_options.get("ssl.key.location"),
     };
     let cert_path = match ccsr_options.get("ssl_certificate_location") {
         Some(Value::String(path)) => Some(path),
-        Some(_) => { bail!("ssl_certificate_location must be a string"); },
+        Some(_) => {
+            bail!("ssl_certificate_location must be a string");
+        }
         None => kafka_options.get("ssl.certificate.location"),
     };
     match (key_path, cert_path) {
