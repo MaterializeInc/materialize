@@ -25,7 +25,10 @@ use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
-use dataflow_types::{SinkAsOf, SinkDesc, TailResponse, TailSinkConnector};
+use dataflow_types::{
+    sinks::{SinkAsOf, SinkDesc, TailSinkConnector},
+    TailResponse,
+};
 use expr::GlobalId;
 use repr::{Diff, Row, Timestamp};
 

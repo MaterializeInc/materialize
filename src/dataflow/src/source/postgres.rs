@@ -27,7 +27,7 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
-use dataflow_types::{PostgresSourceConnector, SourceErrorDetails};
+use dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
 use repr::{Datum, Row};
 
 lazy_static! {

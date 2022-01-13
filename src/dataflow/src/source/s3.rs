@@ -47,8 +47,9 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
 
-use dataflow_types::{
-    AwsConfig, Compression, ExternalSourceConnector, MzOffset, S3KeySource, SourceDataEncoding,
+use dataflow_types::sources::{
+    encoding::SourceDataEncoding, AwsConfig, Compression, ExternalSourceConnector, MzOffset,
+    S3KeySource,
 };
 use expr::{PartitionId, SourceInstanceId};
 use ore::retry::{Retry, RetryReader};

@@ -21,9 +21,9 @@ use repr::MessagePayload;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
-use dataflow_types::{
-    AvroOcfEncoding, Compression, DataEncoding, ExternalSourceConnector, MzOffset,
-    SourceDataEncoding,
+use dataflow_types::sources::{
+    encoding::AvroOcfEncoding, encoding::DataEncoding, encoding::SourceDataEncoding, Compression,
+    ExternalSourceConnector, MzOffset,
 };
 use expr::{PartitionId, SourceInstanceId};
 use mz_avro::Block;

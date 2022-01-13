@@ -27,13 +27,21 @@ use reqwest::Url;
 use tracing::{debug, error};
 
 use dataflow_types::{
-    included_column_desc, provide_default_metadata, AvroEncoding, AvroOcfEncoding,
-    AvroOcfSinkConnectorBuilder, BringYourOwn, ColumnSpec, Consistency, CsvEncoding, DataEncoding,
-    DebeziumMode, ExternalSourceConnector, FileSourceConnector, IncludedColumnPos,
-    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat, KafkaSourceConnector,
-    KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
-    PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
-    SourceConnector, SourceDataEncoding, SourceEnvelope, Timeline,
+    sinks::{
+        AvroOcfSinkConnectorBuilder, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
+        KafkaSinkFormat, SinkConnectorBuilder, SinkEnvelope,
+    },
+    sources::{
+        encoding::{
+            included_column_desc, AvroEncoding, AvroOcfEncoding, ColumnSpec, CsvEncoding,
+            DataEncoding, ProtobufEncoding, RegexEncoding, SourceDataEncoding,
+        },
+        persistence::{BringYourOwn, Consistency},
+        provide_default_metadata, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
+        IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
+        PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector, SourceConnector,
+        SourceEnvelope, Timeline,
+    },
 };
 use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
@@ -606,8 +614,8 @@ pub fn plan_create_source(
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
                 compression: match compression {
-                    Compression::Gzip => dataflow_types::Compression::Gzip,
-                    Compression::None => dataflow_types::Compression::None,
+                    Compression::Gzip => dataflow_types::sources::Compression::Gzip,
+                    Compression::None => dataflow_types::sources::Compression::None,
                 },
                 tail,
             });
@@ -627,12 +635,12 @@ pub fn plan_create_source(
             for ks in key_sources {
                 let dtks = match ks {
                     sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        dataflow_types::S3KeySource::Scan {
+                        dataflow_types::sources::S3KeySource::Scan {
                             bucket: bucket.clone(),
                         }
                     }
                     sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        dataflow_types::S3KeySource::SqsNotifications {
+                        dataflow_types::sources::S3KeySource::SqsNotifications {
                             queue: queue.clone(),
                         }
                     }
@@ -652,8 +660,8 @@ pub fn plan_create_source(
                     .transpose()?,
                 aws,
                 compression: match compression {
-                    Compression::Gzip => dataflow_types::Compression::Gzip,
-                    Compression::None => dataflow_types::Compression::None,
+                    Compression::Gzip => dataflow_types::sources::Compression::Gzip,
+                    Compression::None => dataflow_types::sources::Compression::None,
                 },
             });
             let encoding = get_encoding(format, envelope, with_options_original)?;
@@ -715,7 +723,7 @@ pub fn plan_create_source(
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
-                compression: dataflow_types::Compression::None,
+                compression: dataflow_types::sources::Compression::None,
                 tail,
             });
             if !matches!(format, CreateSourceFormat::None) {
@@ -897,11 +905,12 @@ pub fn plan_create_source(
                 Some(key_desc) => match &bare_desc.typ().column_types[0].scalar_type {
                     ScalarType::Record { fields, .. } => {
                         let row_desc = RelationDesc::from_names_and_types(fields.clone());
-                        let key_schema_indices =
-                            match dataflow_types::match_key_indices(&key_desc, &row_desc) {
-                                Err(e) => bail!("Cannot use key due to error: {}", e),
-                                Ok(indices) => Some(indices),
-                            };
+                        let key_schema_indices = match dataflow_types::sources::match_key_indices(
+                            &key_desc, &row_desc,
+                        ) {
+                            Err(e) => bail!("Cannot use key due to error: {}", e),
+                            Ok(indices) => Some(indices),
+                        };
                         key_schema_indices
                     }
                     _ => {

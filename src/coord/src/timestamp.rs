@@ -32,10 +32,11 @@ use rdkafka::ClientConfig;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use dataflow_types::{
-    Consistency, DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
-    KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector, SourceConnector,
-    SourceEnvelope, TimestampSourceUpdate,
+use dataflow_types::sources::{
+    encoding::DataEncoding,
+    persistence::{Consistency, TimestampSourceUpdate},
+    DebeziumMode, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
+    KinesisSourceConnector, MzOffset, S3SourceConnector, SourceConnector, SourceEnvelope,
 };
 use expr::{GlobalId, PartitionId};
 use kafka_util::client::MzClientContext;

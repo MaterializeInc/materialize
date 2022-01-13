@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use dataflow_types::{
-    EnvelopePersistDesc, ExternalSourceConnector, MzOffset, SinkEnvelope, SourcePersistDesc,
+    sinks::SinkEnvelope, sources::persistence::EnvelopePersistDesc,
+    sources::persistence::SourcePersistDesc, sources::ExternalSourceConnector, sources::MzOffset,
 };
 use expr::{Id, PartitionId};
 use itertools::Itertools;
@@ -32,7 +33,10 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 
 use build_info::DUMMY_BUILD_INFO;
-use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
+use dataflow_types::{
+    sinks::{SinkConnector, SinkConnectorBuilder},
+    sources::{SourceConnector, Timeline},
+};
 use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use persist::error::Error as PersistError;
 use persist::indexed::runtime::RuntimeClient as PersistClient;
@@ -955,7 +959,7 @@ impl Catalog {
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
                             optimized_expr,
-                            connector: dataflow_types::SourceConnector::Local {
+                            connector: dataflow_types::sources::SourceConnector::Local {
                                 timeline: Timeline::EpochMilliseconds,
                                 persisted_name: None,
                             },

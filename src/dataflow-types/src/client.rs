@@ -22,8 +22,8 @@ use timely::progress::ChangeBatch;
 
 use crate::logging::LoggingConfig;
 use crate::{
-    DataflowDescription, MzOffset, PeekResponse, SourceConnector, TailResponse,
-    TimestampSourceUpdate, Update,
+    sources::MzOffset, sources::SourceConnector, DataflowDescription, PeekResponse, TailResponse,
+    Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
 use persist::indexed::runtime::RuntimeClient;
@@ -113,14 +113,14 @@ pub enum Command {
         /// The connector for the timestamped source.
         connector: SourceConnector,
         /// Previously stored timestamp bindings.
-        bindings: Vec<(PartitionId, Timestamp, MzOffset)>,
+        bindings: Vec<(PartitionId, Timestamp, crate::sources::MzOffset)>,
     },
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
         id: GlobalId,
         /// The associated update (RT or BYO)
-        update: TimestampSourceUpdate,
+        update: crate::types::sources::persistence::TimestampSourceUpdate,
     },
     /// Drop all timestamping info for a source
     DropSourceTimestamping {

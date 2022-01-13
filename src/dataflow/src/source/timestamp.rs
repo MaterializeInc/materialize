@@ -34,7 +34,7 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::{ChangeBatch, Timestamp as TimelyTimestamp};
 use tracing::error;
 
-use dataflow_types::MzOffset;
+use dataflow_types::sources::MzOffset;
 use expr::PartitionId;
 use ore::now::NowFn;
 use repr::Timestamp;

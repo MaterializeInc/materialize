@@ -37,7 +37,7 @@ use timely::progress::Antichain;
 use timely::scheduling::Activator;
 use tracing::{debug, error, info};
 
-use dataflow_types::{
+use dataflow_types::sinks::{
     KafkaSinkConnector, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkAsOf, SinkDesc,
 };
 use expr::GlobalId;

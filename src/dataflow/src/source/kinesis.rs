@@ -20,8 +20,8 @@ use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
-use dataflow_types::{
-    ExternalSourceConnector, KinesisSourceConnector, MzOffset, SourceDataEncoding,
+use dataflow_types::sources::{
+    encoding::SourceDataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset,
 };
 use expr::{PartitionId, SourceInstanceId};
 use mz_aws_util::kinesis;
