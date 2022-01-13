@@ -34,7 +34,7 @@ declare -A shortlinks=(
 
 cd doc/user
 hugo --gc --baseURL /docs --destination public/docs
-cp -R ../../ci/deploy/website/ public/
+cp -R ../../ci/deploy/website/. public/
 hugo deploy
 
 # NOTE(benesch): this code does not delete old shortlinks. That's fine, because
