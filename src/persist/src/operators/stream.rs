@@ -9,11 +9,13 @@
 
 //! Modular Timely Dataflow operators that can persist and seal updates in streams.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::task::Context;
 
@@ -26,7 +28,9 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::{Branch, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 use timely::Data as TimelyData;
+use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::indexed::runtime::StreamWriteHandle;
@@ -220,8 +224,7 @@ where
         let mut data_input = seal_op.new_input(&self, Pipeline);
         let (mut data_output, data_output_stream) = seal_op.new_output();
         let mut data_buffer = Vec::new();
-        let mut input_frontier =
-            Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
+        let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
         // We only seal from one worker because sealing from multiple workers could lead to a race
         // conditions where one worker seals up to time `t` while another worker is still trying to
         // write data with timestamps that are not beyond `t`.
@@ -461,6 +464,200 @@ where
             },
         )
     }
+}
+
+/// Extension trait for [`Stream`].
+// NOTE: This is not named AllowCompaction because there are already too many things with that
+// name...
+pub trait AllowPersistCompaction<G: Scope<Timestamp = u64>, D: TimelyData> {
+    /// Passes through each element of the stream and allows compaction on the given collection
+    /// (the `write` handle) when the input frontier combined with the allowed compaction frontier
+    /// (the effective input frontier) advance.
+    ///
+    /// NOTE: This does not allow compaction right up to the effective input frontier. Instead,
+    /// when the frontier advances, we allow compaction up to the latest previous frontier that is
+    /// strictly dominated (`PartialOrder::less()`), than the effective input frontier. We do this,
+    /// because the input frontier is most likely a proxy for an upstream persist or seal frontier
+    /// and we don't want to advance up to the seal, so that we can still distinguish between
+    /// updates that are in front of or beyond the seal frontier.
+    fn allow_compaction<K, V>(
+        &self,
+        name: &str,
+        write: StreamWriteHandle<K, V>,
+        allowed_compaction_frontier: Rc<RefCell<Antichain<u64>>>,
+    ) -> Stream<G, (D, u64, isize)>
+    where
+        K: Codec,
+        V: Codec;
+}
+
+impl<G, D> AllowPersistCompaction<G, D> for Stream<G, (D, u64, isize)>
+where
+    G: Scope<Timestamp = u64>,
+    D: TimelyData,
+{
+    fn allow_compaction<K, V>(
+        &self,
+        name: &str,
+        write: StreamWriteHandle<K, V>,
+        allowed_compaction_frontier: Rc<RefCell<Antichain<u64>>>,
+    ) -> Stream<G, (D, u64, isize)>
+    where
+        K: Codec,
+        V: Codec,
+    {
+        let operator_name = format!("allow_compaction({})", name);
+        let mut op = OperatorBuilder::new(operator_name.clone(), self.scope());
+
+        let mut data_input = op.new_input(&self, Pipeline);
+        let (mut data_output, data_output_stream) = op.new_output();
+        let mut data_buffer = Vec::new();
+
+        // We only allow compaction from one worker because doing so from multiple workers could
+        // lead to a race conditions where one worker allows compaction up to time `t` while
+        // another worker is still trying to write data with timestamps that are not beyond `t`.
+        //
+        // Upstream operators will only advance their frontier when writes are succesful. With
+        // timely progress tracking we are therefore sure that when the frontier advances for
+        // worker 0, it has advanced to at least that point for all upstream operators.
+        //
+        // Alternative solutions would be to "teach" persistence to work with allowing compaction
+        // from multiple workers, or to use a non-timely solution for keeping track of outstanding
+        // write capabilities.
+        let active_operator = self.scope().index() == 0;
+
+        // An activator that allows futures to re-schedule this operator when ready.
+        let activator = Arc::new(
+            self.scope()
+                .sync_activator_for(&op.operator_info().address[..]),
+        );
+
+        let mut pending_futures = VecDeque::new();
+
+        // The combination of the input frontier (which is a proxy for how far upstream operators
+        // have written and/or sealed) and the allowed compaction frontier (that likely gets
+        // updated based on messages from the coordinator).
+        let mut effective_input_frontier = Antichain::new();
+
+        // The current compaction frontier.
+        let mut compaction_frontier: Antichain<u64> = Antichain::new();
+
+        // A candidate compaction frontier. When we compact, we pick the current effective input
+        // frontier as the next candidate. Once the effective input frontier is strictly beyond
+        // (that is >, not >=) this candidate, it becomes the compaction frontier.
+        //
+        // NOTE: We could try and be more clever here, say we could apply the logic that checks if
+        // we moved beyond a given frontier only to the input frontier, not the combined/effective
+        // frontier, and move through candidates like this. The reasoning behind this is that we
+        // don't have to wait until the allowed frontier advances past a given frontier, we only
+        // need to be careful not to advance the compaction frontier up to the seal frontier, for
+        // which the input frontier is a proxy.
+        let mut candidate_compaction_frontier: Antichain<u64> =
+            Antichain::from_elem(TimelyTimestamp::minimum());
+
+        op.build_reschedule(move |_capabilities| {
+            move |frontiers| {
+                let mut data_output = data_output.activate();
+
+                // Pass through all data.
+                data_input.for_each(|cap, data| {
+                    data.swap(&mut data_buffer);
+
+                    let mut session = data_output.session(&cap);
+                    session.give_vec(&mut data_buffer);
+                });
+
+                if !active_operator {
+                    // We are always complete if we're not the active operator.
+                    return false;
+                }
+
+                let allowed_compaction_frontier = allowed_compaction_frontier.borrow_mut();
+                let input_frontier = frontiers[0].frontier();
+
+                effective_input_frontier.clear();
+                effective_input_frontier.extend(input_frontier.iter().cloned());
+                effective_input_frontier.extend(allowed_compaction_frontier.iter().cloned());
+
+                if PartialOrder::less_than(
+                    &candidate_compaction_frontier,
+                    &effective_input_frontier,
+                ) {
+                    // We can now safely compact to this candidate frontier, because we know the
+                    // input frontier combined with the allowed compaction is strictly beyond (that
+                    // is >).
+                    std::mem::swap(&mut compaction_frontier, &mut candidate_compaction_frontier);
+
+                    // The current combined input frontier becomes the next candidate up to which
+                    // we could allow compaction, once it is strictly dominated by the then current
+                    // effective input frontier.
+                    candidate_compaction_frontier.clear();
+                    candidate_compaction_frontier.extend(effective_input_frontier.iter().cloned());
+
+                    tracing::trace!(
+                        "In {}, allowing compaction up to {:?}. Effective input frontier: {:?}",
+                        &operator_name,
+                        compaction_frontier,
+                        effective_input_frontier
+                    );
+
+                    let fut = write.allow_compaction(compaction_frontier.clone());
+
+                    pending_futures.push_back(CompactionFuture {
+                        frontier: compaction_frontier.clone(),
+                        fut,
+                    });
+                }
+
+                // Swing through all pending futures and see if they're ready. Ready futures will
+                // invoke the Activator, which will make sure that we arrive here, even when there
+                // are no changes in the input frontier or new input.
+                let waker = futures_util::task::waker_ref(&activator);
+                let mut context = Context::from_waker(&waker);
+
+                while let Some(mut pending_future) = pending_futures.pop_front() {
+                    match Pin::new(&mut pending_future.fut).poll(&mut context) {
+                        std::task::Poll::Ready(Ok(_)) => {
+                            tracing::trace!(
+                                "In {}, finished allowing compaction up to {:?}",
+                                &operator_name,
+                                pending_future.frontier,
+                            );
+                        }
+                        std::task::Poll::Ready(Err(e)) => {
+                            // We don't retry or emit an error. Compaction is an optimization that
+                            // is not strictly necessary for correctness.
+                            tracing::error!("In {}: {}", &operator_name, e);
+                        }
+                        std::task::Poll::Pending => {
+                            // We assume that compaction requests are worked off in order and stop
+                            // trying for the first one that is not done. Push the future back to
+                            // the front of the queue. We have to do this dance of popping and
+                            // pushing because we're modifying the queue while we work on a future.
+                            // This prevents us from just getting a reference to the front of the
+                            // queue and then popping once we know that a future is done.
+                            pending_futures.push_front(pending_future);
+                            break;
+                        }
+                    }
+                }
+
+                // When we're done, clear all pending futures to allow speedy shutdown.
+                if frontiers[0].frontier().is_empty() {
+                    pending_futures.clear();
+                }
+
+                !pending_futures.is_empty()
+            }
+        });
+
+        data_output_stream
+    }
+}
+
+struct CompactionFuture<F: Future<Output = Result<SeqNo, Error>>> {
+    frontier: Antichain<u64>,
+    fut: F,
 }
 
 /// Extension trait for [`Stream`].
@@ -1077,6 +1274,108 @@ mod tests {
         let p = registry.runtime_no_reentrance()?;
         let (_write, read) = p.create_or_load("test");
         assert_eq!(read.snapshot()?.read_to_end()?, expected);
+
+        Ok(())
+    }
+
+    // Tests the case where the input frontier is beyond the allowed frontier that we get from
+    // outside.
+    #[test]
+    fn allow_compaction_input_beyond_allowed() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+
+        let p = registry.runtime_no_reentrance()?;
+
+        timely::execute_directly(move |worker| {
+            let allowed_compaction = Rc::new(RefCell::new(Antichain::from_elem(3)));
+
+            let (mut input, probe) = worker.dataflow(|scope| {
+                let (write, _read) = p.create_or_load::<(), ()>("1");
+                let mut input = Handle::new();
+
+                let ok_stream =
+                    input
+                        .to_stream(scope)
+                        .allow_compaction("test", write, allowed_compaction);
+
+                let probe = ok_stream.probe();
+                (input, probe)
+            });
+
+            input.send((((), ()), 1, 1));
+
+            input.advance_to(2);
+            while probe.less_than(&2) {
+                worker.step();
+            }
+
+            input.advance_to(10);
+            while probe.less_than(&10) {
+                worker.step();
+            }
+        });
+
+        let p = registry.runtime_no_reentrance()?;
+        let description = p.get_description("1")?;
+
+        // The operator will allow compaction up to the last frontier before the effective
+        // frontier. We keep `allowed_compaction` at [3], so in our setup the last frontier before
+        // that is [2].
+        assert_eq!(*description.since(), Antichain::from_elem(2));
+
+        Ok(())
+    }
+
+    // Tests the case where the allowed frontier is beyond the input frontier
+    #[test]
+    fn allow_compaction_allowed_beyond_input() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+
+        let p = registry.runtime_no_reentrance()?;
+
+        timely::execute_directly(move |worker| {
+            let allowed_compaction = Rc::new(RefCell::new(Antichain::from_elem(10)));
+
+            let (mut input, probe) = worker.dataflow(|scope| {
+                let (write, _read) = p.create_or_load::<(), ()>("1");
+                let mut input = Handle::new();
+
+                let ok_stream =
+                    input
+                        .to_stream(scope)
+                        .allow_compaction("test", write, allowed_compaction);
+
+                let probe = ok_stream.probe();
+                (input, probe)
+            });
+
+            input.send((((), ()), 1, 1));
+
+            input.advance_to(2);
+            while probe.less_than(&2) {
+                worker.step();
+            }
+
+            input.advance_to(3);
+            while probe.less_than(&3) {
+                worker.step();
+            }
+
+            // The operator will allow compaction up to the last frontier before the effective
+            // frontier. We keep `allowed_compaction` at [3], so in our setup the last frontier before
+            // that is [2].
+            // let p = registry.runtime_no_reentrance()?;
+            let description = p.get_description("1").unwrap();
+            assert_eq!(*description.since(), Antichain::from_elem(2));
+        });
+
+        let p = registry.runtime_no_reentrance()?;
+        let description = p.get_description("1")?;
+
+        // Closing the operator advances the input frontier to the empty frontier (aka "infinity"),
+        // we are therefore allowed to advanec to [3], which was the last valid frontier before
+        // that.
+        assert_eq!(*description.since(), Antichain::from_elem(3));
 
         Ok(())
     }
