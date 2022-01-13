@@ -544,9 +544,21 @@ pub mod partitioned {
                             changes.clear();
                         }
                     }
-                    // TODO: The following line would be great, but is not permitted by `list.retain()`.
-                    // list.retain_mut(|(_, changes)| !changes.is_empty());
+                    // The following block implements a `list.retain()` of non-empty change batches.
+                    // This is more verbose than `list.retain()` because that method cannot mutate
+                    // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
+                    let mut cursor = 0;
+                    while let Some((_id, changes)) = list.get_mut(cursor) {
+                        if changes.is_empty() {
+                            list.swap_remove(cursor);
+                        } else {
+                            cursor += 1;
+                        }
+                    }
+                    // Only produce a result if there are any changes to report.
                     if !list.is_empty() {
+                        // Put changes in order of `id` for ease of understanding.
+                        list.sort_by_key(|(id, _)| *id);
                         Some(Response::FrontierUppers(list))
                     } else {
                         None
