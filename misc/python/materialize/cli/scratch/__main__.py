@@ -9,7 +9,7 @@
 
 import argparse
 
-from materialize.cli.scratch import create, destroy, mine, ssh
+from materialize.cli.scratch import create, destroy, mine, push, ssh
 
 
 def main() -> None:
@@ -20,6 +20,7 @@ def main() -> None:
         ("mine", mine.configure_parser, mine.run),
         ("ssh", ssh.configure_parser, ssh.run),
         ("destroy", destroy.configure_parser, destroy.run),
+        ("push", push.configure_parser, push.run),
     ]:
         s = subparsers.add_parser(name)
         configure(s)
