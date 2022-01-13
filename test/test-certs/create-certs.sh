@@ -28,7 +28,7 @@ openssl req \
     -passin pass:$SSL_SECRET \
     -passout pass:$SSL_SECRET
 
-# Create CA
+# Create an alternative CA, used for certain tests
 openssl req \
     -x509 \
     -days 36500 \
@@ -128,7 +128,7 @@ do
 
 done
 
-# Create truststore and import CA cert
+# Create truststore and import a cert using the alternative CA
 keytool \
     -keystore secrets/kafka.truststore.jks \
     -alias Selective \
@@ -136,7 +136,7 @@ keytool \
     -file secrets/materialized-kafka.crt \
     -noprompt -storepass $SSL_SECRET -keypass $SSL_SECRET
 
-# Create truststore and import CA cert
+# Create truststore and import a cert using the alternative CA
 keytool \
     -keystore secrets/schema-registry.truststore.jks \
     -alias Selective \
