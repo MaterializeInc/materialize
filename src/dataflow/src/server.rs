@@ -1026,6 +1026,10 @@ where
 
                 self.reported_frontiers.remove(&id);
                 self.reported_bindings_frontiers.remove(&id);
+
+                // TODO: This is not the right place to do it.
+                println!("Removing allowed compaction frontier for source {}", id);
+                self.storage_state.allowed_compaction_frontiers.remove(&id);
             }
         }
     }

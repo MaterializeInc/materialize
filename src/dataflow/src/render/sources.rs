@@ -898,9 +898,13 @@ where
         TimelyTimestamp::minimum(),
     )));
 
-    render_state
+    let previous = render_state
         .allowed_compaction_frontiers
         .insert(source_id.clone(), Rc::clone(&allowed_compaction_frontier));
+    assert!(
+        previous.is_none(),
+        "cannot have multiple instances of a persistent source"
+    );
 
     let sealed_stream = sealed_stream.allow_compaction(
         format!("{}", source_name).as_str(),
