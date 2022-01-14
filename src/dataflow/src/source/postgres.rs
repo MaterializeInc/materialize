@@ -297,7 +297,6 @@ impl PostgresSourceReader {
         let mut last_keepalive = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
-        
         while let Some(item) = stream.try_next().await? {
             use ReplicationMessage::*;
             // The upstream will periodically request keepalive responses by setting the reply field

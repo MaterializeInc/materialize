@@ -147,6 +147,8 @@ changes that have not yet been documented.
 - Fix a bug where using a `ROWS FROM` clause with an alias in a view would cause
   Materialize to fail to reboot {{% gh 10008 %}}.
 
+- Add basic Prometheus counters for PostgreSQL sources
+
 {{< comment >}}
 Only add new release notes above this line.
 
