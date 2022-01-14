@@ -64,3 +64,18 @@ a
 ---
 1
 2
+
+# Ensure that our test infra correctly sets up certs by failing when CSR is not
+# specifically configured
+! CREATE MATERIALIZED SOURCE data
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (
+      security_protocol = 'SSL',
+      ssl_key_location = '/share/secrets/materialized-kafka.key',
+      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
+      ssl_key_password = 'mzmzmz'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+sslv3 alert certificate unknown
