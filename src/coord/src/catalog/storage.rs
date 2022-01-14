@@ -14,7 +14,7 @@ use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use dataflow_types::MzOffset;
+use dataflow_types::sources::MzOffset;
 use expr::{GlobalId, PartitionId};
 use ore::cast::CastFrom;
 use repr::Timestamp;

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dataflow_types::{DecodeError, ProtobufEncoding};
+use dataflow_types::{sources::encoding::ProtobufEncoding, DecodeError};
 use interchange::protobuf::{DecodedDescriptors, Decoder};
 use repr::Row;
 

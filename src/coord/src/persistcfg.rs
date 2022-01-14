@@ -17,9 +17,9 @@ use std::time::Duration;
 use timely::progress::Timestamp;
 
 use build_info::BuildInfo;
-use dataflow_types::{
-    EnvelopePersistDesc, ExternalSourceConnector, PersistStreamDesc, SourceConnector,
-    SourceEnvelope, SourcePersistDesc,
+use dataflow_types::sources::{
+    persistence::{EnvelopePersistDesc, PersistStreamDesc, SourcePersistDesc},
+    ExternalSourceConnector, SourceConnector, SourceEnvelope,
 };
 use itertools::Itertools;
 use ore::metrics::MetricsRegistry;
@@ -33,10 +33,9 @@ use tokio::runtime::Runtime;
 use url::Url;
 
 use expr::GlobalId;
+use persist::client::{MultiWriteHandle, RuntimeClient, StreamWriteHandle};
 use persist::file::FileBlob;
-use persist::indexed::runtime::{
-    self, MultiWriteHandle, RuntimeClient, RuntimeConfig, StreamWriteHandle,
-};
+use persist::runtime::{self, RuntimeConfig};
 use uuid::Uuid;
 
 use crate::catalog::{SerializedEnvelopePersistDetails, SerializedSourcePersistDetails};

@@ -28,13 +28,13 @@ use rand::{Rng, SeedableRng};
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 
+use persist::client::WriteReqBuilder;
 use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::background::Maintainer;
 use persist::indexed::cache::BlobCache;
 use persist::indexed::encoding::{BlobTraceBatch, BlobUnsealedBatch, Id};
 use persist::indexed::metrics::Metrics;
-use persist::indexed::runtime::WriteReqBuilder;
 use persist::indexed::Indexed;
 use persist::mem::MemRegistry;
 use persist::pfuture::{PFuture, PFutureHandle};

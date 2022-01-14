@@ -23,10 +23,11 @@ use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
 use timely::Config;
 
+use persist::client::RuntimeClient;
 use persist::error::{Error, ErrorLog};
 use persist::file::FileBlob;
-use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use persist::operators::source::PersistedSource;
+use persist::runtime::{self, RuntimeConfig};
 use persist::storage::{Blob, LockInfo};
 use persist::workload::{self, DataGenerator};
 

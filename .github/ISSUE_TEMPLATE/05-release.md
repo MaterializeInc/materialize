@@ -32,7 +32,18 @@ production readiness.
 
 - [ ] Choose the commit for the release. The commit should *always* be the
   last commit before noon EST on Monday, even if you start the release process
-  late.
+  late. From an updated `main` branch, use this command to find the release commit:
+
+  **Note:** If you're on macOS you need to use `gdate` instead of `date` which
+  you can install with `brew install coreutils`.
+
+  ```shell
+  # If you run the release on Monday
+  git log -n1 --before $(date -Iminutes -d 'this monday 12:00 EST') main
+
+  # If you run the release on Tuesday
+  git log -n1 --before $(date -Iminutes -d 'last monday 12:00 EST') main
+  ```
 
   If there are open release blockers, what to do depends on the scope of the
   fix. If the fix lands soon and is small, cherry-pick the fix onto the chosen
@@ -142,7 +153,7 @@ of PRs and adds release notes for any features or bugs that were missed.
 - [ ] Remove all load test machines:
 
   ```
-  bin/scratch mine --output-format csv | tail -n +2 | cut -d, -f2 | xargs bin/scratch destroy
+  bin/scratch mine --output-format csv | grep -E 'chbench|kinesis' | tail -n +2 | cut -d, -f2 | xargs bin/scratch destroy
   ```
 
 [teleport cluster]: https://tsh.i.mtrlz.dev/cluster/tsh/nodes
@@ -250,17 +261,6 @@ of PRs and adds release notes for any features or bugs that were missed.
 ## Finish
 
 - (optional) Update the current status at the top of this issue.
-- [ ] If this release ran over a week late, update the repeating slack reminder
-  in the `release` channel.
-
-  you can view and delete existing reminders by typing `/remind list` in
-  `#release`
-
-  I used the following to create the repeating alert, just modify the start date
-  to the correct date:
-
-  > /remind #release "@release-team start the next release" on June 21st every 2 weeks
-
 - Close this issue.
 
 [`doc/user/config.toml`]: https://github.com/MaterializeInc/materialize/blob/main/doc/user/config.toml

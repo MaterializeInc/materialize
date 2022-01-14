@@ -18,7 +18,7 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::{StatementContext, StatementDesc};
 use build_info::DUMMY_BUILD_INFO;
 use chrono::MIN_DATETIME;
-use dataflow_types::SourceConnector;
+use dataflow_types::sources::SourceConnector;
 use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use expr_test_util::generate_explanation;
 use lazy_static::lazy_static;

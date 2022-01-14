@@ -18,7 +18,7 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::Scope;
 
-use dataflow_types::*;
+use dataflow_types::sinks::*;
 use expr::GlobalId;
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use repr::{Datum, Diff, Row, Timestamp};

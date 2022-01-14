@@ -24,6 +24,7 @@ use persist::operators::source::PersistedSource;
 use persist::operators::stream::{AwaitFrontier, Seal};
 use persist::operators::upsert::PersistentUpsertConfig;
 
+use dataflow_types::sources::{encoding::*, persistence::*, *};
 use dataflow_types::*;
 use expr::{GlobalId, Id, PartitionId, SourceInstanceId};
 use ore::now::NowFn;
@@ -459,7 +460,7 @@ where
                                         let row_desc = RelationDesc::from_names_and_types(fields);
                                         // these must be available because the DDL parsing logic already
                                         // checks this and bails in case the key is not correct
-                                        Some(dataflow_types::match_key_indices(&key_desc, &row_desc).expect("Invalid key schema, this indicates a bug in Materialize"))
+                                        Some(dataflow_types::sources::match_key_indices(&key_desc, &row_desc).expect("Invalid key schema, this indicates a bug in Materialize"))
                                     } else {
                                         None
                                     };
@@ -672,7 +673,7 @@ impl<K: Codec, V: Codec, ST: Codec, AT: Codec> PersistentSourceConfig<K, V, ST, 
 fn get_persist_config(
     source_id: &SourceInstanceId,
     persist_desc: SourcePersistDesc,
-    persist_client: &mut persist::indexed::runtime::RuntimeClient,
+    persist_client: &mut persist::client::RuntimeClient,
 ) -> PersistentSourceConfig<
     Result<Row, DecodeError>,
     Result<Row, DecodeError>,

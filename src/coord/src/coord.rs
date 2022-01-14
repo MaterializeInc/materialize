@@ -109,12 +109,15 @@ use tokio::sync::{mpsc, oneshot, watch};
 use build_info::BuildInfo;
 use dataflow_types::client::TimestampBindingFeedback;
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
+use dataflow_types::{sinks::SinkAsOf, sources::Timeline};
 use dataflow_types::{
-    DataflowDesc, DataflowDescription, ExternalSourceConnector, IndexDesc, PeekResponse,
-    PostgresSourceConnector, SinkConnector, SourceConnector, TailSinkConnector,
-    TimestampSourceUpdate, Update,
+    sinks::{SinkConnector, TailSinkConnector},
+    sources::{
+        persistence::TimestampSourceUpdate, ExternalSourceConnector, PostgresSourceConnector,
+        SourceConnector,
+    },
+    DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
 };
-use dataflow_types::{SinkAsOf, Timeline};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -1703,7 +1706,7 @@ where
         ];
         let df = self
             .catalog_transact(ops, |mut builder| {
-                let sink_description = dataflow_types::SinkDesc {
+                let sink_description = dataflow_types::sinks::SinkDesc {
                     from: sink.from,
                     from_desc: builder
                         .catalog
@@ -3163,7 +3166,7 @@ where
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails
             .insert(sink_id, PendingTail::new(tx, emit_progress, object_columns));
-        let sink_description = dataflow_types::SinkDesc {
+        let sink_description = dataflow_types::sinks::SinkDesc {
             from: source_id,
             from_desc: self.catalog.get_by_id(&source_id).desc().unwrap().clone(),
             connector: SinkConnector::Tail(TailSinkConnector::default()),

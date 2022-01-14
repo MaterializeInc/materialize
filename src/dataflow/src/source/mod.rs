@@ -11,7 +11,7 @@
 
 use dataflow_types::{DataflowError, DecodeError, SourceErrorDetails};
 use mz_avro::types::Value;
-use persist::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
+use persist::client::{StreamReadHandle, StreamWriteHandle};
 use persist::indexed::Snapshot;
 use persist::operators::stream::Persist;
 use persist_types::Codec;
@@ -34,7 +34,10 @@ use timely::dataflow::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use dataflow_types::{
-    Consistency, ExternalSourceConnector, MzOffset, SourceDataEncoding, SourceError,
+    sources::{
+        encoding::SourceDataEncoding, persistence::Consistency, ExternalSourceConnector, MzOffset,
+    },
+    SourceError,
 };
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use ore::cast::CastFrom;

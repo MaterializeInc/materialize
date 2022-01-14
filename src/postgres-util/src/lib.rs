@@ -212,6 +212,15 @@ pub async fn publication_info(
     let (client, connection) = config.connect(tls).await?;
     tokio::spawn(connection);
 
+    client
+        .query(
+            "SELECT oid FROM pg_publication WHERE pubname = $1",
+            &[&publication],
+        )
+        .await?
+        .get(0)
+        .ok_or_else(|| anyhow!("publication {:?} does not exist", publication))?;
+
     let tables = client
         .query(
             "SELECT

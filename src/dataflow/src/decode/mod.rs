@@ -28,8 +28,11 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, DataEncoding, DebeziumMode, DecodeError, IncludedColumnSource,
-    KeyEnvelope, LinearOperator, RegexEncoding, SourceEnvelope,
+    sources::{
+        encoding::{AvroEncoding, AvroOcfEncoding, DataEncoding, RegexEncoding},
+        DebeziumMode, IncludedColumnSource, KeyEnvelope, SourceEnvelope,
+    },
+    DecodeError, LinearOperator,
 };
 use interchange::avro::ConfluentAvroResolver;
 use repr::Datum;

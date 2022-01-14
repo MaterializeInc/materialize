@@ -22,11 +22,11 @@ use timely::progress::ChangeBatch;
 
 use crate::logging::LoggingConfig;
 use crate::{
-    DataflowDescription, MzOffset, PeekResponse, SourceConnector, TailResponse,
-    TimestampSourceUpdate, Update,
+    sources::MzOffset, sources::SourceConnector, DataflowDescription, PeekResponse, TailResponse,
+    Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
-use persist::indexed::runtime::RuntimeClient;
+use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
 
 /// Explicit instructions for timely dataflow workers.
@@ -113,14 +113,14 @@ pub enum Command {
         /// The connector for the timestamped source.
         connector: SourceConnector,
         /// Previously stored timestamp bindings.
-        bindings: Vec<(PartitionId, Timestamp, MzOffset)>,
+        bindings: Vec<(PartitionId, Timestamp, crate::sources::MzOffset)>,
     },
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
         id: GlobalId,
         /// The associated update (RT or BYO)
-        update: TimestampSourceUpdate,
+        update: crate::types::sources::persistence::TimestampSourceUpdate,
     },
     /// Drop all timestamping info for a source
     DropSourceTimestamping {
@@ -544,9 +544,21 @@ pub mod partitioned {
                             changes.clear();
                         }
                     }
-                    // TODO: The following line would be great, but is not permitted by `list.retain()`.
-                    // list.retain_mut(|(_, changes)| !changes.is_empty());
+                    // The following block implements a `list.retain()` of non-empty change batches.
+                    // This is more verbose than `list.retain()` because that method cannot mutate
+                    // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
+                    let mut cursor = 0;
+                    while let Some((_id, changes)) = list.get_mut(cursor) {
+                        if changes.is_empty() {
+                            list.swap_remove(cursor);
+                        } else {
+                            cursor += 1;
+                        }
+                    }
+                    // Only produce a result if there are any changes to report.
                     if !list.is_empty() {
+                        // Put changes in order of `id` for ease of understanding.
+                        list.sort_by_key(|(id, _)| *id);
                         Some(Response::FrontierUppers(list))
                     } else {
                         None

@@ -7,6 +7,7 @@ pygmentsUseClasses = true
 # Keep the releases in reverse order of their release date. The first release
 # in the list is assumed to be the most recent.
 versions = [
+  { name = "v0.16.0", date = "13 January 2022", targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin"] },
   { name = "v0.15.0", date = "05 January 2022", targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin"] },
   { name = "v0.14.0", date = "29 December 2021", targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin"] },
   { name = "v0.13.0", date = "21 December 2021", targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin"] },
@@ -146,3 +147,8 @@ weight= 2
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
 unsafe = true
+
+[[deployment.targets]]
+name = "production"
+url = "s3://materialize-website?region=us-east-1"
+cloudFrontDistributionID = "E1F8Q2NUUC41QE"

@@ -17,7 +17,6 @@ pub mod cache;
 pub mod columnar;
 pub mod encoding;
 pub mod metrics;
-pub mod runtime;
 
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -968,7 +967,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     // timestamp (upper) here. Description seems more oriented towards describing batches, and in
     // our case the lower is always `Antichain::from_elem(Timestamp::minimum())`. We could return a
     // tuple or create our own Description-like return type for this.
-    fn get_description(&mut self, id_str: &str, res: PFutureHandle<Description<u64>>) {
+    pub fn get_description(&mut self, id_str: &str, res: PFutureHandle<Description<u64>>) {
         res.fill((|| {
             self.drain_pending()?;
             self.apply_unbatched_cmd(|state, _, _| {
@@ -1018,8 +1017,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ///
     /// The compaction frontier can never decrease and it is an error to call
     /// this function with a since argument that is less than the current compaction
-    /// frontier. It is also an error to advance the compaction frontier beyond the
-    /// current sealed frontier.
+    /// frontier.
+    ///
+    /// While it may seem counter-intuitive to advance the compaction frontier past the seal
+    /// frontier, this is perfectly valid. It can happen when joining updates from one stream to
+    /// updates from another stream, and we already know that the other stream is compacted further
+    /// along. Allowing compaction on this, the first stream, then is saying that we are fine with
+    /// losing historical detail, and that we already allow compaction of updates that are yet to
+    /// come because we don't need them at their full resolution. A similar case is when we know
+    /// that any outstanding queries have an `as_of` that is in the future of the seal: we can also
+    /// pro-actively allow compaction of updates that did not yet arrive.
     pub fn allow_compaction(
         &mut self,
         id_sinces: Vec<(Id, Antichain<u64>)>,

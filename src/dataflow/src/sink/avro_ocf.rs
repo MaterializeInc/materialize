@@ -18,7 +18,7 @@ use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::Scope;
 use tracing::error;
 
-use dataflow_types::{AvroOcfSinkConnector, SinkDesc};
+use dataflow_types::sinks::{AvroOcfSinkConnector, SinkDesc};
 use expr::GlobalId;
 use interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
 use repr::{Diff, RelationDesc, Row, Timestamp};

@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use dataflow_types::{
-    EnvelopePersistDesc, ExternalSourceConnector, MzOffset, SinkEnvelope, SourcePersistDesc,
+    sinks::SinkEnvelope, sources::persistence::EnvelopePersistDesc,
+    sources::persistence::SourcePersistDesc, sources::ExternalSourceConnector, sources::MzOffset,
 };
 use expr::{Id, PartitionId};
 use itertools::Itertools;
@@ -25,17 +26,20 @@ use lazy_static::lazy_static;
 use ore::collections::CollectionExt;
 use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, EpochMillis, NowFn};
-use persist::indexed::runtime::MultiWriteHandle;
+use persist::client::MultiWriteHandle;
 use regex::Regex;
 use repr::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 
 use build_info::DUMMY_BUILD_INFO;
-use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
+use dataflow_types::{
+    sinks::{SinkConnector, SinkConnectorBuilder},
+    sources::{SourceConnector, Timeline},
+};
 use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use persist::client::RuntimeClient as PersistClient;
 use persist::error::Error as PersistError;
-use persist::indexed::runtime::RuntimeClient as PersistClient;
 use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
@@ -779,7 +783,7 @@ impl CatalogEntry {
         self.item.func(&self.name)
     }
 
-    /// Returns the [`dataflow_types::SourceConnector`] associated with
+    /// Returns the [`dataflow_types::sources::SourceConnector`] associated with
     /// this `CatalogEntry`.
     pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
         self.item.source_connector(&self.name)
@@ -955,7 +959,7 @@ impl Catalog {
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
                             optimized_expr,
-                            connector: dataflow_types::SourceConnector::Local {
+                            connector: dataflow_types::sources::SourceConnector::Local {
                                 timeline: Timeline::EpochMilliseconds,
                                 persisted_name: None,
                             },
