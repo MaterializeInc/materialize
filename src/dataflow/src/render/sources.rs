@@ -12,10 +12,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{collection, AsCollection, Collection};
+use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
+use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, UnorderedInput};
 use timely::dataflow::{Scope, Stream};
 
@@ -38,6 +38,8 @@ use crate::decode::render_decode_delimited;
 use crate::decode::rewrite_for_upsert;
 use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
+use crate::render::envelope_none;
+use crate::render::envelope_none::PersistentEnvelopeNoneConfig;
 use crate::server::LocalInput;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
@@ -510,7 +512,7 @@ where
                                     src.bare_desc.typ().arity(),
                                     source_persist_config
                                         .as_ref()
-                                        .map(|config| config.upsert_config.clone()),
+                                        .map(|config| config.upsert_config().clone()),
                                 );
 
                                 // When persistence is enabled we need to seal up both the
@@ -522,7 +524,7 @@ where
                                     let bindings_handle =
                                         source_persist_config.bindings_config.write_handle.clone();
                                     let upsert_state_handle =
-                                        source_persist_config.upsert_config.write_handle;
+                                        source_persist_config.upsert_config().write_handle.clone();
 
                                     // Don't send data forward to "dataflow" until the frontier
                                     // tells us that we both persisted and sealed it.
@@ -549,12 +551,70 @@ where
                             SourceEnvelope::None(key_envelope) => {
                                 let results = append_metadata_to_value(results);
 
-                                let (stream, errors) =
-                                    flatten_results_prepend_keys(key_envelope, results)
-                                        .ok_err(ResultExt::err_into);
-                                let stream = stream.pass_through("decode-ok").as_collection();
-                                let errors = errors.pass_through("decode-errors").as_collection();
-                                (stream, Some(errors))
+                                let flattened_stream =
+                                    flatten_results_prepend_keys(key_envelope, results);
+
+                                let flattened_stream = flattened_stream.pass_through("decode");
+
+                                // When persistence is enabled we need to persist and seal up
+                                // both the timestamp bindings and the data. Otherwise, just
+                                // pass through.
+                                let (flattened_stream, persist_errs) =
+                                    if let Some(source_persist_config) = source_persist_config {
+                                        let bindings_config =
+                                            &source_persist_config.bindings_config;
+                                        let envelope_config =
+                                            source_persist_config.envelope_none_config();
+
+                                        let (flattened_stream, persist_errs) =
+                                            envelope_none::persist_and_replay(
+                                                &source_name,
+                                                &flattened_stream,
+                                                as_of_frontier,
+                                                envelope_config.clone(),
+                                            );
+
+                                        // Don't send data forward to "dataflow" until the frontie
+                                        // tells us that we both persisted and sealed it.
+                                        //
+                                        // This is the most pessimistic style of concurrency
+                                        // control, an alternatie would be to not hold data but
+                                        // only hold the frontier (which is what the persist/seal
+                                        // operators do).
+                                        let sealed_flattened_stream = seal_and_await(
+                                            &flattened_stream,
+                                            &ts_bindings,
+                                            envelope_config.write_handle.clone(),
+                                            bindings_config.write_handle.clone(),
+                                            &source_name,
+                                        );
+
+                                        // NOTE: Persistence errors don't go through the same
+                                        // pipeline as data, i.e. no sealing and awaiting.
+                                        (sealed_flattened_stream, persist_errs)
+                                    } else {
+                                        (flattened_stream, operator::empty(scope))
+                                    };
+
+                                // TODO: Maybe we should finally move this to some central
+                                // place and re-use. There seem to be enough instances of this
+                                // by now.
+                                fn split_ok_err(
+                                    x: (Result<Row, DecodeError>, u64, isize),
+                                ) -> Result<(Row, u64, isize), (DataflowError, u64, isize)>
+                                {
+                                    match x {
+                                        (Ok(row), ts, diff) => Ok((row, ts, diff)),
+                                        (Err(err), ts, diff) => Err((err.into(), ts, diff)),
+                                    }
+                                }
+
+                                let (stream, errors) = flattened_stream.ok_err(split_ok_err);
+
+                                let errors = errors.concat(&persist_errs);
+
+                                let errors = errors.as_collection();
+                                (stream.as_collection(), Some(errors))
                             }
                             SourceEnvelope::CdcV2 => unreachable!(),
                         }
@@ -667,22 +727,52 @@ where
 #[derive(Clone)]
 pub struct PersistentSourceConfig<K: Codec, V: Codec, ST: Codec, AT: Codec> {
     bindings_config: PersistentTimestampBindingsConfig<ST, AT>, // wrong ordering... AT-ST
-    upsert_config: PersistentUpsertConfig<K, V>,
+    envelope_config: PersistentEnvelopeConfig<K, V>,
 }
 
 impl<K: Codec, V: Codec, ST: Codec, AT: Codec> PersistentSourceConfig<K, V, ST, AT> {
     /// Creates a new [`PersistentSourceConfig`] from the given parts.
     pub fn new(
         bindings_config: PersistentTimestampBindingsConfig<ST, AT>,
-        upsert_config: PersistentUpsertConfig<K, V>,
+        envelope_config: PersistentEnvelopeConfig<K, V>,
     ) -> Self {
         PersistentSourceConfig {
             bindings_config,
-            upsert_config,
+            envelope_config,
+        }
+    }
+
+    // NOTE: These two show our problematic use of two hierarchies of enums: we keep an envelope
+    // config in the `SourceDesc`, but we roughly mirror that hierachy in the `SourcePersistDesc`.
+
+    pub fn upsert_config(&self) -> &PersistentUpsertConfig<K, V> {
+        match self.envelope_config {
+            PersistentEnvelopeConfig::Upsert(ref config) => config,
+            PersistentEnvelopeConfig::EnvelopeNone(_) => {
+                panic!("source is not an ENVELOPE UPSERT source but an ENVELOPE NONE source")
+            }
+        }
+    }
+
+    pub fn envelope_none_config(&self) -> &PersistentEnvelopeNoneConfig<V> {
+        match self.envelope_config {
+            PersistentEnvelopeConfig::Upsert(_) => {
+                panic!("source is not an ENVELOPE NONE source but an ENVELOPE UPSERT source")
+            }
+            PersistentEnvelopeConfig::EnvelopeNone(ref config) => config,
         }
     }
 }
 
+/// Configuration for the envelope-specific part of persistent sources.
+#[derive(Clone)]
+pub enum PersistentEnvelopeConfig<K: Codec, V: Codec> {
+    Upsert(PersistentUpsertConfig<K, V>),
+    EnvelopeNone(PersistentEnvelopeNoneConfig<V>),
+}
+
+// TODO: Now it gets really obvious how the current way of structuring the persist information is
+// not that good.
 fn get_persist_config(
     source_id: &SourceInstanceId,
     persist_desc: SourcePersistDesc,
@@ -701,32 +791,71 @@ fn get_persist_config(
             &persist_desc.timestamp_bindings_stream.name,
         );
 
-    let (data_write, data_read) = persist_client
-        .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(
-            &persist_desc.primary_stream.name,
-        );
+    match persist_desc.envelope_desc {
+        EnvelopePersistDesc::Upsert => {
+            let (data_write, data_read) = persist_client
+                .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(
+                    &persist_desc.primary_stream.name,
+                );
 
-    let bindings_seal_ts = persist_desc.timestamp_bindings_stream.upper_seal_ts;
-    let data_seal_ts = persist_desc.primary_stream.upper_seal_ts;
+            let bindings_seal_ts = persist_desc.timestamp_bindings_stream.upper_seal_ts;
+            let data_seal_ts = persist_desc.primary_stream.upper_seal_ts;
 
-    tracing::debug!(
-            "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
-            source_id,
-            persist_desc.primary_stream.name,
-            persist_desc.timestamp_bindings_stream.name,
-            bindings_seal_ts,
-            data_seal_ts,
-        );
+            tracing::debug!(
+                "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
+                source_id,
+                persist_desc.primary_stream.name,
+                persist_desc.timestamp_bindings_stream.name,
+                bindings_seal_ts,
+                data_seal_ts,
+            );
 
-    let bindings_config = PersistentTimestampBindingsConfig::new(
-        bindings_seal_ts,
-        data_seal_ts,
-        bindings_read,
-        bindings_write,
-    );
-    let upsert_config = PersistentUpsertConfig::new(data_seal_ts, data_read, data_write);
+            let bindings_config = PersistentTimestampBindingsConfig::new(
+                bindings_seal_ts,
+                data_seal_ts,
+                bindings_read,
+                bindings_write,
+            );
 
-    PersistentSourceConfig::new(bindings_config, upsert_config)
+            let upsert_config = PersistentUpsertConfig::new(data_seal_ts, data_read, data_write);
+
+            PersistentSourceConfig::new(
+                bindings_config,
+                PersistentEnvelopeConfig::Upsert(upsert_config),
+            )
+        }
+        EnvelopePersistDesc::None => {
+            let (data_write, data_read) = persist_client
+                .create_or_load::<Result<Row, DecodeError>, ()>(&persist_desc.primary_stream.name);
+
+            let bindings_seal_ts = persist_desc.timestamp_bindings_stream.upper_seal_ts;
+            let data_seal_ts = persist_desc.primary_stream.upper_seal_ts;
+
+            tracing::debug!(
+                "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
+                source_id,
+                persist_desc.primary_stream.name,
+                persist_desc.timestamp_bindings_stream.name,
+                bindings_seal_ts,
+                data_seal_ts,
+            );
+
+            let bindings_config = PersistentTimestampBindingsConfig::new(
+                bindings_seal_ts,
+                data_seal_ts,
+                bindings_read,
+                bindings_write,
+            );
+
+            let none_config =
+                PersistentEnvelopeNoneConfig::new(data_seal_ts, data_read, data_write);
+
+            PersistentSourceConfig::new(
+                bindings_config,
+                PersistentEnvelopeConfig::EnvelopeNone(none_config),
+            )
+        }
+    }
 }
 
 /// Seals both the main stream and the stream of timestamp bindings, allows compaction on
