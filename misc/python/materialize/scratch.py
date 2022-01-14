@@ -226,22 +226,29 @@ async def setup(
     mkrepo(i, git_rev)
 
 
-def mkrepo(i: Instance, rev: str) -> None:
-    mssh(i, "git init --bare materialize/.git")
+def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> None:
+    if init:
+        mssh(i, "git init --bare materialize/.git")
+
+    rev = git.rev_parse(rev)
+
+    cmd: List[str] = [
+        "git",
+        "push",
+        "--no-verify",
+        f"{instance_host(i)}:materialize/.git",
+        # Explicit refspec is required if the host repository is in detached
+        # HEAD mode.
+        f"{rev}:refs/heads/scratch",
+    ]
+    if force:
+        cmd.append("--force")
+
     spawn.runv(
-        [
-            "git",
-            "push",
-            "--no-verify",
-            f"{instance_host(i)}:materialize/.git",
-            # Explicit refspec is required if the host repository is in detached
-            # HEAD mode.
-            "HEAD:refs/heads/scratch",
-        ],
+        cmd,
         cwd=ROOT,
         env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
     )
-    rev = git.rev_parse(rev)
     mssh(
         i,
         f"cd materialize && git config core.bare false && git checkout {rev}",
