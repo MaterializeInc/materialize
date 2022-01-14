@@ -36,7 +36,7 @@ use repr::adt::array::ArrayDimension;
 use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
-use repr::adt::numeric::{self, LossyFrom, Numeric};
+use repr::adt::numeric::{self, DecimalLike, Numeric};
 use repr::adt::regex::Regex;
 use repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
@@ -1369,14 +1369,14 @@ fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
 pub trait TimeLike: chrono::Timelike {
     fn extract_epoch<T>(&self) -> T
     where
-        T: From<u32> + From<f64> + std::ops::Div<Output = T> + std::ops::Add<Output = T>,
+        T: DecimalLike,
     {
         T::from(self.hour() * 60 * 60 + self.minute() * 60) + self.extract_second::<T>()
     }
 
     fn extract_second<T>(&self) -> T
     where
-        T: From<u32> + From<f64> + std::ops::Div<Output = T> + std::ops::Add<Output = T>,
+        T: DecimalLike,
     {
         let s = T::from(self.second());
         let ns = T::from(self.nanosecond()) / T::from(1e9);
@@ -1385,7 +1385,7 @@ pub trait TimeLike: chrono::Timelike {
 
     fn extract_millisecond<T>(&self) -> T
     where
-        T: From<u32> + From<f64> + std::ops::Div<Output = T> + std::ops::Add<Output = T>,
+        T: DecimalLike,
     {
         let s = T::from(self.second() * 1_000);
         let ns = T::from(self.nanosecond()) / T::from(1e6);
@@ -1394,7 +1394,7 @@ pub trait TimeLike: chrono::Timelike {
 
     fn extract_microsecond<T>(&self) -> T
     where
-        T: From<u32> + From<f64> + std::ops::Div<Output = T> + std::ops::Add<Output = T>,
+        T: DecimalLike,
     {
         let s = T::from(self.second() * 1_000_000);
         let ns = T::from(self.nanosecond()) / T::from(1e3);
@@ -1484,11 +1484,7 @@ pub trait TimestampLike:
 
     fn extract_epoch<T>(&self) -> T
     where
-        T: From<u32>
-            + From<f64>
-            + LossyFrom<i64>
-            + std::ops::Div<Output = T>
-            + std::ops::Add<Output = T>,
+        T: DecimalLike,
     {
         T::lossy_from(self.timestamp()) + T::from(self.timestamp_subsec_micros()) / T::from(1e6)
     }
@@ -1746,14 +1742,7 @@ fn date_part_interval_inner<T>(
     interval: Interval,
 ) -> Result<Datum<'static>, EvalError>
 where
-    T: From<u32>
-        + From<f64>
-        + From<i32>
-        + LossyFrom<i64>
-        + std::ops::Mul<Output = T>
-        + std::ops::Div<Output = T>
-        + std::ops::Add<Output = T>
-        + Into<Datum<'static>>,
+    T: DecimalLike + Into<Datum<'static>>,
 {
     match units {
         DateTimeUnits::Epoch => Ok(interval.as_seconds::<T>().into()),
@@ -1808,11 +1797,7 @@ where
 fn date_part_time_inner<'a, T, U>(units: DateTimeUnits, time: T) -> Result<Datum<'a>, EvalError>
 where
     T: TimeLike,
-    U: From<u32>
-        + From<f64>
-        + std::ops::Div<Output = U>
-        + std::ops::Add<Output = U>
-        + Into<Datum<'a>>,
+    U: DecimalLike + Into<Datum<'a>>,
 {
     match units {
         DateTimeUnits::Epoch => Ok(time.extract_epoch::<U>().into()),
@@ -1870,13 +1855,7 @@ where
 fn date_part_timestamp_inner<'a, T, U>(units: DateTimeUnits, ts: T) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
-    U: From<u32>
-        + From<f64>
-        + From<i32>
-        + LossyFrom<i64>
-        + std::ops::Div<Output = U>
-        + std::ops::Add<Output = U>
-        + Into<Datum<'a>>,
+    U: DecimalLike + Into<Datum<'a>>,
 {
     match units {
         DateTimeUnits::Epoch => Ok(TimestampLike::extract_epoch::<U>(&ts).into()),

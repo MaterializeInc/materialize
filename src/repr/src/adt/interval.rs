@@ -16,7 +16,7 @@ use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
-use crate::adt::numeric::LossyFrom;
+use crate::adt::numeric::DecimalLike;
 
 /// An interval of time meant to express SQL intervals.
 ///
@@ -226,7 +226,7 @@ impl Interval {
     /// modulo 60.0.
     pub fn seconds<T>(&self) -> T
     where
-        T: From<f64> + LossyFrom<i64> + std::ops::Div<Output = T>,
+        T: DecimalLike,
     {
         T::lossy_from((self.duration % 60_000_000_000) as i64) / T::from(1e9)
     }
@@ -237,7 +237,7 @@ impl Interval {
     /// modulo 60.0.
     pub fn milliseconds<T>(&self) -> T
     where
-        T: From<f64> + LossyFrom<i64> + std::ops::Div<Output = T>,
+        T: DecimalLike,
     {
         T::lossy_from((self.duration % 60_000_000_000) as i64) / T::from(1e6)
     }
@@ -248,7 +248,7 @@ impl Interval {
     /// modulo 60.0.
     pub fn microseconds<T>(&self) -> T
     where
-        T: From<f64> + LossyFrom<i64> + std::ops::Div<Output = T>,
+        T: DecimalLike,
     {
         T::lossy_from((self.duration % 60_000_000_000) as i64) / T::from(1e3)
     }
@@ -261,12 +261,7 @@ impl Interval {
     /// Computes the total number of seconds in the interval.
     pub fn as_seconds<T>(&self) -> T
     where
-        T: From<i32>
-            + From<f64>
-            + LossyFrom<i64>
-            + std::ops::Mul<Output = T>
-            + std::ops::Div<Output = T>
-            + std::ops::Add<Output = T>,
+        T: DecimalLike,
     {
         T::from(self.years() * 60 * 60 * 24) * T::from(365.25)
             + T::from(self.months() * 60 * 60 * 24 * 30)

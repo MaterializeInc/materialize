@@ -617,20 +617,34 @@ pub fn extract_typ_mod(typ_mod: &[u64]) -> Result<Option<u8>, anyhow::Error> {
     })
 }
 
-/// Used to do potentially lossy value-to-value conversions while consuming the input value. Useful
-/// for interoperability between Numeric and f64.
-pub trait LossyFrom<T>: Sized {
-    fn lossy_from(_: T) -> Self;
+/// A type that can represent Real Numbers. Useful for interoperability between Numeric and
+/// floating point.
+pub trait DecimalLike:
+    From<u8>
+    + From<u16>
+    + From<u32>
+    + From<i8>
+    + From<i16>
+    + From<i32>
+    + From<f32>
+    + From<f64>
+    + std::ops::Add<Output = Self>
+    + std::ops::Sub<Output = Self>
+    + std::ops::Mul<Output = Self>
+    + std::ops::Div<Output = Self>
+{
+    /// Used to do value-to-value conversions while consuming the input value. Depending on the
+    /// implementation it may be potentially lossy.
+    fn lossy_from(i: i64) -> Self;
 }
 
-impl LossyFrom<i64> for f64 {
+impl DecimalLike for f64 {
     fn lossy_from(i: i64) -> Self {
         i as f64
     }
 }
 
-impl LossyFrom<i64> for Numeric {
-    // This is not actually lossy but has to conform to the f64 impl
+impl DecimalLike for Numeric {
     fn lossy_from(i: i64) -> Self {
         Numeric::from(i)
     }
