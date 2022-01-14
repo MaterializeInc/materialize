@@ -216,6 +216,7 @@ impl PostgresSourceReader {
             }
             self.metrics.tables.inc();
         }
+        self.metrics.lsn.set(self.lsn.into());
         client.simple_query("COMMIT;").await?;
         Ok(())
     }
@@ -392,6 +393,7 @@ impl PostgresSourceReader {
                             for row in inserts.drain(..) {
                                 try_fatal!(tx.insert(row).await);
                             }
+                            self.metrics.lsn.set(self.lsn.into());
                         }
                         Origin(_) | Relation(_) | Type(_) => {
                             self.metrics.ignored.inc();

@@ -151,6 +151,7 @@ pub(super) struct PostgresSourceSpecificMetrics {
     pub(super) update_messages: UIntCounterVec,
     pub(super) delete_messages: UIntCounterVec,
     pub(super) tables_in_publication: UIntGaugeVec,
+    pub(super) wal_lsn: UIntGaugeVec,
 }
 
 impl PostgresSourceSpecificMetrics {
@@ -163,27 +164,27 @@ impl PostgresSourceSpecificMetrics {
             )),
             transactions: registry.register(metric!(
                 name: "mz_postgres_per_source_transactions_total",
-                help: "The number of committed transactions for this source",
+                help: "The number of committed transactions for all tables in this source",
                 var_labels: ["source_id"],
             )),
             ignored_messages: registry.register(metric!(
                 name: "mz_postgres_per_source_ignored_messages",
-                help: "The number of messages ignored",
+                help: "The number of messages ignored because of an irrelevant type or relation_id",
                 var_labels: ["source_id"],
             )),
             insert_messages: registry.register(metric!(
                 name: "mz_postgres_per_source_inserts",
-                help: "The number of inserts for this source",
+                help: "The number of inserts for all tables in this source",
                 var_labels: ["source_id"],
             )),
             update_messages: registry.register(metric!(
                 name: "mz_postgres_per_source_updates",
-                help: "The number of updates for this source",
+                help: "The number of updates for all tables in this source",
                 var_labels: ["source_id"],
             )),
             delete_messages: registry.register(metric!(
                 name: "mz_postgres_per_source_deletes",
-                help: "The number of deletes for this source",
+                help: "The number of deletes for all tables in this source",
                 var_labels: ["source_id"],
             )),
             tables_in_publication: registry.register(metric!(
@@ -191,6 +192,11 @@ impl PostgresSourceSpecificMetrics {
                 help: "The number of upstream tables for this source",
                 var_labels: ["source_id"],
             )),
+            wal_lsn: registry.register(metric!(
+                name: "mz_postgres_per_source_wal_lsn",
+                help: "LSN of the latest transaction committed for this source, see Postgres Replication docs for more details on LSN",
+                var_labels: ["source_id"],
+            ))
         }
     }
 }

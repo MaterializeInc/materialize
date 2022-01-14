@@ -19,6 +19,7 @@ pub(super) struct PgSourceMetrics {
     pub total: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub transactions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub tables: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub lsn: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 
@@ -35,6 +36,7 @@ impl PgSourceMetrics {
             total: pg_metrics.total_messages.get_delete_on_drop_counter(labels.to_vec()),
             transactions: pg_metrics.transactions.get_delete_on_drop_counter(labels.to_vec()),
             tables: pg_metrics.tables_in_publication.get_delete_on_drop_gauge(labels.to_vec()),
+            lsn: pg_metrics.wal_lsn.get_delete_on_drop_gauge(labels.to_vec()),
         }
     }
 }
