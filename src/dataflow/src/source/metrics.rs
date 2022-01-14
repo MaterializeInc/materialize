@@ -140,8 +140,6 @@ impl PartitionSpecificMetrics {
     }
 }
 
-
-
 #[derive(Clone, Debug)]
 pub(super) struct PostgresSourceSpecificMetrics {
     pub(super) total_messages: UIntCounterVec,
@@ -200,7 +198,6 @@ impl PostgresSourceSpecificMetrics {
         }
     }
 }
-
 
 /// A set of base metrics that hang off a central metrics registry, labeled by the source they
 /// belong to.

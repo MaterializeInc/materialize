@@ -123,8 +123,11 @@ macro_rules! try_recoverable {
 
 impl PostgresSourceReader {
     /// Constructs a new instance
-    pub fn new(source_name: String, connector: PostgresSourceConnector, metrics: &SourceBaseMetrics) -> Self 
-    {
+    pub fn new(
+        source_name: String,
+        connector: PostgresSourceConnector,
+        metrics: &SourceBaseMetrics,
+    ) -> Self {
         Self {
             source_name: source_name.clone(),
             connector,
@@ -396,7 +399,7 @@ impl PostgresSourceReader {
                         }
                         Origin(_) | Relation(_) | Type(_) => {
                             self.metrics.ignored.inc();
-                        },
+                        }
                         Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),
                         // The enum is marked as non_exaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
