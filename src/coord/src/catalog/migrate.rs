@@ -72,6 +72,7 @@ lazy_static! {
     static ref VER_0_9_1: Version = Version::new(0, 9, 1);
     static ref VER_0_9_2: Version = Version::new(0, 9, 2);
     static ref VER_0_9_13: Version = Version::new(0, 9, 13);
+    static ref VER_0_17_0: Version = Version::new(0, 17, 0);
 }
 
 pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
@@ -98,6 +99,9 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         }
         if catalog_version < *VER_0_9_13 {
             ast_rewrite_kafka_protobuf_source_text_to_compiled_0_9_13(stmt)?;
+        }
+        if catalog_version < *VER_0_17_0 {
+            ast_rewrite_ccsr_with_options_to_compiled_0_17_0(stmt)?;
         }
         Ok(())
     })?;
@@ -136,6 +140,34 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+/// lalalal
+fn ast_rewrite_ccsr_with_options_to_compiled_0_17_0(
+    stmt: &mut sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    fn is_option_to_skip(option_name: &str) -> bool {
+        [
+            "ssl_ca_location",
+            "ssl_key_location",
+            "ssl_certificate_location",
+        ]
+        .contains(&option_name)
+    }
+
+    struct OptionRemover;
+    impl<'ast> VisitMut<'ast, Raw> for OptionRemover {
+        fn visit_csr_connector_avro_mut(&mut self, node: &'ast mut CsrConnectorAvro<Raw>) {
+            node.with_options
+                .retain(|e| !is_option_to_skip(e.name().as_str()))
+        }
+        fn visit_csr_connector_proto_mut(&mut self, node: &'ast mut CsrConnectorProto<Raw>) {
+            node.with_options
+                .retain(|e| !is_option_to_skip(e.name().as_str()))
+        }
+    }
+
+    Ok(OptionRemover.visit_statement_mut(stmt))
+}
 
 /// Rewrites Protobuf sources to store the compiled bytes rather than the text
 /// of the schema.
