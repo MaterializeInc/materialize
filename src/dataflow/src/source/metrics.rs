@@ -158,38 +158,38 @@ impl PostgresSourceSpecificMetrics {
         Self {
             total_messages: registry.register(metric!(
                 name: "mz_postgres_per_source_messages_total",
-                help: "The total number of replication messages for this source",
-                var_labels: ["source_id", "worker_id", "table_id"],
+                help: "The total number of replication messages for this source, not expected to be the sum of the other values.",
+                var_labels: ["source_id"],
             )),
             transactions: registry.register(metric!(
                 name: "mz_postgres_per_source_transactions_total",
-                help: "The total number of committed transactions for this source",
-                var_labels: ["source_id", "worker_id", "table_id"],
+                help: "The number of committed transactions for this source",
+                var_labels: ["source_id"],
             )),
             ignored_messages: registry.register(metric!(
-                name: "mz_postgres_per_source_ignored_messages_total",
-                help: "The total number of messages ignored",
-                var_labels: ["source_id", "worker_id", "table_id"],
+                name: "mz_postgres_per_source_ignored_messages",
+                help: "The number of messages ignored",
+                var_labels: ["source_id"],
             )),
             insert_messages: registry.register(metric!(
-                name: "mz_postgres_per_source_inserts_total",
-                help: "The total number of inserts for this source",
-                var_labels: ["source_id", "worker_id", "table_id"],
+                name: "mz_postgres_per_source_inserts",
+                help: "The number of inserts for this source",
+                var_labels: ["source_id"],
             )),
             update_messages: registry.register(metric!(
-                name: "mz_postgres_per_source_updates_total",
-                help: "The total number of updates for this source",
-                var_labels: ["source_id", "worker_id", "table_id"],
+                name: "mz_postgres_per_source_updates",
+                help: "The number of updates for this source",
+                var_labels: ["source_id"],
             )),
             delete_messages: registry.register(metric!(
-                name: "mz_postgres_per_source_deletes_total",
-                help: "The total number of deletes for this source",
-                var_labels: ["source_id", "worker_id", "table_id"],
+                name: "mz_postgres_per_source_deletes",
+                help: "The number of deletes for this source",
+                var_labels: ["source_id"],
             )),
             tables_in_publication: registry.register(metric!(
-                name: "mz_postgres_per_source_tables_total",
+                name: "mz_postgres_per_source_tables_count",
                 help: "The number of upstream tables for this source",
-                var_labels: ["source_id", "worker_id"],
+                var_labels: ["source_id"],
             )),
         }
     }

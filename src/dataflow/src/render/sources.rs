@@ -258,7 +258,7 @@ where
 
                     (ok_stream.as_collection(), capability)
                 } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
-                    let source = PostgresSourceReader::new(src.name.clone(), pg_connector, source_config.base_metrics.clone());
+                    let source = PostgresSourceReader::new(src.name.clone(), pg_connector, source_config.base_metrics);
 
                     let ((ok_stream, err_stream), capability) =
                         source::create_source_simple(source_config, source);

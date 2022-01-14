@@ -30,7 +30,10 @@ use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 use dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
 use repr::{Datum, Row};
 
+use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
+
+mod metrics;
 
 lazy_static! {
     /// Postgres epoch is 2000-01-01T00:00:00Z
@@ -44,7 +47,7 @@ pub struct PostgresSourceReader {
     connector: PostgresSourceConnector,
     /// Our cursor into the WAL
     lsn: PgLsn,
-    metrics: SourceBaseMetrics,
+    metrics: PgSourceMetrics,
 }
 
 trait ErrorExt {
@@ -120,12 +123,13 @@ macro_rules! try_recoverable {
 
 impl PostgresSourceReader {
     /// Constructs a new instance
-    pub fn new(source_name: String, connector: PostgresSourceConnector, metrics: SourceBaseMetrics) -> Self {
+    pub fn new(source_name: String, connector: PostgresSourceConnector, metrics: &SourceBaseMetrics) -> Self 
+    {
         Self {
-            source_name,
+            source_name: source_name.clone(),
             connector,
             lsn: 0.into(),
-            metrics: metrics,
+            metrics: PgSourceMetrics::new(metrics, source_name),
         }
     }
 
@@ -189,7 +193,6 @@ impl PostgresSourceReader {
         self.lsn = try_fatal!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
-
         for info in publication_tables {
             // TODO(petrosagg): use a COPY statement here for more efficient network transfer
             let data = client
@@ -211,7 +214,7 @@ impl PostgresSourceReader {
                     try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
                 }
             }
-            self.metrics.postgres_source_specific.tables_in_publication.inc();
+            self.metrics.tables.inc();
         }
         client.simple_query("COMMIT;").await?;
         Ok(())
@@ -293,6 +296,7 @@ impl PostgresSourceReader {
         let mut last_keepalive = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
+        
         while let Some(item) = stream.try_next().await? {
             use ReplicationMessage::*;
             // The upstream will periodically request keepalive responses by setting the reply field
@@ -322,6 +326,7 @@ impl PostgresSourceReader {
             }
             match item {
                 XLogData(xlog_data) => {
+                    self.metrics.total.inc();
                     use LogicalReplicationMessage::*;
 
                     match xlog_data.data() {
@@ -333,12 +338,14 @@ impl PostgresSourceReader {
                             }
                         }
                         Insert(insert) => {
+                            self.metrics.inserts.inc();
                             let rel_id = insert.rel_id();
                             let new_tuple = insert.tuple().tuple_data();
                             let row = try_fatal!(self.row_from_tuple(rel_id, new_tuple));
                             inserts.push(row);
                         }
                         Update(update) => {
+                            self.metrics.updates.inc();
                             let rel_id = update.rel_id();
                             let old_tuple = try_fatal!(update
                                 .old_tuple()
@@ -363,6 +370,7 @@ impl PostgresSourceReader {
                             inserts.push(new_row);
                         }
                         Delete(delete) => {
+                            self.metrics.deletes.inc();
                             let rel_id = delete.rel_id();
                             let old_tuple = try_fatal!(delete
                                 .old_tuple()
@@ -373,6 +381,7 @@ impl PostgresSourceReader {
                             deletes.push(row);
                         }
                         Commit(commit) => {
+                            self.metrics.transactions.inc();
                             self.lsn = commit.end_lsn().into();
 
                             let tx = timestamper.start_tx().await;
@@ -384,7 +393,9 @@ impl PostgresSourceReader {
                                 try_fatal!(tx.insert(row).await);
                             }
                         }
-                        Origin(_) | Relation(_) | Type(_) => (),
+                        Origin(_) | Relation(_) | Type(_) => {
+                            self.metrics.ignored.inc();
+                        },
                         Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),
                         // The enum is marked as non_exaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
