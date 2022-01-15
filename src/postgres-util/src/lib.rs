@@ -14,6 +14,7 @@ use std::fmt;
 use anyhow::{anyhow, bail};
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
+use sql_parser::parser::parse_columns;
 use tokio_postgres::config::{ReplicationMode, SslMode};
 use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{Client, Config};
@@ -21,7 +22,7 @@ use tokio_postgres::{Client, Config};
 use ore::task;
 use repr::adt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
-use sql_parser::ast::{Ident, DataType, Raw, RawName, UnresolvedObjectName};
+use sql_parser::ast::{ColumnDef, DataType, Ident, PgTable, Raw, RawName, UnresolvedObjectName};
 use sql_parser::impl_display;
 
 pub struct PgNumericMod {
@@ -111,45 +112,46 @@ impl TryFrom<PgScalarType> for DataType<Raw> {
     fn try_from(val: PgScalarType) -> Result<Self, anyhow::Error> {
         let raw_name = |name: &str| RawName::Name(UnresolvedObjectName::unqualified(name));
         match val {
-            PgScalarType::Simple(inner) => Ok(DataType::Other{ typ_mod: vec![], name: raw_name(inner.name()) }),
-            PgScalarType::Numeric(numeric_mod) => {
-                Ok(DataType::Other{
+            PgScalarType::Simple(inner) => Ok(DataType::Other {
+                typ_mod: vec![],
+                name: raw_name(inner.name()),
+            }),
+            PgScalarType::Numeric(numeric_mod) => Ok(DataType::Other {
+                name: raw_name("numeric"),
+                typ_mod: match numeric_mod {
+                    Some(mods) => vec![mods.precision.into()],
+                    None => vec![],
+                },
+            }),
+            PgScalarType::NumericArray(numeric_mod) => {
+                Ok(DataType::Array(Box::new(DataType::Other {
                     name: raw_name("numeric"),
                     typ_mod: match numeric_mod {
                         Some(mods) => vec![mods.precision.into()],
                         None => vec![],
                     },
-                })
-            },
-            PgScalarType::NumericArray(numeric_mod) => {
-                Ok(DataType::Array(
-                    Box::new(DataType::Other{
-                        name: raw_name("numeric"),
-                        typ_mod: match numeric_mod {
-                            Some(mods) => vec![mods.precision.into()],
-                            None => vec![],
-                        }
-                    })
-                ))
-            },
-            PgScalarType::BPChar { length } => Ok(DataType::Other{ name: raw_name("bpchar"), typ_mod: vec![u64::try_from(length)?] }),
+                })))
+            }
+            PgScalarType::BPChar { length } => Ok(DataType::Other {
+                name: raw_name("bpchar"),
+                typ_mod: vec![u64::try_from(length)?],
+            }),
             PgScalarType::BPCharArray { length } => {
-                Ok(DataType::Array(
-                    Box::new(DataType::Other{
-                        name: raw_name("bpchar"),
-                        typ_mod: vec![u64::try_from(length)?],
-                    })
-                ))
-            },
-            PgScalarType::VarChar { length } => Ok(DataType::Other{ name: raw_name("varchar"), typ_mod: vec![u64::try_from(length)?]}),
+                Ok(DataType::Array(Box::new(DataType::Other {
+                    name: raw_name("bpchar"),
+                    typ_mod: vec![u64::try_from(length)?],
+                })))
+            }
+            PgScalarType::VarChar { length } => Ok(DataType::Other {
+                name: raw_name("varchar"),
+                typ_mod: vec![u64::try_from(length)?],
+            }),
             PgScalarType::VarCharArray { length } => {
-                Ok(DataType::Array(
-                    Box::new(DataType::Other{
-                        name: raw_name("varchar"),
-                        typ_mod: vec![u64::try_from(length)?],
-                    })
-                ))
-            },
+                Ok(DataType::Array(Box::new(DataType::Other {
+                    name: raw_name("varchar"),
+                    typ_mod: vec![u64::try_from(length)?],
+                })))
+            }
         }
     }
 }
@@ -179,6 +181,27 @@ impl AstDisplay for PgColumn {
 }
 impl_display!(PgColumn);
 
+impl TryFrom<PgColumn> for ColumnDef<Raw> {
+    type Error = anyhow::Error;
+    fn try_from(col: PgColumn) -> Result<Self, anyhow::Error> {
+        let pg_column_string = col.to_ast_string();
+        let parsed = parse_columns(&pg_column_string);
+        match parsed {
+            Ok((cd, _)) => {
+                if cd.len() > 1 {
+                    bail!(
+                        "one column {} parsed into multiple {:?}",
+                        pg_column_string,
+                        cd
+                    );
+                }
+                Ok(cd[0].to_owned())
+            }
+            Err(e) => bail!(e),
+        }
+    }
+}
+
 /// Information about a remote table
 pub struct TableInfo {
     /// The OID of the table
@@ -189,6 +212,22 @@ pub struct TableInfo {
     pub name: String,
     /// The schema of each column, in order
     pub schema: Vec<PgColumn>,
+}
+
+impl TryFrom<TableInfo> for PgTable<Raw> {
+    type Error = anyhow::Error;
+
+    fn try_from(tbl: TableInfo) -> Result<Self, anyhow::Error> {
+        let mut pg_table: PgTable<Raw> = PgTable {
+            name: UnresolvedObjectName::unqualified(&tbl.name),
+            alias: RawName::Name(UnresolvedObjectName::unqualified(&tbl.name)),
+            columns: Vec::new(),
+        };
+        for pg_col in tbl.schema {
+            pg_table.columns.push(pg_col.try_into()?);
+        }
+        Ok(pg_table)
+    }
 }
 
 /// Creates a TLS connector for the given [`Config`].
