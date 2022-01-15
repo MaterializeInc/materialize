@@ -23,6 +23,7 @@
 #![warn(missing_debug_implementations)]
 
 mod datum_vec;
+mod gen;
 mod relation;
 mod row;
 mod scalar;

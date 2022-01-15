@@ -1327,8 +1327,7 @@ dependencies = [
 [[package]]
 name = "dec"
 version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c2bbc59a6735d2f5bc4befd3300c9b75cc6ed66165e92b741da0a58c07ea04d"
+source = "git+https://github.com/MaterializeInc/rust-dec?branch=bcd#1bcccbb8ede789c83b8f258277343846bc975ef5"
 dependencies = [
  "decnumber-sys",
  "libc",
@@ -1339,8 +1338,7 @@ dependencies = [
 [[package]]
 name = "decnumber-sys"
 version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76a99b958f19724bc0a2202086d135c2e7ed098e95cdae778546e965648fa47b"
+source = "git+https://github.com/MaterializeInc/rust-dec?branch=bcd#1bcccbb8ede789c83b8f258277343846bc975ef5"
 dependencies = [
  "cc",
  "libc",
@@ -4082,12 +4080,14 @@ dependencies = [
  "itertools",
  "lazy_static",
  "lowertest",
+ "mz-protoc",
  "num-traits",
  "num_enum",
  "ordered-float",
  "ore",
  "persist-types",
  "proptest",
+ "protobuf",
  "rand",
  "regex",
  "ryu",
