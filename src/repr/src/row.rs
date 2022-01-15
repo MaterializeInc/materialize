@@ -409,7 +409,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                 lsu[i] = u16::from_le_bytes(c.try_into().unwrap());
             }
 
-            let d = Numeric::from_raw_parts(digits, exponent.into(), bits, &lsu[..lsu_u16_len]);
+            let d = Numeric::from_raw_parts(digits, exponent.into(), bits, lsu);
             Datum::from(d)
         }
     }
@@ -576,6 +576,8 @@ where
                     as u8,
             );
             data.push(bits);
+
+            let lsu = &lsu[..Numeric::digits_to_lsu_elements_len(digits)];
 
             // Little endian machines can take the lsu directly from u16 to u8.
             if cfg!(target_endian = "little") {
