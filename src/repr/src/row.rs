@@ -18,6 +18,7 @@ use std::str;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
+use ore::soft_assert;
 use ore::vec::Vector;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -583,14 +584,14 @@ where
                 let (prefix, lsu_bytes, suffix) = unsafe { lsu.align_to::<u8>() };
                 // The `u8` aligned version of the `lsu` should have twice as many
                 // elements as we expect for the `u16` version.
-                assert!(
+                soft_assert!(
                     lsu_bytes.len() == Numeric::digits_to_lsu_elements_len(digits) * 2,
                     "u8 version of numeric LSU contained the wrong number of elements; expected {}, but got {}",
                     Numeric::digits_to_lsu_elements_len(digits) * 2,
                     lsu_bytes.len()
                 );
                 // There should be no unaligned elements in the prefix or suffix.
-                assert!(prefix.is_empty() && suffix.is_empty());
+                soft_assert!(prefix.is_empty() && suffix.is_empty());
                 data.extend_from_slice(&lsu_bytes);
             } else {
                 for u in lsu {
