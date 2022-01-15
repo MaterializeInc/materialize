@@ -16,7 +16,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.2"
 dataflow-types = { path = "../dataflow-types" }
 derivative = "2.2.0"
-dec = "0.4.6"
+dec = "0.4.7"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 fail = { version = "0.5.0", features = ["failpoints"] }
