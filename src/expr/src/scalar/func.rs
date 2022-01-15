@@ -1409,7 +1409,7 @@ pub trait DateLike: chrono::Datelike {
     fn extract_epoch(&self) -> i64 {
         let naive_date =
             NaiveDate::from_ymd(self.year(), self.month(), self.day()).and_hms(0, 0, 0);
-        naive_date.timestamp() + naive_date.timestamp_subsec_micros() as i64
+        naive_date.timestamp()
     }
 
     fn millennium(&self) -> i32 {
