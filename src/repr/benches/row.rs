@@ -114,6 +114,18 @@ pub fn bench_sort(c: &mut Criterion) {
             ]
         })
         .collect::<Vec<_>>();
+    let numeric_rows = (0..num_rows)
+        .map(|_| {
+            vec![
+                Datum::Numeric(rng.gen::<i32>().into()),
+                Datum::Numeric(rng.gen::<i32>().into()),
+                Datum::Numeric(rng.gen::<i32>().into()),
+                Datum::Numeric(rng.gen::<i32>().into()),
+                Datum::Numeric(rng.gen::<i32>().into()),
+                Datum::Numeric(rng.gen::<i32>().into()),
+            ]
+        })
+        .collect::<Vec<_>>();
 
     let mut rng = seeded_rng();
     let byte_data = (0..num_rows)
@@ -137,6 +149,22 @@ pub fn bench_sort(c: &mut Criterion) {
     });
     c.bench_function("sort_unpacked_ints", |b| {
         bench_sort_unpacked(int_rows.clone(), b)
+    });
+
+    c.bench_function("sort_datums_numeric", |b| {
+        bench_sort_datums(numeric_rows.clone(), b)
+    });
+    c.bench_function("sort_row_numeric", |b| {
+        bench_sort_row(numeric_rows.clone(), b)
+    });
+    c.bench_function("sort_iter_numeric", |b| {
+        bench_sort_iter(numeric_rows.clone(), b)
+    });
+    c.bench_function("sort_unpack_numeric", |b| {
+        bench_sort_unpack(numeric_rows.clone(), b)
+    });
+    c.bench_function("sort_unpacked_numeric", |b| {
+        bench_sort_unpacked(numeric_rows.clone(), b)
     });
 
     c.bench_function("sort_datums_bytes", |b| {

@@ -1326,8 +1326,9 @@ dependencies = [
 
 [[package]]
 name = "dec"
-version = "0.4.5"
-source = "git+https://github.com/MaterializeInc/rust-dec?branch=bcd#1bcccbb8ede789c83b8f258277343846bc975ef5"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9d829012cb80e6836307bc86bd621e71718f6c5370c36542cb7504f14055bb9"
 dependencies = [
  "decnumber-sys",
  "libc",
@@ -1338,7 +1339,8 @@ dependencies = [
 [[package]]
 name = "decnumber-sys"
 version = "0.1.5"
-source = "git+https://github.com/MaterializeInc/rust-dec?branch=bcd#1bcccbb8ede789c83b8f258277343846bc975ef5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76a99b958f19724bc0a2202086d135c2e7ed098e95cdae778546e965648fa47b"
 dependencies = [
  "cc",
  "libc",
