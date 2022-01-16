@@ -64,15 +64,15 @@ where
     group.bench_function(format!("{}_search_starts_with", name), |b| {
         b.iter(|| search_poem(&matcher))
     });
-    matcher = compile_fn("%and%");
+    matcher = compile_fn("%is%");
     group.bench_function(format!("{}_search_contains", name), |b| {
         b.iter(|| search_poem(&matcher))
     });
-    matcher = compile_fn("%and%is%");
+    matcher = compile_fn("%is%more%");
     group.bench_function(format!("{}_search_contains2", name), |b| {
         b.iter(|| search_poem(&matcher))
     });
-    matcher = compile_fn("%and%is%more%");
+    matcher = compile_fn("%is%more%than%");
     group.bench_function(format!("{}_search_contains3", name), |b| {
         b.iter(|| search_poem(&matcher))
     });
