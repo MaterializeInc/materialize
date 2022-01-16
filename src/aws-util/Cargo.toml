@@ -14,7 +14,7 @@ aws-sdk-kinesis = { version = "0.4.0", default-features = false, features = ["na
 aws-sdk-s3 = { version = "0.4.0", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-sqs = { version = "0.4.0", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-sts = { version = "0.4.0", default-features = false, features = ["native-tls"], optional = true }
-aws-types = { version = "0.4.0" }
+aws-types = { version = "0.4.1" }
 hyper = "0.14.16"
 mz-http-proxy = { path = "../http-proxy", features = ["hyper"] }
 
