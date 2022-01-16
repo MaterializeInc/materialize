@@ -36,6 +36,7 @@ regex-syntax = "0.6.25"
 repr = { path = "../repr" }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
+serde_regex = "1.1.0"
 sha-1 = "0.10.0"
 sha2 = "0.10.1"
 uncased = "0.9.6"

@@ -9,7 +9,6 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use expr::like_pattern;
-use regex::Regex;
 
 // SMART, by Shel Silverstein
 const POEM: &[&str] = &[
@@ -39,8 +38,7 @@ const POEM: &[&str] = &[
     "Too proud of me to speak!",
 ];
 
-
-fn search_poem(needle: &Regex) {
+fn search_poem(needle: &like_pattern::Matcher) {
     for i in 0..POEM.len() {
         needle.is_match(black_box(POEM[i]));
     }
@@ -48,55 +46,56 @@ fn search_poem(needle: &Regex) {
 
 fn bench_op<F>(c: &mut Criterion, name: &str, mut compile_fn: F)
 where
-    F: FnMut(&str) -> Regex
+    F: FnMut(&str) -> like_pattern::Matcher,
 {
     let mut group = c.benchmark_group("like_pattern");
 
     // Test how long it takes to compile a pattern.
-    group.bench_function(
-        format!("{}_compile", name),
-        |b| b.iter(|| compile_fn(black_box("W_rdle%fun%"))),
-    );
+    group.bench_function(format!("{}_compile", name), |b| {
+        b.iter(|| compile_fn(black_box("W_rdle%fun%")))
+    });
 
-    // Test some search scenarios: 
-    let mut matcher = compile_fn("");
-    group.bench_function(
-        format!("{}_search_empty", name),
-        |b| b.iter(|| search_poem(&matcher)),
-    );
-    matcher = compile_fn("And");
-    group.bench_function(
-        format!("{}_search_literal", name),
-        |b| b.iter(|| search_poem(&matcher)),
-    );
+    // Test some search scenarios:
+    let mut matcher = compile_fn("And");
+    group.bench_function(format!("{}_search_literal", name), |b| {
+        b.iter(|| search_poem(&matcher))
+    });
     matcher = compile_fn("And%");
-    group.bench_function(
-        format!("{}_search_starts_with", name),
-        |b| b.iter(|| search_poem(&matcher)),
-    );
+    group.bench_function(format!("{}_search_starts_with", name), |b| {
+        b.iter(|| search_poem(&matcher))
+    });
     matcher = compile_fn("%and%");
-    group.bench_function(
-        format!("{}_search_contains", name),
-        |b| b.iter(|| search_poem(&matcher)),
-    );
+    group.bench_function(format!("{}_search_contains", name), |b| {
+        b.iter(|| search_poem(&matcher))
+    });
+    matcher = compile_fn("%and%is%");
+    group.bench_function(format!("{}_search_contains2", name), |b| {
+        b.iter(|| search_poem(&matcher))
+    });
+    matcher = compile_fn("%and%is%more%");
+    group.bench_function(format!("{}_search_contains3", name), |b| {
+        b.iter(|| search_poem(&matcher))
+    });
     matcher = compile_fn("%!");
-    group.bench_function(
-        format!("{}_search_ends_with", name),
-        |b| b.iter(|| search_poem(&matcher)),
-    );
+    group.bench_function(format!("{}_search_ends_with", name), |b| {
+        b.iter(|| search_poem(&matcher))
+    });
     matcher = compile_fn("%e%e%e%e%e%e?");
-    group.bench_function(
-        format!("{}_search_expensive", name),
-        |b| b.iter(|| matcher.is_match(black_box("wheeeeeeeeeeeeeeeeeeeeee!"))),
-    );
+    group.bench_function(format!("{}_search_expensive", name), |b| {
+        b.iter(|| matcher.is_match(black_box("wheeeeeeeeeeeeeeeeeeeeee!")))
+    });
 }
 
 pub fn bench_ilike(c: &mut Criterion) {
-    bench_op(c, "ilike", |pattern| like_pattern::build_regex(pattern, "i").unwrap());
+    bench_op(c, "ilike", |pattern| {
+        like_pattern::compile(pattern, true, '\\').unwrap()
+    });
 }
 
 pub fn bench_like(c: &mut Criterion) {
-    bench_op(c, "like", |pattern| like_pattern::build_regex(pattern, "").unwrap());
+    bench_op(c, "like", |pattern| {
+        like_pattern::compile(pattern, false, '\\').unwrap()
+    });
 }
 
 criterion_group!(benches, bench_like, bench_ilike);

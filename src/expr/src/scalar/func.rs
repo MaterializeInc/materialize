@@ -3350,6 +3350,7 @@ pub enum UnaryFunc {
     ByteLengthBytes,
     ByteLengthString,
     CharLength,
+    IsLikePatternMatch(like_pattern::Matcher),
     IsRegexpMatch(Regex),
     RegexpMatch(Regex),
     ExtractInterval(DateTimeUnits),
@@ -3755,6 +3756,7 @@ impl UnaryFunc {
             ByteLengthString => byte_length(a.unwrap_str()),
             ByteLengthBytes => byte_length(a.unwrap_bytes()),
             CharLength => char_length(a),
+            IsLikePatternMatch(matcher) => Ok(is_like_pattern_match_static(a, &matcher)),
             IsRegexpMatch(regex) => Ok(is_regexp_match_static(a, &regex)),
             RegexpMatch(regex) => regexp_match_static(a, temp_storage, &regex),
             ExtractInterval(units) => date_part_interval_inner::<Numeric>(*units, a),
@@ -3960,7 +3962,7 @@ impl UnaryFunc {
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(nullable),
 
-            IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
+            IsLikePatternMatch(_) | IsRegexpMatch(_) => ScalarType::Bool.nullable(nullable),
 
             CastStringToJsonb => ScalarType::Jsonb.nullable(nullable),
 
@@ -4218,7 +4220,7 @@ impl UnaryFunc {
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => false,
-            IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
+            IsLikePatternMatch(_) | IsRegexpMatch(_) | CastJsonbOrNullToJsonb => false,
             CastStringToJsonb => false,
             CastRecordToString { .. }
             | CastArrayToString { .. }
@@ -4497,6 +4499,7 @@ impl UnaryFunc {
             BitLengthString => f.write_str("bit_length"),
             ByteLengthBytes => f.write_str("octet_length"),
             ByteLengthString => f.write_str("octet_length"),
+            IsLikePatternMatch(matcher) => write!(f, "{} ~~", matcher.pattern.quoted()),
             IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
             RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             ExtractInterval(units) => write!(f, "extract_{}_iv", units),
@@ -4720,14 +4723,18 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     ))
 }
 
+fn is_like_pattern_match_static<'a>(a: Datum<'a>, needle: &like_pattern::Matcher) -> Datum<'a> {
+    let haystack = a.unwrap_str();
+    Datum::from(needle.is_match(haystack))
+}
+
 fn is_like_pattern_match_dynamic<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     case_insensitive: bool,
 ) -> Result<Datum<'a>, EvalError> {
     let haystack = a.unwrap_str();
-    let flags = if case_insensitive { "i" } else { "" };
-    let needle = like_pattern::build_regex(b.unwrap_str(), flags)?;
+    let needle = like_pattern::compile(b.unwrap_str(), case_insensitive, '\\')?;
     Ok(Datum::from(needle.is_match(haystack.as_ref())))
 }
 
