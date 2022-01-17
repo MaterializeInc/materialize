@@ -10,5 +10,5 @@ publish = false
 anyhow = "1.0.52"
 clap = { version = "3.0.6", features = ["derive"] }
 serde = "1.0.133"
-serde_json = "1.0.74"
+serde_json = "1.0.75"
 ore = { path = "../../src/ore" }

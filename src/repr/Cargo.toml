@@ -34,9 +34,9 @@ protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 regex = "1.5.4"
 ryu = "1.0.9"
 serde = { version = "1.0.133", features = ["derive"] }
-serde_json = { version = "1.0.74", features = ["arbitrary_precision"] }
+serde_json = { version = "1.0.75", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
-smallvec = { version = "1.7.0", features = ["serde", "union"] }
+smallvec = { version = "1.8.0", features = ["serde", "union"] }
 uuid = "0.8.2"
 
 [build-dependencies]
