@@ -32,8 +32,9 @@ from materialize.feature_benchmark.termination import (
     TerminationCondition,
 )
 from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services import Kafka as KafkaService
+from materialize.mzcompose.services import Kgen as KgenService
 from materialize.mzcompose.services import (
-    Kafka,
     Materialized,
     SchemaRegistry,
     Testdrive,
@@ -64,11 +65,11 @@ def make_comparator(name: str) -> Comparator:
     return RelativeThresholdComparator(name, threshold=0.10)
 
 
-default_timeout = "5m"
+default_timeout = "30m"
 
 SERVICES = [
     Zookeeper(),
-    Kafka(),
+    KafkaService(),
     SchemaRegistry(),
     # We are going to override this service definition during the actual benchmark
     # we put "latest" here so that we avoid recompiling the current source unless
@@ -78,6 +79,7 @@ SERVICES = [
         validate_catalog=False,
         default_timeout=default_timeout,
     ),
+    KgenService(),
 ]
 
 
