@@ -284,8 +284,10 @@ class CargoBuild(CargoPreImage):
                 if message["reason"] != "build-script-executed":
                     continue
                 package = message["package_id"].split()[0]
-                for d in self.extract.get(package, []):
-                    shutil.copy(Path(message["out_dir"]) / d, self.path / Path(d).name)
+                for src, dst in self.extract.get(package, {}).items():
+                    spawn.runv(
+                        ["cp", "-R", Path(message["out_dir"]) / src, self.path / dst]
+                    )
 
     def run(self) -> None:
         super().run()
@@ -312,6 +314,15 @@ class CargoTest(CargoPreImage):
 
     def run(self) -> None:
         super().run()
+        CargoBuild(
+            self.rd,
+            self.path,
+            {
+                "bin": "protoc",
+                "strip": True,
+                "extract": {"protobuf-src": {"install": "protobuf-install"}},
+            },
+        ).build()
         CargoBuild(self.rd, self.path, {"bin": "testdrive", "strip": True}).build()
         CargoBuild(self.rd, self.path, {"bin": "materialized", "strip": True}).build()
 
@@ -323,8 +334,10 @@ class CargoTest(CargoPreImage):
         # error messages would also be sent to the output file in JSON, and the
         # user would only see a vague "could not compile <package>" error.
         args = [*self.rd.cargo("test", rustflags=[]), "--locked", "--no-run"]
-        spawn.runv(args)
-        output = spawn.capture(args + ["--message-format=json"], unicode=True)
+        spawn.runv(args, cwd=self.rd.root)
+        output = spawn.capture(
+            args + ["--message-format=json"], unicode=True, cwd=self.rd.root
+        )
 
         tests = []
         for line in output.split("\n"):
@@ -334,8 +347,6 @@ class CargoTest(CargoPreImage):
             if message.get("profile", {}).get("test", False):
                 crate_name = message["package_id"].split()[0]
                 target_kind = "".join(message["target"]["kind"])
-                # TODO - ask Nikhil if this is long-term correct,
-                # but it unblocks us for now.
                 if target_kind == "proc-macro":
                     continue
                 slug = crate_name + "." + target_kind
@@ -355,7 +366,10 @@ class CargoTest(CargoPreImage):
         with open(self.path / "tests" / "manifest", "w") as manifest:
             for (executable, slug, crate_path) in tests:
                 shutil.copy(executable, self.path / "tests" / slug)
-                spawn.runv([*self.rd.tool("strip"), self.path / "tests" / slug])
+                spawn.runv(
+                    [*self.rd.tool("strip"), self.path / "tests" / slug],
+                    cwd=self.rd.root,
+                )
                 manifest.write(f"{slug} {crate_path}\n")
         shutil.move(str(self.path / "materialized"), self.path / "tests")
         shutil.move(str(self.path / "testdrive"), self.path / "tests")

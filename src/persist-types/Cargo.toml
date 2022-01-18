@@ -8,3 +8,4 @@ publish = false
 # NB: This is meant to be a strong, independent abstraction boundary, please
 # don't leak in deps on other Materialize packages.
 [dependencies]
+bytes = "1.1.0"

@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-package gen;
+package row;
 
 message ProtoRow {
     repeated ProtoDatum datums = 1;

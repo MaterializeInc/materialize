@@ -399,13 +399,12 @@ publish: true
 
      In rare cases, it may be necessary to extract files from the build
      directory of a dependency. The `extract` key specifies a mapping from a
-     dependent package to a list of files to copy into the build context. Paths
-     should be relative and are interpreted relative to that crate's build
-     directory. Each extracted file will be placed in the root of the build
-     context with the same name as the original file. Copying directories is not
-     supported. Note that `extract` is only relevant if the dependency has a
-     custom Cargo build script, as Rust crates without a build script do not
-     have a build directory.
+     dependent package to a mapping from source files and directories to
+     destination directories. Source paths are interpreted relative to that
+     crate's build directory while destination paths are interpreted relative to
+     the build context. Note that `extract` is only relevant if the dependency
+     has a custom Cargo build script, as Rust crates without a build script do
+     not have a build directory.
 
   * `type: cargo-test` builds a special image that simulates `cargo test`. This
      plugin is very special-cased at the moment, and unlikely to be generally

@@ -16,7 +16,9 @@ use tempfile::TempDir;
 
 use mz_protoc::Protoc;
 
-const SIMPLE_PROTO: &str = "message Simple {
+const SIMPLE_PROTO: &str = "package mz_protoc;
+
+message Simple {
     required int32 i = 1;
 }
 ";
@@ -63,7 +65,7 @@ fn missing_input_file() -> Result<(), anyhow::Error> {
         .include(temp_dir.path())
         .input(temp_dir.path().join("noexist"))
         .compile_into(temp_dir.path());
-    assert_error(res, "input protobuf file does not exist");
+    assert_error(res, "No such file or directory");
     Ok(())
 }
 
@@ -74,8 +76,10 @@ fn bad_input_file() -> Result<(), anyhow::Error> {
         .include(temp_dir.path())
         .input(proto_path)
         .compile_into(&temp_dir.path());
-    assert_error(&res, "input.proto");
-    assert_error(&res, "incorrect input");
+    assert_error(
+        &res,
+        r#"input.proto:1:1: Expected top-level statement (e.g. "message")."#,
+    );
     Ok(())
 }
 
@@ -92,7 +96,9 @@ fn simple_success() -> Result<(), anyhow::Error> {
 #[test]
 fn well_known_types() -> Result<(), anyhow::Error> {
     let (temp_dir, proto_path) = build_workspace(
-        r#"import "google/protobuf/timestamp.proto";
+        r#"package mz_protoc;
+
+import "google/protobuf/timestamp.proto";
 
     message HasWellKnownType {
         required google.protobuf.Timestamp ts = 1;

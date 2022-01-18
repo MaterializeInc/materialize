@@ -204,7 +204,7 @@ ENV RANLIB=$ARCH_GCC-unknown-linux-gnu-ranlib
 ENV CPP=$ARCH_GCC-unknown-linux-gnu-cpp
 ENV CC=$ARCH_GCC-unknown-linux-gnu-cc
 ENV CXX=$ARCH_GCC-unknown-linux-gnu-c++
-ENV LDFLAGS=-fuse-ld=lld
+ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
 ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
 ENV PATH=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH

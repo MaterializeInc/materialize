@@ -161,7 +161,7 @@ impl<B: Blob> BlobCache<B> {
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
         let mut val = Vec::new();
-        let format = ProtoBatchFormat::ParquetKVTD;
+        let format = ProtoBatchFormat::ParquetKvtd;
         batch.encode(&mut val);
         let val_len = u64::cast_from(val.len());
 
@@ -263,7 +263,7 @@ impl<B: Blob> BlobCache<B> {
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
         let mut val = Vec::new();
-        let format = ProtoBatchFormat::ParquetKVTD;
+        let format = ProtoBatchFormat::ParquetKvtd;
         batch.encode(&mut val);
         let val_len = u64::cast_from(val.len());
 

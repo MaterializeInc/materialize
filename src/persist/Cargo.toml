@@ -28,6 +28,7 @@ aws-types = { version = "0.4.0" }
 base64 = "0.13.0"
 bincode = "1.3.3"
 build-info = { path = "../build-info" }
+bytes = "1.1.0"
 crossbeam-channel = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
@@ -40,7 +41,7 @@ mz-aws-util = { path = "../aws-util", features = ["s3"] }
 ore = { path = "../ore", default-features = false, features = ["metrics"] }
 parquet2 = { version = "0.8.1", default-features = false }
 persist-types = { path = "../persist-types" }
-protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
+prost = "0.9.0"
 semver = { version = "1.0.4" }
 serde = { version = "1.0.133", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }

@@ -22,7 +22,7 @@ use std::process;
 use std::sync::Arc;
 
 use anyhow::Result;
-use protobuf::Message;
+use prost::Message;
 use tokio::time::{self, Duration};
 
 use test_util::kafka::kafka_client;
@@ -114,7 +114,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         let messages_to_send = std::cmp::min(config.messages_per_second, messages_remaining);
         for _ in 0..messages_to_send {
             let m = randomizer::random_batch(rng, &mut recordstate);
-            m.write_to_vec(&mut buf)?;
+            m.encode(&mut buf)?;
             tracing::trace!("sending: {:?}", m);
             let res = k_client.send(&config.topic, &buf);
             match res {

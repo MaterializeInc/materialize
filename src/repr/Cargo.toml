@@ -16,6 +16,7 @@ harness = false
 [dependencies]
 anyhow = "1.0.52"
 byteorder = "1.4.3"
+bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.6.1", features = ["serde", "case-insensitive"] }
 dec = "0.4.7"
@@ -30,7 +31,7 @@ num-traits = "0.2.14"
 ordered-float = { version = "2.10.0", features = ["serde"] }
 ore = { path = "../ore", features = ["bytes", "smallvec"] }
 persist-types = { path = "../persist-types" }
-protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
+prost = "0.9.0"
 regex = "1.5.4"
 ryu = "1.0.9"
 serde = { version = "1.0.133", features = ["derive"] }
