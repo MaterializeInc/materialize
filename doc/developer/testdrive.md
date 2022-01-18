@@ -658,9 +658,9 @@ Set the starting value of the `${kafka-ingest.iteration}` variable.
 
 Send the data to the specified partition.
 
-#### `kafka-verify format=avro sink=... [sort-messages=true] [consistency=debezium]`
+#### `kafka-verify format=avro sink=... [sort-messages=true] [consistency=debezium] [greedy-search=false]`
 
-Obtains the data from the specified `sink` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test.
+Obtains the data from the specified `sink` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test. If `greedy-search=true` is specified, the messages do not have to match starting at the beginning of the sink but once one record matches, the following must all match.
 
 ## Actions on Kinesis
 
