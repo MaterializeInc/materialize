@@ -9,6 +9,11 @@
 
 //! Helpers for working with Kafka's client API.
 
+use std::time::Duration;
+
+use anyhow::bail;
+use ore::collections::CollectionExt;
+use rdkafka::client::Client;
 use rdkafka::consumer::ConsumerContext;
 use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
 use rdkafka::ClientContext;
@@ -54,4 +59,34 @@ impl ProducerContext for MzClientContext {
     ) {
         DefaultProducerContext.delivery(delivery_result, delivery_opaque);
     }
+}
+
+/// Retrieve number of partitions for a given `topic` using the given `client`
+pub fn get_partitions<C: ClientContext>(
+    client: &Client<C>,
+    topic: &str,
+    timeout: Duration,
+) -> Result<Vec<i32>, anyhow::Error> {
+    let meta = client.fetch_metadata(Some(&topic), timeout)?;
+    if meta.topics().len() != 1 {
+        bail!(
+            "topic {} has {} metadata entries; expected 1",
+            topic,
+            meta.topics().len()
+        );
+    }
+    let meta_topic = meta.topics().into_element();
+    if meta_topic.name() != topic {
+        bail!(
+            "got results for wrong topic {} (expected {})",
+            meta_topic.name(),
+            topic
+        );
+    }
+
+    if meta_topic.partitions().len() == 0 {
+        bail!("topic {} does not exist", topic);
+    }
+
+    Ok(meta_topic.partitions().iter().map(|x| x.id()).collect())
 }
