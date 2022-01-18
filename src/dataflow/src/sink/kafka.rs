@@ -1094,10 +1094,9 @@ pub fn produce_to_kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let mut builder = OperatorBuilder::new(name.clone(), stream.scope());
-    let activator = stream
-        .scope()
-        .activator_for(&builder.operator_info().address[..]);
+    let scope = stream.scope();
+    let mut builder = OperatorBuilder::new(name.clone(), scope.clone());
+    let activator = scope.activator_for(&builder.operator_info().address[..]);
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
 
@@ -1105,17 +1104,12 @@ where
         connector,
         name,
         &id,
-        stream.scope().index().to_string(),
+        scope.index().to_string(),
         Arc::clone(&shutdown_flag),
         activator,
         write_frontier,
         metrics,
     );
-
-    // Keep track of whether this operator/worker ever received updates. We
-    // use this to control who should send continuous END progress records
-    // to Kafka below.
-    let mut is_active_worker = false;
 
     let mut vector = Vec::new();
 
@@ -1125,10 +1119,12 @@ where
 
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = id.hashed();
+    let is_active_worker = (hashed_id as usize) % scope.peers() == scope.index();
+
     let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
 
     builder.build_async(
-        stream.scope(),
+        scope,
         async_op!(|_initial_capabilities, frontiers| {
             if s.shutdown_flag.load(Ordering::SeqCst) {
                 debug!("shutting down sink: {}", &s.name);
@@ -1150,9 +1146,50 @@ where
                     accum.meet(&history.durability_frontier())
                 });
 
+            // Can't use `?` when the return type is a `bool` so use a custom try operator
+            macro_rules! bail_err {
+                ($expr:expr) => {
+                    match $expr {
+                        Ok(val) => val,
+                        Err(_) => {
+                            s.activator.activate();
+                            return true;
+                        }
+                    }
+                };
+            }
+
+            if is_active_worker {
+                if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
+                    if s.transactional {
+                        bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
+                    }
+
+                    let latest_ts = match s.determine_latest_consistency_record().await {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            s.shutdown_flag.store(true, Ordering::SeqCst);
+                            info!("shutting down kafka sink while initializing: {}", e);
+                            return true;
+                        }
+                    };
+                    let consistency_state = init
+                        .as_ref()
+                        .cloned()
+                        .map(|init| init.to_running(Rc::clone(&shared_gate_ts)));
+
+                    if let Some(gate) = latest_ts {
+                        shared_gate_ts.set(gate);
+                        s.maybe_update_progress(&gate);
+                    }
+
+                    s.sink_state = KafkaSinkStateEnum::Running(consistency_state);
+                }
+            }
+
             // Queue all pending rows waiting to be sent to kafka
             input.for_each(|_, rows| {
-                is_active_worker = true;
+                assert!(is_active_worker);
                 rows.swap(&mut vector);
                 for ((key, value), time, diff) in vector.drain(..) {
                     let should_emit = if as_of.strict {
@@ -1184,50 +1221,6 @@ where
                     s.metrics.rows_queued.inc();
                 }
             });
-
-            // Can't use `?` when the return type is a `bool` so use a custom try operator
-            macro_rules! bail_err {
-                ($expr:expr) => {
-                    match $expr {
-                        Ok(val) => val,
-                        Err(_) => {
-                            s.activator.activate();
-                            return true;
-                        }
-                    }
-                };
-            }
-
-            // XXX(chae): is there a way to find out if we're teh active worker without consuming
-            // data?  Ideally this would be one of the first things that happens.
-            if is_active_worker {
-                if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
-                    if s.transactional {
-                        bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
-                    }
-
-                    let latest_ts = match s.determine_latest_consistency_record().await {
-                        Ok(ts) => ts,
-                        Err(e) => {
-                            s.shutdown_flag.store(true, Ordering::SeqCst);
-                            info!("shutting down kafka sink while initializing: {}", e);
-                            return true;
-                        }
-                    };
-                    let consistency_state = init
-                        .as_ref()
-                        .cloned()
-                        .map(|init| init.to_running(Rc::clone(&shared_gate_ts)));
-
-                    if let Some(gate) = latest_ts {
-                        shared_gate_ts.set(gate);
-                        s.maybe_update_progress(&gate);
-                        s.pending_rows.retain(|ts, _| *ts > gate);
-                    }
-
-                    s.sink_state = KafkaSinkStateEnum::Running(consistency_state);
-                }
-            }
 
             // Move any newly closed timestamps from pending to ready
             let mut closed_ts: Vec<u64> = s
