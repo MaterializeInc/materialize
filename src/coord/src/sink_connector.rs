@@ -18,13 +18,13 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, Top
 use rdkafka::config::ClientConfig;
 use rdkafka::{Message, Offset, TopicPartitionList};
 
-use ::kafka_util::client::MzClientContext;
 use dataflow_types::sinks::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
     KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkConsistencyConnector,
     PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
 };
 use expr::GlobalId;
+use kafka_util::client::MzClientContext;
 use ore::collections::CollectionExt;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::KafkaError;
@@ -80,13 +80,14 @@ fn get_latest_ts(
         .context("creating consumer client failed")?;
 
     // ensure the consistency topic has exactly one partition
-    let partitions = sql::kafka_util::get_partitions(&consumer, consistency_topic, timeout)
-        .with_context(|| {
-            format!(
-                "Unable to fetch metadata about consistency topic {}",
-                consistency_topic
-            )
-        })?;
+    let partitions =
+        kafka_util::client::get_partitions(consumer.client(), consistency_topic, timeout)
+            .with_context(|| {
+                format!(
+                    "Unable to fetch metadata about consistency topic {}",
+                    consistency_topic
+                )
+            })?;
 
     if partitions.len() != 1 {
         bail!(
