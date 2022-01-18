@@ -425,12 +425,10 @@ mod test {
                 needle: "_漢",
                 case_insensitive: false,
                 escape: '\\',
-                inputs: vec![
-                    Input {
-                        haystack: "漢漢",
-                        matches: true,
-                    },
-                ],
+                inputs: vec![Input {
+                    haystack: "漢漢",
+                    matches: true,
+                }],
             },
             Pattern {
                 needle: "__o",
