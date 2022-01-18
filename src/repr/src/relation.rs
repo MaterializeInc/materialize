@@ -320,7 +320,7 @@ impl RustType<ProtoColumnName> for ColumnName {
 /// });
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RelationDesc {
     typ: RelationType,
     names: Vec<ColumnName>,

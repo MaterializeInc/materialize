@@ -548,7 +548,7 @@ from (select false as a, null as b, null as c) x"
 }
 
 cat
-(defsource x ([int32 int64 int32] [[0] [1 2]]) [a b c])
+(defsource x (([int32 int64 int32] [[0] [1 2]]) [a b c]) )
 ----
 ok
 
