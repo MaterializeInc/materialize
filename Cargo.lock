@@ -1411,6 +1411,7 @@ dependencies = [
  "ore",
  "persist",
  "persist-types",
+ "rdkafka",
  "regex",
  "repr",
  "serde",

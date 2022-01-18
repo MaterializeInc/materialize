@@ -17,19 +17,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::{anyhow, bail, Context};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use interchange::json::JsonEncoder;
 use itertools::Itertools;
-use ore::collections::CollectionExt;
-use ore::retry::Retry;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
+use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
 use rdkafka::message::{Message, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
+use rdkafka::{Offset, TopicPartitionList};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -45,11 +46,14 @@ use dataflow_types::sinks::{
     KafkaSinkConnector, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkAsOf, SinkDesc,
 };
 use expr::GlobalId;
-use interchange::avro::{self, AvroEncoder, AvroSchemaGenerator};
+use interchange::avro::{self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator};
 use interchange::encode::Encode;
 use kafka_util::client::MzClientContext;
+use mz_avro::types::Value;
 use ore::cast::CastFrom;
+use ore::collections::CollectionExt;
 use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use ore::retry::Retry;
 use ore::task;
 use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 use timely_util::async_op;
@@ -325,6 +329,91 @@ impl KafkaTxProducer {
     }
 }
 
+// So users aren't able to manipulate the fields
+mod consistency_gate {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    use repr::Timestamp;
+
+    #[derive(Debug)]
+    pub struct KafkaConsistencyGateTs {
+        ts: AtomicU64,
+        init: AtomicBool,
+    }
+
+    impl KafkaConsistencyGateTs {
+        pub fn new() -> Self {
+            Self {
+                ts: AtomicU64::new(0),
+                init: AtomicBool::new(false),
+            }
+        }
+
+        pub fn get_ts(&self) -> Option<Timestamp> {
+            if self.init.load(Ordering::Relaxed) {
+                Some(self.ts.load(Ordering::Relaxed))
+            } else {
+                None
+            }
+        }
+
+        pub fn set(&self, ts: Timestamp) {
+            self.ts.store(ts, Ordering::Relaxed);
+            self.init.store(true, Ordering::Relaxed);
+        }
+    }
+}
+use consistency_gate::KafkaConsistencyGateTs;
+
+#[derive(Debug, Clone)]
+struct KafkaConsistencyInitState {
+    topic: String,
+    schema_id: i32,
+    consistency_client_config: rdkafka::ClientConfig,
+}
+
+impl KafkaConsistencyInitState {
+    fn to_running(self, gate_ts: Rc<KafkaConsistencyGateTs>) -> KafkaConsistencyRunningState {
+        KafkaConsistencyRunningState {
+            topic: self.topic,
+            schema_id: self.schema_id,
+            gate_ts,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct KafkaConsistencyRunningState {
+    topic: String,
+    schema_id: i32,
+    gate_ts: Rc<KafkaConsistencyGateTs>,
+}
+
+#[derive(Debug, Clone)]
+enum KafkaSinkStateEnum {
+    // Initialize ourselves as a transactional producer with Kafka
+    // Note that this only runs once across all workers - it should only execute
+    // for the worker that will actually be publishing to kafka
+    Init(Option<KafkaConsistencyInitState>),
+    Running(Option<KafkaConsistencyRunningState>),
+}
+
+impl KafkaSinkStateEnum {
+    fn unwrap_running(&self) -> Option<&KafkaConsistencyRunningState> {
+        match self {
+            Self::Init(_) => panic!("KafkaSink unexpected in Init state"),
+            Self::Running(c) => c.as_ref(),
+        }
+    }
+
+    fn gate_ts(&self) -> Option<Timestamp> {
+        match self {
+            Self::Init(_) | Self::Running(None) => None,
+            Self::Running(Some(KafkaConsistencyRunningState { gate_ts, .. })) => gate_ts.get_ts(),
+        }
+    }
+}
+
 struct KafkaSinkState {
     name: String,
     topic: String,
@@ -334,10 +423,9 @@ struct KafkaSinkState {
     producer: KafkaTxProducer,
     activator: timely::scheduling::Activator,
     transactional: bool,
-    consistency: Option<KafkaSinkConsistencyConnector>,
     pending_rows: HashMap<Timestamp, Vec<EncodedRow>>,
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
-    send_state: SendState,
+    sink_state: KafkaSinkStateEnum,
 
     /// Timestamp of the latest `END` record that was written out to Kafka.
     latest_progress_ts: Timestamp,
@@ -361,11 +449,11 @@ impl KafkaSinkState {
         worker_id: String,
         shutdown_flag: Arc<AtomicBool>,
         activator: Activator,
-        latest_progress_ts: Timestamp,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
         metrics: &KafkaBaseMetrics,
     ) -> Self {
         let config = Self::create_producer_config(&connector);
+        let consistency_client_config = Self::create_consistency_client_config(&connector);
 
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -387,6 +475,14 @@ impl KafkaSinkState {
             timeout: Duration::from_secs(5),
         };
 
+        let sink_state = KafkaSinkStateEnum::Init(connector.consistency.map(
+            |KafkaSinkConsistencyConnector { topic, schema_id }| KafkaConsistencyInitState {
+                topic,
+                schema_id,
+                consistency_client_config,
+            },
+        ));
+
         KafkaSinkState {
             name: sink_name,
             topic: connector.topic,
@@ -396,11 +492,10 @@ impl KafkaSinkState {
             producer,
             activator,
             transactional: connector.exactly_once,
-            consistency: connector.consistency,
             pending_rows: HashMap::new(),
             ready_rows: VecDeque::new(),
-            send_state: SendState::Init,
-            latest_progress_ts,
+            sink_state,
+            latest_progress_ts: Timestamp::MIN,
             write_frontier,
         }
     }
@@ -454,7 +549,38 @@ impl KafkaSinkState {
         config
     }
 
-    // TODO: maybe bound the backoff
+    fn create_consistency_client_config(connector: &KafkaSinkConnector) -> ClientConfig {
+        let mut config = ClientConfig::new();
+        config.set("bootstrap.servers", &connector.addrs.to_string());
+        for (k, v) in connector.config_options.iter() {
+            // We explicitly reject `statistics.interval.ms` here so that we don't
+            // flood the INFO log with statistics messages.
+            // TODO: properly support statistics on Kafka sinks
+            // We explicitly reject 'isolation.level' as it's a consumer property
+            // and, while benign, will fill the log with WARN messages
+            if k != "statistics.interval.ms" && k != "isolation.level" {
+                config.set(k, v);
+            }
+        }
+        config
+            .set(
+                "group.id",
+                format!(
+                    "materialize-bootstrap-{}",
+                    connector
+                        .consistency
+                        .as_ref()
+                        .map(|c| c.topic.clone())
+                        .unwrap_or_else(String::new)
+                ),
+            )
+            .set("isolation.level", "read_committed")
+            .set("enable.auto.commit", "false")
+            .set("auto.offset.reset", "earliest")
+            .set("enable.partition.eof", "true");
+        config
+    }
+
     async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> KafkaResult<T>
     where
         F: Fn(KafkaTxProducer) -> Fut,
@@ -588,17 +714,171 @@ impl KafkaSinkState {
             .await
     }
 
+    async fn determine_latest_consistency_record(&self) -> Option<Timestamp> {
+        // Return the list of partition ids associated with a specific topic
+        /// Polls a message from a Kafka Source
+        fn get_next_message(
+            consumer: &mut BaseConsumer,
+            timeout: Duration,
+        ) -> Result<Option<(Vec<u8>, i64)>, anyhow::Error> {
+            if let Some(result) = consumer.poll(timeout) {
+                match result {
+                    Ok(message) => match message.payload() {
+                        Some(p) => Ok(Some((p.to_vec(), message.offset()))),
+                        None => bail!("unexpected null payload"),
+                    },
+                    Err(KafkaError::PartitionEOF(_)) => Ok(None),
+                    Err(err) => bail!("Failed to process message {}", err),
+                }
+            } else {
+                Ok(None)
+            }
+        }
+
+        // Retrieves the latest committed timestamp from the consistency topic
+        fn get_latest_ts(
+            consistency_topic: &str,
+            config: &ClientConfig,
+            timeout: Duration,
+        ) -> Result<Option<Timestamp>, anyhow::Error> {
+            let mut consumer = config
+                .create::<BaseConsumer>()
+                .context("creating consumer client failed")?;
+
+            // ensure the consistency topic has exactly one partition
+            let partitions =
+                kafka_util::client::get_partitions(consumer.client(), consistency_topic, timeout)
+                    .with_context(|| {
+                    format!(
+                        "Unable to fetch metadata about consistency topic {}",
+                        consistency_topic
+                    )
+                })?;
+
+            if partitions.len() != 1 {
+                bail!(
+                    "Consistency topic {} should contain a single partition, but instead contains {} partitions",
+                    consistency_topic, partitions.len(),
+                );
+            }
+
+            let partition = partitions.into_element();
+
+            // We scan from the beginning and see if we can find an END record. We have
+            // to do it like this because Kafka Control Batches mess with offsets. We
+            // therefore cannot simply take the last offset from the back and expect an
+            // END message there. With a transactional producer, the OffsetTail(1) will
+            // not point to an END message but a control message. With aborted
+            // transactions, there might even be a lot of garbage at the end of the
+            // topic or in between.
+
+            let mut tps = TopicPartitionList::new();
+            tps.add_partition(consistency_topic, partition);
+            tps.set_partition_offset(consistency_topic, partition, Offset::Beginning)?;
+
+            consumer.assign(&tps).with_context(|| {
+                format!(
+                    "Error seeking in consistency topic {}:{}",
+                    consistency_topic, partition
+                )
+            })?;
+
+            let (lo, hi) = consumer
+                .fetch_watermarks(consistency_topic, 0, timeout)
+                .map_err(|e| {
+                    anyhow!(
+                        "Failed to fetch metadata while reading from consistency topic: {}",
+                        e
+                    )
+                })?;
+
+            // Empty topic.  Return early to avoid unnecesasry call to kafka below.
+            if hi == 0 {
+                return Ok(None);
+            }
+
+            let mut latest_ts = None;
+            let mut latest_offset = None;
+            while let Some((message, offset)) = get_next_message(&mut consumer, timeout)? {
+                debug_assert!(offset >= latest_offset.unwrap_or(0));
+                latest_offset = Some(offset);
+
+                if let Some(ts) = maybe_decode_consistency_end_record(&message, consistency_topic)?
+                {
+                    if ts >= latest_ts.unwrap_or(0) {
+                        latest_ts = Some(ts);
+                    }
+                }
+            }
+
+            // Topic not empty but we couldn't read any messages.  We don't expect this to happen but we
+            // have no reason to rely on kafka not inserting any internal messages at the beginning.
+            if latest_offset.is_none() {
+                tracing::debug!(
+                    "unable to read any messages from non-empty topic {}:{}, lo/hi: {}/{}",
+                    consistency_topic,
+                    partition,
+                    lo,
+                    hi
+                );
+            }
+            Ok(latest_ts)
+        }
+
+        // There may be arbitrary messages in this topic that we cannot decode.  We only
+        // return an error when we know we've found an END message but cannot decode it.
+        fn maybe_decode_consistency_end_record(
+            bytes: &[u8],
+            consistency_topic: &str,
+        ) -> Result<Option<Timestamp>, anyhow::Error> {
+            // The first 5 bytes are reserved for the schema id/schema registry information
+            let mut bytes = &bytes[5..];
+            let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
+                .context("Failed to decode consistency topic message")?;
+
+            if let Value::Record(ref r) = record {
+                let m: HashMap<String, Value> = r.clone().into_iter().collect();
+                let status = m.get("status");
+                let id = m.get("id");
+                match (status, id) {
+                    (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
+                        if let Ok(ts) = id.parse::<u64>() {
+                            Ok(Some(ts))
+                        } else {
+                            bail!(
+                        "Malformed consistency record, failed to parse timestamp {} in topic {}",
+                        id,
+                        consistency_topic
+                    );
+                        }
+                    }
+                    _ => Ok(None),
+                }
+            } else {
+                Ok(None)
+            }
+        }
+
+        if let KafkaSinkStateEnum::Init(Some(KafkaConsistencyInitState {
+            ref topic,
+            ref consistency_client_config,
+            ..
+        })) = self.sink_state
+        {
+            // XXX(chae): handle unwrap
+            return get_latest_ts(&topic, &consistency_client_config, Duration::from_secs(10))
+                .unwrap();
+        }
+        return None;
+    }
+
     async fn send_consistency_record(
         &self,
         transaction_id: &str,
         status: &str,
         message_count: Option<i64>,
+        consistency: &KafkaConsistencyRunningState,
     ) -> KafkaResult<()> {
-        let consistency = self
-            .consistency
-            .as_ref()
-            .expect("no consistency information");
-
         let encoded = avro::encode_debezium_transaction_unchecked(
             consistency.schema_id,
             &self.topic_prefix,
@@ -670,14 +950,19 @@ impl KafkaSinkState {
 
             if min_frontier > self.latest_progress_ts {
                 // record the write frontier in the consistency topic.
-                if self.consistency.is_some() {
+                if let Some(consistency_state) = self.sink_state.unwrap_running() {
                     if self.transactional {
                         self.begin_transaction().await?
                     }
 
-                    self.send_consistency_record(&min_frontier.to_string(), "END", None)
-                        .await
-                        .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
+                    self.send_consistency_record(
+                        &min_frontier.to_string(),
+                        "END",
+                        None,
+                        consistency_state,
+                    )
+                    .await
+                    .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
 
                     if self.transactional {
                         self.commit_transaction().await?
@@ -701,15 +986,6 @@ impl KafkaSinkState {
 
         Ok(progress_emitted)
     }
-}
-
-#[derive(Debug, Copy, Clone)]
-enum SendState {
-    // Initialize ourselves as a transactional producer with Kafka
-    // Note that this only runs once across all workers - it should only execute
-    // for the worker that will actually be publishing to kafka
-    Init,
-    Running,
 }
 
 #[derive(Debug)]
@@ -738,6 +1014,8 @@ where
 
     let stream = &collection.inner;
 
+    let shared_gate_ts = Rc::new(KafkaConsistencyGateTs::new());
+
     let encoded_stream = match connector.published_schema_info {
         Some(PublishedSchemaInfo {
             key_schema_id,
@@ -754,10 +1032,7 @@ where
             encode_stream(
                 stream,
                 as_of.clone(),
-                connector
-                    .consistency
-                    .clone()
-                    .and_then(|consistency| consistency.gate_ts),
+                Rc::clone(&shared_gate_ts),
                 encoder,
                 connector.fuel,
                 name.clone(),
@@ -768,10 +1043,7 @@ where
             encode_stream(
                 stream,
                 as_of.clone(),
-                connector
-                    .consistency
-                    .clone()
-                    .and_then(|consistency| consistency.gate_ts),
+                Rc::clone(&shared_gate_ts),
                 encoder,
                 connector.fuel,
                 name.clone(),
@@ -785,6 +1057,7 @@ where
         name,
         connector,
         as_of,
+        shared_gate_ts,
         source_timestamp_histories,
         write_frontier,
         metrics,
@@ -808,6 +1081,7 @@ pub fn produce_to_kafka<G>(
     name: String,
     connector: KafkaSinkConnector,
     as_of: SinkAsOf,
+    shared_gate_ts: Rc<KafkaConsistencyGateTs>,
     source_timestamp_histories: Vec<TimestampBindingRc>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
@@ -822,14 +1096,6 @@ where
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
 
-    let latest_progress_ts = match &connector.consistency {
-        Some(consistency) => match consistency.gate_ts {
-            Some(gate_ts) => gate_ts,
-            None => Timestamp::MIN,
-        },
-        None => Timestamp::MIN,
-    };
-
     let mut s = KafkaSinkState::new(
         connector,
         name,
@@ -837,7 +1103,6 @@ where
         stream.scope().index().to_string(),
         Arc::clone(&shutdown_flag),
         activator,
-        latest_progress_ts,
         write_frontier,
         metrics,
     );
@@ -891,13 +1156,7 @@ where
                         as_of.frontier.less_equal(&time)
                     };
 
-                    let previously_published = match &s.consistency {
-                        Some(consistency) => match consistency.gate_ts {
-                            Some(gate_ts) => time <= gate_ts,
-                            None => false,
-                        },
-                        None => false,
-                    };
+                    let previously_published = Some(time) <= s.sink_state.gate_ts();
 
                     if !should_emit || previously_published {
                         // Skip stale data for already published timestamps
@@ -921,19 +1180,6 @@ where
                 }
             });
 
-            // Move any newly closed timestamps from pending to ready
-            let mut closed_ts: Vec<u64> = s
-                .pending_rows
-                .iter()
-                .filter(|(ts, _)| !frontier.less_equal(*ts) && !durability_frontier.less_equal(*ts))
-                .map(|(&ts, _)| ts)
-                .collect();
-            closed_ts.sort_unstable();
-            closed_ts.into_iter().for_each(|ts| {
-                let rows = s.pending_rows.remove(&ts).unwrap();
-                s.ready_rows.push_back((ts, rows));
-            });
-
             // Can't use `?` when the return type is a `bool` so use a custom try operator
             macro_rules! bail_err {
                 ($expr:expr) => {
@@ -947,21 +1193,42 @@ where
                 };
             }
 
-            if is_active_worker
-                && matches!(s.send_state, SendState::Init)
-                // Removing this check would cause us to start writing out END consistency rows as
-                // soon as the sink starts up.  There isn't anything inherently wrong with this but
-                // we need to update testdrive to be able to check a reasonable condition that this
-                // is correct.  That is, td currently checks we start with a BEGIN and then END.
-                // We'd need to be able to do a search for a BEGIN to properly test were we to
-                // remove this check.  This would fix #9514.
-                && s.ready_rows.front().is_some()
-            {
-                if s.transactional {
-                    bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
+            // XXX(chae): is there a way to find out if we're teh active worker without consuming
+            // data?  Ideally this would be one of the first things that happens.
+            if is_active_worker {
+                if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
+                    if s.transactional {
+                        bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
+                    }
+
+                    let latest_ts = s.determine_latest_consistency_record().await;
+                    let consistency_state = init
+                        .as_ref()
+                        .cloned()
+                        .map(|init| init.to_running(Rc::clone(&shared_gate_ts)));
+
+                    if let Some(gate) = latest_ts {
+                        shared_gate_ts.set(gate);
+                        s.maybe_update_progress(&gate);
+                        s.pending_rows.retain(|ts, _| *ts > gate);
+                    }
+
+                    s.sink_state = KafkaSinkStateEnum::Running(consistency_state);
                 }
-                s.send_state = SendState::Running;
             }
+
+            // Move any newly closed timestamps from pending to ready
+            let mut closed_ts: Vec<u64> = s
+                .pending_rows
+                .iter()
+                .filter(|(ts, _)| !frontier.less_equal(*ts) && !durability_frontier.less_equal(*ts))
+                .map(|(&ts, _)| ts)
+                .collect();
+            closed_ts.sort_unstable();
+            closed_ts.into_iter().for_each(|ts| {
+                let rows = s.pending_rows.remove(&ts).unwrap();
+                s.ready_rows.push_back((ts, rows));
+            });
 
             while let Some((ts, rows)) = s.ready_rows.front() {
                 assert!(is_active_worker);
@@ -969,10 +1236,15 @@ where
                 if s.transactional {
                     bail_err!(s.retry_on_txn_error(|p| p.begin_transaction()).await);
                 }
-                if s.consistency.is_some() {
+                if let Some(ref consistency_state) = s.sink_state.unwrap_running() {
                     bail_err!(
-                        s.send_consistency_record(&ts.to_string(), "BEGIN", None)
-                            .await
+                        s.send_consistency_record(
+                            &ts.to_string(),
+                            "BEGIN",
+                            None,
+                            consistency_state
+                        )
+                        .await
                     );
                 }
 
@@ -1002,10 +1274,15 @@ where
                     }
                 }
 
-                if s.consistency.is_some() {
+                if let Some(ref consistency_state) = s.sink_state.unwrap_running() {
                     bail_err!(
-                        s.send_consistency_record(&ts.to_string(), "END", Some(total_sent))
-                            .await
+                        s.send_consistency_record(
+                            &ts.to_string(),
+                            "END",
+                            Some(total_sent),
+                            consistency_state
+                        )
+                        .await
                     );
                 }
                 if s.transactional {
@@ -1091,7 +1368,7 @@ where
 fn encode_stream<G>(
     input_stream: &Stream<G, ((Option<Row>, Option<Row>), Timestamp, Diff)>,
     as_of: SinkAsOf,
-    gate_ts: Option<Timestamp>,
+    shared_gate_ts: Rc<KafkaConsistencyGateTs>,
     encoder: impl Encode + 'static,
     fuel: usize,
     name_prefix: String,
@@ -1135,11 +1412,7 @@ where
                 } else {
                     as_of.frontier.less_equal(&time)
                 };
-
-                let ts_gated = match gate_ts {
-                    Some(gate_ts) => time <= gate_ts,
-                    None => false,
-                };
+                let ts_gated = Some(time) <= shared_gate_ts.get_ts();
 
                 if !should_emit || ts_gated {
                     // Skip stale data for already published timestamps
