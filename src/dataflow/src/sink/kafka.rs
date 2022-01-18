@@ -641,8 +641,6 @@ impl KafkaSinkState {
         // Consider a retriable error that's hit our max backoff to be fatal.
         if shutdown.get() {
             self.shutdown_flag.store(true, Ordering::SeqCst);
-            // Indicate that the sink is closed to everyone else who
-            // might be tracking its write frontier.
             info!("shutting down kafka sink: {}", &self.name);
         }
         Err(last_error)
@@ -714,7 +712,9 @@ impl KafkaSinkState {
             .await
     }
 
-    async fn determine_latest_consistency_record(&self) -> Option<Timestamp> {
+    async fn determine_latest_consistency_record(
+        &self,
+    ) -> Result<Option<Timestamp>, anyhow::Error> {
         // Return the list of partition ids associated with a specific topic
         /// Polls a message from a Kafka Source
         fn get_next_message(
@@ -865,11 +865,16 @@ impl KafkaSinkState {
             ..
         })) = self.sink_state
         {
-            // XXX(chae): handle unwrap
-            return get_latest_ts(&topic, &consistency_client_config, Duration::from_secs(10))
-                .unwrap();
+            return Retry::default()
+                .clamp_backoff(Duration::from_secs(60 * 10))
+                // Yes this is bad but we had an infinite loop before so it's no worse. Fix when
+                // addressing error strategy holistically.
+                .max_tries(usize::MAX)
+                .retry(|_| {
+                    get_latest_ts(&topic, &consistency_client_config, Duration::from_secs(10))
+                });
         }
-        return None;
+        return Ok(None);
     }
 
     async fn send_consistency_record(
@@ -1201,7 +1206,14 @@ where
                         bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
                     }
 
-                    let latest_ts = s.determine_latest_consistency_record().await;
+                    let latest_ts = match s.determine_latest_consistency_record().await {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            s.shutdown_flag.store(true, Ordering::SeqCst);
+                            info!("shutting down kafka sink while initializing: {}", e);
+                            return true;
+                        }
+                    };
                     let consistency_state = init
                         .as_ref()
                         .cloned()
