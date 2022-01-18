@@ -50,7 +50,7 @@ hyper = { version = "0.14.16", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"
 include_dir = "0.7.2"
 itertools = "0.10.3"
-krb5-src = { version = "0.3.1", features = ["binaries"] }
+krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
 libc = "0.2.112"
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
@@ -82,7 +82,7 @@ tokio = { version = "1.15.0", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-stream = { version = "0.1.8", features = ["net"] }
 tracing = "0.1.29"
-tracing-subscriber = "0.3.5"
+tracing-subscriber = "0.3.6"
 url = "2.2.2"
 uuid = "0.8.2"
 

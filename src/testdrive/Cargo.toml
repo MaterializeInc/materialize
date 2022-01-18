@@ -8,10 +8,10 @@ publish = false
 [dependencies]
 async-compression = { version = "0.3.8", features = ["tokio", "gzip"] }
 async-trait = "0.1.52"
-aws-config = { version = "0.4.0", default-features = false, features = ["native-tls"] }
+aws-config = { version = "0.4.1", default-features = false, features = ["native-tls"] }
 aws-sdk-kinesis = { version = "0.4.0", default-features = false }
 aws-sdk-s3 = { version = "0.4.0", default-features = false }
-aws-sdk-sqs = { version = "0.4.0", default-features = false }
+aws-sdk-sqs = { version = "0.4.1", default-features = false }
 aws-smithy-http = "0.34.0"
 aws-types = { version = "0.4.0", features = ["hardcoded-credentials"] }
 atty = "0.2.0"
@@ -27,7 +27,7 @@ http = "0.2.6"
 interchange = { path = "../interchange" }
 itertools = "0.10.3"
 kafka-util = { path = "../kafka-util" }
-krb5-src = { version = "0.3.1", features = ["binaries"] }
+krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
 maplit = "1.0.2"
 md-5 = "0.10.0"
