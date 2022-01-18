@@ -316,13 +316,13 @@ where
                     actual_item = actual.next();
                 }
             }
-            (Some(e), None) => {
+            (Some(e), None) => return Err(format!("missing record {}: {:#?}", i, e)),
+            (None, Some(a)) => {
                 if !greedy_search {
-                    return Err(format!("missing record {}: {:#?}", i, e));
+                    return Err(format!("extra record {}: {:#?}", i, a));
                 }
                 break;
             }
-            (None, Some(a)) => return Err(format!("extra record {}: {:#?}", i, a)),
             (None, None) => break,
         }
     }
@@ -330,7 +330,7 @@ where
     let actual: Vec<_> = actual.map(|a| format!("{:#?}", a)).collect();
     if !expected.is_empty() {
         Err(format!("missing records:\n{}", expected.join("\n")))
-    } else if !actual.is_empty() {
+    } else if !actual.is_empty() && !greedy_search {
         Err(format!("extra records:\n{}", actual.join("\n")))
     } else {
         Ok(())
