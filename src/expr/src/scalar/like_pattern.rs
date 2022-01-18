@@ -192,10 +192,15 @@ impl StringMatcher {
         let mut rest = text;
         // Go ahead and skip the minimum number of characters the sub-pattern consumes:
         if self.consume > 0 {
-            if rest.len() < self.consume {
-                return false;
+            let mut byte_len = 0;
+            let mut cs = rest.chars();
+            for _ in 0..self.consume {
+                match cs.next() {
+                    None => return false,
+                    Some(c) => byte_len += c.len_utf8(),
+                }
             }
-            rest = &rest[self.consume..];
+            rest = &rest[byte_len..];
         }
         if self.many {
             // The sub-pattern might consume any number of characters, but we need to find
