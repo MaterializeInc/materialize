@@ -7,7 +7,7 @@
 
 black==21.12b0
 boto3-stubs[ec2,kinesis,s3,sqs,ssm,sts]==1.20.31
-boto3==1.20.31
+boto3==1.20.37
 docker==5.0.3
 ec2instanceconnectcli==1.0.2
 flake8==4.0.1
