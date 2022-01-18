@@ -16,9 +16,10 @@ import os
 import shlex
 import sys
 from subprocess import CalledProcessError
-from typing import IO, Dict, List, NamedTuple, Optional, Union
+from typing import IO, Dict, List, NamedTuple, Optional, Union, cast
 
 import boto3
+from mypy_boto3_ec2.literals import InstanceTypeType
 from mypy_boto3_ec2.service_resource import Instance
 from mypy_boto3_ec2.type_defs import (
     InstanceNetworkInterfaceSpecificationTypeDef,
@@ -150,7 +151,7 @@ def launch(
         "MinCount": 1,
         "MaxCount": 1,
         "ImageId": ami,
-        "InstanceType": instance_type,  # type: ignore
+        "InstanceType": cast(InstanceTypeType, instance_type),
         "UserData": provisioning_script,
         "TagSpecifications": [
             {

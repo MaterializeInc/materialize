@@ -265,7 +265,7 @@ class Composition:
 
         # Emit the munged configuration to a temporary file so that we can later
         # pass it to Docker Compose.
-        self.file = TemporaryFile()
+        self.file = TemporaryFile(mode="w")
         os.set_inheritable(self.file.fileno(), True)
         self._write_compose()
 
@@ -302,7 +302,7 @@ class Composition:
     def _write_compose(self) -> None:
         self.file.seek(0)
         self.file.truncate()
-        yaml.dump(self.compose, self.file, encoding="utf-8")  # type: ignore
+        yaml.dump(self.compose, self.file)
         self.file.flush()
 
     @classmethod

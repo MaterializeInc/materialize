@@ -9,8 +9,7 @@
 
 import time
 
-import pg8000
-from pg8000 import InterfaceError  # type: ignore
+from pg8000.dbapi import InterfaceError
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (

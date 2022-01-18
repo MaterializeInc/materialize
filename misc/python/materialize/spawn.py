@@ -28,7 +28,7 @@ CalledProcessError = subprocess.CalledProcessError
 def runv(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = None,
-    stdin: Union[None, int, IO[bytes], bytes] = None,
+    stdin: Union[None, int, IO[bytes], IO[str], bytes] = None,
     stdout: Union[None, int, IO[bytes], TextIO] = None,
     capture_output: bool = False,
     env: Optional[Dict[str, str]] = None,
