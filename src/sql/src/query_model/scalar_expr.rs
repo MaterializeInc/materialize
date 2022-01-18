@@ -182,6 +182,42 @@ impl BoxScalarExpr {
         post(self);
     }
 
+    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
+    where
+        F: FnMut(&'a mut Self),
+    {
+        use BoxScalarExpr::*;
+        match self {
+            ColumnReference(..) | BaseColumn(..) | Literal(..) | CallNullary(..) => (),
+            CallUnary { expr, .. } => f(expr),
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+            Aggregate { expr, .. } => {
+                f(expr);
+            }
+        }
+    }
+
+    pub fn visit_mut<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut Self),
+    {
+        self.visit1_mut(|e| e.visit_mut(f));
+        f(self);
+    }
+
     pub fn collect_column_references_from_context(
         &self,
         context: &QuantifierSet,

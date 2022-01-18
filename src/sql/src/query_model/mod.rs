@@ -13,6 +13,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
+use itertools::Itertools;
+
 use ore::id_gen::Gen;
 
 pub mod dot;
@@ -461,9 +463,9 @@ impl Model {
         Ok(())
     }
 
-    /// Removes unreferenced objects from the model. May be invoked
-    /// several times during query rewrites.
-    #[allow(dead_code)]
+    /// Removes unreferenced objects from the model.
+    ///
+    /// May be invoked several times during query rewrites.
     fn garbage_collect(&mut self) {
         let mut visited_boxes = HashSet::new();
         let mut visited_quantifiers: HashSet<QuantifierId> = HashSet::new();
@@ -476,6 +478,70 @@ impl Model {
         self.boxes.retain(|b, _| visited_boxes.contains(b));
         self.quantifiers
             .retain(|q, _| visited_quantifiers.contains(q));
+    }
+
+    /// Renumbers all the boxes and quantifiers in the model starting from 0.
+    ///
+    /// Intended to be called after [Model::garbage_collect].
+    ///
+    /// Renumbering the model does not save memory or improve the performance of
+    /// traversing the model, but it does make the Dot graph easier to parse.
+    fn update_ids(&mut self) {
+        // Reset the id generators.
+        self.box_id_gen = Default::default();
+        self.quantifier_id_gen = Default::default();
+
+        // Figure out new ids for each quantifier and box.
+        let updated_quantifier_ids = self
+            .quantifiers
+            .keys()
+            .sorted()
+            .map(|q_id| (*q_id, self.quantifier_id_gen.allocate_id()))
+            .collect::<HashMap<_, _>>();
+        let updated_box_ids = self
+            .boxes
+            .keys()
+            .sorted()
+            .map(|box_id| (*box_id, self.box_id_gen.allocate_id()))
+            .collect::<HashMap<_, _>>();
+
+        // Change all ids to their new versions.
+        self.quantifiers = self
+            .quantifiers
+            .drain()
+            .map(|(q_id, q)| {
+                let new_id = updated_quantifier_ids[&q_id];
+                let mut b_q = q.borrow_mut();
+                b_q.id = new_id;
+                b_q.input_box = updated_box_ids[&b_q.input_box];
+                b_q.parent_box = updated_box_ids[&b_q.parent_box];
+                drop(b_q);
+                (new_id, q)
+            })
+            .collect();
+        self.boxes = self
+            .boxes
+            .drain()
+            .map(|(box_id, b)| {
+                let new_id = updated_box_ids[&box_id];
+                let mut b_b = b.borrow_mut();
+                b_b.id = new_id;
+                b_b.quantifiers = b_b
+                    .quantifiers
+                    .iter()
+                    .map(|q_id| updated_quantifier_ids[q_id])
+                    .collect();
+                b_b.ranging_quantifiers = b_b
+                    .ranging_quantifiers
+                    .iter()
+                    .map(|q_id| updated_quantifier_ids[q_id])
+                    .collect();
+                b_b.update_column_quantifiers(&updated_quantifier_ids);
+                drop(b_b);
+                (new_id, b)
+            })
+            .collect();
+        self.top_box = *updated_box_ids.get(&self.top_box).unwrap();
     }
 }
 
@@ -551,6 +617,58 @@ impl QueryBox {
         Ok(())
     }
 
+    /// Mutably visit all the expressions in this query box.
+    fn visit_expressions_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut BoxScalarExpr) -> Result<(), E>,
+    {
+        for c in self.columns.iter_mut() {
+            f(&mut c.expr)?;
+        }
+        match &mut self.box_type {
+            BoxType::Select(select) => {
+                for p in select.predicates.iter_mut() {
+                    f(p)?;
+                }
+                if let Some(order_key) = &mut select.order_key {
+                    for p in order_key.iter_mut() {
+                        f(p)?;
+                    }
+                }
+                if let Some(limit) = &mut select.limit {
+                    f(limit)?;
+                }
+                if let Some(offset) = &mut select.offset {
+                    f(offset)?;
+                }
+            }
+            BoxType::OuterJoin(outer_join) => {
+                for p in outer_join.predicates.iter_mut() {
+                    f(p)?;
+                }
+            }
+            BoxType::Grouping(grouping) => {
+                for p in grouping.key.iter_mut() {
+                    f(p)?;
+                }
+            }
+            BoxType::Values(values) => {
+                for row in values.rows.iter_mut() {
+                    for value in row.iter_mut() {
+                        f(value)?;
+                    }
+                }
+            }
+            BoxType::TableFunction(table_function) => {
+                for p in table_function.parameters.iter_mut() {
+                    f(p)?;
+                }
+            }
+            BoxType::Except | BoxType::Union | BoxType::Intersect | BoxType::Get(_) => {}
+        }
+        Ok(())
+    }
+
     fn is_select(&self) -> bool {
         matches!(self.box_type, BoxType::Select(_))
     }
@@ -582,6 +700,28 @@ impl QueryBox {
             }
         }
         correlation_info
+    }
+
+    /// For every expression in this box, update the quantifier ids of every
+    /// referenced column.
+    ///
+    /// `updated_quantifier_ids` should be a map of the old [QuantifierId] to
+    /// the new one.
+    fn update_column_quantifiers(
+        &mut self,
+        updated_quantifier_ids: &HashMap<QuantifierId, QuantifierId>,
+    ) {
+        // TODO: handle errors.
+        self.visit_expressions_mut(&mut |expr: &mut BoxScalarExpr| -> Result<(), ()> {
+            expr.visit_mut(&mut |expr| {
+                if let BoxScalarExpr::ColumnReference(c) = expr {
+                    if let Some(new_quantifier) = updated_quantifier_ids.get(&c.quantifier_id) {
+                        c.quantifier_id = *new_quantifier;
+                    }
+                }
+            });
+            Ok(())
+        }).unwrap();
     }
 }
 
