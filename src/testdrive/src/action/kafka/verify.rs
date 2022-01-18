@@ -39,7 +39,7 @@ pub struct VerifyAction {
     sort_messages: bool,
     expected_messages: Vec<String>,
     context: Context,
-    greedy_search: bool,
+    partial_search: Option<usize>,
 }
 
 pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyAction, String> {
@@ -66,7 +66,7 @@ pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyA
             "kafka-verify requires a non-empty list of expected messages",
         ));
     }
-    let greedy_search = cmd.args.opt_bool("greedy-search")?.unwrap_or(false);
+    let partial_search = cmd.args.opt_parse("partial-search")?;
     cmd.args.done()?;
     Ok(VerifyAction {
         sink,
@@ -75,7 +75,7 @@ pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyA
         sort_messages,
         expected_messages,
         context,
-        greedy_search,
+        partial_search,
     })
 }
 
@@ -145,11 +145,15 @@ impl Action for VerifyAction {
             .subscribe(&[&topic])
             .map_err(|e| format!("subscribing: {:#}", e))?;
 
-        // Wait up to 15 seconds for each message.
+        let (stream_size, stream_timeout) = match self.partial_search {
+            Some(size) => (size, state.default_timeout),
+            None => (self.expected_messages.len(), Duration::from_secs(15)),
+        };
+
         let message_stream = consumer
             .stream()
-            .take(self.expected_messages.len())
-            .timeout(cmp::max(state.default_timeout, Duration::from_secs(15)));
+            .take(stream_size)
+            .timeout(cmp::max(state.default_timeout, stream_timeout));
         pin!(message_stream);
 
         // Collect all messages that arrive without timing out. If we trip
@@ -227,17 +231,21 @@ impl Action for VerifyAction {
                     actual_messages.sort_by_key(|k| format!("{:?}", k.1));
                 }
 
-                avro::validate_sink_with_greedy_search(
+                avro::validate_sink_with_partial_search(
                     key_schema.as_ref(),
                     value_schema,
                     &self.expected_messages,
                     &actual_messages,
                     &self.context.regex,
                     &self.context.regex_replacement,
-                    self.greedy_search,
+                    self.partial_search.is_some(),
                 )
             }
             SinkFormat::Json { key } => {
+                assert!(
+                    self.partial_search.is_none(),
+                    "partial search not yet implemented for json formatted sinks"
+                );
                 let mut actual_messages = vec![];
                 for (key, value) in actual_bytes {
                     let key_datum =
