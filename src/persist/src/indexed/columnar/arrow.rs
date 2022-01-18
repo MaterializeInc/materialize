@@ -24,7 +24,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
 use crate::gen::persist::ProtoBatchFormat;
-use crate::indexed::columnar::ColumnarRecords;
+use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVec};
 use crate::indexed::encoding::{
     decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
     encode_unsealed_inline_meta, BlobTraceBatch, BlobUnsealedBatch,
@@ -104,8 +104,14 @@ pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Result
     let schema = Schema::new_from(SCHEMA_ARROW_KVTD.fields().clone(), metadata);
     let options = WriteOptions { compression: None };
     let mut writer = FileWriter::try_new(w, &schema, options)?;
-    let records = batch.updates.iter().collect::<ColumnarRecords>();
-    writer.write(&encode_arrow_batch_kvtd(&records))?;
+    let records = batch
+        .updates
+        .iter()
+        .collect::<ColumnarRecordsVec>()
+        .into_inner();
+    for records in records.iter() {
+        writer.write(&encode_arrow_batch_kvtd(&records))?;
+    }
     writer.finish()?;
     Ok(())
 }

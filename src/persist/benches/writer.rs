@@ -175,11 +175,12 @@ fn bench_write<L: Log, B: Blob>(
         for updates in data {
             // We intentionally never call seal, so that the data only gets written
             // once to Unsealed, and not to Trace.
-            let mut updates = WriteReqBuilder::from_iter(updates.iter());
-            block_on_drain(index, |i, handle| {
-                i.write(vec![(id, updates.finish())], handle)
-            })
-            .unwrap();
+            let updates = WriteReqBuilder::from_iter(updates.iter())
+                .finish()
+                .into_iter()
+                .map(|x| (id, x))
+                .collect();
+            block_on_drain(index, |i, handle| i.write(updates, handle)).unwrap();
         }
         start.elapsed()
     })

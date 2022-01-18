@@ -1185,6 +1185,7 @@ impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 #[cfg(test)]
 mod tests {
     use crate::error::Error;
+    use crate::indexed::columnar::ColumnarRecordsVec;
     use crate::indexed::SnapshotExt;
     use crate::mem::MemRegistry;
     use crate::pfuture::PFuture;
@@ -1206,6 +1207,19 @@ mod tests {
         let (tx, rx) = PFuture::new();
         f(tx);
         rx.recv()
+    }
+
+    fn write_req_payload(
+        id: Id,
+        updates: &[((Vec<u8>, Vec<u8>), u64, isize)],
+    ) -> Vec<(Id, ColumnarRecords)> {
+        updates
+            .iter()
+            .collect::<ColumnarRecordsVec>()
+            .into_inner()
+            .into_iter()
+            .map(|x| (id, x))
+            .collect()
     }
 
     #[test]
@@ -1232,10 +1246,7 @@ mod tests {
 
         // After a write, all data is in the unsealed.
         block_on_drain(&mut i, |i, handle| {
-            i.write(
-                vec![(id, updates.iter().collect::<ColumnarRecords>())],
-                handle,
-            )
+            i.write(write_req_payload(id, &updates), handle)
         })?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
         let ArrangementSnapshot(unsealed, trace, seqno, seal_frontier) =
@@ -1317,10 +1328,7 @@ mod tests {
         // orders it within each batch by time. It's not, so this will fire a
         // validations error if the sort code doesn't work.
         block_on_drain(&mut i, |i, handle| {
-            i.write(
-                vec![(id, updates.iter().collect::<ColumnarRecords>())],
-                handle,
-            )
+            i.write(write_req_payload(id, &updates), handle)
         })?;
 
         // Now move it into the trace part of the index, which orders it within
@@ -1340,8 +1348,8 @@ mod tests {
     #[test]
     fn batch_consolidation() -> Result<(), Error> {
         let updates = vec![
-            (("1".as_bytes(), "".as_bytes()), 1, 1),
-            (("1".as_bytes(), "".as_bytes()), 1, 1),
+            (("1".into(), "".into()), 1, 1),
+            (("1".into(), "".into()), 1, 1),
         ];
 
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
@@ -1349,19 +1357,13 @@ mod tests {
 
         // Write the data and move it into the unsealed part of the index.
         block_on_drain(&mut i, |i, handle| {
-            i.write(
-                vec![(id, updates.iter().collect::<ColumnarRecords>())],
-                handle,
-            )
+            i.write(write_req_payload(id, &updates), handle)
         })?;
 
         // Add another set of identical updates and place into another unsealed
         // batch.
         block_on_drain(&mut i, |i, handle| {
-            i.write(
-                vec![(id, updates.iter().collect::<ColumnarRecords>())],
-                handle,
-            )
+            i.write(write_req_payload(id, &updates), handle)
         })?;
 
         // Sanity check that the data is all in unsealed and none of it is in trace.
@@ -1401,10 +1403,7 @@ mod tests {
         // Write the data and move it into the unsealed part of the index.
         assert_eq!(
             block_on_drain(&mut i, |i, handle| {
-                i.write(
-                    vec![(id, updates.iter().collect::<ColumnarRecords>())],
-                    handle,
-                )
+                i.write(write_req_payload(id, &updates), handle)
             }),
             Ok(SeqNo(1))
         );
@@ -1430,24 +1429,14 @@ mod tests {
         let s1 = block_on(|res| i.register("s1", "", "", res))?;
         block_on_drain(&mut i, |i, handle| {
             i.write(
-                vec![(
-                    s1,
-                    vec![(("".as_bytes(), "".as_bytes()), 0, 1)]
-                        .iter()
-                        .collect::<ColumnarRecords>(),
-                )],
+                write_req_payload(s1, &[(("".into(), "".into()), 0, 1)]),
                 handle,
             )
         })?;
         let s2 = block_on(|res| i.register("s2", "", "", res))?;
         block_on_drain(&mut i, |i, handle| {
             i.write(
-                vec![(
-                    s2,
-                    vec![(("".as_bytes(), "".as_bytes()), 1, 1)]
-                        .iter()
-                        .collect::<ColumnarRecords>(),
-                )],
+                write_req_payload(s2, &[(("".into(), "".into()), 1, 1)]),
                 handle,
             )
         })?;
@@ -1457,12 +1446,7 @@ mod tests {
         // between two step calls doesn't get a batch.)
         block_on_drain(&mut i, |i, handle| {
             i.write(
-                vec![(
-                    s1,
-                    vec![(("".as_bytes(), "".as_bytes()), 2, 1)]
-                        .iter()
-                        .collect::<ColumnarRecords>(),
-                )],
+                write_req_payload(s1, &[(("".into(), "".into()), 2, 1)]),
                 handle,
             )
         })?;
@@ -1535,8 +1519,8 @@ mod tests {
     #[test]
     fn try_set_meta_matches_storage() -> Result<(), Error> {
         let updates = vec![
-            (("1".as_bytes(), "".as_bytes()), 2, 1),
-            (("2".as_bytes(), "".as_bytes()), 1, 1),
+            (("1".into(), "".into()), 2, 1),
+            (("2".into(), "".into()), 1, 1),
         ];
 
         let mut unreliable = UnreliableHandle::default();
@@ -1545,10 +1529,7 @@ mod tests {
 
         // Write the data out but don't close it.
         block_on_drain(&mut i, |i, handle| {
-            i.write(
-                vec![(id, updates.iter().collect::<ColumnarRecords>())],
-                handle,
-            )
+            i.write(write_req_payload(id, &updates), handle)
         })?;
 
         // We haven't closed the data, so nothing for step to do. If the
@@ -1568,12 +1549,12 @@ mod tests {
         // answer (at the time of the bug, compaction did the right thing, which
         // is why we didn't catch it initially).
         let updates = vec![
-            (("1".as_bytes(), "".as_bytes()), 1, 1),
-            (("1".as_bytes(), "".as_bytes()), 10, -1),
-            (("2".as_bytes(), "".as_bytes()), 2, 1),
+            (("1".into(), "".into()), 1, 1),
+            (("1".into(), "".into()), 10, -1),
+            (("2".into(), "".into()), 2, 1),
         ];
         block_on_drain(&mut i, |i, res| {
-            i.write(vec![(id, updates.iter().collect::<ColumnarRecords>())], res)
+            i.write(write_req_payload(id, &updates), res)
         })?;
         block_on_drain(&mut i, |i, res| i.seal(vec![id], 4, res))?;
         block_on_drain(&mut i, |i, res| {
