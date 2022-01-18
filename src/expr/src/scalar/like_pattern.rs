@@ -218,22 +218,33 @@ impl StringMatcher {
             // http://0x80.pl/articles/simd-strfind.html
             if self.suffix.len() == 0 {
                 // Nothing to find... This should only happen in the last sub-pattern.
-                // TODO: Should this assert that self.next.is_none()?
+                assert!(self.next.is_none(), "empty suffix in middle of a pattern");
                 return true;
             }
-            // Use rmatch so we use greedy capture like Regex.
-            for (offset, _) in rest.rmatch_indices(&self.suffix) {
-                let tmp = &rest[(offset + self.suffix.len())..];
-                match &self.next {
-                    None => return tmp.len() == 0,
-                    Some(next) => {
-                        if next.is_match(tmp) {
-                            return true;
+            // Use rfind so we perform a greedy capture, like Regex.
+            let mut found = rest.rfind(&self.suffix);
+            loop {
+                match found {
+                    None => return false,
+                    Some(offset) => {
+                        let end = offset + self.suffix.len();
+                        let tmp = &rest[end..];
+                        match &self.next {
+                            None => return tmp.len() == 0,
+                            Some(next) => {
+                                if next.is_match(tmp) {
+                                    return true;
+                                }
+                            }
                         }
+                        // Didn't match, look for the next rfind.
+                        if offset == 0 {
+                            return false;
+                        }
+                        found = rest[..(end - 1)].rfind(&self.suffix);
                     }
                 }
             }
-            return false;
         }
         // No string search needed, we just use a prefix match on rest.
         if !rest.starts_with(&self.suffix) {
@@ -241,8 +252,8 @@ impl StringMatcher {
         }
         rest = &rest[self.suffix.len()..];
         match &self.next {
-            Some(matcher) => matcher.is_match(rest),
             None => rest.len() == 0,
+            Some(matcher) => matcher.is_match(rest),
         }
     }
 }
@@ -427,6 +438,24 @@ mod test {
                 escape: '\\',
                 inputs: vec![Input {
                     haystack: "漢漢",
+                    matches: true,
+                }],
+            },
+            Pattern {
+                needle: "%AA%A",
+                case_insensitive: false,
+                escape: '\\',
+                inputs: vec![Input {
+                    haystack: "AAA",
+                    matches: true,
+                }],
+            },
+            Pattern {
+                needle: "%aa_",
+                case_insensitive: false,
+                escape: '\\',
+                inputs: vec![Input {
+                    haystack: "aaa",
                     matches: true,
                 }],
             },
