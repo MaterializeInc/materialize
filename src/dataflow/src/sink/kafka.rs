@@ -870,9 +870,23 @@ impl KafkaSinkState {
                 // Yes this is bad but we had an infinite loop before so it's no worse. Fix when
                 // addressing error strategy holistically.
                 .max_tries(usize::MAX)
-                .retry(|_| {
-                    get_latest_ts(&topic, &consistency_client_config, Duration::from_secs(10))
-                });
+                .retry_async(|_| async {
+                    let topic = topic.clone();
+                    let consistency_client_config = consistency_client_config.clone();
+                    task::spawn_blocking(
+                        || format!("get_latest_ts:{}", self.name),
+                        move || {
+                            get_latest_ts(
+                                &topic,
+                                &consistency_client_config,
+                                Duration::from_secs(10),
+                            )
+                        },
+                    )
+                    .await
+                    .unwrap_or_else(|e| bail!(e))
+                })
+                .await;
         }
         return Ok(None);
     }
