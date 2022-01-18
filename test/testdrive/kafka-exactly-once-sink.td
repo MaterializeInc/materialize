@@ -224,7 +224,7 @@ $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_s
 # can't verify more because there will now be a constant stream of END records
 # as real time advances.
 
-$ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink consistency=debezium
+$ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink consistency=debezium greedy-search=true
 {"id": "<TIMESTAMP>", "status": "BEGIN", "event_count": null, "data_collections": null}
 {"id": "<TIMESTAMP>", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "rt-binding-consistency-test-output-${testdrive.seed}"}]}}
 
