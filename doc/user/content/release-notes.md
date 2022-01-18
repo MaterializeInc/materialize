@@ -116,6 +116,10 @@ changes that have not yet been documented.
 
 - Add basic Prometheus counters for PostgreSQL sources.
 
+- Improve PostgreSQL compatibility:
+
+  - Support `SHOW TIME ZONE` as an alias for `SHOW TIMEZONE` {{% gh 9908 %}}.
+
 {{< comment >}}
 Only add new release notes above this line.
 
