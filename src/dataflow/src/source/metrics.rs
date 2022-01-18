@@ -140,12 +140,72 @@ impl PartitionSpecificMetrics {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct PostgresSourceSpecificMetrics {
+    pub(super) total_messages: UIntCounterVec,
+    pub(super) transactions: UIntCounterVec,
+    pub(super) ignored_messages: UIntCounterVec,
+    pub(super) insert_messages: UIntCounterVec,
+    pub(super) update_messages: UIntCounterVec,
+    pub(super) delete_messages: UIntCounterVec,
+    pub(super) tables_in_publication: UIntGaugeVec,
+    pub(super) wal_lsn: UIntGaugeVec,
+}
+
+impl PostgresSourceSpecificMetrics {
+    fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            total_messages: registry.register(metric!(
+                name: "mz_postgres_per_source_messages_total",
+                help: "The total number of replication messages for this source, not expected to be the sum of the other values.",
+                var_labels: ["source_id"],
+            )),
+            transactions: registry.register(metric!(
+                name: "mz_postgres_per_source_transactions_total",
+                help: "The number of committed transactions for all tables in this source",
+                var_labels: ["source_id"],
+            )),
+            ignored_messages: registry.register(metric!(
+                name: "mz_postgres_per_source_ignored_messages",
+                help: "The number of messages ignored because of an irrelevant type or relation_id",
+                var_labels: ["source_id"],
+            )),
+            insert_messages: registry.register(metric!(
+                name: "mz_postgres_per_source_inserts",
+                help: "The number of inserts for all tables in this source",
+                var_labels: ["source_id"],
+            )),
+            update_messages: registry.register(metric!(
+                name: "mz_postgres_per_source_updates",
+                help: "The number of updates for all tables in this source",
+                var_labels: ["source_id"],
+            )),
+            delete_messages: registry.register(metric!(
+                name: "mz_postgres_per_source_deletes",
+                help: "The number of deletes for all tables in this source",
+                var_labels: ["source_id"],
+            )),
+            tables_in_publication: registry.register(metric!(
+                name: "mz_postgres_per_source_tables_count",
+                help: "The number of upstream tables for this source",
+                var_labels: ["source_id"],
+            )),
+            wal_lsn: registry.register(metric!(
+                name: "mz_postgres_per_source_wal_lsn",
+                help: "LSN of the latest transaction committed for this source, see Postgres Replication docs for more details on LSN",
+                var_labels: ["source_id"],
+            ))
+        }
+    }
+}
+
 /// A set of base metrics that hang off a central metrics registry, labeled by the source they
 /// belong to.
 #[derive(Debug, Clone)]
 pub struct SourceBaseMetrics {
     pub(super) source_specific: SourceSpecificMetrics,
     pub(super) partition_specific: PartitionSpecificMetrics,
+    pub(super) postgres_source_specific: PostgresSourceSpecificMetrics,
 
     pub(crate) s3: S3Metrics,
     pub(crate) kinesis: KinesisMetrics,
@@ -158,6 +218,7 @@ impl SourceBaseMetrics {
         Self {
             source_specific: SourceSpecificMetrics::register_with(registry),
             partition_specific: PartitionSpecificMetrics::register_with(registry),
+            postgres_source_specific: PostgresSourceSpecificMetrics::register_with(registry),
 
             s3: S3Metrics::register_with(registry),
             kinesis: KinesisMetrics::register_with(registry),
