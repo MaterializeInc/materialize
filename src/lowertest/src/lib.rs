@@ -655,7 +655,7 @@ where
                     if let Some((names, types)) = enum_dict.get(&variant[..]) {
                         return format!(
                             "({} {})",
-                            variant.to_string(),
+                            variant,
                             from_json_fields(data, names, types, rti, ctx)
                         );
                     }

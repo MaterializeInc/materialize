@@ -116,7 +116,7 @@ mod test {
                     // tests simplification of scalars
                     "reduce" => match reduce(&s.input) {
                         Ok(scalar) => {
-                            format!("{}\n", scalar.to_string())
+                            format!("{}\n", scalar)
                         }
                         Err(err) => format!("error: {}\n", err),
                     },

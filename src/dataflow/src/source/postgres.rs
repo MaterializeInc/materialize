@@ -277,7 +277,7 @@ impl PostgresSourceReader {
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
               ("proto_version" '1', "publication_names" '{publication}')"#,
             name = &self.connector.slot_name,
-            lsn = self.lsn.to_string(),
+            lsn = self.lsn,
             publication = self.connector.publication
         );
         let copy_stream = try_recoverable!(client.copy_both_simple(&query).await);

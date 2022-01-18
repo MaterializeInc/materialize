@@ -1865,7 +1865,7 @@ impl fmt::Display for ColumnOrder {
         write!(
             f,
             "#{} {}",
-            self.column.to_string(),
+            self.column,
             if self.desc { "desc" } else { "asc" }
         )
     }
