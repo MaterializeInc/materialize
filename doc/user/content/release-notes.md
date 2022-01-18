@@ -147,6 +147,9 @@ changes that have not yet been documented.
 - Fix a bug where using a `ROWS FROM` clause with an alias in a view would cause
   Materialize to fail to reboot {{% gh 10008 %}}.
 
+- Allow wildcards in `LIKE` patterns to match newline characters. The new
+  behavior matches PostgreSQL.
+
 - Add basic Prometheus counters for PostgreSQL sources
 
 {{< comment >}}

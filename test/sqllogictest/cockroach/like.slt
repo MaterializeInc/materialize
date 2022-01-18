@@ -43,6 +43,18 @@ SELECT '' LIKE ''
 ----
 true
 
+query B
+SELECT 'a
+b' LIKE '%'
+----
+true
+
+query B
+SELECT 'a
+b' ILIKE '%'
+----
+true
+
 # Regex special characters.
 
 query B
