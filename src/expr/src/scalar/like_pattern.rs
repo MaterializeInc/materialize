@@ -192,15 +192,13 @@ impl StringMatcher {
         let mut rest = text;
         // Go ahead and skip the minimum number of characters the sub-pattern consumes:
         if self.consume > 0 {
-            let mut byte_len = 0;
-            let mut cs = rest.chars();
+            let mut chars = rest.chars();
             for _ in 0..self.consume {
-                match cs.next() {
-                    None => return false,
-                    Some(c) => byte_len += c.len_utf8(),
+                if chars.next().is_none() {
+                    return false;
                 }
             }
-            rest = &rest[byte_len..];
+            rest = chars.as_str();
         }
         if self.many {
             // The sub-pattern might consume any number of characters, but we need to find
@@ -420,6 +418,17 @@ mod test {
                     Input {
                         haystack: "foo",
                         matches: false,
+                    },
+                ],
+            },
+            Pattern {
+                needle: "_漢",
+                case_insensitive: false,
+                escape: '\\',
+                inputs: vec![
+                    Input {
+                        haystack: "漢漢",
+                        matches: true,
                     },
                 ],
             },
