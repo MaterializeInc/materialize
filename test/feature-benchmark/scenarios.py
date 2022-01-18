@@ -803,3 +803,68 @@ true
 true
 """
     )
+
+
+class Sink(Scenario):
+    pass
+
+
+class ExactlyOnce(Sink):
+    """Measure the time it takes to emit 1M records to a reuse_topic=true sink. As we have limited
+    means to figure out when the complete output has been emited, we have no option of re-ingesting
+    the data again to determine completion.
+    """
+
+    SHARED = Td(
+        """
+$ set keyschema={"type": "record", "name": "Key", "fields": [ {"name": "f1", "type": "long"} ] }
+
+$ set schema={"type" : "record", "name" : "test", "fields": [ {"name": "f2", "type": "long"} ] }
+
+$ kafka-create-topic topic=sink-input partitions=16
+
+$ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=1000000
+{"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
+"""
+    )
+
+    INIT = Td(
+        """
+> CREATE MATERIALIZED SOURCE source1
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-sink-input-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT;
+
+> /* B */ SELECT COUNT(*) FROM source1;
+1000000
+"""
+    )
+
+    BENCHMARK = Td(
+        """
+> DROP SINK IF EXISTS sink1;
+
+> DROP SOURCE IF EXISTS sink1_check CASCADE;
+  /* A */
+
+> CREATE SINK sink1 FROM source1
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-sink-output-${testdrive.seed}'
+  KEY (f1)
+  WITH (reuse_topic=true)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+# Wait until all the records have been emited from the sink, as observed by the sink1_check source
+
+> CREATE SOURCE sink1_check
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-sink-output-${testdrive.seed}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT;
+
+> CREATE MATERIALIZED VIEW sink1_check_v AS SELECT COUNT(*) FROM sink1_check;
+
+> SELECT * FROM sink1_check_v
+  /* B */
+1000000
+"""
+    )
