@@ -75,7 +75,7 @@ serde_json = "1.0.75"
 shell-words = "1.0.0"
 sql = { path = "../sql" }
 sysctl = "0.4.3"
-sysinfo = "0.22.5"
+sysinfo = "0.23.0"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.15.0", features = ["sync"] }
