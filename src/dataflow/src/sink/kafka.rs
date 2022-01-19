@@ -19,8 +19,10 @@ use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use futures::StreamExt;
 use interchange::json::JsonEncoder;
 use itertools::Itertools;
+use ore::collections::CollectionExt;
 use ore::retry::Retry;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
@@ -447,69 +449,72 @@ impl KafkaSinkState {
         config
     }
 
-    // TODO: bound the backoff
-    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> Result<(), bool>
+    // TODO: maybe bound the backoff
+    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> KafkaResult<T>
     where
         F: Fn(KafkaTxProducer) -> Fut,
         Fut: Future<Output = KafkaResult<T>>,
     {
         let shutdown = Cell::new(false);
         let self_producer = self.producer.clone();
-        let result = Retry::default()
+        let mut last_error = KafkaError::Canceled;
+        let tries = Retry::default()
             .clamp_backoff(Duration::from_secs(60 * 10))
-            // Yes this is bad but we had an infinite loop before so it's no worse. Fix when
+            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
             // addressing error strategy holistically.
             .max_tries(usize::MAX)
-            .retry_async(|_| async {
-                match f(self_producer.clone()).await {
-                    Ok(_) => Ok(()),
-                    Err(KafkaError::Transaction(e)) => {
-                        if e.txn_requires_abort() {
-                            info!("Error requiring abort in kafka sink: {:?}", e);
-                            let self_self_producer = self_producer.clone();
-                            let should_shutdown = Retry::default()
-                                .clamp_backoff(Duration::from_secs(60 * 10))
-                                // Yes this is bad but we had an infinite loop before so it's no
-                                // worse.  Fix when addressing error strategy holistically.
-                                .max_tries(usize::MAX)
-                                .retry_async(|_| async {
-                                    match self_self_producer.abort_transaction().await {
-                                        Ok(_) => Ok(false),
-                                        Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                                            Err(KafkaError::Transaction(e))
-                                        }
-                                        Err(_) => Ok(true),
+            .into_retry_stream();
+        tokio::pin!(tries);
+        while tries.next().await.is_some() {
+            match f(self_producer.clone()).await {
+                Ok(result) => return Ok(result),
+                Err(KafkaError::Transaction(e)) => {
+                    // clone is a cheap: Option<Arc<..>> internally
+                    last_error = KafkaError::Transaction(e.clone());
+                    if e.txn_requires_abort() {
+                        info!("Error requiring abort in kafka sink: {:?}", e);
+                        let self_self_producer = self_producer.clone();
+                        let should_shutdown = Retry::default()
+                            .clamp_backoff(Duration::from_secs(60 * 10))
+                            // Yes this might be bad but we had an infinite loop before so it's no
+                            // worse.  Fix when addressing error strategy holistically.
+                            .max_tries(usize::MAX)
+                            .retry_async(|_| async {
+                                match self_self_producer.abort_transaction().await {
+                                    Ok(_) => Ok(false),
+                                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
+                                        Err(KafkaError::Transaction(e))
                                     }
-                                })
-                                .await
-                                .unwrap_or(true);
-                            shutdown.set(should_shutdown);
-                            Ok(())
-                        } else if e.is_retriable() {
-                            info!("Retriable error in kafka sink: {:?}", e);
-                            Err(KafkaError::Transaction(e))
-                        } else {
-                            shutdown.set(true);
-                            Ok(())
-                        }
-                    }
-                    Err(_) => {
+                                    Err(_) => Ok(true),
+                                }
+                            })
+                            .await
+                            .unwrap_or(true);
+                        shutdown.set(should_shutdown);
+                    } else if e.is_retriable() {
+                        info!("Retriable error in kafka sink: {:?}", e);
+                        continue;
+                    } else {
                         shutdown.set(true);
-                        Ok(())
                     }
+                    break;
                 }
-            })
-            .await;
+                Err(e) => {
+                    last_error = e;
+                    shutdown.set(true);
+                    break;
+                }
+            }
+        }
 
-        // Consdier a retriable error that's hit our max backoff to be fatal.
-        if result.is_err() || shutdown.get() {
+        // Consider a retriable error that's hit our max backoff to be fatal.
+        if shutdown.get() {
             self.shutdown_flag.store(true, Ordering::SeqCst);
             // Indicate that the sink is closed to everyone else who
             // might be tracking its write frontier.
             info!("shutting down kafka sink: {}", &self.name);
-            return Err(true);
         }
-        Ok(())
+        Err(last_error)
     }
 
     async fn begin_transaction(&self) -> KafkaResult<()> {
@@ -520,42 +525,50 @@ impl KafkaSinkState {
         self.producer.commit_transaction().await
     }
 
-    async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>) -> Result<(), ()>
+    async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>) -> KafkaResult<()>
     where
         K: ToBytes + ?Sized,
         P: ToBytes + ?Sized,
     {
-        let mut backoff = Duration::from_millis(125);
-        let clamp_backoff = Duration::from_secs(10 * 60);
-        let factor = 2.0;
-        loop {
+        let mut last_error = KafkaError::Canceled;
+        // Because of the lifetime bound on `record`, we can't just use `Retry::retry` so use the stream
+        let tries = Retry::default()
+            .clamp_backoff(Duration::from_secs(60 * 10))
+            // Yes this might be bad but we had an infinite loop before so it's no worse. Fix when
+            // addressing error strategy holistically.
+            .max_tries(usize::MAX)
+            .into_retry_stream();
+        tokio::pin!(tries);
+        while tries.next().await.is_some() {
             match self.producer.send(record) {
+                Ok(_) => {
+                    self.metrics.messages_sent_counter.inc();
+                    return Ok(());
+                }
                 Err((e, rec)) => {
                     record = rec;
+                    last_error = e;
                     self.metrics.message_send_errors_counter.inc();
 
-                    if let KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) = e {
-                        debug!("unable to produce message in {}: rdkafka queue full. Retrying after 60 seconds.", self.name);
-                        // Because of the lifetime bound on `record`, we can't just use `ore::retry::Retry` so do the backoff by hand.
-                        tokio::time::sleep(backoff).await;
-                        backoff = cmp::min(backoff.mul_f64(factor), clamp_backoff);
+                    if let KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) = last_error {
+                        debug!(
+                            "unable to produce message in {}: rdkafka queue full. Retrying.",
+                            self.name
+                        );
                         continue;
                     } else {
                         // We've received an error that is not transient
                         error!(
                             "unable to produce message in {}: {}. Shutting down sink.",
-                            self.name, e
+                            self.name, last_error
                         );
                         self.shutdown_flag.store(true, Ordering::SeqCst);
-                        break Err(());
+                        break;
                     }
-                }
-                Ok(_) => {
-                    self.metrics.messages_sent_counter.inc();
-                    break Ok(());
                 }
             }
         }
+        Err(last_error)
     }
 
     async fn send_consistency_record(
@@ -563,7 +576,7 @@ impl KafkaSinkState {
         transaction_id: &str,
         status: &str,
         message_count: Option<i64>,
-    ) -> Result<(), ()> {
+    ) -> KafkaResult<()> {
         let consistency = self
             .consistency
             .as_ref()
@@ -833,11 +846,8 @@ where
                 s.write_frontier.borrow_mut().clear();
                 return false;
             }
-
-            // Determine frontier for all inputs
-            let frontier = frontiers
-                .iter()
-                .fold(Antichain::new(), |accum, new| accum.meet(new));
+            // Panic if there's not exactly once element in the frontier like we expect.
+            let frontier = frontiers.clone().into_element();
 
             // Figure out the durablity frontier for all sources we depend on
             let durability_frontier = source_timestamp_histories
@@ -903,11 +913,11 @@ where
             // Can't use `?` when the return type is a `bool` so wrap up all the tx error handling
             macro_rules! retry_txn_with_error {
                 (|$s:ident, $producer:ident| $body:block) => {
-                    if let Err(retry) = $s
+                    if let Err(_error) = $s
                         .retry_on_txn_error(|$producer| async move { $body })
                         .await
                     {
-                        return retry;
+                        return true;
                     }
                 };
             }
@@ -935,7 +945,7 @@ where
                     retry_txn_with_error!(|s, producer| { producer.begin_transaction().await });
                 }
                 if s.consistency.is_some() {
-                    if let Err(()) = s
+                    if let Err(_) = s
                         .send_consistency_record(&ts.to_string(), "BEGIN", None)
                         .await
                     {
@@ -959,7 +969,7 @@ where
                     };
 
                     // Only fatal errors are returned from send
-                    if let Err(()) = s.send(record).await {
+                    if let Err(_) = s.send(record).await {
                         return true;
                     }
 
@@ -974,7 +984,7 @@ where
                 }
 
                 if s.consistency.is_some() {
-                    if let Err(()) = s
+                    if let Err(_) = s
                         .send_consistency_record(&ts.to_string(), "END", Some(total_sent))
                         .await
                     {
