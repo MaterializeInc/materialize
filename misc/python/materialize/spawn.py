@@ -30,6 +30,7 @@ CalledProcessError = subprocess.CalledProcessError
 # directly rather than adding a one-off parameter here.
 def runv(
     args: Sequence[Union[Path, str]],
+    *,
     cwd: Optional[Path] = None,
     env: Optional[Dict[str, str]] = None,
     stdin: Union[None, int, IO[bytes], bytes] = None,
@@ -81,6 +82,7 @@ def runv(
 
 def capture(
     args: Sequence[Union[Path, str]],
+    *,
     cwd: Optional[Path] = None,
     env: Optional[Dict[str, str]] = None,
     stdin: Union[None, int, IO[bytes], bytes] = None,
