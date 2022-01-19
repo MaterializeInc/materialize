@@ -464,12 +464,12 @@ impl ClientContext for KafkaErrCheckContext {
 pub fn generate_ccsr_client_config(
     csr_url: Url,
     kafka_options: &BTreeMap<String, String>,
-    mut ccsr_options: BTreeMap<String, Value>,
+    ccsr_options: &mut BTreeMap<String, Value>,
 ) -> Result<ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = ccsr::ClientConfig::new(csr_url);
 
     // If provided, prefer SSL options from the schema registry configuration
-    if let Some(ca_path) = match ccsr_options.get("ssl_ca_location") {
+    if let Some(ca_path) = match ccsr_options.remove("ssl_ca_location").as_ref() {
         Some(Value::String(path)) => Some(path),
         Some(_) => {
             bail!("ssl_ca_location must be a string");
@@ -482,14 +482,16 @@ pub fn generate_ccsr_client_config(
         client_config = client_config.add_root_certificate(cert);
     }
 
-    let key_path = match ccsr_options.get("ssl_key_location") {
+    let ssl_key_location = ccsr_options.remove("ssl_key_location");
+    let key_path = match &&ssl_key_location {
         Some(Value::String(path)) => Some(path),
         Some(_) => {
             bail!("ssl_key_location must be a string");
         }
         None => kafka_options.get("ssl.key.location"),
     };
-    let cert_path = match ccsr_options.get("ssl_certificate_location") {
+    let ssl_certificate_location = ccsr_options.remove("ssl_certificate_location");
+    let cert_path = match &ssl_certificate_location {
         Some(Value::String(path)) => Some(path),
         Some(_) => {
             bail!("ssl_certificate_location must be a string");
@@ -516,7 +518,7 @@ pub fn generate_ccsr_client_config(
     }
 
     let mut ccsr_options = extract(
-        &mut ccsr_options,
+        ccsr_options,
         &[Config::string("username"), Config::string("password")],
     )?;
     if let Some(username) = ccsr_options.remove("username") {
