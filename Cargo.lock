@@ -2440,6 +2440,7 @@ dependencies = [
  "ordered-float",
  "ore",
  "prost",
+ "prost-reflect",
  "protobuf",
  "protobuf-native",
  "regex",
@@ -3963,6 +3964,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost-reflect"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3deba7b331019d2f629de4ec8240f0d3aa230f981c850b5d77eaf913eaf7466"
+dependencies = [
+ "base64",
+ "chrono",
+ "prost",
+ "prost-types",
+ "serde",
+ "serde-value",
+]
+
+[[package]]
 name = "prost-types"
 version = "0.9.0"
 source = "git+https://github.com/MaterializeInc/prost.git#28bc721d6a74b9ed4628cc8f13527a9573cf082d"
@@ -4513,6 +4528,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-value"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
+dependencies = [
+ "ordered-float",
+ "serde",
+]
+
+[[package]]
 name = "serde_cbor"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5000,6 +5025,8 @@ dependencies = [
  "pgrepr",
  "postgres_array",
  "predicates",
+ "prost",
+ "prost-reflect",
  "protobuf",
  "rand",
  "rdkafka",

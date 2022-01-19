@@ -37,6 +37,8 @@ mz-protoc = { path = "../protoc" }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
+prost = "0.9.0"
+prost-reflect = { version = "0.5.3", features = ["serde"] }
 protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }

@@ -68,10 +68,10 @@ pub fn bench_protobuf(c: &mut Criterion) {
     let mut decoder = Decoder::new(
         DecodedDescriptors::from_bytes(
             gen::FILE_DESCRIPTOR_SET_DATA,
-            NormalizedProtobufMessageName::new(".bench.Record".to_string()),
+            NormalizedProtobufMessageName::new(".benchmark.Record".to_string()),
         )
         .unwrap(),
-        None,
+        false,
     )
     .unwrap();
 
