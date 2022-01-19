@@ -18,7 +18,7 @@ operations provided by the standard [`subprocess`][subprocess] module.
 import subprocess
 import sys
 from pathlib import Path
-from typing import IO, Dict, Literal, Optional, Sequence, TextIO, Union, overload
+from typing import IO, Dict, Literal, Optional, Sequence, Union, overload
 
 from materialize import ui
 
@@ -28,10 +28,10 @@ CalledProcessError = subprocess.CalledProcessError
 def runv(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = None,
-    stdin: Union[None, int, IO[bytes], IO[str], bytes] = None,
-    stdout: Union[None, int, IO[bytes], TextIO] = None,
+    stdin: Union[None, int, IO[bytes], bytes] = None,
+    stdout: Union[None, int, IO[bytes]] = None,
     env: Optional[Dict[str, str]] = None,
-    stderr: Union[None, int, IO[bytes], TextIO] = None,
+    stderr: Union[None, int, IO[bytes]] = None,
 ) -> subprocess.CompletedProcess:
     """Verbosely run a subprocess.
 

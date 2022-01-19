@@ -521,7 +521,7 @@ class ResolvedImage:
             self.spec(),
             str(self.image.path),
         ]
-        spawn.runv(cmd, stdin=f, stdout=sys.stderr)
+        spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
     def acquire(self) -> AcquiredFrom:
         """Download or build the image.
@@ -534,7 +534,7 @@ class ResolvedImage:
                 try:
                     spawn.runv(
                         ["docker", "pull", self.spec()],
-                        stdout=sys.stderr,
+                        stdout=sys.stderr.buffer,
                     )
                     return AcquiredFrom.REGISTRY
                 except subprocess.CalledProcessError:
