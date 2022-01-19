@@ -62,7 +62,7 @@ def workflow_kafka_sources(c: Composition) -> None:
     c.up("materialized")
     c.wait_for_materialized("materialized")
 
-    c.run("testdrive-svc", f"--seed {seed} kafka-sources/*{td_test}*-before.td")
+    c.run("testdrive-svc", f"--seed={seed}", f"kafka-sources/*{td_test}*-before.td")
 
     c.kill("materialized")
     c.up("materialized")
@@ -73,7 +73,7 @@ def workflow_kafka_sources(c: Composition) -> None:
     c.up("materialized")
     c.wait_for_materialized("materialized")
 
-    c.run("testdrive-svc", f"--seed {seed} kafka-sources/*{td_test}*-after.td")
+    c.run("testdrive-svc", f"--seed={seed}", f"kafka-sources/*{td_test}*-after.td")
 
     # Do one more restart, just in case and just confirm that Mz is able to come up
     c.kill("materialized")
@@ -93,7 +93,8 @@ def workflow_user_tables(c: Composition) -> None:
 
     c.run(
         "testdrive-svc",
-        f"--seed {seed} user-tables/table-persistence-before-{td_test}.td",
+        f"--seed={seed}",
+        f"user-tables/table-persistence-before-{td_test}.td",
     )
 
     c.kill("materialized")
@@ -101,7 +102,8 @@ def workflow_user_tables(c: Composition) -> None:
 
     c.run(
         "testdrive-svc",
-        f"--seed {seed} user-tables/table-persistence-after-{td_test}.td",
+        f"--seed={seed}",
+        f"user-tables/table-persistence-after-{td_test}.td",
     )
 
     c.kill("materialized")
@@ -115,7 +117,7 @@ def workflow_failpoints(c: Composition) -> None:
     c.up("materialized")
     c.wait_for_materialized()
 
-    c.run("testdrive-svc", f"--seed {seed} failpoints/{td_test}.td")
+    c.run("testdrive-svc", f"--seed={seed}", f"failpoints/{td_test}.td")
 
     c.kill("materialized")
     c.rm("materialized", "testdrive-svc", destroy_volumes=True)
@@ -130,7 +132,7 @@ def workflow_disable_user_indexes(c: Composition) -> None:
     c.up("materialized")
     c.wait_for_materialized()
 
-    c.run("testdrive-svc", f"--seed {seed} disable-user-indexes/before.td")
+    c.run("testdrive-svc", f"--seed={seed}", "disable-user-indexes/before.td")
 
     c.kill("materialized")
 
@@ -138,7 +140,7 @@ def workflow_disable_user_indexes(c: Composition) -> None:
         c.up("materialized")
         c.wait_for_materialized()
 
-        c.run("testdrive-svc", f"--seed {seed} disable-user-indexes/after.td")
+        c.run("testdrive-svc", f"--seed={seed}", "disable-user-indexes/after.td")
 
         c.kill("materialized")
 

@@ -21,7 +21,7 @@ fn test_missing_file() {
         .assert()
         .failure()
         .stderr(predicate::str::starts_with(
-            r#"error: opening noexist: No such file or directory"#,
+            r#"testdrive: glob did not match any patterns: noexist"#,
         ));
 }
 

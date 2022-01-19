@@ -34,6 +34,7 @@ use std::error::Error as StdError;
 use std::fmt::{self, Write as FmtWrite};
 use std::io::{self, Write};
 use std::iter::IntoIterator;
+use std::path::{Path, PathBuf};
 
 use atty::Stream;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
@@ -101,7 +102,9 @@ impl Error {
                 write!(
                     &mut stderr,
                     "{}:{}:{}: ",
-                    details.filename, details.line, details.col
+                    details.filename.display(),
+                    details.line,
+                    details.col
                 )?;
                 write_error_heading(&mut stderr, &color_spec)?;
                 writeln!(&mut stderr, "{}", err.msg)?;
@@ -139,7 +142,7 @@ impl Error {
 
     pub(crate) fn with_input_details(
         self,
-        filename: &str,
+        filename: &Path,
         contents: &str,
         positioner: &dyn Positioner,
     ) -> Self {
@@ -219,14 +222,14 @@ pub struct InputError {
 
 #[derive(Debug)]
 pub struct InputDetails {
-    filename: String,
+    filename: PathBuf,
     snippet: String,
     line: usize,
     col: usize,
 }
 
 impl InputDetails {
-    pub fn filename(&self) -> String {
+    pub fn filename(&self) -> PathBuf {
         return self.filename.clone();
     }
 }

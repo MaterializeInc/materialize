@@ -7,22 +7,35 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
+use std::collections::HashSet;
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
 
 use aws_smithy_http::endpoint::Endpoint;
 use aws_types::region::Region;
 use aws_types::Credentials;
+use globset::GlobBuilder;
 use http::Uri;
-use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use itertools::Itertools;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
 use url::Url;
+use walkdir::WalkDir;
 
 use mz_aws_util::config::AwsConfig;
+use ore::path::PathExt;
 
 use testdrive::Config;
+
+macro_rules! die {
+    ($($e:expr),*) => {{
+        eprintln!($($e),*);
+        process::exit(1);
+    }}
+}
 
 /// Integration test driver for Materialize.
 #[derive(clap::Parser)]
@@ -110,14 +123,13 @@ struct Args {
     temp_dir: Option<String>,
 
     // === Positional arguments. ===
-    /// Paths to testdrive scripts to run.
-    files: Vec<String>,
+    /// Glob patterns of testdrive scripts to run.
+    globs: Vec<String>,
 }
 
 #[tokio::main]
 async fn main() {
     let args: Args = ore::cli::parse_args();
-    let mut files = args.files;
 
     let (aws_config, aws_account) = match args.aws_region {
         Some(region) => {
@@ -136,13 +148,9 @@ async fn main() {
                         .ok_or("account ID is missing")?,
                 )
             };
-            let account = match account.await {
-                Ok(account) => account,
-                Err(e) => {
-                    eprintln!("testdrive: failed fetching AWS account ID: {}", e);
-                    process::exit(1);
-                }
-            };
+            let account = account
+                .await
+                .unwrap_or_else(|e| die!("testdrive: failed fetching AWS account ID: {}", e));
             (config, account)
         }
         None => {
@@ -197,46 +205,88 @@ async fn main() {
         temp_dir: args.temp_dir,
     };
 
-    let mut errors = Vec::new();
-    let mut error_files = Vec::new();
-
-    if files.is_empty() {
-        files.push("-".to_string())
+    // Build the list of files to test.
+    //
+    // The requirements here are a bit sensitive. Each argument on the command
+    // line must be processed in order, but each individual glob expansion is
+    // sorted.
+    //
+    // NOTE(benesch): it'd be nice to use `glob` or `globwalk` instead of
+    // hand-rolling the directory traversal (it's pretty inefficient to list
+    // every directory and only then apply the globs), but `globset` is the only
+    // crate with a sensible globbing syntax.
+    // See: https://github.com/rust-lang-nursery/glob/issues/59
+    let mut files = vec![];
+    if args.globs.is_empty() {
+        files.push(PathBuf::from("-"))
+    } else {
+        let all_files = WalkDir::new(".")
+            .sort_by_file_name()
+            .into_iter()
+            .map(|f| f.map(|f| f.path().clean()))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap_or_else(|e| die!("testdrive: failed walking directory: {}", e));
+        for glob in args.globs {
+            if glob == "-" {
+                files.push(glob.into());
+                continue;
+            }
+            let matcher = GlobBuilder::new(&Path::new(&glob).clean().to_string_lossy())
+                .literal_separator(true)
+                .build()
+                .unwrap_or_else(|e| die!("testdrive: invalid glob syntax: {}: {}", glob, e))
+                .compile_matcher();
+            let mut found = false;
+            for file in &all_files {
+                if matcher.is_match(file) {
+                    files.push(file.clone());
+                    found = true;
+                }
+            }
+            if !found {
+                die!("testdrive: glob did not match any patterns: {}", glob)
+            }
+        }
     }
 
     if args.shuffle_tests {
-        let mut rng: StdRng = SeedableRng::seed_from_u64(
-            args.seed.unwrap_or_else(|| rand::thread_rng().gen()).into(),
-        );
+        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().gen());
+        let mut rng = StdRng::seed_from_u64(seed.into());
         files.shuffle(&mut rng);
     }
 
-    for file in &files[..cmp::min(args.max_tests, files.len())] {
-        if let Err(error) = match file.as_str() {
-            "-" => testdrive::run_stdin(&config).await,
-            _ => testdrive::run_file(&config, &file).await,
-        } {
-            let _ = error.print_stderr();
-            error_files.push(file.clone());
+    let mut error_count = 0;
+    let mut error_files = HashSet::new();
 
-            errors.push(error);
-            if errors.len() >= args.max_errors {
+    for file in files.into_iter().take(args.max_tests) {
+        let res = if file == Path::new("-") {
+            testdrive::run_stdin(&config).await
+        } else {
+            testdrive::run_file(&config, &file).await
+        };
+        if let Err(error) = res {
+            let _ = error.print_stderr();
+            error_count += 1;
+            error_files.insert(file);
+            if error_count >= args.max_errors {
+                eprintln!("testdrive: maximum number of errors reached; giving up");
                 break;
             }
         }
     }
 
     print!("+++ ");
-    if errors.is_empty() {
+    if error_count == 0 {
         println!("testdrive completed successfully.");
     } else {
         eprintln!("!!! Error Report");
-        eprintln!("{} errors were encountered during execution", errors.len());
-
+        eprintln!("{} errors were encountered during execution", error_count);
         if !error_files.is_empty() {
-            eprintln!("files involved: {}", error_files.join(" "));
+            eprintln!(
+                "files involved: {}",
+                error_files.iter().map(|p| p.display()).join(" ")
+            );
         }
-
         process::exit(1);
     }
 }

@@ -7,10 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
-import time
-
-from materialize.mzcompose import Composition
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
@@ -78,6 +75,8 @@ SERVICES = [
     ),
     Testdrive(
         entrypoint=[
+            "bash",
+            "-c",
             "cp /share/secrets/ca.crt /usr/local/share/ca-certificates/ca.crt && "
             "update-ca-certificates && "
             "testdrive "
@@ -86,6 +85,7 @@ SERVICES = [
             "--materialized-url=postgres://materialize@materialized:6875 "
             "--cert=/share/secrets/producer.p12 "
             "--cert-password=mzmzmz "
+            '"$$@"',
         ],
         volumes_extra=["secrets:/share/secrets"],
         # Required to install root certs above
@@ -94,10 +94,15 @@ SERVICES = [
 ]
 
 
-tests = os.getenv("TD_TEST", "*.td")
-
-
-def workflow_testdrive(c: Composition) -> None:
+def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """ "Run testdrive against an SSL-enabled Confluent Platform."""
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default=["*.td"],
+        help="run against the specified files",
+    )
+    args = parser.parse_args()
     c.start_and_wait_for_tcp(
         services=[
             "zookeeper",
@@ -106,4 +111,4 @@ def workflow_testdrive(c: Composition) -> None:
             "materialized",
         ]
     )
-    c.run("testdrive-svc", tests)
+    c.run("testdrive-svc", *args.files)
