@@ -635,8 +635,13 @@ where
             key_schema_id,
             value_schema_id,
         }) => {
-            let schema_generator =
-                AvroSchemaGenerator::new(key_desc, value_desc, connector.consistency.is_some());
+            let schema_generator = AvroSchemaGenerator::new(
+                None,
+                None,
+                key_desc,
+                value_desc,
+                connector.consistency.is_some(),
+            );
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
                 stream,

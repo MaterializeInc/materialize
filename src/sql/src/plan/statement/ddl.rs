@@ -1428,6 +1428,28 @@ fn kafka_sink_builder(
     };
     let config_options = kafka_util::extract_config(with_options)?;
 
+    let avro_key_fullname = match with_options.remove("avro_key_fullname") {
+        Some(Value::String(s)) => Some(s),
+        None => None,
+        Some(_) => bail!("avro_key_fullname must be a string"),
+    };
+
+    if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
+        bail!("Cannot specify avro_key_fullname without a corresponding KEY field");
+    }
+
+    let avro_value_fullname = match with_options.remove("avro_value_fullname") {
+        Some(Value::String(s)) => Some(s),
+        None => None,
+        Some(_) => bail!("avro_value_fullname must be a string"),
+    };
+
+    if key_desc_and_indices.is_some()
+        && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
+    {
+        bail!("Must specify both avro_key_fullname and avro_value_fullname when specifying generated schema names");
+    }
+
     let format = match format {
         Some(Format::Avro(AvroSchema::Csr {
             csr_connector:
@@ -1451,6 +1473,8 @@ fn kafka_sink_builder(
             let include_transaction =
                 reuse_topic || consistency_topic.is_some() || consistency.is_some();
             let schema_generator = AvroSchemaGenerator::new(
+                avro_key_fullname.as_deref(),
+                avro_value_fullname.as_deref(),
                 key_desc_and_indices
                     .as_ref()
                     .map(|(desc, _indices)| desc.clone()),
