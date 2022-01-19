@@ -51,12 +51,12 @@ client that inlines a confluent schema registry ID at the beginning of each reco
 `confluent_wire_format` is `false` then `materialized` will *not* validate that a well-formatted
 schema-id is present at the beginning of each record.
 
-#### Confluent Schema Registry Options
+#### Confluent Schema Registry options
 
 Options for connecting to a Confluent Schema Registry. If these options are not provided, the SSL `WITH` options for the Kafka cluster (see above) are used.
 
 Field | Value | Description
 ------|-------|------------
-`ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication.
-`ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.
-`ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication.
+`ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication. <em>New in v0.17.0.</em>
+`ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication. <em>New in v0.17.0.</em>
+`ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. <em>New in v0.17.0.</em>
