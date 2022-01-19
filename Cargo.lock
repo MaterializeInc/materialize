@@ -82,27 +82,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dabe5a181f83789739c194cbe5a897dde195078fac08568d09221fd6137a7ba8"
 
 [[package]]
-name = "arrow-format"
-version = "0.3.0"
+name = "array-init-cursor"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f7da2d9660bfaebbdb0a44a33b3bd1dcb5a952fafa02c0dfc6a51ea471fef2a"
+checksum = "bf7d0a018de4f6aa429b9d33d69edf69072b1c5b1cb8d3e4a5f7ef898fc3eb76"
+
+[[package]]
+name = "arrow-format"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2333f8ccf0d597ba779863c57a0b61f635721187fb2fdeabae92691d7d582fe5"
 dependencies = [
- "flatbuffers",
+ "planus",
+ "serde",
 ]
 
 [[package]]
 name = "arrow2"
-version = "0.8.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3452b2ae9727464a31a726c07ffec0c0da3b87831610d9ac99fc691c78b3a44"
+checksum = "b578c7e6b6325e735dc919abc4d92e6f10a2f09dabac177526320ac9fa3457ec"
 dependencies = [
  "arrow-format",
  "base64",
+ "bytemuck",
  "chrono",
  "futures",
  "hash_hasher",
  "num-traits",
- "parquet2",
+ "parquet2 0.9.0",
  "simdutf8",
 ]
 
@@ -707,6 +715,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "590b1af059a21c47d4da7cd11f05e08b1992b58b5b4acf2a5e10d7e53aed3d74"
 dependencies = [
  "regex",
+]
+
+[[package]]
+name = "bytemuck"
+version = "1.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "439989e6b8c38d1b6570a384ef1e49c8848128f5a97f3914baef02920842712f"
+dependencies = [
+ "bytemuck_derive",
+]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e215f8c2f9f79cb53c8335e687ffd07d5bfcb6fe5fc80723762d0be46e7cc54"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1823,17 +1851,6 @@ name = "fixedbitset"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "279fb028e20b3c4c320317955b77c5e0c9701f05a1d309905d6fc702cdc5053e"
-
-[[package]]
-name = "flatbuffers"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef4c5738bcd7fad10315029c50026f83c9da5e4a21f8ed66826f43e0e2bde5f6"
-dependencies = [
- "bitflags",
- "smallvec",
- "thiserror",
-]
 
 [[package]]
 name = "flate2"
@@ -3378,6 +3395,17 @@ version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57e98d7da0076cead49c49580cc5771dfe0ba8a93cadff9b47c1681a4a78e1f9"
 dependencies = [
+ "bitpacking",
+ "parquet-format-async-temp",
+ "streaming-decompression",
+]
+
+[[package]]
+name = "parquet2"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7ee9d21df8de64b98e08ad59bf3106c27e00e556c0843e81a3271f7470c65dc"
+dependencies = [
  "async-stream",
  "bitpacking",
  "futures",
@@ -3457,7 +3485,7 @@ dependencies = [
  "mz-aws-util",
  "mz-protoc",
  "ore",
- "parquet2",
+ "parquet2 0.8.1",
  "persist-types",
  "prost",
  "rand",
@@ -3634,6 +3662,15 @@ name = "pkg-config"
 version = "0.3.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c9b1041b4387893b91ee6746cddfc28516aff326a3519fb2adf820932c5e6cb"
+
+[[package]]
+name = "planus"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bffebaf174d6cad46a5f0f1bb1c45c6eb509571688bcb18dfab217f3c9f9b151"
+dependencies = [
+ "array-init-cursor",
+]
 
 [[package]]
 name = "plotters"
