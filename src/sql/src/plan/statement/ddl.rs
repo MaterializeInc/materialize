@@ -592,7 +592,7 @@ pub fn plan_create_source(
 
             let region = arn
                 .region
-                .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
+                .ok_or_else(|| anyhow!("Provided Kinesis ARN does not include an AWS region"))?;
 
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let connector =

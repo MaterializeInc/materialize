@@ -24,7 +24,7 @@ pub fn client(config: &AwsConfig) -> Result<Client, anyhow::Error> {
     if let Some(endpoint) = config.endpoint() {
         builder = builder.endpoint_resolver(endpoint.clone());
     }
-    let conn = util::connector()?;
+    let conn = util::connector("Kinesis")?;
     Ok(Client::from_conf_conn(builder.build(), conn))
 }
 

@@ -796,7 +796,18 @@ async fn compile_proto(
 /// whether the specified AWS configuration is valid.
 async fn validate_aws_credentials(config: &AwsConfig) -> Result<(), anyhow::Error> {
     let config = config.load().await?;
-    let sts_client = mz_aws_util::sts::client(&config)?;
-    let _ = sts_client.get_caller_identity().send().await?;
+    let _ok = mz_aws_util::sts::client(&config)
+        .map_err(|e| {
+            anyhow!(
+                "Unable to build STS client to validate AWS credentials: {}",
+                e
+            )
+        })?
+        .get_caller_identity()
+        .send()
+        .await
+        // This external error doesn't provide enough information unless its cause is displayed.
+        .map_err(|e| anyhow!("Unable to validate AWS credentials: {:#}", e))?;
+
     Ok(())
 }

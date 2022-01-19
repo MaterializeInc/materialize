@@ -11,7 +11,8 @@ use anyhow::anyhow;
 use aws_smithy_client::erase::DynConnector;
 use aws_smithy_client::hyper_ext::Adapter;
 
-pub fn connector() -> Result<DynConnector, anyhow::Error> {
-    let connector = mz_http_proxy::hyper::connector().map_err(|e| anyhow!("{}", e))?;
+pub fn connector(service: &str) -> Result<DynConnector, anyhow::Error> {
+    let connector = mz_http_proxy::hyper::connector()
+        .map_err(|e| anyhow!("Unable to build AWS {} HTTP connector: {}", service, e))?;
     Ok(DynConnector::new(Adapter::builder().build(connector)))
 }
