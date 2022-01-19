@@ -6,6 +6,6 @@ edition = "2021"
 publish = false
 
 [dependencies]
-clap = { version = "3.0.6", features = ["derive"] }
+clap = { version = "3.0.10", features = ["derive"] }
 ore = { path = "../ore" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }

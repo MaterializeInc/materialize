@@ -11,7 +11,7 @@ path = "bin/protoc.rs"
 
 [dependencies]
 anyhow = "1.0.52"
-clap = { version = "3.0.6", features = ["derive"] }
+clap = { version = "3.0.10", features = ["derive"] }
 ore = { path = "../ore" }
 protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 protobuf-codegen = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
