@@ -3212,6 +3212,7 @@ pub enum UnaryFunc {
     CastInt16ToInt64(CastInt16ToInt64),
     CastInt16ToOid(CastInt16ToOid),
     CastInt16ToString(CastInt16ToString),
+    CastInt2VectorToArray(CastInt2VectorToArray),
     CastInt32ToBool(CastInt32ToBool),
     CastInt32ToFloat32(CastInt32ToFloat32),
     CastInt32ToFloat64(CastInt32ToFloat64),
@@ -3263,6 +3264,7 @@ pub enum UnaryFunc {
     CastStringToInt16(CastStringToInt16),
     CastStringToInt32(CastStringToInt32),
     CastStringToInt64(CastStringToInt64),
+    CastStringToInt2Vector(CastStringToInt2Vector),
     CastStringToFloat32(CastStringToFloat32),
     CastStringToFloat64(CastStringToFloat64),
     CastStringToDate(CastStringToDate),
@@ -3329,6 +3331,7 @@ pub enum UnaryFunc {
     CastInPlace {
         return_ty: ScalarType,
     },
+    CastInt2VectorToString,
     CeilFloat32(CeilFloat32),
     CeilFloat64(CeilFloat64),
     CeilNumeric(CeilNumeric),
@@ -3444,6 +3447,7 @@ derive_unary!(
     CastInt16ToOid,
     CastInt16ToString,
     CastInt16ToNumeric,
+    CastInt2VectorToArray,
     CastInt32ToBool,
     CastInt32ToFloat32,
     CastInt32ToFloat64,
@@ -3506,6 +3510,7 @@ derive_unary!(
     CastStringToInt16,
     CastStringToInt32,
     CastStringToInt64,
+    CastStringToInt2Vector,
     CastStringToFloat32,
     CastStringToFloat64,
     CastStringToNumeric,
@@ -3641,6 +3646,7 @@ impl UnaryFunc {
             | CastInt16ToInt64(_)
             | CastInt16ToOid(_)
             | CastInt16ToString(_)
+            | CastInt2VectorToArray(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
             | CastInt32ToFloat64(_)
@@ -3693,6 +3699,7 @@ impl UnaryFunc {
             | CastStringToInt16(_)
             | CastStringToInt32(_)
             | CastStringToInt64(_)
+            | CastStringToInt2Vector(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
             | CastStringToNumeric(_)
@@ -3744,6 +3751,11 @@ impl UnaryFunc {
             | CastArrayToString { ty }
             | CastListToString { ty }
             | CastMapToString { ty } => Ok(cast_collection_to_string(a, ty, temp_storage)),
+            CastInt2VectorToString => Ok(cast_collection_to_string(
+                a,
+                &ScalarType::Int2Vector,
+                temp_storage,
+            )),
             CastList1ToList2 { cast_expr, .. } => cast_list1_to_list2(a, &*cast_expr, temp_storage),
             CastInPlace { .. } => Ok(a),
             Ascii => Ok(ascii(a)),
@@ -3867,6 +3879,7 @@ impl UnaryFunc {
             | CastInt16ToInt64(_)
             | CastInt16ToOid(_)
             | CastInt16ToString(_)
+            | CastInt2VectorToArray(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
             | CastInt32ToFloat64(_)
@@ -3918,6 +3931,7 @@ impl UnaryFunc {
             | CastStringToBytes(_)
             | CastStringToInt16(_)
             | CastStringToInt32(_)
+            | CastStringToInt2Vector(_)
             | CastStringToInt64(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
@@ -3968,6 +3982,7 @@ impl UnaryFunc {
             | CastArrayToString { .. }
             | CastListToString { .. }
             | CastMapToString { .. }
+            | CastInt2VectorToString
             | TrimWhitespace
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace
@@ -4120,6 +4135,7 @@ impl UnaryFunc {
             | CastInt16ToInt64(_)
             | CastInt16ToOid(_)
             | CastInt16ToString(_)
+            | CastInt2VectorToArray(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
             | CastInt32ToFloat64(_)
@@ -4172,6 +4188,7 @@ impl UnaryFunc {
             | CastStringToInt16(_)
             | CastStringToInt32(_)
             | CastStringToInt64(_)
+            | CastStringToInt2Vector(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
             | CastStringToNumeric(_)
@@ -4228,6 +4245,7 @@ impl UnaryFunc {
             | CastArrayToString { .. }
             | CastListToString { .. }
             | CastMapToString { .. }
+            | CastInt2VectorToString
             | TrimWhitespace
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace
@@ -4391,6 +4409,7 @@ impl UnaryFunc {
             | CastInt16ToFloat64(_)
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
+            | CastInt2VectorToArray(_)
             | CastInt16ToOid(_)
             | CastInt16ToString(_)
             | CastInt32ToBool(_)
@@ -4445,6 +4464,7 @@ impl UnaryFunc {
             | CastStringToInt16(_)
             | CastStringToInt32(_)
             | CastStringToInt64(_)
+            | CastStringToInt2Vector(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
             | CastStringToNumeric(_)
@@ -4494,6 +4514,7 @@ impl UnaryFunc {
             CastJsonbToNumeric(_) => f.write_str("jsonbtonumeric"),
             CastRecordToString { .. } => f.write_str("recordtostr"),
             CastArrayToString { .. } => f.write_str("arraytostr"),
+            CastInt2VectorToString => f.write_str("int2vectortostr"),
             CastListToString { .. } => f.write_str("listtostr"),
             CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             CastMapToString { .. } => f.write_str("maptostr"),
@@ -5122,10 +5143,13 @@ where
                 stringify_datum(buf.nonnull_buffer(), d, value_type)
             }
         }),
+        Int2Vector => strconv::format_legacy_vector(buf, &d.unwrap_array().elements(), |buf, d| {
+            stringify_datum(buf.nonnull_buffer(), d, &ScalarType::Int16)
+        }),
     }
 }
 
-fn array_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+fn array_index<'a>(datums: &[Datum<'a>], offset: usize) -> Datum<'a> {
     let array = datums[0].unwrap_array();
     let dims = array.dims();
     if dims.len() != datums.len() - 1 {
@@ -5150,7 +5174,7 @@ fn array_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
             return Datum::Null;
         }
 
-        final_idx = final_idx * length + (idx as usize - 1);
+        final_idx = final_idx * length + (idx as usize - offset);
     }
 
     array
@@ -5736,7 +5760,11 @@ pub enum VariadicFunc {
     ArrayToString {
         elem_type: ScalarType,
     },
-    ArrayIndex,
+    ArrayIndex {
+        // Subtract `offset` from users' input to use 0-indexed arrays, i.e. is
+        // `1` in the case of `ScalarType::Array`.
+        offset: usize,
+    },
     ListCreate {
         // We need to know the element type to type empty lists.
         elem_type: ScalarType,
@@ -5792,7 +5820,7 @@ impl VariadicFunc {
             VariadicFunc::ArrayToString { elem_type } => {
                 eager!(array_to_string, elem_type, temp_storage)
             }
-            VariadicFunc::ArrayIndex => Ok(eager!(array_index)),
+            VariadicFunc::ArrayIndex { offset } => Ok(eager!(array_index, *offset)),
 
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
                 Ok(eager!(list_create, temp_storage))
@@ -5848,7 +5876,7 @@ impl VariadicFunc {
                 }
             }
             ArrayToString { .. } => ScalarType::String.nullable(true),
-            ArrayIndex => input_types[0]
+            ArrayIndex { .. } => input_types[0]
                 .scalar_type
                 .unwrap_array_element_type()
                 .clone()
@@ -5927,7 +5955,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ArrayCreate { .. } => f.write_str("array_create"),
             VariadicFunc::ArrayToString { .. } => f.write_str("array_to_string"),
-            VariadicFunc::ArrayIndex => f.write_str("array_index"),
+            VariadicFunc::ArrayIndex { .. } => f.write_str("array_index"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
             VariadicFunc::ListIndex => f.write_str("list_index"),

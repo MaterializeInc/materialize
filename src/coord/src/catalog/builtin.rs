@@ -774,6 +774,30 @@ pub const TYPE_REGCLASS_ARRAY: BuiltinType = BuiltinType {
     },
 };
 
+pub const TYPE_INT2_VECTOR: BuiltinType = BuiltinType {
+    name: "int2vector",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1052),
+    oid: 22,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Int2Vector,
+        array_id: Some(GlobalId::System(1053)),
+    },
+};
+
+pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType = BuiltinType {
+    name: "_int2vector",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1053),
+    oid: 1006,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_id: GlobalId::System(1052),
+        },
+        array_id: None,
+    },
+};
+
 pub const TYPE_LIST: BuiltinType = BuiltinType {
     name: "list",
     schema: PG_CATALOG_SCHEMA,
@@ -2070,6 +2094,8 @@ lazy_static! {
             Builtin::Type(&TYPE_UUID_ARRAY),
             Builtin::Type(&TYPE_VARCHAR),
             Builtin::Type(&TYPE_VARCHAR_ARRAY),
+            Builtin::Type(&TYPE_INT2_VECTOR),
+            Builtin::Type(&TYPE_INT2_VECTOR_ARRAY),
             Builtin::Log(&MZ_ARRANGEMENT_SHARING_INTERNAL),
             Builtin::Log(&MZ_ARRANGEMENT_BATCHES_INTERNAL),
             Builtin::Log(&MZ_ARRANGEMENT_RECORDS_INTERNAL),

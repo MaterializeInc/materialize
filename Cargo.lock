@@ -3236,6 +3236,7 @@ dependencies = [
  "hex",
  "hmac",
  "itertools",
+ "lazy_static",
  "md-5",
  "mz-expr_test_util",
  "mz-lowertest",

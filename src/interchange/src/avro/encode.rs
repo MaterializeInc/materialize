@@ -358,9 +358,11 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 }
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
                 ScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
-                ScalarType::Array(element_type) | ScalarType::List { element_type, .. } => {
-                    let list = match typ.scalar_type {
-                        ScalarType::Array(_) => datum.unwrap_array().elements(),
+                ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
+                    let list = match ty {
+                        ScalarType::Array(_) | ScalarType::Int2Vector => {
+                            datum.unwrap_array().elements()
+                        }
                         ScalarType::List { .. } => datum.unwrap_list(),
                         _ => unreachable!(),
                     };
@@ -372,7 +374,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                                 datum,
                                 ColumnType {
                                     nullable: true,
-                                    scalar_type: (**element_type).clone(),
+                                    scalar_type: ty.unwrap_collection_element_type().clone(),
                                 },
                             );
                             datum.avro()

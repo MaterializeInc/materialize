@@ -87,7 +87,7 @@ impl TypeCategory {
     /// ```
     fn from_type(typ: &ScalarType) -> Self {
         match typ {
-            ScalarType::Array(..) => Self::Array,
+            ScalarType::Array(..) | ScalarType::Int2Vector => Self::Array,
             ScalarType::Bool => Self::Bool,
             ScalarType::Bytes | ScalarType::Jsonb | ScalarType::Uuid => Self::UserDefined,
             ScalarType::Date
@@ -535,12 +535,13 @@ impl ParamList {
     /// parameter list.
     ///
     /// Polymorphic type consistency constraints include:
-    /// - All arguments passed to `ArrayAny` must be `ScalarType::Array`s with
-    ///   the same types of elements. All arguments passed to `ArrayElementAny`
+    /// - All arguments passed to `ArrayAny` must be equivalent
+    ///   `ScalarType::Array`s with the same types of elements. All arguments
+    ///   passed to `ArrayElementAny` must also be of these elements' type.
+    ///   Note that equivalent includes types like `Int2Vector`.
+    /// - All arguments passed to `ListAny` must be `ScalarType::List`s with
+    ///   the same types of elements. All arguments passed to `ListElementAny`
     ///   must also be of these elements' type.
-    /// - All arguments passed to `ListAny` must be `ScalarType::List`s with the
-    ///   same types of elements. All arguments passed to `ListElementAny` must
-    ///   also be of these elements' type.
     /// - All arguments passed to `MapAny` must be `ScalarType::Map`s with the
     ///   same type of value in each key, value pair.
     ///
@@ -603,8 +604,8 @@ impl ParamList {
     ///
     /// For example if you `list_append(int4 list list, custom_int4_list)`, the
     /// resulant type will be complex: its `custom_oid` will be `None`, but its
-    /// embedded element will be the custom element type, i.e. `custom_int4_list
-    /// list`).
+    /// embedded element will be the custom element type, i.e.
+    /// `custom_int4_list list`).
     ///
     /// However, it's also important to note that a complex value whose
     /// `custom_oid` is `None` are still considered complex if its embedded
@@ -620,11 +621,12 @@ impl ParamList {
     ///
     /// We will not coerce `int4_list_custom list` to
     /// `int4_list_list_custom`––only built-in types are ever coerced into
-    /// custom types. It's also trivial for users to add a cast to ensure custom
-    /// type consistency.
+    /// custom types. It's also trivial for users to add a cast to ensure
+    /// custom type consistency.
     fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
         // Determines if types have the same [`ScalarBaseType`], and if complex
         // types' elements do, as well.
+        // TODO: This shouldn't test equality; it should find the best common type.
         fn complex_base_eq(l: &ScalarType, r: &ScalarType) -> bool {
             match (l, r) {
                 (ScalarType::Array(l), ScalarType::Array(r))
@@ -639,6 +641,8 @@ impl ParamList {
                 | (ScalarType::Map { value_type: l, .. }, ScalarType::Map { value_type: r, .. }) => {
                     complex_base_eq(l, r)
                 }
+                (ScalarType::Int2Vector, ScalarType::Array(el))
+                | (ScalarType::Array(el), ScalarType::Int2Vector) => **el == ScalarType::Int16,
                 (l, r) => ScalarBaseType::from(l) == ScalarBaseType::from(r),
             }
         }
@@ -652,7 +656,14 @@ impl ParamList {
             let param = &self[i];
             match (param, typ, &mut constrained_type) {
                 (ParamType::ArrayAny, Some(typ), None) => {
-                    constrained_type = Some(typ.clone());
+                    constrained_type = Some(match typ {
+                        // All polymorphic inputs get cast to the constrained
+                        // type. Because you can cast `int2vector` to `int2[]`
+                        // but not the other way around, `int2vector` must be
+                        // rewritten to `int2[]`.
+                        ScalarType::Int2Vector => ScalarType::Array(Box::new(ScalarType::Int16)),
+                        other => other.clone(),
+                    });
                 }
                 (ParamType::ArrayAny, Some(typ), Some(constrained)) => {
                     if !complex_base_eq(typ, constrained) {
@@ -740,6 +751,7 @@ impl ParamList {
                 _ => {}
             }
         }
+
         constrained_type
     }
 
@@ -851,7 +863,7 @@ impl ParamType {
         use ScalarType::*;
 
         match self {
-            ArrayAny => matches!(t, Array(..)),
+            ArrayAny => matches!(t, Array(..) | Int2Vector),
             ListAny => matches!(t, List { .. }),
             Any | ArrayElementAny | ListElementAny => true,
             NonVecAny => !t.is_vec(),
@@ -966,6 +978,7 @@ impl From<ScalarBaseType> for ParamType {
             RegClass => ScalarType::RegClass,
             RegProc => ScalarType::RegProc,
             RegType => ScalarType::RegType,
+            Int2Vector => ScalarType::Int2Vector,
         };
         ParamType::Plain(s)
     }

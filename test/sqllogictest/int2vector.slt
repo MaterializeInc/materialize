@@ -1,0 +1,129 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# 🔬🔬 int2vector
+
+query T
+SELECT '1'::int2vector::text
+----
+1
+
+query T
+SELECT '1'::text::int2vector::text
+----
+1
+
+query T
+SELECT '1'::pg_catalog.int2vector::text
+----
+1
+
+query T
+SELECT '1 2 3'::int2vector::text
+----
+1 2 3
+
+query T
+SELECT '1 2 3'::int2vector::int2[]::text
+----
+{1,2,3}
+
+query T
+SELECT null::int2vector::text
+----
+NULL
+
+query T
+SELECT null::int2vector::int2[]::text
+----
+NULL
+
+query error invalid input syntax for type int2vector
+SELECT 'a'::int2vector::text
+
+query error CAST does not support casting from smallint\[\] to int2vector
+SELECT '{1,2,3}'::int2[]::int2vector::text
+
+query T
+SELECT ('1 2 3'::int2vector)[1]::text;
+----
+2
+
+query T
+SELECT ('1 2 3'::int2vector::int2[])[1]::text;
+----
+1
+
+query T
+SELECT ('1 2'::int2vector || '{3}'::int2[])::text;
+----
+{1,2,3}
+
+query T
+SELECT ('{1,2}'::int2[] || '3'::int2vector)::text;
+----
+{1,2,3}
+
+query T
+SELECT array_cat('1 2'::int2vector, '{3}'::int2[])::text;
+----
+{1,2,3}
+
+query T
+SELECT array_cat('{1,2}'::int2[], '3'::int2vector)::text;
+----
+{1,2,3}
+
+query I
+SELECT array_length('{1,2}'::int2[], 1);
+----
+2
+
+query I
+SELECT array_length('1 2'::int2vector, 1);
+----
+2
+
+query T
+SELECT ('{1 2 3, 4 5 6}'::int2vector[])[2]::text;
+----
+4 5 6
+
+query T
+SELECT ('{1 2 3, 4 5 6}'::int2vector[])[2][1]::text;
+----
+NULL
+
+query T
+SELECT (('{1 2 3, 4 5 6}'::int2vector[])[2])[1]::text;
+----
+5
+
+query T
+SELECT ARRAY (SELECT * FROM (VALUES ('1 2'::INT2VECTOR), ('3 4')))::text;
+----
+{"1 2","3 4"}
+
+query TII
+SELECT
+	l.b::text, l.a, r.a
+FROM
+	(
+		SELECT
+			5 AS a,
+			ARRAY (SELECT * FROM (VALUES ('1 2'::INT2VECTOR), ('3 4')))
+				AS b
+	)
+		AS l
+	JOIN (SELECT 6 AS a, '{1 2, 3 4}'::INT2VECTOR[] AS b) AS r ON
+			l.b = r.b;
+----
+{"1 2","3 4"}
+5
+6

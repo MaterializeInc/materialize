@@ -23,6 +23,7 @@ _date
 _float4
 _float8
 _int2
+_int2vector
 _int4
 _int8
 _interval
@@ -51,6 +52,7 @@ date
 float4
 float8
 int2
+int2vector
 int4
 int8
 interval
@@ -81,6 +83,7 @@ _date            system
 _float4          system
 _float8          system
 _int2            system
+_int2vector      system
 _int4            system
 _int8            system
 _interval        system
@@ -109,6 +112,7 @@ date             system
 float4           system
 float8           system
 int2             system
+int2vector       system
 int4             system
 int8             system
 interval         system
