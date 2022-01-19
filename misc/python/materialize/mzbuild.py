@@ -26,7 +26,6 @@ import shutil
 import stat
 import subprocess
 import sys
-import time
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
@@ -525,18 +524,14 @@ class ResolvedImage:
             acquired_from: How the image was acquired.
         """
         if self.image.publish:
-            while True:
-                try:
-                    spawn.runv(
-                        ["docker", "pull", self.spec()],
-                        stdout=sys.stderr.buffer,
-                    )
-                    return AcquiredFrom.REGISTRY
-                except subprocess.CalledProcessError:
-                    if not ui.env_is_truthy("MZBUILD_WAIT_FOR_IMAGE"):
-                        break
-                    print(f"waiting for mzimage to become available", file=sys.stderr)
-                    time.sleep(10)
+            try:
+                spawn.runv(
+                    ["docker", "pull", self.spec()],
+                    stdout=sys.stderr.buffer,
+                )
+                return AcquiredFrom.REGISTRY
+            except subprocess.CalledProcessError:
+                pass
         self.build()
         return AcquiredFrom.LOCAL_BUILD
 
