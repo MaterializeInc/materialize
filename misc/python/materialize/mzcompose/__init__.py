@@ -44,6 +44,7 @@ from typing import (
     TypedDict,
     TypeVar,
     Union,
+    cast,
 )
 
 import pg8000
@@ -179,7 +180,7 @@ class Composition:
     ):
         self.name = name
         self.repo = repo
-        self.images: List[mzbuild.Image] = []
+        self.preserve_ports = preserve_ports
         self.workflows: Dict[str, Callable[..., None]] = {}
 
         if name in self.repo.compositions:
@@ -222,7 +223,35 @@ class Composition:
             for python_service in getattr(module, "SERVICES", []):
                 compose["services"][python_service.name] = python_service.config
 
-        for name, config in compose["services"].items():
+        # Add default volumes
+        compose.setdefault("volumes", {}).update(
+            {
+                "mzdata": None,
+                "tmp": None,
+                "secrets": None,
+            }
+        )
+
+        self.images = self._munge_services(compose["services"].items())
+
+        # Emit the munged configuration to a temporary file so that we can later
+        # pass it to Docker Compose.
+        self.file = TemporaryFile(mode="w")
+        os.set_inheritable(self.file.fileno(), True)
+        self._write_compose()
+
+    def _munge_services(self, services: List[Tuple[str, dict]]) -> List[mzbuild.Image]:
+        images = []
+
+        for name, config in services:
+            # Remember any mzbuild references.
+            if "mzbuild" in config:
+                image_name = config["mzbuild"]
+                if image_name not in self.repo.images:
+                    raise UIError(f"mzcompose: unknown image {image_name}")
+                image = self.repo.images[image_name]
+                images.append(image)
+
             if "propagate_uid_gid" in config:
                 if config["propagate_uid_gid"]:
                     config["user"] = f"{os.getuid()}:{os.getgid()}"
@@ -234,7 +263,7 @@ class Composition:
                     raise UIError(
                         "programming error: disallowed host port in service {name!r}"
                     )
-                if preserve_ports:
+                if self.preserve_ports:
                     # If preserving ports, bind the container port to the same
                     # host port.
                     ports[i] = f"{port}:{port}"
@@ -250,41 +279,14 @@ class Composition:
                 )
                 config.setdefault("volumes", []).append("./coverage:/coverage")
 
-        # Add default volumes
-        compose.setdefault("volumes", {}).update(
-            {
-                "mzdata": None,
-                "tmp": None,
-                "secrets": None,
-            }
-        )
-
-        self._resolve_mzbuild_references()
-
-        # Emit the munged configuration to a temporary file so that we can later
-        # pass it to Docker Compose.
-        self.file = TemporaryFile(mode="w")
-        os.set_inheritable(self.file.fileno(), True)
-        self._write_compose()
-
-    def _resolve_mzbuild_references(self) -> None:
-        # Resolve all services that reference an `mzbuild` image to a specific
-        # `image` reference.
-        for name, config in self.compose["services"].items():
-            if "mzbuild" in config:
-                image_name = config["mzbuild"]
-
-                if image_name not in self.repo.images:
-                    raise UIError(f"mzcompose: unknown image {image_name}")
-
-                image = self.repo.images[image_name]
-                self.images.append(image)
-
-        deps = self.repo.resolve_dependencies(self.images)
-        for config in self.compose["services"].values():
+        # Determine mzbuild specs and inject them into services accordingly.
+        deps = self.repo.resolve_dependencies(images)
+        for _name, config in services:
             if "mzbuild" in config:
                 config["image"] = deps[config["mzbuild"]].spec()
                 del config["mzbuild"]
+
+        return images
 
     def _write_compose(self) -> None:
         self.file.seek(0)
@@ -412,6 +414,7 @@ class Composition:
         old_compose = copy.deepcopy(self.compose)
 
         # Update the composition with the new service definitions.
+        self._munge_services([(s.name, cast(dict, s.config)) for s in services])
         for service in services:
             if service.name not in self.compose["services"]:
                 raise RuntimeError(
@@ -419,7 +422,6 @@ class Composition:
                     f"{service.name!r} does not exist"
                 )
             self.compose["services"][service.name] = service.config
-            self._resolve_mzbuild_references()
         self._write_compose()
 
         try:

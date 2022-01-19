@@ -24,7 +24,6 @@ import subprocess
 import sys
 from collections import OrderedDict
 from pathlib import Path
-from tempfile import TemporaryFile
 from typing import Any, Iterable, Set
 
 import yaml
@@ -68,10 +67,9 @@ def main() -> int:
         if "inputs" in step:
             del step["inputs"]
 
-    f = TemporaryFile(mode="w")
-    yaml.dump(pipeline, f)
-    f.seek(0)
-    spawn.runv(["buildkite-agent", "pipeline", "upload"], stdin=f)
+    spawn.runv(
+        ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
+    )
 
     return 0
 
