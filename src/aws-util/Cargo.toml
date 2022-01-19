@@ -11,7 +11,7 @@ aws-config = { version = "0.4.1", default-features = false, features = ["native-
 aws-smithy-client = { version = "0.34.0", default-features = false }
 aws-smithy-http = "0.34.0"
 aws-sdk-kinesis = { version = "0.4.0", default-features = false, features = ["native-tls"], optional = true }
-aws-sdk-s3 = { version = "0.4.0", default-features = false, features = ["native-tls"], optional = true }
+aws-sdk-s3 = { version = "0.4.1", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-sqs = { version = "0.4.1", default-features = false, features = ["native-tls"], optional = true }
 aws-sdk-sts = { version = "0.4.0", default-features = false, features = ["native-tls"], optional = true }
 aws-types = { version = "0.4.0" }
