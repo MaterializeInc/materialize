@@ -18,7 +18,7 @@ operations provided by the standard [`subprocess`][subprocess] module.
 import subprocess
 import sys
 from pathlib import Path
-from typing import IO, Dict, Literal, Optional, Sequence, Union, overload
+from typing import IO, Dict, Optional, Sequence, Union
 
 from materialize import ui
 
@@ -79,53 +79,31 @@ def runv(
     )
 
 
-@overload
-def capture(
-    args: Sequence[Union[Path, str]],
-    cwd: Optional[Path] = ...,
-    stdin: Union[None, int, IO[bytes]] = None,
-    unicode: Literal[False] = ...,
-    stderr_too: bool = False,
-    env: Optional[Dict[str, str]] = None,
-) -> bytes:
-    ...
-
-
-@overload
-def capture(
-    args: Sequence[Union[Path, str]],
-    cwd: Optional[Path] = ...,
-    stdin: Union[None, int, IO[bytes]] = None,
-    *,
-    unicode: Literal[True],
-    stderr_too: bool = False,
-    env: Optional[Dict[str, str]] = None,
-) -> str:
-    ...
-
-
 def capture(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = None,
-    stdin: Union[None, int, IO[bytes]] = None,
-    unicode: bool = False,
-    stderr_too: bool = False,
     env: Optional[Dict[str, str]] = None,
-) -> Union[str, bytes]:
+    stdin: Union[None, int, IO[bytes], bytes] = None,
+    stderr: Union[None, int, IO[bytes]] = None,
+) -> str:
     """Capture the output of a subprocess.
 
     Args:
         args: A list of strings or paths describing the program to run and
             the arguments to pass to it.
         cwd: An optional directory to change into before executing the process.
-        stdin: Optional input stream for the process.
-        unicode: Whether to return output as a unicode string or as bytes.
-        stderr_too: Whether to capture stderr in the returned value
+        env: A replacement environment with which to launch the process. If
+            unspecified, the current process's environment is used. Replacement
+            occurs wholesale, so use a construction like
+            `env=dict(os.environ, KEY=VAL, ...)` to instead amend the existing
+            environment.
+        stdin: An optional IO handle or byte string to use as the process's
+            stdin stream.
+        stderr: An optional IO handle to use as the process's stderr stream.
 
     Returns:
-        output: The verbatim output of the process as a string or bytes object,
-            depending on the value of the `unicode` argument. Note that trailing
-            whitespace is preserved.
+        output: The verbatim output of the process as a string. Note that
+            trailing whitespace is preserved.
 
     Raises:
         OSError: The process cannot be executed, e.g. because the specified
@@ -136,7 +114,11 @@ def capture(
         You may want to call `strip()` on the output to remove any trailing
         whitespace.
     """
-    stderr = subprocess.STDOUT if stderr_too else None
-    return subprocess.check_output(  # type: ignore
-        args, cwd=cwd, stdin=stdin, universal_newlines=unicode, stderr=stderr, env=env
+    input = None
+    if isinstance(stdin, bytes):
+        input = stdin
+        stdin = None
+
+    return subprocess.check_output(
+        args, cwd=cwd, env=env, input=input, stdin=stdin, stderr=stderr, text=True
     )

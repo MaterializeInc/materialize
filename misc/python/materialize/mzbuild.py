@@ -98,9 +98,7 @@ class RepositoryDetails:
 def docker_images() -> Set[str]:
     """List the Docker images available on the local machine."""
     return set(
-        spawn.capture(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"], unicode=True
-        )
+        spawn.capture(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
         .strip()
         .split("\n")
     )
@@ -274,7 +272,6 @@ class CargoBuild(CargoPreImage):
         if self.extract:
             output = spawn.capture(
                 cargo_build + ["--message-format=json"],
-                unicode=True,
                 cwd=self.rd.root,
             )
             for line in output.split("\n"):
@@ -335,9 +332,7 @@ class CargoTest(CargoPreImage):
         # user would only see a vague "could not compile <package>" error.
         args = [*self.rd.cargo("test", rustflags=[]), "--locked", "--no-run"]
         spawn.runv(args, cwd=self.rd.root)
-        output = spawn.capture(
-            args + ["--message-format=json"], unicode=True, cwd=self.rd.root
-        )
+        output = spawn.capture(args + ["--message-format=json"], cwd=self.rd.root)
 
         tests = []
         for line in output.split("\n"):

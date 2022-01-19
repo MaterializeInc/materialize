@@ -29,7 +29,7 @@ import subprocess
 import sys
 import webbrowser
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Text, Tuple
+from typing import IO, Any, List, Optional, Sequence, Text, Tuple, Union
 
 from humanize import naturalsize
 
@@ -395,7 +395,7 @@ class DockerComposeCommand(Command):
     def run(self, args: argparse.Namespace) -> None:
         if args.help:
             output = self.capture(
-                ["docker-compose", self.name, "--help"], stderr_too=True
+                ["docker-compose", self.name, "--help"], stderr=subprocess.STDOUT
             )
             output = output.replace("docker-compose", "./mzcompose")
             output += "\nThis command is a wrapper around Docker Compose."
@@ -407,7 +407,9 @@ class DockerComposeCommand(Command):
 
         # Make sure Docker Compose is new enough.
         output = (
-            self.capture(["docker-compose", "version", "--short"], stderr_too=True)
+            self.capture(
+                ["docker-compose", "version", "--short"], stderr=subprocess.STDOUT
+            )
             .strip()
             .strip("v")
         )
@@ -459,9 +461,11 @@ class DockerComposeCommand(Command):
                 "See https://materialize.com/docs/third-party/docker/."
             )
 
-    def capture(self, args: List[str], stderr_too: bool = False) -> str:
+    def capture(
+        self, args: List[str], stderr: Union[None, int, IO[bytes]] = None
+    ) -> str:
         try:
-            return spawn.capture(args, stderr_too=stderr_too, unicode=True)
+            return spawn.capture(args, stderr=stderr)
         except subprocess.CalledProcessError as e:
             # Print any captured output, since it probably hints at the problem.
             print(e.output, file=sys.stderr, end="")
