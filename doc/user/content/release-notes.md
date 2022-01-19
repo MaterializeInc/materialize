@@ -114,7 +114,7 @@ changes that have not yet been documented.
 - Allow wildcards in `LIKE` patterns to match newline characters
   {{% gh 10077 %}}. The new behavior matches PostgreSQL.
 
-- Add basic Prometheus counters for PostgreSQL sources
+- Add basic Prometheus counters for PostgreSQL sources.
 
 {{< comment >}}
 Only add new release notes above this line.
@@ -134,7 +134,7 @@ boundary don't silently merge their release notes into the wrong place.
       Consider the following query:
 
       ```sql
-      SELECT 'a'::text
+      SELECT 'a'::text;
       ```
 
       This version of Materialize will infer the column name `text`, while
@@ -166,7 +166,7 @@ boundary don't silently merge their release notes into the wrong place.
 
 - When initializing a [PostgreSQL source](/sql/create-source/postgres), report
   an error if the configured publication does not exist {{% gh 9933 %}}.
-  Previously Materialize would silently import zero tables.
+  Previously, Materialize would silently import zero tables.
 
 {{% version-header v0.16.0 %}}
 
