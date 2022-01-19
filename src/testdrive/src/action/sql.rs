@@ -64,7 +64,7 @@ impl Action for SqlAction {
             Statement::CreateDatabase(CreateDatabaseStatement { name, .. }) => {
                 self.try_drop(
                     &mut state.pgclient,
-                    &format!("DROP DATABASE IF EXISTS {}", name.to_string()),
+                    &format!("DROP DATABASE IF EXISTS {}", name),
                 )
                 .await
             }

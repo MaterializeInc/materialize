@@ -140,7 +140,7 @@ pub enum PartitionId {
 impl fmt::Display for PartitionId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
+            PartitionId::Kafka(id) => write!(f, "{}", id),
             PartitionId::None => write!(f, "none"),
         }
     }

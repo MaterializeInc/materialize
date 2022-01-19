@@ -180,7 +180,7 @@ where
         TokenTree::Punct(punct) if punct.as_char() == '-' => {
             match rest_of_stream.next() {
                 Some(TokenTree::Literal(literal)) => {
-                    Ok(Some(format!("{}{}", punct.as_char(), literal.to_string())))
+                    Ok(Some(format!("{}{}", punct.as_char(), literal)))
                 }
                 None => Ok(None),
                 // Must error instead of handling the tokens using default

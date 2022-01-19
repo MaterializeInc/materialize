@@ -59,12 +59,12 @@ fn datadriven() {
                 if s.len() != 1 {
                     "expected exactly one statement".to_string()
                 } else if tc.args.get("roundtrip").is_some() {
-                    format!("{}\n", s.into_element().to_string())
+                    format!("{}\n", s.into_element())
                 } else {
                     let stmt = s.into_element();
                     // TODO(justin): it would be nice to have a middle-ground between this
                     // all-on-one-line and {:#?}'s huge number of lines.
-                    format!("{}\n=>\n{:?}\n", stmt.to_string(), stmt)
+                    format!("{}\n=>\n{:?}\n", stmt, stmt)
                 }
             }
             Err(e) => render_error(input, e),
@@ -76,7 +76,7 @@ fn datadriven() {
         match parser::parse_expr(input) {
             Ok(s) => {
                 if tc.args.get("roundtrip").is_some() {
-                    format!("{}\n", s.to_string())
+                    format!("{}\n", s)
                 } else {
                     // TODO(justin): it would be nice to have a middle-ground between this
                     // all-on-one-line and {:#?}'s huge number of lines.

@@ -316,7 +316,7 @@ fn trait_generics_and_bounds(generics: &BTreeMap<String, BTreeSet<String>>) -> S
         .iter()
         .map(|(ident, bounds)| {
             if bounds.len() == 0 {
-                format!("{}, ", ident.to_string())
+                format!("{}, ", ident)
             } else {
                 format!("{}: {}, ", ident, bounds.iter().join("+"))
             }

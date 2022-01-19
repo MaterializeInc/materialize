@@ -243,7 +243,7 @@ mod tests {
             f.run(move |s| -> String {
                 match s.directive.as_str() {
                     "build" => match build(&s.input, &s.args) {
-                        Ok(msg) => format!("{}\n", msg.trim_end().to_string()),
+                        Ok(msg) => format!("{}\n", msg.trim_end()),
                         Err(err) => format!("error: {}\n", err),
                     },
                     _ => panic!("unknown directive: {}", s.directive),

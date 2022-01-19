@@ -52,8 +52,7 @@ pub async fn create_stream(
                 Some(StreamStatus::Active) => Ok(description.stream_arn.clone()),
                 other_status => Err(anyhow::Error::msg(format!(
                     "Stream {} is not yet ACTIVE, is {:?}",
-                    stream_name.to_string(),
-                    other_status
+                    stream_name, other_status
                 ))),
             }
         })

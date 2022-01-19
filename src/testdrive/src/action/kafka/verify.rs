@@ -240,20 +240,20 @@ impl Action for VerifyAction {
             SinkFormat::Json { key } => {
                 let mut actual_messages = vec![];
                 for (key, value) in actual_bytes {
-                    let key_datum =
-                        match key {
-                            None => None,
-                            Some(bytes) => Some(serde_json::from_slice(&bytes).map_err(|e| {
-                                format!("converting bytes to JSON {}", e.to_string())
-                            })?),
-                        };
-                    let value_datum =
-                        match value {
-                            None => None,
-                            Some(bytes) => Some(serde_json::from_slice(&bytes).map_err(|e| {
-                                format!("converting bytes to JSON {}", e.to_string())
-                            })?),
-                        };
+                    let key_datum = match key {
+                        None => None,
+                        Some(bytes) => Some(
+                            serde_json::from_slice(&bytes)
+                                .map_err(|e| format!("converting bytes to JSON {}", e))?,
+                        ),
+                    };
+                    let value_datum = match value {
+                        None => None,
+                        Some(bytes) => Some(
+                            serde_json::from_slice(&bytes)
+                                .map_err(|e| format!("converting bytes to JSON {}", e))?,
+                        ),
+                    };
 
                     actual_messages.push((key_datum, value_datum));
                 }
