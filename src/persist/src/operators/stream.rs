@@ -733,7 +733,7 @@ mod tests {
     use timely::dataflow::operators::probe::Probe;
     use timely::dataflow::operators::Capture;
     use timely::Config;
-    use tokio::runtime::Runtime;
+    use tokio::runtime::Runtime as AsyncRuntime;
 
     use crate::error::Error;
     use crate::indexed::{ListenEvent, SnapshotExt};
@@ -982,8 +982,8 @@ mod tests {
         condition_read.listen(condition_listen_tx)?;
         let (listen_tx, listen_rx) = crossbeam_channel::unbounded();
 
-        let runtime = Runtime::new()?;
-        let listener_handle = runtime.spawn(async move {
+        let async_runtime = AsyncRuntime::new()?;
+        let listener_handle = async_runtime.spawn(async move {
             let mut num_channels_closed = 0;
             loop {
                 crossbeam_channel::select! {
