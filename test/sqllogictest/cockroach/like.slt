@@ -43,6 +43,38 @@ SELECT '' LIKE ''
 ----
 true
 
+query B
+SELECT 'a
+b' LIKE '%'
+----
+true
+
+query B
+SELECT 'a
+b' ILIKE '%'
+----
+true
+
+query B
+SELECT 'a'::char(10) LIKE 'a'
+----
+false
+
+query B
+SELECT 'a'::char(10) NOT LIKE 'a'
+----
+true
+
+query B
+SELECT 'a'::char(10) ILIKE 'a'
+----
+false
+
+query B
+SELECT 'a'::char(10) NOT ILIKE 'a'
+----
+true
+
 # Regex special characters.
 
 query B
