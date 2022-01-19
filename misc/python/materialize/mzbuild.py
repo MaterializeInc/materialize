@@ -502,7 +502,7 @@ class ResolvedImage:
 
     def build(self) -> None:
         """Build the image from source."""
-        spawn.runv(["git", "clean", "-ffdX", self.image.path], print_to=sys.stderr)
+        spawn.runv(["git", "clean", "-ffdX", self.image.path])
         for pre_image in self.image.pre_images:
             pre_image.run()
         build_args = {
@@ -521,7 +521,7 @@ class ResolvedImage:
             self.spec(),
             str(self.image.path),
         ]
-        spawn.runv(cmd, stdin=f, stdout=sys.stderr, print_to=sys.stderr)
+        spawn.runv(cmd, stdin=f, stdout=sys.stderr)
 
     def acquire(self) -> AcquiredFrom:
         """Download or build the image.
@@ -534,7 +534,6 @@ class ResolvedImage:
                 try:
                     spawn.runv(
                         ["docker", "pull", self.spec()],
-                        print_to=sys.stderr,
                         stdout=sys.stderr,
                     )
                     return AcquiredFrom.REGISTRY

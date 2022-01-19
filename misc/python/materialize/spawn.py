@@ -33,7 +33,6 @@ def runv(
     capture_output: bool = False,
     env: Optional[Dict[str, str]] = None,
     stderr: Union[None, int, IO[bytes], TextIO] = None,
-    print_to: TextIO = sys.stdout,
 ) -> subprocess.CompletedProcess:
     """Verbosely run a subprocess.
 
@@ -60,7 +59,7 @@ def runv(
             program does not exist.
         CalledProcessError: The process exited with a non-zero exit status.
     """
-    print("$", ui.shell_quote(args), file=print_to)
+    print("$", ui.shell_quote(args), file=sys.stderr)
 
     if capture_output:
         stdout = subprocess.PIPE
