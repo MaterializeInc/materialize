@@ -15,7 +15,7 @@ import numpy as np
 
 class Aggregation:
     def __init__(self) -> None:
-        self._data: List[Any] = []
+        self._data: List[float] = []
 
     def append(self, measurement: float) -> None:
         self._data.append(measurement)
@@ -43,10 +43,10 @@ class StdDevAggregation(Aggregation):
         self._num_stdevs = num_stdevs
 
     def aggregate(self) -> float:
-        stdev = np.std(self._data)
-        mean = np.mean(self._data)
+        stdev: float = np.std(self._data)
+        mean: float = np.mean(self._data)
         val = mean - (stdev * self._num_stdevs)
-        return val  # type: ignore
+        return val
 
 
 class NormalDistributionAggregation(Aggregation):

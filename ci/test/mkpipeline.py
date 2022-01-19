@@ -68,8 +68,8 @@ def main() -> int:
         if "inputs" in step:
             del step["inputs"]
 
-    f = TemporaryFile()
-    yaml.dump(pipeline, f, encoding="utf-8")  # type: ignore
+    f = TemporaryFile(mode="w")
+    yaml.dump(pipeline, f)
     f.seek(0)
     spawn.runv(["buildkite-agent", "pipeline", "upload"], stdin=f)
 
