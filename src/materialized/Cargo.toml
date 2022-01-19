@@ -75,7 +75,7 @@ serde_json = "1.0.75"
 shell-words = "1.0.0"
 sql = { path = "../sql" }
 sysctl = "0.4.3"
-sysinfo = "0.22.5"
+sysinfo = "0.23.0"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.15.0", features = ["sync"] }
@@ -96,7 +96,7 @@ prof = { path = "../prof", features = ["jemalloc"] }
 tikv-jemallocator = { version = "0.4.1", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
-assert_cmd = "2.0.2"
+assert_cmd = "2.0.4"
 bytes = "1.1.0"
 coordtest = { path = "../coordtest" }
 datadriven = "0.6.0"
