@@ -2544,12 +2544,11 @@ dependencies = [
 
 [[package]]
 name = "krb5-src"
-version = "0.3.1+1.19.2"
+version = "0.3.2+1.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57fe5be675c272d885d49be528b3b048e38974a0579b0e691da2fb3f3c41eaca"
+checksum = "44cd3b7e7735d48bc3793837041294f2eb747bd0f63bbc081e89972abb9e48fb"
 dependencies = [
  "duct",
- "openssl-sys",
 ]
 
 [[package]]

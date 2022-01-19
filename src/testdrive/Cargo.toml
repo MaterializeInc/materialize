@@ -27,7 +27,7 @@ http = "0.2.6"
 interchange = { path = "../interchange" }
 itertools = "0.10.3"
 kafka-util = { path = "../kafka-util" }
-krb5-src = { version = "0.3.1", features = ["binaries"] }
+krb5-src = { version = "0.3.2", features = ["binaries"] }
 lazy_static = "1.4.0"
 maplit = "1.0.2"
 md-5 = "0.10.0"
