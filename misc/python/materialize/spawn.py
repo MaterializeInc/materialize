@@ -24,13 +24,16 @@ from materialize import ui
 
 CalledProcessError = subprocess.CalledProcessError
 
-
+# NOTE(benesch): Please think twice before adding additional parameters to this
+# method! It is meant to serve 95% of callers with a small ands understandable
+# set of parameters. If your needs are niche, consider calling `subprocess.run`
+# directly rather than adding a one-off parameter here.
 def runv(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = None,
+    env: Optional[Dict[str, str]] = None,
     stdin: Union[None, int, IO[bytes], bytes] = None,
     stdout: Union[None, int, IO[bytes]] = None,
-    env: Optional[Dict[str, str]] = None,
     stderr: Union[None, int, IO[bytes]] = None,
 ) -> subprocess.CompletedProcess:
     """Verbosely run a subprocess.
@@ -42,10 +45,15 @@ def runv(
         args: A list of strings or paths describing the program to run and
             the arguments to pass to it.
         cwd: An optional directory to change into before executing the process.
+        env: A replacement environment with which to launch the process. If
+            unspecified, the current process's environment is used. Replacement
+            occurs wholesale, so use a construction like
+            `env=dict(os.environ, KEY=VAL, ...)` to instead amend the existing
+            environment.
         stdin: An optional IO handle or byte string to use as the process's
             stdin stream.
         stdout: An optional IO handle to use as the process's stdout stream.
-        env: If present, overwrite the environment with this dict
+        stderr: An optional IO handle to use as the process's stderr stream.
 
     Raises:
         OSError: The process cannot be executed, e.g. because the specified
@@ -62,12 +70,12 @@ def runv(
     return subprocess.run(
         args,
         cwd=cwd,
+        env=env,
+        input=input,
+        stdin=stdin,
         stdout=stdout,
         stderr=stderr,
         check=True,
-        env=env,
-        stdin=stdin,
-        input=input,
     )
 
 
