@@ -36,6 +36,7 @@ DEFAULT_SECURITY_GROUP_ID = "sg-06f780c8e23c0d944"
 DEFAULT_INSTANCE_PROFILE_NAME = "admin-instance"
 
 SSH_COMMAND = ["mssh", "-o", "StrictHostKeyChecking=off"]
+SFTP_COMMAND = ["msftp", "-o", "StrictHostKeyChecking=off"]
 
 say = ui.speaker("scratch> ")
 
@@ -384,6 +385,24 @@ def mssh(
             *SSH_COMMAND,
             f"{host}",
             command,
+        ],
+        stdin=stdin,
+        print_to=open(os.devnull, "w"),
+    )
+
+
+def msftp(
+    instance: Instance,
+    *,
+    stdin: Union[None, int, IO[bytes], bytes] = None,
+) -> None:
+    """Connects over SFTP via EC2 Instance Connect."""
+    host = instance_host(instance)
+    print(f"$ msftp {host}")
+    spawn.runv(
+        [
+            *SFTP_COMMAND,
+            f"{host}",
         ],
         stdin=stdin,
         print_to=open(os.devnull, "w"),
