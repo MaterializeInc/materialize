@@ -182,8 +182,6 @@ class Composition:
         self.images: List[mzbuild.Image] = []
         self.workflows: Dict[str, Callable[..., None]] = {}
 
-        self.default_tag = os.getenv(f"MZBUILD_TAG", None)
-
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
         else:
@@ -280,18 +278,7 @@ class Composition:
                     raise UIError(f"mzcompose: unknown image {image_name}")
 
                 image = self.repo.images[image_name]
-                override_tag = os.getenv(
-                    f"MZBUILD_{image.env_var_name()}_TAG", self.default_tag
-                )
-                if override_tag is not None:
-                    config["image"] = image.docker_name(override_tag)
-                    print(
-                        f"mzcompose: warning: overriding {image_name} image to tag {override_tag}",
-                        file=sys.stderr,
-                    )
-                    del config["mzbuild"]
-                else:
-                    self.images.append(image)
+                self.images.append(image)
 
         deps = self.repo.resolve_dependencies(self.images)
         for config in self.compose["services"].values():
