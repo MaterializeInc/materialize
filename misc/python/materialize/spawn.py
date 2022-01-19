@@ -65,19 +65,20 @@ def runv(
         stdout = subprocess.PIPE
         stderr = subprocess.PIPE
 
-    # Work around https://bugs.python.org/issue34886.
-    stdin_args = {"stdin": stdin}
+    input = None
     if isinstance(stdin, bytes):
-        stdin_args = {"input": stdin}
+        input = stdin
+        stdin = None
 
-    return subprocess.run(  # type: ignore
+    return subprocess.run(
         args,
         cwd=cwd,
         stdout=stdout,
         stderr=stderr,
         check=True,
         env=env,
-        **stdin_args,
+        stdin=stdin,
+        input=input,
     )
 
 
