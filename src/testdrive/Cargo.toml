@@ -9,7 +9,7 @@ publish = false
 async-compression = { version = "0.3.8", features = ["tokio", "gzip"] }
 async-trait = "0.1.52"
 aws-config = { version = "0.4.1", default-features = false, features = ["native-tls"] }
-aws-sdk-kinesis = { version = "0.4.0", default-features = false }
+aws-sdk-kinesis = { version = "0.4.1", default-features = false }
 aws-sdk-s3 = { version = "0.4.0", default-features = false }
 aws-sdk-sqs = { version = "0.4.1", default-features = false }
 aws-smithy-http = "0.34.0"
