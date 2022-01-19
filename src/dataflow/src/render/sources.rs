@@ -38,7 +38,7 @@ use crate::decode::rewrite_for_upsert;
 use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
-use crate::render::{RelevantTokens, RenderState};
+use crate::render::RenderState;
 use crate::server::LocalInput;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
@@ -125,10 +125,11 @@ where
     }
 
     /// Import the source described by `src` into the rendering context.
+    ///
+    /// Returns a "source token" and any "additional tokens" to be associated with `src_id`.
     pub(crate) fn import_source(
         &mut self,
         render_state: &mut RenderState,
-        tokens: &mut RelevantTokens,
         scope: &mut G,
         materialized_logging: Option<Logger>,
         src_id: GlobalId,
@@ -139,6 +140,9 @@ where
         orig_id: GlobalId,
         now: NowFn,
         base_metrics: &SourceBaseMetrics,
+    ) -> (
+        Rc<Option<crate::source::SourceToken>>,
+        Vec<Rc<dyn std::any::Any>>,
     ) {
         // Extract the linear operators, as we will need to manipulate them.
         // extracting them reduces the change we might accidentally communicate
@@ -151,6 +155,9 @@ where
                 linear_operators = None;
             }
         }
+
+        // Tokens that we should return from the method.
+        let mut additional_tokens: Vec<Rc<dyn std::any::Any>> = Vec::new();
 
         // Before proceeding, we may need to remediate sources with non-trivial relational
         // expressions that post-process the bare source. If the expression is trivial, a
@@ -174,6 +181,9 @@ where
                         err_collection,
                     ),
                 );
+
+                // TODO(mcsherry): Local tables are a special non-source we should relocate.
+                (Rc::new(None), Vec::new())
             }
 
             SourceConnector::External {
@@ -379,11 +389,7 @@ where
                                 schema_registry_config,
                                 confluent_wire_format,
                             );
-                            tokens
-                                .additional_tokens
-                                .entry(src_id)
-                                .or_insert_with(Vec::new)
-                                .push(Rc::new(token));
+                            additional_tokens.push(Rc::new(token));
                             (oks, None)
                         } else {
                             let (results, extra_token) = match ok_source {
@@ -410,11 +416,7 @@ where
                                 ),
                             };
                             if let Some(tok) = extra_token {
-                                tokens
-                                    .additional_tokens
-                                    .entry(src_id)
-                                    .or_insert_with(Vec::new)
-                                    .push(Rc::new(tok));
+                                additional_tokens.push(Rc::new(tok));
                             }
 
                             // render envelopes
@@ -644,8 +646,7 @@ where
                     crate::render::CollectionBundle::from_collections(collection, err_collection),
                 );
 
-                let token = Rc::new(capability);
-                tokens.source_tokens.insert(src_id, token.clone());
+                let source_token = Rc::new(capability);
 
                 // We also need to keep track of this mapping globally to activate sources
                 // on timestamp advancement queries
@@ -653,7 +654,10 @@ where
                     .ts_source_mapping
                     .entry(orig_id)
                     .or_insert_with(Vec::new)
-                    .push(Rc::downgrade(&token));
+                    .push(Rc::downgrade(&source_token));
+
+                // Return the source token for capability manipulation, and any additional tokens.
+                (source_token, additional_tokens)
             }
         }
     }

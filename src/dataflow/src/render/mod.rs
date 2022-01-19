@@ -219,9 +219,8 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (src_id, (src, orig_id)) in &dataflow.source_imports {
-                context.import_source(
+                let (source_token, additional_tokens) = context.import_source(
                     render_state,
-                    &mut tokens,
                     region,
                     materialized_logging.clone(),
                     src_id.clone(),
@@ -230,6 +229,15 @@ pub fn build_dataflow<A: Allocate>(
                     now.clone(),
                     source_metrics,
                 );
+
+                // Associate returned tokens with the source identifier.
+                let prior = tokens.source_tokens.insert(*src_id, source_token);
+                assert!(prior.is_none());
+                tokens
+                    .additional_tokens
+                    .entry(*src_id)
+                    .or_insert_with(Vec::new)
+                    .extend(additional_tokens);
             }
 
             // Import declared indexes into the rendering context.
