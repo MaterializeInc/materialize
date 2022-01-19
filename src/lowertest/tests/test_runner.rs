@@ -19,33 +19,33 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
 
-    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct ZeroArg;
 
-    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct SingleUnnamedArg(Box<f64>);
 
-    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct OptionalArg(bool, #[serde(default)] (f64, u32));
 
-    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct MultiUnnamedArg(Vec<(usize, Vec<(String, usize)>, usize)>, String);
 
-    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct MultiNamedArg {
         fizz: Vec<Option<bool>>,
         #[serde(default)]
         bizz: Vec<Vec<(SingleUnnamedArg, bool)>>,
     }
 
-    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct FirstArgEnum {
         test_enum: Box<TestEnum>,
         #[serde(default)]
         second_arg: String,
     }
 
-    #[derive(Debug, Deserialize, PartialEq, Serialize, MzEnumReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     enum TestEnum {
         SingleNamedField {
             foo: Vec<usize>,
@@ -67,21 +67,12 @@ mod tests {
         Unit,
     }
 
-    gen_reflect_info_func!(
-        produce_rti,
-        [TestEnum],
-        [
-            ZeroArg,
-            SingleUnnamedArg,
-            OptionalArg,
-            MultiUnnamedArg,
-            MultiNamedArg,
-            FirstArgEnum
-        ]
-    );
-
     lazy_static! {
-        static ref RTI: ReflectedTypeInfo = produce_rti();
+        static ref RTI: ReflectedTypeInfo = {
+            let mut rti = ReflectedTypeInfo::default();
+            TestEnum::add_to_reflected_type_info(&mut rti);
+            rti
+        };
     }
 
     #[derive(Default)]

@@ -1,5 +1,21 @@
 # Utility for testing lower layers of the Materialize stack
 
+> If you are reading this because you are encountering a compile-time error that
+> looks something like:
+> ```
+>    ::: <path_to_file>:<lineno>:1
+>    |
+> <lineno> | pub <struct or enum> <Type> {
+>    | ------------------- variant or associated item `add_to_reflected_type_info` not found here
+>    |
+>    = help: items from traits can only be used if the trait is implemented and in scope
+>    = note: the following trait defines an item `add_to_reflected_type_info`, perhaps you need to implement it:
+>            candidate #1: `MzReflect`
+> = note: this error originates in the derive macro `MzReflect` (in Nightly builds, run with -Z macro-backtrace for more info)
+>  ```
+>
+> go [here](#0-required-trait-derivations).
+
 ## Purpose
 
 If you want to run tests on something like `MirRelationExpr`, specifying it in
@@ -87,8 +103,17 @@ recommended that the object also implement `serde::Serialize`.
 In order to translate the text syntax into a correctly-deserializable JSON
 string, we need information about enums and structs being created that are not
 specified in the test syntax.
-Thus, you need to derive the trait `MzEnumReflect` (resp. `MzStructReflect`) for
-each enum (resp. struct) that you will need to construct your object.
+
+Thus, you need to derive the trait `MzReflect` for each enum or struct that
+you will need to construct your object. If you cannot derive the enum or struct
+because it is from an external crate, then you should add its name to
+`EXTERNAL_TYPES` in
+[../lowertest-derive/src/lib.rs](../lowertest-derive/src/lib.rs).
+
+If you have added a new type that is relied on by a type that derives the trait
+`MzReflect` and you do not derive the trait `MzReflect` or add the name of the
+type to `EXTERNAL_TYPES`, you may encounter the compile-time error shown at the
+top of this README.
 
 Default values are supported as long as the default fields are last. Put
 `#[serde(default)]` over any fields you want to be default and make sure those
@@ -118,23 +143,41 @@ enums and structs are keyed by string.
 ### 3. Feeding in type information
 
 Enum/struct information must be passed into the converter via
-the struct `ReflectedTypeInfo`. For your convenience, there is a macro to
-generate a function will produce the right `ReflectedTypeInfo` for the object
-you are trying to create.
-```
-get_reflect_info_func!(func_name, [EnumType1, .., EnumTypeN], [StructType1, ..,StructTypeN])
-```
-Calling `func_name()` will produce the desired `ReflectedTypeInfo`.
+the struct `ReflectedTypeInfo`.
 
-For instructions on how to manually populate `ReflectedTypeInfo`, see the struct
-documentation.
+To populate the `ReflectedTypeInfo` struct, add these two lines to your code:
+```
+let mut rti = ReflectedTypeInfo::default();
+<Object_type>::add_to_reflected_type_info(&mut rti);
+```
+
+Provided your object type is a [supported type](#supported-types), the
+`add_to_reflected_type_info` function will recursively add types your object
+type depends on to `ReflectedTypoInfo`.
+
+Notably, the type `Result<<ok_type>, <error_type>>` is not yet
+supported, so you may find that you need to separately add information about the
+error type to `ReflectedTypoInfo`.
+```
+<error_type>::add_to_reflected_type_info(&mut rti)
+```
+
+If it is unnecessary to add the type of a field to `ReflectedTypeInfo` because:
+* you have [overridden the syntax](#extending-the-syntax) such that you can
+construct an instance of the field without using the DSL
+* you have marked the field with the attribute `#[serde(default)]` and always
+  want the field to be initialized with the default value.
+You can add the attribute `#[mzreflect(ignore)]` to the field. If you do so,
+`add_to_reflected_type_info` will not add the type of the field to
+`ReflectedTypeInfo`, but it will add the types of other fields of the enum
+variant or struct without the attribute.
 
 ### 4. Feeding in syntax extensions
 
 If you don't need to extend or override the syntax, give a
 `&mut GenericTestDeserializationContext::default()`.
 
-Otherwise, see [#extending-the-syntax].
+Otherwise, see ["Extending the syntax"](#extending-the-syntax).
 
 ## Extending the syntax
 
@@ -153,7 +196,7 @@ The trait has a method `override_syntax`.
   should have left the stream untouched.
 * The fourth argument is the type of the object whose specification is currently
   being translated. Note that the name of the type is only guaranteed to be
-  accurate if it is a [supported type](supported-types). Thus, if an enum
+  accurate if it is a [supported type](#supported-types). Thus, if an enum
   variant (resp. struct) you are trying to create has a field that is not a
   supported type, you should use `override_syntax` to specify how to create the
   enum variant (resp. struct).
@@ -177,7 +220,17 @@ Since a one-arg enum or struct can be specified as `(<the_arg>)` or
 you from having to implement both syntaxes in `override_syntax`.
 
 The trait has a second method `reverse_syntax_override` to convert from JSON
-to the extended syntax. See [#roundtrip] for more details.
+to the extended syntax. See [Roundtrip](#roundtrip) for more details.
+
+If you implement the ability to construct an enum variant or a struct with
+an alternate syntax and you believe:
+1. the default syntax should not be used. OR
+2. it is unnecessary for the default syntax to be supported.
+
+you can add the attribute `#[mzreflect(ignore)]` to one or more fields of the
+enum variant or struct so that their types do not have to be added to
+`ReflectedTypeInfo`. This has the side effect of disabling the ability to
+construct the enum variant or the struct using the default syntax.
 
 ### Supported types
 
@@ -197,3 +250,5 @@ To convert a Rust object back into the readable syntax:
 1) Serialize the Rust object to a [serde_json::Value] object by calling
    `let json = serde_json::to_value(obj)?;`.
 2) Feed the json into the method `from_json`.
+
+[serde_json::Value]: https://docs.serde.rs/serde_json/enum.Value.html

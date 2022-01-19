@@ -34,6 +34,7 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, 
 use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use lazy_static::lazy_static;
+use lowertest::MzReflect;
 use num_traits::Float as NumFloat;
 use ore::display::DisplayExt;
 use ore::result::ResultExt;
@@ -1311,7 +1312,7 @@ where
 }
 
 /// An error while parsing an input as a type.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ParseError {
     kind: ParseErrorKind,
     type_name: String,
@@ -1319,7 +1320,9 @@ pub struct ParseError {
     details: Option<String>,
 }
 
-#[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub enum ParseErrorKind {
     OutOfRange,
     InvalidInputSyntax,
@@ -1392,7 +1395,7 @@ impl fmt::Display for ParseError {
 
 impl Error for ParseError {}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum ParseHexError {
     InvalidHexDigit(char),
     OddLength,

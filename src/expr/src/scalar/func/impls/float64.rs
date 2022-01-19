@@ -12,7 +12,7 @@ use std::fmt;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzStructReflect;
+use lowertest::MzReflect;
 use repr::adt::numeric::{self, Numeric};
 use repr::{strconv, ColumnType, ScalarType};
 
@@ -127,9 +127,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastFloat64ToNumeric(pub Option<u8>);
 
 impl<'a> EagerUnaryFunc<'a> for CastFloat64ToNumeric {
