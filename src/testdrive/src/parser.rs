@@ -58,7 +58,15 @@ pub struct SqlCommand {
 #[derive(Debug, Clone)]
 pub struct FailSqlCommand {
     pub query: String,
+    pub error_match_type: SqlErrorMatchType,
     pub expected_error: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum SqlErrorMatchType {
+    Contains,
+    Exact,
+    Regex,
 }
 
 pub fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, InputError> {
@@ -221,8 +229,8 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputEr
 fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, InputError> {
     let (pos, line1) = line_reader.next().unwrap();
     let line2 = slurp_one(line_reader);
-    let expected_error = match line2 {
-        Some((_, line2)) => line2,
+    let (err_pos, expected_error) = match line2 {
+        Some((err_pos, line2)) => (err_pos, line2),
         None => {
             return Err(InputError {
                 pos,
@@ -230,9 +238,25 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, InputE
             });
         }
     };
+    let query = line1[1..].trim().to_string();
+
+    let (expected_error, error_match_type) =
+        if let Some(exp_err) = expected_error.strip_prefix("regex:") {
+            (exp_err, SqlErrorMatchType::Regex)
+        } else if let Some(exp_err) = expected_error.strip_prefix("contains:") {
+            (exp_err, SqlErrorMatchType::Contains)
+        } else if let Some(exp_err) = expected_error.strip_prefix("exact:") {
+            (exp_err, SqlErrorMatchType::Exact)
+        } else {
+            return Err(InputError {
+                pos: err_pos,
+                msg: "Query error must start with match specifier".into(),
+            });
+        };
     Ok(FailSqlCommand {
-        query: line1[1..].trim().to_owned(),
-        expected_error,
+        query: query.trim().to_string(),
+        expected_error: expected_error.trim().to_string(),
+        error_match_type,
     })
 }
 

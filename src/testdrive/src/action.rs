@@ -34,7 +34,7 @@ use mz_aws_util::config::AwsConfig;
 use ore::retry::Retry;
 
 use crate::error::{DynError, Error, InputError, ResultExt};
-use crate::parser::{Command, PosCommand, SqlOutput};
+use crate::parser::{Command, PosCommand, SqlErrorMatchType, SqlOutput};
 use crate::util;
 
 mod avro_ocf;
@@ -411,7 +411,10 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
             Command::Builtin(builtin) => Some(builtin.name.clone()),
             _ => None,
         };
-        let subst = |msg: &str| substitute_vars(msg, &vars, &ignore_prefix).map_err(wrap_err);
+        let subst =
+            |msg: &str| substitute_vars(msg, &vars, &ignore_prefix, false).map_err(wrap_err);
+        let subst_re =
+            |msg: &str| substitute_vars(msg, &vars, &ignore_prefix, true).map_err(wrap_err);
 
         let action: Box<dyn Action + Send + Sync> = match cmd.command {
             Command::Builtin(mut builtin) => {
@@ -557,7 +560,12 @@ pub async fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction
             }
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
-                sql.expected_error = subst(&sql.expected_error)?;
+
+                sql.expected_error = if matches!(sql.error_match_type, SqlErrorMatchType::Regex) {
+                    subst_re(&sql.expected_error)?
+                } else {
+                    subst(&sql.expected_error)?
+                };
                 Box::new(sql::build_fail_sql(sql, context.clone()).map_err(wrap_err)?)
             }
         };
@@ -574,6 +582,7 @@ fn substitute_vars(
     msg: &str,
     vars: &HashMap<String, String>,
     ignore_prefix: &Option<String>,
+    regex_escape: bool,
 ) -> Result<String, String> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"\$\{([^}]+)\}").unwrap();
@@ -589,7 +598,11 @@ fn substitute_vars(
         }
 
         if let Some(val) = vars.get(name) {
-            val.to_string()
+            if regex_escape {
+                regex::escape(val)
+            } else {
+                val.to_string()
+            }
         } else {
             err = Some(format!("unknown variable: {}", name));
             "#VAR-MISSING#".to_string()
