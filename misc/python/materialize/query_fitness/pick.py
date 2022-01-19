@@ -10,8 +10,8 @@
 
 import sys
 
+import pg8000
 import sqlparse
-from pg8000.dbapi import Connection  # type: ignore
 
 from materialize.query_fitness.all_parts_essential import AllPartsEssential
 
@@ -19,7 +19,7 @@ threshold = 0.5
 
 
 def main() -> None:
-    conn = Connection("pstoev", password="pstoev")
+    conn = pg8000.connect(database="pstoev", password="pstoev")
     fitness_func = AllPartsEssential(conn=conn)
 
     for query in sys.stdin:
@@ -29,8 +29,8 @@ def main() -> None:
             dump_slt(conn, query)
 
 
-def dump_slt(conn: Connection, query: str) -> None:
-    query = sqlparse.format(query.rstrip(), reindent=True, keyword_case="upper")  # type: ignore
+def dump_slt(conn: pg8000.Connection, query: str) -> None:
+    query = sqlparse.format(query.rstrip(), reindent=True, keyword_case="upper")
     cursor = conn.cursor()
     cursor.execute("ROLLBACK")
     cursor.execute(query)

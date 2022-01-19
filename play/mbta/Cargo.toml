@@ -8,13 +8,13 @@ publish = false
 [dependencies]
 anyhow = "1.0.52"
 byteorder = "1.4.3"
-clap = { version = "3.0.6", features = ["derive"] }
+clap = { version = "3.0.10", features = ["derive"] }
 futures = "0.3.19"
 json = "0.12.4"
 ordered-float = { version = "2.10.0", features = ["serde"] }
 ore = { path = "../../src/ore" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 repr = { path = "../../src/repr" }
-serde_json = "1.0.74"
+serde_json = "1.0.75"
 test-util = { path = "../../test/test-util" }
 tokio = "1.15.0"

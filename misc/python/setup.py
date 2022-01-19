@@ -10,7 +10,7 @@
 from pathlib import Path
 from typing import List
 
-from setuptools import find_packages, setup  # type: ignore
+from setuptools import find_packages, setup
 
 # stub setup.py that allows running `pip install -e .` to install into a virtualenv
 

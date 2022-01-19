@@ -107,45 +107,14 @@ These changes are present in [unstable builds](/versions/#unstable-builds) and
 are slated for inclusion in the next stable release. There may be additional
 changes that have not yet been documented.
 
-- Detect if the publication slot is missing from the upstream database and
-  report an error when using PostgreSQL sources
+- Fix a bug in the `ILIKE` operator where matching against a [`char`] value did
+  not take any trailing spaces into account {{% gh 10075 %}}. The new behavior
+  matches the behavior of the `LIKE` operator.
 
-- Allow Confluent Schema Registry SSL `WITH` options
-  (`ssl_ca_location`, `ssl_key_location`, `ssl_certificate_location`),
-  which override the equivalent Kafka options in `CREATE SOURCE` statements,
-  when creating CSR clients.
+- Allow wildcards in `LIKE` patterns to match newline characters
+  {{% gh 10077 %}}. The new behavior matches PostgreSQL.
 
-- **Breaking change.** When inferring a column name for a cast expression, fall
-  back to choosing the name of the target type.
-
-  Consider the following query:
-
-  ```sql
-  SELECT 'a'::text
-  ```
-
-  This version of Materialize will infer the column name `text`, while previous
-  versions of Materialize would fall back to the default column name `?column?`.
-
-- **Breaking change.** When inferring a column name for a [`boolean`] or
-  [`interval`] literal, fall back to choosing `bool` or `interval`,
-  respectively.
-
-- Support [subscripting `jsonb` values](/sql/types/jsonb/#subscripting) to
-  retrieve array elements or object values, as in:
-
-  ```sql
-  SELECT ('{"a": 1, "b": 2, "c": 3}'::jsonb)['b'];
-  ```
-  ```nofmt
-   jsonb
-  -------
-   2
-  ```
-
-
-- Fix a bug where using a `ROWS FROM` clause with an alias in a view would cause
-  Materialize to fail to reboot {{% gh 10008 %}}.
+- Add basic Prometheus counters for PostgreSQL sources.
 
 - **Breaking change.** Return an error when [`extract`](/sql/functions/extract/)
   is called with a [`date`] value but a time-related field (e.g., `SECOND`).
@@ -167,6 +136,51 @@ Only add new release notes above this line.
 The presence of this comment ensures that PRs that are alive across a release
 boundary don't silently merge their release notes into the wrong place.
 {{</ comment >}}
+
+{{% version-header v0.17.0 %}}
+
+- **Breaking change.** Improve consistency with PostgreSQL's column name
+  inference rules:
+
+    * When inferring a column name for a cast expression, fall back
+      to choosing the name of the target type.
+
+      Consider the following query:
+
+      ```sql
+      SELECT 'a'::text;
+      ```
+
+      This version of Materialize will infer the column name `text`, while
+      previous versions of Materialize would fall back to the default column
+      name `?column?`.
+
+    * When inferring a column name for a [`boolean`] or [`interval`] literal,
+      fall back to choosing `bool` or `interval`, respectively.
+
+- Support [subscripting `jsonb` values](/sql/types/jsonb/#subscripting) to
+  retrieve array elements or object values, as in:
+
+  ```sql
+  SELECT ('{"a": 1, "b": 2, "c": 3}'::jsonb)['b'];
+  ```
+  ```nofmt
+   jsonb
+  -------
+   2
+  ```
+
+- In Kafka sources, support independent SSL configurations for the Confluent
+  Schema Registry and the Kafka broker. See the new
+  [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)
+  for details.
+
+- Fix a bug where using a `ROWS FROM` clause with an alias in a view would cause
+  Materialize to fail to reboot {{% gh 10008 %}}.
+
+- When initializing a [PostgreSQL source](/sql/create-source/postgres), report
+  an error if the configured publication does not exist {{% gh 9933 %}}.
+  Previously, Materialize would silently import zero tables.
 
 {{% version-header v0.16.0 %}}
 

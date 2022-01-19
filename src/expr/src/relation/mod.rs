@@ -16,7 +16,7 @@ use std::fmt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use lowertest::{MzEnumReflect, MzStructReflect};
+use lowertest::MzReflect;
 use ore::collections::CollectionExt;
 use ore::id_gen::IdGen;
 use ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
@@ -49,7 +49,7 @@ pub const RECURSION_LIMIT: usize = 2048;
 ///
 /// The AST is meant reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///
@@ -65,6 +65,7 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Get {
         /// The identifier for the collection to load.
+        #[mzreflect(ignore)]
         id: Id,
         /// Schema of the collection.
         typ: RelationType,
@@ -74,6 +75,7 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Let {
         /// The identifier to be used in `Get` variants to retrieve `value`.
+        #[mzreflect(ignore)]
         id: LocalId,
         /// The collection to be bound to `id`.
         value: Box<MirRelationExpr>,
@@ -1851,7 +1853,7 @@ impl CheckedRecursion for MirRelationExprVisitor {
 }
 
 /// Specification for an ordering by a column.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzStructReflect)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
 pub struct ColumnOrder {
     /// The column index.
     pub column: usize,
@@ -1865,14 +1867,14 @@ impl fmt::Display for ColumnOrder {
         write!(
             f,
             "#{} {}",
-            self.column.to_string(),
+            self.column,
             if self.desc { "desc" } else { "asc" }
         )
     }
 }
 
 /// Describes an aggregation expression.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AggregateExpr {
     /// Names the aggregation function.
     pub func: AggregateFunc,
@@ -2060,7 +2062,7 @@ impl fmt::Display for AggregateExpr {
 }
 
 /// Describe a join implementation in dataflow.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///

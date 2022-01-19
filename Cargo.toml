@@ -78,7 +78,12 @@ rustc-demangle = { opt-level = 3 }
 debug = 1
 
 [patch.crates-io]
+# Waiting on https://github.com/lu-zero/autotools-rs/pull/27 to make it into a release.
+autotools = { git = "https://github.com/lu-zero/autotools-rs.git" }
 # Waiting on https://github.com/hyperium/headers/pull/99.
 headers = { git = "https://github.com/MaterializeInc/headers.git" }
 # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
 parquet-format-async-temp = { git = "https://github.com/MaterializeInc/parquet-format-rs", branch = "main" }
+# Waiting on https://github.com/tokio-rs/prost/pull/576.
+prost = { git = "https://github.com/MaterializeInc/prost.git" }
+prost-types = { git = "https://github.com/MaterializeInc/prost.git" }

@@ -27,8 +27,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use persist_types::{Codec, ExtendWriteAdapter};
-use protobuf::Message;
+use bytes::BufMut;
+use persist_types::Codec;
+use prost::Message;
 use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::{ChangeBatch, Timestamp as TimelyTimestamp};
@@ -711,14 +712,10 @@ impl From<&SourceTimestamp> for ProtoSourceTimestamp {
     fn from(x: &SourceTimestamp) -> Self {
         ProtoSourceTimestamp {
             partition_id: Some(match &x.partition {
-                PartitionId::Kafka(x) => proto_source_timestamp::Partition_id::kafka(*x),
-                PartitionId::None => proto_source_timestamp::Partition_id::none(
-                    protobuf::well_known_types::Empty::default(),
-                ),
+                PartitionId::Kafka(x) => proto_source_timestamp::PartitionId::Kafka(*x),
+                PartitionId::None => proto_source_timestamp::PartitionId::None(()),
             }),
             mz_offset: x.offset.offset,
-            unknown_fields: Default::default(),
-            cached_size: Default::default(),
         }
     }
 }
@@ -728,8 +725,8 @@ impl TryFrom<ProtoSourceTimestamp> for SourceTimestamp {
 
     fn try_from(x: ProtoSourceTimestamp) -> Result<Self, Self::Error> {
         let partition = match x.partition_id {
-            Some(proto_source_timestamp::Partition_id::kafka(x)) => PartitionId::Kafka(x),
-            Some(proto_source_timestamp::Partition_id::none(_)) => PartitionId::None,
+            Some(proto_source_timestamp::PartitionId::Kafka(x)) => PartitionId::Kafka(x),
+            Some(proto_source_timestamp::PartitionId::None(_)) => PartitionId::None,
             None => return Err("unknown partition_id".into()),
         };
         Ok(SourceTimestamp {
@@ -746,14 +743,14 @@ impl Codec for SourceTimestamp {
         "protobuf[SourceTimestamp]".into()
     }
 
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+    fn encode<B: BufMut>(&self, buf: &mut B) {
         ProtoSourceTimestamp::from(self)
-            .write_to_writer(&mut ExtendWriteAdapter(buf))
-            .expect("infallible for ExtendWriteAdapter")
+            .encode(buf)
+            .expect("provided buffer had sufficient capacity")
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        ProtoSourceTimestamp::parse_from_bytes(buf)
+        ProtoSourceTimestamp::decode(buf)
             .map_err(|err| err.to_string())?
             .try_into()
     }
@@ -761,11 +758,7 @@ impl Codec for SourceTimestamp {
 
 impl From<&AssignedTimestamp> for ProtoAssignedTimestamp {
     fn from(x: &AssignedTimestamp) -> Self {
-        ProtoAssignedTimestamp {
-            ts: x.0,
-            unknown_fields: Default::default(),
-            cached_size: Default::default(),
-        }
+        ProtoAssignedTimestamp { ts: x.0 }
     }
 }
 
@@ -782,14 +775,17 @@ impl Codec for AssignedTimestamp {
         "protobuf[AssignedTimestamp]".into()
     }
 
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
         ProtoAssignedTimestamp::from(self)
-            .write_to_writer(&mut ExtendWriteAdapter(buf))
-            .expect("infallible for ExtendWriteAdapter")
+            .encode(buf)
+            .expect("provided buffer had sufficient capacity")
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        ProtoAssignedTimestamp::parse_from_bytes(buf)
+        ProtoAssignedTimestamp::decode(buf)
             .map_err(|err| err.to_string())?
             .try_into()
     }

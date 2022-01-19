@@ -14,5 +14,5 @@ pre-image:
     strip: false
     extract:
       krb5-src:
-        - install/bin/kinit
-        - install/bin/kdestroy
+        install/bin/kinit: .
+        install/bin/kdestroy: .

@@ -16,7 +16,7 @@
     clippy::cast_sign_loss
 )]
 
-use std::io;
+use bytes::BufMut;
 
 mod codec_impls;
 
@@ -33,7 +33,9 @@ pub trait Codec: Sized + 'static {
     /// This must perfectly round-trip Self through [Codec::decode]. If the
     /// encode function for this codec ever changes, decode must be able to
     /// handle bytes output by all previous versions of encode.
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E);
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut;
     /// Decode a key or value previous encoded with this codec's
     /// [Codec::encode].
     ///
@@ -47,21 +49,4 @@ pub trait Codec: Sized + 'static {
     // TODO: Mechanically, this could return a ref to the original bytes
     // without any copies, see if we can make the types work out for that.
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String>;
-}
-
-/// An adaptor to implement [io::Write] for Extend<&u8>.
-///
-/// This is a helper for implementations of Codec that internally need a
-/// [io::Write]. Writes and flushes are guaranteed to succeed.
-pub struct ExtendWriteAdapter<'e, E>(pub &'e mut E);
-
-impl<'e, E: for<'a> Extend<&'a u8>> io::Write for ExtendWriteAdapter<'e, E> {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
-        self.0.extend(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> Result<(), io::Error> {
-        Ok(())
-    }
 }

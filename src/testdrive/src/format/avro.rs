@@ -236,6 +236,30 @@ where
     I: IntoIterator,
     I::Item: AsRef<str>,
 {
+    validate_sink_with_greedy_search(
+        key_schema,
+        value_schema,
+        expected,
+        actual,
+        regex,
+        regex_replacement,
+        false,
+    )
+}
+
+pub fn validate_sink_with_greedy_search<I>(
+    key_schema: Option<&Schema>,
+    value_schema: &Schema,
+    expected: I,
+    actual: &[(Option<Value>, Option<Value>)],
+    regex: &Option<Regex>,
+    regex_replacement: &String,
+    greedy_search: bool,
+) -> Result<(), String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
     let expected = expected
         .into_iter()
         .map(|v| {
@@ -262,9 +286,13 @@ where
     let mut expected = expected.iter();
     let mut actual = actual.iter();
     let mut index = 0..;
+
+    let mut found_beginning = !greedy_search;
+    let mut expected_item = expected.next();
+    let mut actual_item = actual.next();
     loop {
         let i = index.next().expect("known to exist");
-        match (expected.next(), actual.next()) {
+        match (expected_item, actual_item) {
             (Some(e), Some(a)) => {
                 let e_str = format!("{:#?}", e);
                 let a_str = match &regex {
@@ -275,13 +303,25 @@ where
                 };
 
                 if e_str != a_str {
-                    return Err(format!(
-                        "record {} did not match\nexpected:\n{}\n\nactual:\n{}",
-                        i, e_str, a_str
-                    ));
+                    if found_beginning {
+                        return Err(format!(
+                            "record {} did not match\nexpected:\n{}\n\nactual:\n{}",
+                            i, e_str, a_str
+                        ));
+                    }
+                    actual_item = actual.next();
+                } else {
+                    found_beginning = true;
+                    expected_item = expected.next();
+                    actual_item = actual.next();
                 }
             }
-            (Some(e), None) => return Err(format!("missing record {}: {:#?}", i, e)),
+            (Some(e), None) => {
+                if !greedy_search {
+                    return Err(format!("missing record {}: {:#?}", i, e));
+                }
+                break;
+            }
             (None, Some(a)) => return Err(format!("extra record {}: {:#?}", i, a)),
             (None, None) => break,
         }

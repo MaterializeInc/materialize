@@ -8,13 +8,13 @@ publish = false
 [dependencies]
 anyhow = "1.0.52"
 async-trait = "0.1.52"
-clap = { version = "3.0.6", features = ["derive", "env"] }
+clap = { version = "3.0.10", features = ["derive", "env"] }
 dataflow-types = { path = "../dataflow-types" }
 dataflow = { path = "../dataflow" }
 tracing = "0.1.29"
 ore = { path = "../ore" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tracing-subscriber = "0.3.5"
+tracing-subscriber = "0.3.6"
 tokio = { version = "1.15.0", features = ["macros", "rt-multi-thread"] }
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-util = { version = "0.6.9", features = ["codec"] }

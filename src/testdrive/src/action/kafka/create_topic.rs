@@ -95,7 +95,7 @@ impl Action for CreateTopicAction {
                 match res {
                     Ok(_) | Err((_, RDKafkaErrorCode::UnknownTopicOrPartition)) => (),
                     Err((_, err)) => {
-                        eprintln!("warning: unable to delete {}: {}", topic, err.to_string())
+                        eprintln!("warning: unable to delete {}: {}", topic, err)
                     }
                 }
             }

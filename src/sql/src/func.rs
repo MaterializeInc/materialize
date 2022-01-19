@@ -2590,6 +2590,12 @@ lazy_static! {
             // ILIKE
             "~~*" => Scalar {
                 params!(String, String) => IsLikePatternMatch { case_insensitive: true }, 1627;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
+                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: true })
+                    )
+                }), 1629;
             },
             "!~~*" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
@@ -2597,6 +2603,13 @@ lazy_static! {
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: true })
                         .call_unary(UnaryFunc::Not(func::Not)))
                 }), 1628;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
+                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
+                        .call_unary(UnaryFunc::Not(func::Not))
+                    )
+                }), 1630;
             },
 
 

@@ -241,7 +241,7 @@ mod tests {
             req: req.clone(),
             merged: TraceBatchMeta {
                 key: "MERGED_KEY".into(),
-                format: ProtoBatchFormat::ParquetKVTD,
+                format: ProtoBatchFormat::ParquetKvtd,
                 desc: desc_from(0, 3, 2),
                 level: 1,
                 size_bytes: 0,

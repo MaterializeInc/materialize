@@ -23,7 +23,7 @@ Such queries are suitable for inclusion in regression tests
 
 from typing import Optional
 
-from pg8000.native import DatabaseError  # type: ignore
+from pg8000.dbapi import DatabaseError
 
 from materialize.query_fitness.fitness_function import FitnessFunction
 

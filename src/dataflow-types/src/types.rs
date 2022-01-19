@@ -402,7 +402,7 @@ pub mod sources {
                     DataEncoding::Protobuf(ProtobufEncoding {
                         descriptors,
                         message_name,
-                        schema_registry_config: _,
+                        confluent_wire_format: _,
                     }) => protobuf::DecodedDescriptors::from_bytes(
                         descriptors,
                         message_name.to_owned(),
@@ -491,7 +491,7 @@ pub mod sources {
         pub struct ProtobufEncoding {
             pub descriptors: Vec<u8>,
             pub message_name: NormalizedProtobufMessageName,
-            pub schema_registry_config: Option<ccsr::ClientConfig>,
+            pub confluent_wire_format: bool,
         }
 
         /// Arguments necessary to define how to decode from CSV format

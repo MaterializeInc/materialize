@@ -16,18 +16,18 @@ use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
 
 use lowertest::{
-    deserialize_optional, gen_reflect_info_func, GenericTestDeserializeContext, MzEnumReflect,
-    MzStructReflect, ReflectedTypeInfo,
+    deserialize_optional, GenericTestDeserializeContext, MzReflect, ReflectedTypeInfo,
 };
 use ore::str::StrExt;
 use repr::adt::numeric::Numeric;
 use repr::{ColumnType, Datum, Row, RowArena, ScalarType};
 
-/* #region Generate information required to construct arbitrary `ScalarType`*/
-gen_reflect_info_func!(produce_rti, [ScalarType], [ColumnType]);
-
 lazy_static! {
-    pub static ref RTI: ReflectedTypeInfo = produce_rti();
+    pub static ref RTI: ReflectedTypeInfo = {
+        let mut rti = ReflectedTypeInfo::default();
+        ColumnType::add_to_reflected_type_info(&mut rti);
+        rti
+    };
 }
 
 /* #endregion */
@@ -180,7 +180,7 @@ where
         TokenTree::Punct(punct) if punct.as_char() == '-' => {
             match rest_of_stream.next() {
                 Some(TokenTree::Literal(literal)) => {
-                    Ok(Some(format!("{}{}", punct.as_char(), literal.to_string())))
+                    Ok(Some(format!("{}{}", punct.as_char(), literal)))
                 }
                 None => Ok(None),
                 // Must error instead of handling the tokens using default

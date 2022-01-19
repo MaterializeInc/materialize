@@ -49,6 +49,7 @@ from typing import (
 import pg8000
 import sqlparse
 import yaml
+from pg8000 import Cursor
 
 from materialize import mzbuild, spawn, ui
 from materialize.ui import UIError
@@ -264,7 +265,7 @@ class Composition:
 
         # Emit the munged configuration to a temporary file so that we can later
         # pass it to Docker Compose.
-        self.file = TemporaryFile()
+        self.file = TemporaryFile(mode="w")
         os.set_inheritable(self.file.fileno(), True)
         self._write_compose()
 
@@ -301,7 +302,7 @@ class Composition:
     def _write_compose(self) -> None:
         self.file.seek(0)
         self.file.truncate()
-        yaml.dump(self.compose, self.file, encoding="utf-8")  # type: ignore
+        yaml.dump(self.compose, self.file)
         self.file.flush()
 
     @classmethod
@@ -442,14 +443,18 @@ class Composition:
             self.compose = old_compose
             self._write_compose()
 
-    def sql(self, sql: str) -> None:
-        """Run a batch of SQL statements against the materialized service."""
+    def sql_cursor(self) -> Cursor:
+        """Get a cursor to run SQL queries against the materialized service."""
         port = self.default_port("materialized")
         conn = pg8000.connect(host="localhost", user="materialize", port=port)
         conn.autocommit = True
-        cursor = conn.cursor()
-        for statement in sqlparse.split(sql):
-            cursor.execute(statement)
+        return conn.cursor()
+
+    def sql(self, sql: str) -> None:
+        """Run a batch of SQL statements against the materialized service."""
+        with self.sql_cursor() as cursor:
+            for statement in sqlparse.split(sql):
+                cursor.execute(statement)
 
     def start_and_wait_for_tcp(self, services: List[str]) -> None:
         """Sequentially start the named services, waiting for eaach to become

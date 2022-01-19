@@ -53,6 +53,7 @@ pub fn build_regex(pattern: &str, flags: &str) -> Result<Regex, EvalError> {
     }
 
     let mut regex = RegexBuilder::new(&regex);
+    regex.dot_matches_new_line(true);
     for f in flags.chars() {
         match f {
             'i' => {

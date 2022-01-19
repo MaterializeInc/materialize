@@ -7,25 +7,27 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, List
+from typing import Generic, List, Protocol, TypeVar
+
+T = TypeVar("T")
 
 
-class Comparator:
+class Comparator(Generic[T]):
     def __init__(self, name: str, threshold: float) -> None:
         self._name = name
         self._threshold = threshold
-        self._points: List[Any] = []
+        self._points: List[T] = []
 
-    def append(self, point: Any) -> None:
+    def append(self, point: T) -> None:
         self._points.append(point)
 
     def name(self) -> str:
         return self._name
 
-    def this(self) -> Any:
+    def this(self) -> T:
         return self._points[0]
 
-    def other(self) -> Any:
+    def other(self) -> T:
         return self._points[1]
 
     def is_regression(self) -> bool:
@@ -38,10 +40,8 @@ class Comparator:
         return str(self)
 
 
-class RelativeThresholdComparator(Comparator):
+class RelativeThresholdComparator(Comparator[float]):
     def ratio(self) -> float:
-        assert type(self._points[0]) is float
-        assert type(self._points[1]) is float
         return self._points[0] / self._points[1]
 
     def is_regression(self) -> bool:
@@ -65,9 +65,14 @@ class RelativeThresholdComparator(Comparator):
             return f"{(1/ratio):3.1f} times faster"
 
 
-class OverlapComparator(Comparator):
+class Overlappable(Protocol):
+    def overlap(self, other: "Overlappable") -> float:
+        ...
+
+
+class OverlapComparator(Comparator[Overlappable]):
     def ratio(self) -> float:
-        return self._points[0].overlap(other=self._points[1])  # type: ignore
+        return self._points[0].overlap(other=self._points[1])
 
     def is_regression(self) -> bool:
         return self.ratio() < 1 - self._threshold

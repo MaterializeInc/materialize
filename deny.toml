@@ -104,11 +104,14 @@ license-files = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
+    # Waiting on https://github.com/lu-zero/autotools-rs/pull/27 to make it into
+    # a release.
+    "https://github.com/lu-zero/autotools-rs.git",
+
     # See the patch in Cargo.toml.
     "https://github.com/MaterializeInc/headers.git",
 
     # Waiting on several PRs to a mostly-abandoned upstream library.
-    "https://github.com/MaterializeInc/pubnub-headers.git",
     "https://github.com/MaterializeInc/pubnub-rust.git",
 
     # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
@@ -119,8 +122,14 @@ allow-git = [
     # Waiting on https://github.com/stepancheg/rust-protobuf/pull/581.
     "https://github.com/MaterializeInc/rust-protobuf.git",
 
+    # Waiting on https://github.com/tokio-rs/prost/pull/576.
+    "https://github.com/MaterializeInc/prost.git",
+
     # Waiting on https://github.com/bheisler/criterion.rs/pull/543.
     "https://github.com/MaterializeInc/criterion.rs.git",
+
+    # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
+    "https://github.com/MaterializeInc/parquet-format-rs.git",
 
     # Dependencies that we control upstream whose official releases we don't
     # care about.
@@ -128,6 +137,4 @@ allow-git = [
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",
-    # Until https://github.com/jorgecarleitao/parquet-format-rs/pull/2 is merged and released
-    "https://github.com/MaterializeInc/parquet-format-rs.git",
 ]

@@ -9,11 +9,11 @@ publish = false
 anyhow = "1.0.52"
 aws-sdk-s3 = { version = "0.4.0", default-features = false }
 bytefmt = "0.1.7"
-clap = { version = "3.0.6", features = ["derive"] }
+clap = { version = "3.0.10", features = ["derive"] }
 futures = "0.3.19"
 indicatif = "0.16.2"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 ore = { path = "../ore" }
 tokio = { version = "1.15.0", features = ["macros", "net", "rt", "time"] }
 tracing = "0.1.29"
-tracing-subscriber = { version = "0.3.5", default-features = false, features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.6", default-features = false, features = ["env-filter", "fmt"] }

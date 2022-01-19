@@ -9,6 +9,7 @@
 
 use std::fmt::Display;
 
+use bytes::BufMut;
 use expr::EvalError;
 use persist_types::Codec;
 
@@ -26,12 +27,14 @@ impl Codec for DecodeError {
         "DecodeError".into()
     }
 
-    fn encode<B: for<'a> Extend<&'a u8>>(&self, buf: &mut B) {
-        let encoded = match serde_json::to_vec(self) {
+    fn encode<B: BufMut>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        match serde_json::to_writer(buf.writer(), self) {
             Ok(ok) => ok,
             Err(e) => panic!("Encoding error, trying to encode {}: {}", self, e),
         };
-        buf.extend(encoded.iter());
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {

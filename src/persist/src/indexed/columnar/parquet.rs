@@ -42,7 +42,7 @@ pub fn encode_unsealed_parquet<W: Write>(
 ) -> Result<(), Error> {
     encode_parquet_kvtd(
         w,
-        encode_unsealed_inline_meta(batch, ProtoBatchFormat::ParquetKVTD),
+        encode_unsealed_inline_meta(batch, ProtoBatchFormat::ParquetKvtd),
         &batch.updates,
     )
 }
@@ -56,7 +56,7 @@ pub fn encode_trace_parquet<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Resu
         .collect();
     encode_parquet_kvtd(
         w,
-        encode_trace_inline_meta(batch, ProtoBatchFormat::ParquetKVTD),
+        encode_trace_inline_meta(batch, ProtoBatchFormat::ParquetKvtd),
         &[updates],
     )
 }
@@ -72,10 +72,10 @@ pub fn decode_unsealed_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealed
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
-        ProtoBatchFormat::ArrowKVTD => {
-            return Err("ArrowKVTD format not supported in parquet".into())
+        ProtoBatchFormat::ArrowKvtd => {
+            return Err("ArrowKvtd format not supported in parquet".into())
         }
-        ProtoBatchFormat::ParquetKVTD => decode_parquet_file_kvtd(r)?,
+        ProtoBatchFormat::ParquetKvtd => decode_parquet_file_kvtd(r)?,
     };
 
     let ret = BlobUnsealedBatch {
@@ -97,10 +97,10 @@ pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch,
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
-        ProtoBatchFormat::ArrowKVTD => {
+        ProtoBatchFormat::ArrowKvtd => {
             return Err("ArrowKVTD format not supported in parquet".into())
         }
-        ProtoBatchFormat::ParquetKVTD => decode_parquet_file_kvtd(r)?,
+        ProtoBatchFormat::ParquetKvtd => decode_parquet_file_kvtd(r)?,
     };
 
     let updates = updates
@@ -112,7 +112,7 @@ pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch,
         .collect();
 
     let ret = BlobTraceBatch {
-        desc: meta.desc.into_option().map_or_else(
+        desc: meta.desc.map_or_else(
             || {
                 Description::new(
                     Antichain::from_elem(u64::minimum()),

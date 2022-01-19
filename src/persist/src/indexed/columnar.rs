@@ -98,7 +98,7 @@ where
         let size_hint = iter.size_hint();
 
         let mut builder = ColumnarRecordsBuilder::default();
-        for record in iter.into_iter() {
+        for record in iter {
             let ((key, val), ts, diff) = record;
             let (key, val) = (key.as_ref(), val.as_ref());
             if builder.len() == 0 {
@@ -125,7 +125,7 @@ where
         let size_hint = iter.size_hint();
 
         let mut builder = ColumnarRecordsBuilder::default();
-        for record in iter.into_iter() {
+        for record in iter {
             let ((key, val), ts, diff) = record;
             let (key, val) = (key.as_ref(), val.as_ref());
             if builder.len() == 0 {

@@ -42,7 +42,7 @@ mod test {
                 new_s,
                 serde_json::to_string_pretty(&result).unwrap(),
                 serde_json::to_string_pretty(&new_result).unwrap(),
-                json.to_string(),
+                json,
                 type_name = type_name
             ))
         }

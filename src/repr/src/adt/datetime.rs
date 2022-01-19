@@ -22,11 +22,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
 
+use lowertest::MzReflect;
+
 /// Units of measurements associated with dates and times.
 ///
 /// TODO(benesch): with enough thinking, this type could probably be merged with
 /// `DateTimeField`.
-#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect,
+)]
 pub enum DateTimeUnits {
     Epoch,
     Millennium,
@@ -292,7 +296,7 @@ impl DateTimeFieldValue {
 }
 
 /// Parsed timezone.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
 pub enum Timezone {
     #[serde(with = "fixed_offset_serde")]
     FixedOffset(FixedOffset),

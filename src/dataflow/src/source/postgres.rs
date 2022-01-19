@@ -30,6 +30,11 @@ use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 use dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
 use repr::{Datum, Row};
 
+use self::metrics::PgSourceMetrics;
+use super::metrics::SourceBaseMetrics;
+
+mod metrics;
+
 lazy_static! {
     /// Postgres epoch is 2000-01-01T00:00:00Z
     static ref PG_EPOCH: SystemTime = UNIX_EPOCH + Duration::from_secs(946_684_800);
@@ -42,6 +47,7 @@ pub struct PostgresSourceReader {
     connector: PostgresSourceConnector,
     /// Our cursor into the WAL
     lsn: PgLsn,
+    metrics: PgSourceMetrics,
 }
 
 trait ErrorExt {
@@ -117,11 +123,16 @@ macro_rules! try_recoverable {
 
 impl PostgresSourceReader {
     /// Constructs a new instance
-    pub fn new(source_name: String, connector: PostgresSourceConnector) -> Self {
+    pub fn new(
+        source_name: String,
+        connector: PostgresSourceConnector,
+        metrics: &SourceBaseMetrics,
+    ) -> Self {
         Self {
-            source_name,
+            source_name: source_name.clone(),
             connector,
             lsn: 0.into(),
+            metrics: PgSourceMetrics::new(metrics, source_name),
         }
     }
 
@@ -185,7 +196,6 @@ impl PostgresSourceReader {
         self.lsn = try_fatal!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
-
         for info in publication_tables {
             // TODO(petrosagg): use a COPY statement here for more efficient network transfer
             let data = client
@@ -207,7 +217,9 @@ impl PostgresSourceReader {
                     try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
                 }
             }
+            self.metrics.tables.inc();
         }
+        self.metrics.lsn.set(self.lsn.into());
         client.simple_query("COMMIT;").await?;
         Ok(())
     }
@@ -277,7 +289,7 @@ impl PostgresSourceReader {
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
               ("proto_version" '1', "publication_names" '{publication}')"#,
             name = &self.connector.slot_name,
-            lsn = self.lsn.to_string(),
+            lsn = self.lsn,
             publication = self.connector.publication
         );
         let copy_stream = try_recoverable!(client.copy_both_simple(&query).await);
@@ -317,6 +329,7 @@ impl PostgresSourceReader {
             }
             match item {
                 XLogData(xlog_data) => {
+                    self.metrics.total.inc();
                     use LogicalReplicationMessage::*;
 
                     match xlog_data.data() {
@@ -328,12 +341,14 @@ impl PostgresSourceReader {
                             }
                         }
                         Insert(insert) => {
+                            self.metrics.inserts.inc();
                             let rel_id = insert.rel_id();
                             let new_tuple = insert.tuple().tuple_data();
                             let row = try_fatal!(self.row_from_tuple(rel_id, new_tuple));
                             inserts.push(row);
                         }
                         Update(update) => {
+                            self.metrics.updates.inc();
                             let rel_id = update.rel_id();
                             let old_tuple = try_fatal!(update
                                 .old_tuple()
@@ -358,6 +373,7 @@ impl PostgresSourceReader {
                             inserts.push(new_row);
                         }
                         Delete(delete) => {
+                            self.metrics.deletes.inc();
                             let rel_id = delete.rel_id();
                             let old_tuple = try_fatal!(delete
                                 .old_tuple()
@@ -368,6 +384,7 @@ impl PostgresSourceReader {
                             deletes.push(row);
                         }
                         Commit(commit) => {
+                            self.metrics.transactions.inc();
                             self.lsn = commit.end_lsn().into();
 
                             let tx = timestamper.start_tx().await;
@@ -378,8 +395,11 @@ impl PostgresSourceReader {
                             for row in inserts.drain(..) {
                                 try_fatal!(tx.insert(row).await);
                             }
+                            self.metrics.lsn.set(self.lsn.into());
                         }
-                        Origin(_) | Relation(_) | Type(_) => (),
+                        Origin(_) | Relation(_) | Type(_) => {
+                            self.metrics.ignored.inc();
+                        }
                         Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),
                         // The enum is marked as non_exaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source

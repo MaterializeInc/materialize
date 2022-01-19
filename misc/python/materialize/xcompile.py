@@ -79,8 +79,14 @@ def cargo(arch: Arch, subcommand: str, rustflags: List[str]) -> List[str]:
     _target = target(arch)
     _target_env = _target.upper().replace("-", "_")
 
-    ldflags: List[str] = []
-    rustflags += ["-Clink-arg=-Wl,--compress-debug-sections=zlib"]
+    # `-static-libstdc++` avoids introducing a runtime dependency on the
+    # extremely new version of libstdc++ that our cross-compiling toolchain
+    # uses.
+    ldflags: List[str] = ["-static-libstdc++"]
+    rustflags += [
+        "-Clink-arg=-Wl,--compress-debug-sections=zlib",
+        "-Clink-arg=-static-libstdc++",
+    ]
 
     if not sys.platform == "darwin":
         # lld is not yet easy to install on macOS.

@@ -18,6 +18,7 @@ use std::str;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
+use ore::soft_assert;
 use ore::vec::Vector;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -391,13 +392,24 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
         Tag::Numeric => {
-            let digits = read_byte(data, offset);
+            let digits = read_byte(data, offset).into();
             let exponent = read_byte(data, offset) as i8;
             let bits = read_byte(data, offset);
-            let lsu_u8_len = Numeric::digits_to_lsu_elements_len(digits.into()) * 2;
+
+            let lsu_u16_len = Numeric::digits_to_lsu_elements_len(digits);
+            let lsu_u8_len = lsu_u16_len * 2;
             let lsu_u8 = &data[*offset..(*offset + lsu_u8_len)];
             *offset += lsu_u8_len;
-            let d = Numeric::from_raw_parts(digits.into(), exponent.into(), bits, lsu_u8);
+
+            // TODO: if we refactor the decimal library to accept the owned
+            // array as a parameter to `from_raw_parts` below, we could likely
+            // avoid a copy because it is exactly the value we want
+            let mut lsu = [0; numeric::NUMERIC_DATUM_WIDTH];
+            for (i, c) in lsu_u8.chunks(2).enumerate() {
+                lsu[i] = u16::from_le_bytes(c.try_into().unwrap());
+            }
+
+            let d = Numeric::from_raw_parts(digits, exponent.into(), bits, lsu);
             Datum::from(d)
         }
     }
@@ -564,7 +576,30 @@ where
                     as u8,
             );
             data.push(bits);
-            data.extend_from_slice(lsu);
+
+            let lsu = &lsu[..Numeric::digits_to_lsu_elements_len(digits)];
+
+            // Little endian machines can take the lsu directly from u16 to u8.
+            if cfg!(target_endian = "little") {
+                // SAFETY: `lsu` (returned by `coefficient_units()`) is a `&[u16]`, so
+                // each element can safely be transmuted into two `u8`s.
+                let (prefix, lsu_bytes, suffix) = unsafe { lsu.align_to::<u8>() };
+                // The `u8` aligned version of the `lsu` should have twice as many
+                // elements as we expect for the `u16` version.
+                soft_assert!(
+                    lsu_bytes.len() == Numeric::digits_to_lsu_elements_len(digits) * 2,
+                    "u8 version of numeric LSU contained the wrong number of elements; expected {}, but got {}",
+                    Numeric::digits_to_lsu_elements_len(digits) * 2,
+                    lsu_bytes.len()
+                );
+                // There should be no unaligned elements in the prefix or suffix.
+                soft_assert!(prefix.is_empty() && suffix.is_empty());
+                data.extend_from_slice(&lsu_bytes);
+            } else {
+                for u in lsu {
+                    data.extend_from_slice(&u.to_le_bytes());
+                }
+            }
         }
     }
 }

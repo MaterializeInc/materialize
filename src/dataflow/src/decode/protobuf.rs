@@ -23,13 +23,13 @@ impl ProtobufDecoderState {
         ProtobufEncoding {
             descriptors,
             message_name,
-            schema_registry_config,
+            confluent_wire_format,
         }: ProtobufEncoding,
     ) -> Result<Self, anyhow::Error> {
         let descriptors = DecodedDescriptors::from_bytes(&descriptors, message_name)
             .expect("descriptors provided to protobuf source are pre-validated");
         Ok(ProtobufDecoderState {
-            decoder: Decoder::new(descriptors, schema_registry_config)?,
+            decoder: Decoder::new(descriptors, confluent_wire_format)?,
             events_success: 0,
             events_error: 0,
         })

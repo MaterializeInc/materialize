@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.52"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-clap = { version = "3.0.6", features = ["derive"] }
+clap = { version = "3.0.10", features = ["derive"] }
 csv = "1.1.6"
 env_logger = "0.9.0"
 futures = "0.3.19"
@@ -18,7 +18,8 @@ hex = "0.4.3"
 tracing = "0.1.29"
 ore = { path = "../../src/ore" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
+prost = "0.9.0"
+prost-types = "0.9.0"
 rand = "0.8.4"
 rand_distr = "0.4.2"
 test-util = { path = "../../test/test-util" }

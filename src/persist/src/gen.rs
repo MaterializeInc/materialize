@@ -15,8 +15,9 @@ include!(concat!(env!("OUT_DIR"), "/protobuf/mod.rs"));
 
 use std::io::Read;
 
+use bytes::BufMut;
 use md5::{Digest, Md5};
-use protobuf::Message;
+use prost::Message;
 
 use crate::error::Error;
 use crate::gen::persist::ProtoMeta;
@@ -75,20 +76,21 @@ impl persist_types::Codec for ProtoMeta {
         "protobuf+md5[ProtoMeta]".into()
     }
 
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
         // TODO: Move checksum to be a field on the proto instead. We can encode
         // the proto, checksum'ing as we go, and then manually append it onto
         // the end.
         //
         // TODO: Regardless of the above TODO, compute the checksum as we go and
         // avoid this temp Vec.
-        let temp = self
-            .write_to_bytes()
-            .expect("no required fields means no initialization errors");
-        buf.extend(&[Self::ENCODING_VERSION]);
-        buf.extend(temp.iter());
+        let temp = self.encode_to_vec();
+        buf.put_slice(&[Self::ENCODING_VERSION]);
+        buf.put_slice(&temp);
         let checksum = Self::md5_checksum(&temp);
-        buf.extend(&checksum);
+        buf.put_slice(&checksum);
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
@@ -110,8 +112,7 @@ impl persist_types::Codec for ProtoMeta {
             return Err("checksum mismatch".into());
         }
 
-        // TODO: Use parse_from_carllerche_bytes to save allocs?
-        Self::parse_from_bytes(buf).map_err(|err| err.to_string())
+        <Self as Message>::decode(buf).map_err(|err| err.to_string())
     }
 }
 
@@ -125,16 +126,16 @@ mod tests {
     fn checksum() {
         let meta = ProtoMeta::default();
         let mut encoded = Vec::new();
-        meta.encode(&mut encoded);
+        Codec::encode(&meta, &mut encoded);
 
         // Intact checksum matches.
-        assert_eq!(ProtoMeta::decode(&encoded), Ok(meta));
+        assert_eq!(<ProtoMeta as Codec>::decode(&encoded), Ok(meta));
 
         // Data has been mutated.
         let mut bad_data = encoded.clone();
         bad_data[1] += 1;
         assert_eq!(
-            ProtoMeta::decode(&bad_data),
+            <ProtoMeta as Codec>::decode(&bad_data),
             Err("checksum mismatch".into())
         );
 
@@ -142,7 +143,7 @@ mod tests {
         let mut bad_checksum = encoded.clone();
         *bad_checksum.last_mut().unwrap() += 1;
         assert_eq!(
-            ProtoMeta::decode(&bad_checksum),
+            <ProtoMeta as Codec>::decode(&bad_checksum),
             Err("checksum mismatch".into())
         );
     }
@@ -156,15 +157,15 @@ mod tests {
             ..Default::default()
         };
         let mut encoded = Vec::new();
-        meta.encode(&mut encoded);
+        Codec::encode(&meta, &mut encoded);
 
         // Sanity check that we don't just always return errors.
-        assert_eq!(ProtoMeta::decode(&encoded), Ok(meta));
+        assert_eq!(<ProtoMeta as Codec>::decode(&encoded), Ok(meta));
 
         // Every subset that's missing at least one byte should error, not panic
         // or succeed.
         for i in 0..encoded.len() - 1 {
-            assert!(ProtoMeta::decode(&encoded[..i]).is_err());
+            assert!(<ProtoMeta as Codec>::decode(&encoded[..i]).is_err());
         }
     }
 }

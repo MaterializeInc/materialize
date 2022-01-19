@@ -15,10 +15,8 @@ use async_trait::async_trait;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::{FuturesUnordered, StreamExt};
 use maplit::hashmap;
-use protobuf::descriptor::FileDescriptorSet;
-use protobuf::reflect::FileDescriptor;
-use protobuf::reflect::MessageDescriptor;
-use protobuf::Message;
+use prost::Message;
+use prost_reflect::{DynamicMessage, FileDescriptor, MessageDescriptor};
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
 use tokio::fs;
@@ -127,8 +125,8 @@ impl Transcoder {
                 schema_id,
                 schema_message_id,
             } => {
-                if let Some(val) = Self::decode_json::<_, Box<serde_json::value::RawValue>>(row)? {
-                    let message = protobuf::json::parse_dynamic_from_str(message, val.get())
+                if let Some(val) = Self::decode_json::<_, serde_json::Value>(row)? {
+                    let message = DynamicMessage::deserialize(message.clone(), val)
                         .map_err(|e| format!("parsing protobuf JSON: {}", e))?;
                     let mut out = vec![];
                     if *confluent_wire_format {
@@ -142,9 +140,7 @@ impl Transcoder {
                         out.write_i32::<NetworkEndian>(*schema_id).unwrap();
                         out.write_u8(*schema_message_id).unwrap();
                     }
-                    message
-                        .write_to_vec_dyn(&mut out)
-                        .map_err(|e| e.to_string())?;
+                    message.encode(&mut out).map_err(|e| e.to_string())?;
                     Ok(Some(out))
                 } else {
                     Ok(None)
@@ -342,12 +338,10 @@ impl Action for IngestAction {
                     let bytes = fs::read(temp_path.join(descriptor_file))
                         .await
                         .map_err(|e| format!("reading protobuf descriptor file: {}", e))?;
-                    let fds = FileDescriptorSet::parse_from_bytes(&bytes)
+                    let fd = FileDescriptor::decode(&*bytes)
                         .map_err(|e| format!("parsing protobuf descriptor file: {}", e))?;
-                    let fds = FileDescriptor::new_dynamic_fds(fds.file);
-                    let message = fds
-                        .iter()
-                        .find_map(|fd| fd.message_by_full_name(&message))
+                    let message = fd
+                        .get_message_by_name(&message)
                         .ok_or_else(|| format!("unknown message name {}", message))?;
                     Ok(Transcoder::Protobuf {
                         message,

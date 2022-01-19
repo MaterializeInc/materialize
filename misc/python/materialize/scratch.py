@@ -16,9 +16,10 @@ import os
 import shlex
 import sys
 from subprocess import CalledProcessError
-from typing import IO, Dict, List, NamedTuple, Optional, Union
+from typing import IO, Dict, List, NamedTuple, Optional, Union, cast
 
 import boto3
+from mypy_boto3_ec2.literals import InstanceTypeType
 from mypy_boto3_ec2.service_resource import Instance
 from mypy_boto3_ec2.type_defs import (
     InstanceNetworkInterfaceSpecificationTypeDef,
@@ -36,6 +37,7 @@ DEFAULT_SECURITY_GROUP_ID = "sg-06f780c8e23c0d944"
 DEFAULT_INSTANCE_PROFILE_NAME = "admin-instance"
 
 SSH_COMMAND = ["mssh", "-o", "StrictHostKeyChecking=off"]
+SFTP_COMMAND = ["msftp", "-o", "StrictHostKeyChecking=off"]
 
 say = ui.speaker("scratch> ")
 
@@ -150,7 +152,7 @@ def launch(
         "MinCount": 1,
         "MaxCount": 1,
         "ImageId": ami,
-        "InstanceType": instance_type,  # type: ignore
+        "InstanceType": cast(InstanceTypeType, instance_type),
         "UserData": provisioning_script,
         "TagSpecifications": [
             {
@@ -226,22 +228,29 @@ async def setup(
     mkrepo(i, git_rev)
 
 
-def mkrepo(i: Instance, rev: str) -> None:
-    mssh(i, "git init --bare materialize/.git")
+def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> None:
+    if init:
+        mssh(i, "git init --bare materialize/.git")
+
+    rev = git.rev_parse(rev)
+
+    cmd: List[str] = [
+        "git",
+        "push",
+        "--no-verify",
+        f"{instance_host(i)}:materialize/.git",
+        # Explicit refspec is required if the host repository is in detached
+        # HEAD mode.
+        f"{rev}:refs/heads/scratch",
+    ]
+    if force:
+        cmd.append("--force")
+
     spawn.runv(
-        [
-            "git",
-            "push",
-            "--no-verify",
-            f"{instance_host(i)}:materialize/.git",
-            # Explicit refspec is required if the host repository is in detached
-            # HEAD mode.
-            "HEAD:refs/heads/scratch",
-        ],
+        cmd,
         cwd=ROOT,
         env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
     )
-    rev = git.rev_parse(rev)
     mssh(
         i,
         f"cd materialize && git config core.bare false && git checkout {rev}",
@@ -377,6 +386,24 @@ def mssh(
             *SSH_COMMAND,
             f"{host}",
             command,
+        ],
+        stdin=stdin,
+        print_to=open(os.devnull, "w"),
+    )
+
+
+def msftp(
+    instance: Instance,
+    *,
+    stdin: Union[None, int, IO[bytes], bytes] = None,
+) -> None:
+    """Connects over SFTP via EC2 Instance Connect."""
+    host = instance_host(instance)
+    print(f"$ msftp {host}")
+    spawn.runv(
+        [
+            *SFTP_COMMAND,
+            f"{host}",
         ],
         stdin=stdin,
         print_to=open(os.devnull, "w"),

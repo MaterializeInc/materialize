@@ -39,6 +39,7 @@ pub struct VerifyAction {
     sort_messages: bool,
     expected_messages: Vec<String>,
     context: Context,
+    greedy_search: bool,
 }
 
 pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyAction, String> {
@@ -65,6 +66,7 @@ pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyA
             "kafka-verify requires a non-empty list of expected messages",
         ));
     }
+    let greedy_search = cmd.args.opt_bool("greedy-search")?.unwrap_or(false);
     cmd.args.done()?;
     Ok(VerifyAction {
         sink,
@@ -73,6 +75,7 @@ pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyA
         sort_messages,
         expected_messages,
         context,
+        greedy_search,
     })
 }
 
@@ -224,32 +227,33 @@ impl Action for VerifyAction {
                     actual_messages.sort_by_key(|k| format!("{:?}", k.1));
                 }
 
-                avro::validate_sink(
+                avro::validate_sink_with_greedy_search(
                     key_schema.as_ref(),
                     value_schema,
                     &self.expected_messages,
                     &actual_messages,
                     &self.context.regex,
                     &self.context.regex_replacement,
+                    self.greedy_search,
                 )
             }
             SinkFormat::Json { key } => {
                 let mut actual_messages = vec![];
                 for (key, value) in actual_bytes {
-                    let key_datum =
-                        match key {
-                            None => None,
-                            Some(bytes) => Some(serde_json::from_slice(&bytes).map_err(|e| {
-                                format!("converting bytes to JSON {}", e.to_string())
-                            })?),
-                        };
-                    let value_datum =
-                        match value {
-                            None => None,
-                            Some(bytes) => Some(serde_json::from_slice(&bytes).map_err(|e| {
-                                format!("converting bytes to JSON {}", e.to_string())
-                            })?),
-                        };
+                    let key_datum = match key {
+                        None => None,
+                        Some(bytes) => Some(
+                            serde_json::from_slice(&bytes)
+                                .map_err(|e| format!("converting bytes to JSON {}", e))?,
+                        ),
+                    };
+                    let value_datum = match value {
+                        None => None,
+                        Some(bytes) => Some(
+                            serde_json::from_slice(&bytes)
+                                .map_err(|e| format!("converting bytes to JSON {}", e))?,
+                        ),
+                    };
 
                     actual_messages.push((key_datum, value_datum));
                 }

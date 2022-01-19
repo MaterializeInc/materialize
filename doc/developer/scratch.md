@@ -97,6 +97,15 @@ brennan@New-Orleans ~ ❯❯❯ ~/code/materialize/bin/scratch mine
 Important options include `--all`, which lists machines for all users, and `--output-format csv`, which does what it looks like. To look up
 machines for someone other than yourself, list their email addresses at the end of the command, like so: `scratch mine eli@materialize.com`.
 
+### `bin/scratch push`
+
+```
+bin/scratch push <instance_id>
+```
+
+`push` re-pushes your git `HEAD` to the specified instance. You can override the commit to checkout
+with `--rev`
+
 ### `bin/scratch destroy`
 
 This subcommand terminates a list of machines given by Instance ID on the command line. For example:

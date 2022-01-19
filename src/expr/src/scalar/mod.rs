@@ -15,7 +15,7 @@ use ore::stack::CheckedRecursion;
 use ore::stack::RecursionGuard;
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzEnumReflect;
+use lowertest::MzReflect;
 use ore::collections::CollectionExt;
 use ore::stack::maybe_grow;
 use ore::str::separated;
@@ -32,9 +32,7 @@ use crate::RECURSION_LIMIT;
 pub mod func;
 pub mod like_pattern;
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum MirScalarExpr {
     /// A column of the input row
     Column(usize),
@@ -1201,9 +1199,7 @@ impl CheckedRecursion for MirScalarExprVisitor {
     }
 }
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum EvalError {
     DateBinOutOfRange(String),
     DivisionByZero,

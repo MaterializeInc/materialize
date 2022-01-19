@@ -8,9 +8,10 @@ publish = false
 [dependencies]
 anyhow = "1.0.52"
 async-trait = "0.1.52"
-aws-config = { version = "0.4.0", default-features = false, features = ["native-tls"] }
+aws-config = { version = "0.4.1", default-features = false, features = ["native-tls"] }
 aws-types = { version = "0.4.0", features = ["hardcoded-credentials"] }
 aws-smithy-http = "0.34.0"
+bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
 crossbeam-channel = "0.5.2"
 enum-iterator = "0.7.0"
@@ -31,7 +32,7 @@ regex = "1.5.4"
 repr = { path = "../repr" }
 serde = { version = "1.0.133", features = ["derive"] }
 serde_regex = "1.1.0"
-serde_json = "1.0.74"
+serde_json = "1.0.75"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.15.0"
 url = { version = "2.2.2", features = ["serde"] }

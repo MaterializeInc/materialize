@@ -20,6 +20,7 @@ mod lowering;
 mod scalar_expr;
 #[cfg(test)]
 mod test;
+mod validator;
 
 pub use scalar_expr::*;
 
@@ -109,7 +110,7 @@ pub struct Column {
 }
 
 /// Enum that describes the DISTINCT property of a `QueryBox`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Eq, Hash, PartialEq)]
 pub enum DistinctOperation {
     /// Distinctness of the output of the box must be enforced by
     /// the box.
@@ -137,21 +138,29 @@ pub struct Quantifier {
     pub alias: Option<Ident>,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub enum QuantifierType {
     /// An ALL subquery.
-    All,
+    All = 0b00000001,
     /// An existential subquery (IN SELECT/EXISTS/ANY).
-    Existential,
+    Existential = 0b00000010,
     /// A regular join operand where each row from its input
     /// box must be consumed by the parent box operator.
-    Foreach,
+    Foreach = 0b00000100,
     /// The preserving side of an outer join. Only valid in
     /// OuterJoin boxes.
-    PreservedForeach,
+    PreservedForeach = 0b00001000,
     /// A scalar subquery that produces one row at most.
-    Scalar,
+    Scalar = 0b00010000,
 }
+
+/// A bitmask that matches the discriminant of every possible [`QuantifierType`].
+const ARBITRARY_QUANTIFIER: usize = 0b00000000
+    | (QuantifierType::All as usize)
+    | (QuantifierType::Existential as usize)
+    | (QuantifierType::Foreach as usize)
+    | (QuantifierType::PreservedForeach as usize)
+    | (QuantifierType::Scalar as usize);
 
 #[derive(Debug)]
 pub enum BoxType {
@@ -184,10 +193,22 @@ pub struct Get {
     id: expr::GlobalId,
 }
 
+impl From<Get> for BoxType {
+    fn from(get: Get) -> Self {
+        BoxType::Get(get)
+    }
+}
+
 /// The content of a Grouping box.
 #[derive(Debug, Default)]
 pub struct Grouping {
     pub key: Vec<BoxScalarExpr>,
+}
+
+impl From<Grouping> for BoxType {
+    fn from(grouping: Grouping) -> Self {
+        BoxType::Grouping(grouping)
+    }
 }
 
 /// The content of a OuterJoin box.
@@ -195,6 +216,12 @@ pub struct Grouping {
 pub struct OuterJoin {
     /// The predices in the ON clause of the outer join.
     pub predicates: Vec<BoxScalarExpr>,
+}
+
+impl From<OuterJoin> for BoxType {
+    fn from(outer_join: OuterJoin) -> Self {
+        BoxType::OuterJoin(outer_join)
+    }
 }
 
 /// The content of a Select box.
@@ -210,15 +237,33 @@ pub struct Select {
     pub offset: Option<BoxScalarExpr>,
 }
 
+impl From<Select> for BoxType {
+    fn from(select: Select) -> Self {
+        BoxType::Select(select)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TableFunction {
     pub parameters: Vec<BoxScalarExpr>,
     // @todo function metadata from the catalog
 }
 
+impl From<TableFunction> for BoxType {
+    fn from(table_function: TableFunction) -> Self {
+        BoxType::TableFunction(table_function)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Values {
     pub rows: Vec<Vec<BoxScalarExpr>>,
+}
+
+impl From<Values> for BoxType {
+    fn from(values: Values) -> Self {
+        BoxType::Values(values)
+    }
 }
 
 impl Model {
@@ -358,6 +403,28 @@ impl Model {
 }
 
 impl QueryBox {
+    /// Resolve the input quantifiers of this box as an iterator of immutable
+    /// references.
+    fn input_quantifiers<'a>(
+        &'a self,
+        model: &'a Model,
+    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
+        self.quantifiers
+            .iter()
+            .map(|q_id| model.get_quantifier(*q_id))
+    }
+
+    /// Resolve the quantifiers ranging over this box as an iterator of immutable
+    /// references.
+    fn ranging_quantifiers<'a>(
+        &'a self,
+        model: &'a Model,
+    ) -> impl Iterator<Item = Ref<'a, Quantifier>> {
+        self.ranging_quantifiers
+            .iter()
+            .map(|q_id| model.get_quantifier(*q_id))
+    }
+
     /// Add all columns from the non-subquery input quantifiers of the box to the
     /// projection of the box.
     fn add_all_input_columns(&mut self, model: &Model) {
