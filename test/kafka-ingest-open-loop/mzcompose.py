@@ -92,17 +92,43 @@ def send_records(
 #
 # [1]: https://www.scylladb.com/2021/04/22/on-coordinated-omission/
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("--num-seconds", type=int, default=100)
-    parser.add_argument("--records-per-second", type=int, default=10000)
-    parser.add_argument("--num-keys", type=int, default=1000000000)
-    parser.add_argument("--value-bytes", type=int, default=500)
-    parser.add_argument("--timeout-secs", type=int, default=120)
-    parser.add_argument("--enable-persistence", action="store_true")
+    parser.add_argument(
+        "--num-seconds",
+        type=int,
+        default=100,
+        help="number of seconds to write records to Kafka",
+    )
+    parser.add_argument(
+        "--records-per-second",
+        type=int,
+        default=10000,
+        help="throughput of writes to maintain during testing",
+    )
+    parser.add_argument(
+        "--num-keys", type=int, default=1000000000, help="number of distinct keys"
+    )
+    parser.add_argument(
+        "--value-bytes", type=int, default=500, help="record payload size in bytes"
+    )
+    parser.add_argument(
+        "--timeout-secs", type=int, default=120, help="timeout to send records to Kafka"
+    )
+    parser.add_argument(
+        "--enable-persistence",
+        action="store_true",
+        help="whether or not to enable persistence on materialized",
+    )
     parser.add_argument(
         "--s3-storage",
         type=str,
         default=None,
         help="enables s3 persist storage, pointed at the given subpath of our internal testing bucket",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="number of dataflow workers to use in materialized",
     )
     args = parser.parse_args()
 
@@ -118,6 +144,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print("--s3-storage value must be non-empty", file=sys.stderr)
         sys.exit(1)
     elif args.s3_storage:
+        if args.enable_persistence is not True:
+            print(
+                "cannot specifiy --s3-storage without --enable-persistence",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         options.extend(
             [
                 "--persist-storage-enabled",
@@ -127,7 +159,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     override = [
         Materialized(
-            workers=4,
+            workers=args.workers,
             timestamp_frequency="1s",
             options=options,
         )
