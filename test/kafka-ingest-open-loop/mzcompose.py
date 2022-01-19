@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import sys
 import time
 
 from pg8000.dbapi import InterfaceError
@@ -99,6 +100,12 @@ def workflow_kafka_ingest_open_loop(
     parser.add_argument("--value-bytes", type=int, default=500)
     parser.add_argument("--timeout-secs", type=int, default=120)
     parser.add_argument("--enable-persistence", action="store_true")
+    parser.add_argument(
+        "--s3-storage",
+        type=str,
+        default=None,
+        help="enables s3 persist storage, pointed at the given subpath of our internal testing bucket",
+    )
     args = parser.parse_args()
 
     options = []
@@ -108,6 +115,17 @@ def workflow_kafka_ingest_open_loop(
             "--persistent-kafka-upsert-source",
             "--disable-persistent-system-tables-test",
         ]
+
+    if args.s3_storage == "":
+        print("--s3-storage value must be non-empty", file=sys.stderr)
+        sys.exit(1)
+    elif args.s3_storage:
+        options.extend(
+            [
+                "--persist-storage-enabled",
+                f"--persist-storage=s3://mtlz-test-persist-1d-lifecycle-delete/{args.s3_storage}",
+            ]
+        )
 
     override = [
         Materialized(
