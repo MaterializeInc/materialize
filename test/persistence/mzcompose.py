@@ -38,7 +38,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     mz_default,
-    Testdrive(no_reset=True),
+    Testdrive(no_reset=True, default_timeout="60s"),
 ]
 
 td_test = os.environ.pop("TD_TEST", "*")
