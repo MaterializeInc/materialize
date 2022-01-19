@@ -220,11 +220,10 @@ $ kafka-ingest format=avro topic=rt-binding-consistency-test-input schema=${sche
 $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
 
-# Verify that there is at least one cycle of consistency output. After that, we
-# can't verify more because there will now be a constant stream of END records
-# as real time advances.
-
-$ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink consistency=debezium greedy-search=true
+# Because the consistency topic produces a new end record every second, parital-search will wait
+# for 10 seconds before continuing rather than the per-record timeout. Be wary of copy/pasting the
+# `partial-search` arg.
+$ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink consistency=debezium partial-search=10
 {"id": "<TIMESTAMP>", "status": "BEGIN", "event_count": null, "data_collections": null}
 {"id": "<TIMESTAMP>", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "rt-binding-consistency-test-output-${testdrive.seed}"}]}}
 

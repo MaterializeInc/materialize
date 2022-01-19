@@ -236,7 +236,7 @@ where
     I: IntoIterator,
     I::Item: AsRef<str>,
 {
-    validate_sink_with_greedy_search(
+    validate_sink_with_partial_search(
         key_schema,
         value_schema,
         expected,
@@ -247,14 +247,14 @@ where
     )
 }
 
-pub fn validate_sink_with_greedy_search<I>(
+pub fn validate_sink_with_partial_search<I>(
     key_schema: Option<&Schema>,
     value_schema: &Schema,
     expected: I,
     actual: &[(Option<Value>, Option<Value>)],
     regex: &Option<Regex>,
     regex_replacement: &String,
-    greedy_search: bool,
+    partial_search: bool,
 ) -> Result<(), String>
 where
     I: IntoIterator,
@@ -287,7 +287,7 @@ where
     let mut actual = actual.iter();
     let mut index = 0..;
 
-    let mut found_beginning = !greedy_search;
+    let mut found_beginning = !partial_search;
     let mut expected_item = expected.next();
     let mut actual_item = actual.next();
     loop {
@@ -316,21 +316,22 @@ where
                     actual_item = actual.next();
                 }
             }
-            (Some(e), None) => {
-                if !greedy_search {
-                    return Err(format!("missing record {}: {:#?}", i, e));
+            (Some(e), None) => return Err(format!("missing record {}: {:#?}", i, e)),
+            (None, Some(a)) => {
+                if !partial_search {
+                    return Err(format!("extra record {}: {:#?}", i, a));
                 }
                 break;
             }
-            (None, Some(a)) => return Err(format!("extra record {}: {:#?}", i, a)),
             (None, None) => break,
         }
     }
     let expected: Vec<_> = expected.map(|e| format!("{:#?}", e)).collect();
     let actual: Vec<_> = actual.map(|a| format!("{:#?}", a)).collect();
+
     if !expected.is_empty() {
         Err(format!("missing records:\n{}", expected.join("\n")))
-    } else if !actual.is_empty() {
+    } else if !actual.is_empty() && !partial_search {
         Err(format!("extra records:\n{}", actual.join("\n")))
     } else {
         Ok(())
