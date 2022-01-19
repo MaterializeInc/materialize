@@ -19,9 +19,9 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-mz_options = "--persistent-user-tables --persistent-kafka-upsert-source --disable-persistent-system-tables-test"
+mz_options = "--log-filter=dataflow::source=trace,persist::operators::stream=trace --persistent-user-tables --persistent-kafka-upsert-source --disable-persistent-system-tables-test"
 
-mz_default = Materialized(options=mz_options)
+mz_default = Materialized(timestamp_frequency="100ms", options=mz_options)
 
 mz_logical_compaction_window_off = Materialized(
     options=f"{mz_options} --logical-compaction-window=off"
