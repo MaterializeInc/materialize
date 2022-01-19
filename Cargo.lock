@@ -257,8 +257,7 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 [[package]]
 name = "autotools"
 version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ec8e3c65baca58d892ae26d20bbe34713d20d0b02fd0ced4254f256aebbbb80"
+source = "git+https://github.com/lu-zero/autotools-rs.git#83de473992c7618fe2607411ad71045b3dab3da5"
 dependencies = [
  "cc",
 ]
