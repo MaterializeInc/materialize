@@ -478,6 +478,18 @@ pub const TYPE_REGCLASS_ARRAY: BuiltinType = BuiltinType {
     pgtype: &postgres_types::Type::REGCLASS_ARRAY,
 };
 
+pub const TYPE_INT2_VECTOR: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1052),
+    pgtype: &postgres_types::Type::INT2_VECTOR,
+};
+
+pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1053),
+    pgtype: &postgres_types::Type::INT2_VECTOR_ARRAY,
+};
+
 lazy_static! {
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
@@ -1709,6 +1721,8 @@ lazy_static! {
             Builtin::Type(&TYPE_UUID_ARRAY),
             Builtin::Type(&TYPE_VARCHAR),
             Builtin::Type(&TYPE_VARCHAR_ARRAY),
+            Builtin::Type(&TYPE_INT2_VECTOR),
+            Builtin::Type(&TYPE_INT2_VECTOR_ARRAY),
             Builtin::Log(&MZ_ARRANGEMENT_SHARING_INTERNAL),
             Builtin::Log(&MZ_ARRANGEMENT_BATCHES_INTERNAL),
             Builtin::Log(&MZ_ARRANGEMENT_RECORDS_INTERNAL),
