@@ -30,7 +30,6 @@ def runv(
     cwd: Optional[Path] = None,
     stdin: Union[None, int, IO[bytes], IO[str], bytes] = None,
     stdout: Union[None, int, IO[bytes], TextIO] = None,
-    capture_output: bool = False,
     env: Optional[Dict[str, str]] = None,
     stderr: Union[None, int, IO[bytes], TextIO] = None,
 ) -> subprocess.CompletedProcess:
@@ -46,12 +45,6 @@ def runv(
         stdin: An optional IO handle or byte string to use as the process's
             stdin stream.
         stdout: An optional IO handle to use as the process's stdout stream.
-        capture_output: Whether to prevent the process from streaming output
-            the parent process's stdin/stdout handles. If true, the output
-            will be captured and made available as the `stdout` and `stderr`
-            fields on the returned `subprocess.CompletedProcess`. Note that
-            setting this parameter to true will override the behavior of the
-            `stdout` parameter.
         env: If present, overwrite the environment with this dict
 
     Raises:
@@ -60,10 +53,6 @@ def runv(
         CalledProcessError: The process exited with a non-zero exit status.
     """
     print("$", ui.shell_quote(args), file=sys.stderr)
-
-    if capture_output:
-        stdout = subprocess.PIPE
-        stderr = subprocess.PIPE
 
     input = None
     if isinstance(stdin, bytes):
