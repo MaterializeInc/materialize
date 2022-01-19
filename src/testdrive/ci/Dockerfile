@@ -16,6 +16,10 @@ RUN apt-get update && apt-get -qy install \
 
 COPY kdestroy kinit testdrive /usr/local/bin/
 
+# Install the Protobuf compiler from protobuf-src.
+COPY protobuf-install /usr/local/
+ENV PROTOC /usr/local/bin/protoc
+
 WORKDIR /workdir
 
 RUN mkdir -p /share/tmp && chmod 777 /share/tmp

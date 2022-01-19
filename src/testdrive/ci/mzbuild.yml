@@ -15,3 +15,5 @@ pre-image:
       krb5-src:
         install/bin/kinit: .
         install/bin/kdestroy: .
+      protobuf-src:
+        install: protobuf-install
