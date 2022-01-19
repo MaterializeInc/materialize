@@ -194,6 +194,14 @@ def error_handler(prog: str) -> Any:
         print(f"{prog}: {fg('red')}error:{attr('reset')} {e}", file=sys.stderr)
         if e.hint:
             print(f"{attr('bold')}hint:{attr('reset')} {e.hint}")
-        sys.exit(1)
+        # Exit with a high exit code in order to differentiate UIErrors from any
+        # other errors that may happen elsewhere while the workflow is running.
+        #
+        # This particular value was chosen to match the one expected by git bisect to
+        # signal that a particular release is not testable and must be skipped. This
+        # way a mzcompose-based test, such as the feature benchmark framework, can
+        # report directly to git bisect that a particular Git tag could not be found
+        # in the container repository and must be skipped.
+        sys.exit(125)
     except KeyboardInterrupt:
         sys.exit(1)
