@@ -79,7 +79,7 @@ pub fn encode_unsealed_arrow<W: Write>(w: &mut W, batch: &BlobUnsealedBatch) -> 
     let mut metadata = HashMap::with_capacity(1);
     metadata.insert(
         INLINE_METADATA_KEY.into(),
-        encode_unsealed_inline_meta(batch, ProtoBatchFormat::ArrowKVTD),
+        encode_unsealed_inline_meta(batch, ProtoBatchFormat::ArrowKvtd),
     );
     let schema = Schema::new_from(SCHEMA_ARROW_KVTD.fields().clone(), metadata);
     let options = WriteOptions { compression: None };
@@ -99,7 +99,7 @@ pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatch) -> Result
     let mut metadata = HashMap::with_capacity(1);
     metadata.insert(
         INLINE_METADATA_KEY.into(),
-        encode_trace_inline_meta(batch, ProtoBatchFormat::ArrowKVTD),
+        encode_trace_inline_meta(batch, ProtoBatchFormat::ArrowKvtd),
     );
     let schema = Schema::new_from(SCHEMA_ARROW_KVTD.fields().clone(), metadata);
     let options = WriteOptions { compression: None };
@@ -121,9 +121,9 @@ pub fn decode_unsealed_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBa
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
-        ProtoBatchFormat::ArrowKVTD => decode_arrow_file_kvtd(r, file_meta)?,
-        ProtoBatchFormat::ParquetKVTD => {
-            return Err("ParquetKVTD format not supported in arrow".into())
+        ProtoBatchFormat::ArrowKvtd => decode_arrow_file_kvtd(r, file_meta)?,
+        ProtoBatchFormat::ParquetKvtd => {
+            return Err("ParquetKvtd format not supported in arrow".into())
         }
     };
 
@@ -146,9 +146,9 @@ pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, E
 
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
-        ProtoBatchFormat::ArrowKVTD => decode_arrow_file_kvtd(r, file_meta)?,
-        ProtoBatchFormat::ParquetKVTD => {
-            return Err("ParquetKVTD format not supported in arrow".into())
+        ProtoBatchFormat::ArrowKvtd => decode_arrow_file_kvtd(r, file_meta)?,
+        ProtoBatchFormat::ParquetKvtd => {
+            return Err("ParquetKvtd format not supported in arrow".into())
         }
     };
 
@@ -161,7 +161,7 @@ pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatch, E
         .collect();
 
     let ret = BlobTraceBatch {
-        desc: meta.desc.into_option().map_or_else(
+        desc: meta.desc.map_or_else(
             || {
                 Description::new(
                     Antichain::from_elem(u64::minimum()),

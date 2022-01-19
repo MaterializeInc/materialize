@@ -9,8 +9,7 @@
 
 use chrono::prelude::*;
 use chrono::DateTime;
-use protobuf::well_known_types::Timestamp;
-use protobuf::MessageField;
+use prost_types::Timestamp;
 use rand::distributions::Distribution;
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -30,10 +29,10 @@ pub struct RecordState {
 }
 
 fn protobuf_timestamp(time: DateTime<Utc>) -> Timestamp {
-    let mut ret = Timestamp::new();
-    ret.seconds = time.timestamp();
-    ret.nanos = time.timestamp_subsec_nanos() as i32;
-    ret
+    Timestamp {
+        seconds: time.timestamp(),
+        nanos: time.timestamp_subsec_nanos() as i32,
+    }
 }
 
 /// Construct a Batch that depends on `state`
@@ -56,13 +55,12 @@ pub fn random_batch(rng: &mut impl Rng, state: &mut RecordState) -> Batch {
         records.push(random_record(rng, interval_start_time, dur_val));
     }
 
-    let mut batch = Batch::new();
-    batch.id = id.to_string();
-    batch.interval_start = MessageField::some(interval_start);
-    batch.interval_end = MessageField::some(interval_end);
-    batch.records = records;
-
-    batch
+    Batch {
+        id: id.to_string(),
+        interval_start: Some(interval_start),
+        interval_end: Some(interval_end),
+        records,
+    }
 }
 
 fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> Record {
@@ -88,15 +86,14 @@ fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> 
         }
     }
 
-    let mut record = Record::new();
-    record.id = Uuid::new_v4().to_string();
-    record.interval_start = MessageField::some(protobuf_timestamp(interval_start));
-    record.interval_end = MessageField::some(protobuf_timestamp(interval_end));
-    record.meter = meter;
-    record.value = val as i32;
-    record.info = MessageField::some(ResourceInfo::random(rng));
-
-    record
+    Record {
+        id: Uuid::new_v4().to_string(),
+        interval_start: Some(protobuf_timestamp(interval_start)),
+        interval_end: Some(protobuf_timestamp(interval_end)),
+        meter,
+        value: val as i32,
+        info: Some(ResourceInfo::random(rng)),
+    }
 }
 
 impl Randomizer for ResourceInfo {
@@ -104,14 +101,12 @@ impl Randomizer for ResourceInfo {
         static POSSIBLE_CPUS: &[i32] = &[1, 2];
         static POSSIBLE_MEM: &[i32] = &[8, 16];
         static POSSIBLE_DISK: &[i32] = &[128];
-
-        let mut resource_info = ResourceInfo::new();
-        resource_info.cpu_num = *POSSIBLE_CPUS.choose(rng).unwrap();
-        resource_info.memory_gb = *POSSIBLE_MEM.choose(rng).unwrap();
-        resource_info.disk_gb = *POSSIBLE_DISK.choose(rng).unwrap();
-        resource_info.client_id = rng.gen_range(1..NUM_CLIENTS as i32);
-        resource_info.vm_id = rng.gen_range(1000..2000);
-
-        resource_info
+        ResourceInfo {
+            cpu_num: *POSSIBLE_CPUS.choose(rng).unwrap(),
+            memory_gb: *POSSIBLE_MEM.choose(rng).unwrap(),
+            disk_gb: *POSSIBLE_DISK.choose(rng).unwrap(),
+            client_id: rng.gen_range(1..NUM_CLIENTS as i32),
+            vm_id: rng.gen_range(1000..2000),
+        }
     }
 }

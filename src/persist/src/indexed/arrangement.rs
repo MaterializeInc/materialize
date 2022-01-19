@@ -948,7 +948,7 @@ mod tests {
     ) -> UnsealedBatchMeta {
         UnsealedBatchMeta {
             key: key.to_string(),
-            format: ProtoBatchFormat::ParquetKVTD,
+            format: ProtoBatchFormat::ParquetKvtd,
             desc: SeqNo(lower)..SeqNo(upper),
             ts_upper,
             ts_lower,
@@ -1378,14 +1378,14 @@ mod tests {
             vec![
                 TraceBatchMeta {
                     key: "KEY".to_string(),
-                    format: ProtoBatchFormat::ParquetKVTD,
+                    format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(0, 3, 3),
                     level: 1,
                     size_bytes: 0,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
-                    format: ProtoBatchFormat::ParquetKVTD,
+                    format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(3, 9, 0),
                     level: 0,
                     size_bytes: 0,
@@ -1437,14 +1437,14 @@ mod tests {
             vec![
                 TraceBatchMeta {
                     key: "KEY".to_string(),
-                    format: ProtoBatchFormat::ParquetKVTD,
+                    format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(0, 3, 3),
                     level: 1,
                     size_bytes: 0,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
-                    format: ProtoBatchFormat::ParquetKVTD,
+                    format: ProtoBatchFormat::ParquetKvtd,
                     desc: desc_from(3, 10, 10),
                     level: 0,
                     size_bytes: 0,

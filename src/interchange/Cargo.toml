@@ -29,6 +29,8 @@ num-traits = "0.2.14"
 ordered-float = { version = "2.10.0", features = ["serde"] }
 ore = { path = "../ore" }
 protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
+protobuf-native = "0.2.1"
+prost = "0.9.0"
 mz-protoc = { path = "../protoc" }
 regex = "1.5.4"
 repr = { path = "../repr" }

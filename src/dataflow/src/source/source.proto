@@ -13,7 +13,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-package gen;
+package source;
 
 message ProtoSourceTimestamp {
     oneof partition_id {

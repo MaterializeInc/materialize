@@ -432,6 +432,8 @@ struct AssignedTimestamp(u64);
 struct SourceTimestamp<P, O>(P, O);
 
 mod kafka_offset_impls {
+    use bytes::BufMut;
+
     use persist_types::Codec;
 
     use crate::AssignedTimestamp;
@@ -444,8 +446,11 @@ mod kafka_offset_impls {
             "KafkaPartition".into()
         }
 
-        fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-            buf.extend(&self.0.to_le_bytes())
+        fn encode<B>(&self, buf: &mut B)
+        where
+            B: BufMut,
+        {
+            buf.put_slice(&self.0.to_le_bytes())
         }
 
         fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
@@ -460,8 +465,11 @@ mod kafka_offset_impls {
             "KafkaOffset".into()
         }
 
-        fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-            buf.extend(&self.0.to_le_bytes())
+        fn encode<B>(&self, buf: &mut B)
+        where
+            B: BufMut,
+        {
+            buf.put_slice(&self.0.to_le_bytes())
         }
 
         fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
@@ -476,8 +484,11 @@ mod kafka_offset_impls {
             "AssignedTimestamp".into()
         }
 
-        fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-            buf.extend(&self.0.to_le_bytes())
+        fn encode<B>(&self, buf: &mut B)
+        where
+            B: BufMut,
+        {
+            buf.put_slice(&self.0.to_le_bytes())
         }
 
         fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
@@ -492,16 +503,19 @@ mod kafka_offset_impls {
             "SourceTimestamp".into()
         }
 
-        fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+        fn encode<B>(&self, buf: &mut B)
+        where
+            B: BufMut,
+        {
             let mut inner_buf = Vec::new();
             self.0.encode(&mut inner_buf);
-            buf.extend(&inner_buf.len().to_le_bytes());
-            buf.extend(&inner_buf);
+            buf.put_slice(&inner_buf.len().to_le_bytes());
+            buf.put_slice(&inner_buf);
 
             inner_buf.clear();
             self.1.encode(&mut inner_buf);
-            buf.extend(&inner_buf.len().to_le_bytes());
-            buf.extend(&inner_buf);
+            buf.put_slice(&inner_buf.len().to_le_bytes());
+            buf.put_slice(&inner_buf);
         }
 
         fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {

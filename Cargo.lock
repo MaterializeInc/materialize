@@ -255,6 +255,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 
 [[package]]
+name = "autotools"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ec8e3c65baca58d892ae26d20bbe34713d20d0b02fd0ced4254f256aebbbb80"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "avro-derive"
 version = "0.0.0"
 dependencies = [
@@ -622,7 +631,8 @@ dependencies = [
  "mz-protoc",
  "ore",
  "postgres-types",
- "protobuf",
+ "prost",
+ "prost-types",
  "rand",
  "rand_distr",
  "test-util",
@@ -837,6 +847,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c84c596dcf125d6781f58e3f4254677ec2a6d8aa56e8501ac277100990b3229"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "codespan-reporting"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3538270d33cc669650c4b093848450d380def10c331d38c768e34cac80576e6e"
+dependencies = [
+ "termcolor",
+ "unicode-width",
 ]
 
 [[package]]
@@ -1146,6 +1166,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "cxx"
+version = "1.0.62"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5beeee74e023d146e6fb933296b3b5e07de146ff3c9498c5af6e53cabc986d51"
+dependencies = [
+ "cc",
+ "cxxbridge-flags",
+ "cxxbridge-macro",
+ "link-cplusplus",
+]
+
+[[package]]
+name = "cxx-build"
+version = "1.0.62"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b49af8e551e84f85d6def97c42b8d93bc5bb0817cce96b56a472b1b19b5bfc2"
+dependencies = [
+ "cc",
+ "codespan-reporting",
+ "lazy_static",
+ "proc-macro2",
+ "quote",
+ "scratch",
+ "syn",
+]
+
+[[package]]
+name = "cxxbridge-flags"
+version = "1.0.62"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d2033701dc9a0cd15c14bb24d4423b6ba57f6eba079b65b7049b95288dad6b3"
+
+[[package]]
+name = "cxxbridge-macro"
+version = "1.0.62"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94d7ddcc58b10f23413d3fef111d1bd64b2bfb76af53f31611e02e9d0b6537be"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "darling"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1202,6 +1266,7 @@ dependencies = [
  "aws-sdk-sqs",
  "bincode",
  "byteorder",
+ "bytes",
  "ccsr",
  "chrono",
  "crossbeam-channel",
@@ -1231,7 +1296,7 @@ dependencies = [
  "postgres-protocol",
  "postgres-util",
  "prometheus",
- "protobuf",
+ "prost",
  "pubnub-hyper",
  "rand",
  "rdkafka",
@@ -1269,6 +1334,7 @@ dependencies = [
  "aws-config",
  "aws-smithy-http",
  "aws-types",
+ "bytes",
  "ccsr",
  "crossbeam-channel",
  "enum-iterator",
@@ -1387,6 +1453,12 @@ dependencies = [
  "derive_builder_core",
  "syn",
 ]
+
+[[package]]
+name = "diff"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 
 [[package]]
 name = "differential-dataflow"
@@ -1745,6 +1817,12 @@ dependencies = [
  "libc",
  "winapi",
 ]
+
+[[package]]
+name = "fixedbitset"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "279fb028e20b3c4c320317955b77c5e0c9701f05a1d309905d6fc702cdc5053e"
 
 [[package]]
 name = "flatbuffers"
@@ -2362,7 +2440,9 @@ dependencies = [
  "num-traits",
  "ordered-float",
  "ore",
+ "prost",
  "protobuf",
+ "protobuf-native",
  "regex",
  "repr",
  "serde",
@@ -2511,6 +2591,15 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "link-cplusplus"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8cae2cd7ba2f3f63938b9c724475dfb7b9861b545a90324476324ed21dbc8c8"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -2811,6 +2900,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "multimap"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
+
+[[package]]
 name = "mz-avro"
 version = "0.6.5"
 dependencies = [
@@ -2883,6 +2978,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ore",
+ "prost-build",
  "protobuf",
  "protobuf-codegen",
  "protobuf-parse",
@@ -3231,6 +3327,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "output_vt100"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53cdc5b785b7a58c5aad8216b3dfa114df64b0b06ae6e1501cef91df2fbdf8f9"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3340,6 +3445,7 @@ dependencies = [
  "base64",
  "bincode",
  "build-info",
+ "bytes",
  "criterion",
  "crossbeam-channel",
  "differential-dataflow",
@@ -3353,7 +3459,7 @@ dependencies = [
  "ore",
  "parquet2",
  "persist-types",
- "protobuf",
+ "prost",
  "rand",
  "semver",
  "serde",
@@ -3368,6 +3474,19 @@ dependencies = [
 [[package]]
 name = "persist-types"
 version = "0.0.0"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
+name = "petgraph"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a13a2fa9d0b63e5f22328828741e523766fff0ee9e779316902290dff3f824f"
+dependencies = [
+ "fixedbitset",
+ "indexmap",
+]
 
 [[package]]
 name = "pgrepr"
@@ -3687,6 +3806,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be91bcc43e73799dc46a6c194a55e7aae1d86cc867c860fd4a436019af21bd8c"
 
 [[package]]
+name = "pretty_assertions"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec0cfe1b2403f172ba0f234e500906ee0a3e493fb81092dac23ebefe129301cc"
+dependencies = [
+ "ansi_term",
+ "ctor",
+ "diff",
+ "output_vt100",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3793,6 +3924,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost"
+version = "0.9.0"
+source = "git+https://github.com/MaterializeInc/prost.git#28bc721d6a74b9ed4628cc8f13527a9573cf082d"
+dependencies = [
+ "bytes",
+ "prost-derive",
+]
+
+[[package]]
+name = "prost-build"
+version = "0.9.1"
+source = "git+https://github.com/MaterializeInc/prost.git#28bc721d6a74b9ed4628cc8f13527a9573cf082d"
+dependencies = [
+ "bytes",
+ "heck",
+ "itertools",
+ "lazy_static",
+ "log",
+ "multimap",
+ "petgraph",
+ "prost",
+ "prost-types",
+ "protobuf-src",
+ "regex",
+ "tempfile",
+ "which",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.9.0"
+source = "git+https://github.com/MaterializeInc/prost.git#28bc721d6a74b9ed4628cc8f13527a9573cf082d"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "prost-types"
+version = "0.9.0"
+source = "git+https://github.com/MaterializeInc/prost.git#28bc721d6a74b9ed4628cc8f13527a9573cf082d"
+dependencies = [
+ "bytes",
+ "prost",
+]
+
+[[package]]
 name = "protobuf"
 version = "3.0.0-alpha.2"
 source = "git+https://github.com/MaterializeInc/rust-protobuf.git#063964a8ab6fee98a9622a0c0a72a9765411025a"
@@ -3811,6 +3992,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf-native"
+version = "0.2.1+3.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86df76d0f2a6933036e8a9f28f1adc8b48081fa681dba07eaa30ac75663f7f4e"
+dependencies = [
+ "cxx",
+ "cxx-build",
+ "paste",
+ "pretty_assertions",
+ "protobuf-src",
+ "tempfile",
+]
+
+[[package]]
 name = "protobuf-parse"
 version = "3.0.0-alpha.2"
 source = "git+https://github.com/MaterializeInc/rust-protobuf.git#063964a8ab6fee98a9622a0c0a72a9765411025a"
@@ -3820,6 +4015,15 @@ dependencies = [
  "protoc",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "protobuf-src"
+version = "1.0.4+3.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "152161ab96ab8f66c4faeda5179798cc03a6c55c653d314d0e6d2f3ae7a46f1f"
+dependencies = [
+ "autotools",
 ]
 
 [[package]]
@@ -4072,6 +4276,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "byteorder",
+ "bytes",
  "chrono",
  "chrono-tz",
  "criterion",
@@ -4089,7 +4294,7 @@ dependencies = [
  "ore",
  "persist-types",
  "proptest",
- "protobuf",
+ "prost",
  "rand",
  "regex",
  "ryu",
@@ -4263,6 +4468,12 @@ name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
+
+[[package]]
+name = "scratch"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96311ef4a16462c757bb6a39152c40f58f31cd2602a40fceb937e2bc34e6cbab"
 
 [[package]]
 name = "security-framework"

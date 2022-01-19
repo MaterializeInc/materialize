@@ -118,6 +118,9 @@ allow-git = [
     # Waiting on https://github.com/stepancheg/rust-protobuf/pull/581.
     "https://github.com/MaterializeInc/rust-protobuf.git",
 
+    # Waiting on https://github.com/tokio-rs/prost/pull/576.
+    "https://github.com/MaterializeInc/prost.git",
+
     # Waiting on https://github.com/bheisler/criterion.rs/pull/543.
     "https://github.com/MaterializeInc/criterion.rs.git",
 

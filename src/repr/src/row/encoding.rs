@@ -11,17 +11,18 @@
 //!
 //! See row.proto for details.
 
+use bytes::BufMut;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use dec::Decimal;
 use ore::cast::CastFrom;
-use persist_types::{Codec, ExtendWriteAdapter};
-use protobuf::{Message, MessageField};
+use persist_types::Codec;
+use prost::Message;
 use uuid::Uuid;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
-use crate::gen::row::proto_datum::Datum_type;
+use crate::gen::row::proto_datum::DatumType;
 use crate::gen::row::{
     ProtoArray, ProtoArrayDimension, ProtoDate, ProtoDatum, ProtoDatumOther, ProtoDict,
     ProtoDictElement, ProtoInterval, ProtoNumeric, ProtoRow, ProtoTime, ProtoTimestamp,
@@ -38,9 +39,12 @@ impl Codec for Row {
     /// This perfectly round-trips through [Row::decode]. It's guaranteed to be
     /// readable by future versions of Materialize through v(TODO: Figure out
     /// our policy).
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
         ProtoRow::from(self)
-            .write_to_writer(&mut ExtendWriteAdapter(buf))
+            .encode(buf)
             .expect("no required fields means no initialization errors");
     }
 
@@ -50,7 +54,7 @@ impl Codec for Row {
     /// encoded by historical versions of Materialize back to v(TODO: Figure out
     /// our policy).
     fn decode(buf: &[u8]) -> Result<Row, String> {
-        let proto_row = ProtoRow::parse_from_bytes(buf).map_err(|err| err.to_string())?;
+        let proto_row = ProtoRow::decode(buf).map_err(|err| err.to_string())?;
         Row::try_from(&proto_row)
     }
 }
@@ -58,44 +62,36 @@ impl Codec for Row {
 impl<'a> From<Datum<'a>> for ProtoDatum {
     fn from(x: Datum<'a>) -> Self {
         let datum_type = match x {
-            Datum::False => Datum_type::other(ProtoDatumOther::False.into()),
-            Datum::True => Datum_type::other(ProtoDatumOther::True.into()),
-            Datum::Int16(x) => Datum_type::int16(x.into()),
-            Datum::Int32(x) => Datum_type::int32(x),
-            Datum::Int64(x) => Datum_type::int64(x),
-            Datum::Float32(x) => Datum_type::float32(x.into_inner()),
-            Datum::Float64(x) => Datum_type::float64(x.into_inner()),
-            Datum::Date(x) => Datum_type::date(ProtoDate {
+            Datum::False => DatumType::Other(ProtoDatumOther::False.into()),
+            Datum::True => DatumType::Other(ProtoDatumOther::True.into()),
+            Datum::Int16(x) => DatumType::Int16(x.into()),
+            Datum::Int32(x) => DatumType::Int32(x),
+            Datum::Int64(x) => DatumType::Int64(x),
+            Datum::Float32(x) => DatumType::Float32(x.into_inner()),
+            Datum::Float64(x) => DatumType::Float64(x.into_inner()),
+            Datum::Date(x) => DatumType::Date(ProtoDate {
                 year: x.year(),
                 ordinal: x.ordinal(),
-                unknown_fields: Default::default(),
-                cached_size: Default::default(),
             }),
-            Datum::Time(x) => Datum_type::time(ProtoTime {
+            Datum::Time(x) => DatumType::Time(ProtoTime {
                 secs: x.num_seconds_from_midnight(),
                 nanos: x.nanosecond(),
-                unknown_fields: Default::default(),
-                cached_size: Default::default(),
             }),
-            Datum::Timestamp(x) => Datum_type::timestamp(ProtoTimestamp {
+            Datum::Timestamp(x) => DatumType::Timestamp(ProtoTimestamp {
                 year: x.date().year(),
                 ordinal: x.date().ordinal(),
                 secs: x.time().num_seconds_from_midnight(),
                 nanos: x.time().nanosecond(),
                 is_tz: false,
-                unknown_fields: Default::default(),
-                cached_size: Default::default(),
             }),
             Datum::TimestampTz(x) => {
                 let date = x.date().naive_utc();
-                Datum_type::timestamp(ProtoTimestamp {
+                DatumType::Timestamp(ProtoTimestamp {
                     year: date.year(),
                     ordinal: date.ordinal(),
                     secs: x.time().num_seconds_from_midnight(),
                     nanos: x.time().nanosecond(),
                     is_tz: true,
-                    unknown_fields: Default::default(),
-                    cached_size: Default::default(),
                 })
             }
             Datum::Interval(x) => {
@@ -103,21 +99,17 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                 let (mut duration_lo, mut duration_hi) = ([0u8; 8], [0u8; 8]);
                 duration_lo.copy_from_slice(&duration[..8]);
                 duration_hi.copy_from_slice(&duration[8..]);
-                Datum_type::interval(ProtoInterval {
+                DatumType::Interval(ProtoInterval {
                     months: x.months,
                     duration_lo: i64::from_le_bytes(duration_lo),
                     duration_hi: i64::from_le_bytes(duration_hi),
-                    unknown_fields: Default::default(),
-                    cached_size: Default::default(),
                 })
             }
-            Datum::Bytes(x) => Datum_type::bytes(x.to_vec()),
-            Datum::String(x) => Datum_type::string(x.to_owned()),
-            Datum::Array(x) => Datum_type::array(ProtoArray {
-                elements: MessageField::some(ProtoRow {
+            Datum::Bytes(x) => DatumType::Bytes(x.to_vec()),
+            Datum::String(x) => DatumType::String(x.to_owned()),
+            Datum::Array(x) => DatumType::Array(ProtoArray {
+                elements: Some(ProtoRow {
                     datums: x.elements().iter().map(|x| x.into()).collect(),
-                    unknown_fields: Default::default(),
-                    cached_size: Default::default(),
                 }),
                 dims: x
                     .dims()
@@ -125,48 +117,33 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                     .map(|x| ProtoArrayDimension {
                         lower_bound: u64::cast_from(x.lower_bound),
                         length: u64::cast_from(x.length),
-                        unknown_fields: Default::default(),
-                        cached_size: Default::default(),
                     })
                     .collect(),
-                unknown_fields: Default::default(),
-                cached_size: Default::default(),
             }),
-            Datum::List(x) => Datum_type::list(ProtoRow {
+            Datum::List(x) => DatumType::List(ProtoRow {
                 datums: x.iter().map(|x| x.into()).collect(),
-                unknown_fields: Default::default(),
-                cached_size: Default::default(),
             }),
-            Datum::Map(x) => Datum_type::dict(ProtoDict {
+            Datum::Map(x) => DatumType::Dict(ProtoDict {
                 elements: x
                     .iter()
                     .map(|(k, v)| ProtoDictElement {
                         key: k.to_owned(),
-                        val: MessageField::some(v.into()),
-                        unknown_fields: Default::default(),
-                        cached_size: Default::default(),
+                        val: Some(v.into()),
                     })
                     .collect(),
-                unknown_fields: Default::default(),
-                cached_size: Default::default(),
             }),
             Datum::Numeric(x) => {
                 // TODO: Do we need this defensive clone?
                 let mut x = x.0.clone();
                 if let Some((bcd, scale)) = x.to_packed_bcd() {
-                    Datum_type::numeric(ProtoNumeric {
-                        bcd,
-                        scale,
-                        unknown_fields: Default::default(),
-                        cached_size: Default::default(),
-                    })
+                    DatumType::Numeric(ProtoNumeric { bcd, scale })
                 } else if x.is_nan() {
-                    Datum_type::other(ProtoDatumOther::NumericNaN.into())
+                    DatumType::Other(ProtoDatumOther::NumericNaN.into())
                 } else if x.is_infinite() {
                     if x.is_negative() {
-                        Datum_type::other(ProtoDatumOther::NumericNegInf.into())
+                        DatumType::Other(ProtoDatumOther::NumericNegInf.into())
                     } else {
-                        Datum_type::other(ProtoDatumOther::NumericPosInf.into())
+                        DatumType::Other(ProtoDatumOther::NumericPosInf.into())
                     }
                 } else if x.is_special() {
                     panic!("internal error: unhandled special numeric value: {}", x);
@@ -177,15 +154,13 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                     )
                 }
             }
-            Datum::JsonNull => Datum_type::other(ProtoDatumOther::JsonNull.into()),
-            Datum::Uuid(x) => Datum_type::uuid(x.as_bytes().to_vec()),
-            Datum::Dummy => Datum_type::other(ProtoDatumOther::Dummy.into()),
-            Datum::Null => Datum_type::other(ProtoDatumOther::Null.into()),
+            Datum::JsonNull => DatumType::Other(ProtoDatumOther::JsonNull.into()),
+            Datum::Uuid(x) => DatumType::Uuid(x.as_bytes().to_vec()),
+            Datum::Dummy => DatumType::Other(ProtoDatumOther::Dummy.into()),
+            Datum::Null => DatumType::Other(ProtoDatumOther::Null.into()),
         };
         ProtoDatum {
             datum_type: Some(datum_type),
-            unknown_fields: Default::default(),
-            cached_size: Default::default(),
         }
     }
 }
@@ -193,41 +168,39 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
 impl From<&Row> for ProtoRow {
     fn from(x: &Row) -> Self {
         let datums = x.iter().map(|x| x.into()).collect();
-        ProtoRow {
-            datums,
-            unknown_fields: Default::default(),
-            cached_size: Default::default(),
-        }
+        ProtoRow { datums }
     }
 }
 
 impl Row {
     fn try_push_proto(&mut self, x: &ProtoDatum) -> Result<(), String> {
         match &x.datum_type {
-            Some(Datum_type::other(o)) => match o.enum_value() {
-                Ok(ProtoDatumOther::Unknown) => return Err("unknown datum type".into()),
-                Ok(ProtoDatumOther::Null) => self.push(Datum::Null),
-                Ok(ProtoDatumOther::False) => self.push(Datum::False),
-                Ok(ProtoDatumOther::True) => self.push(Datum::True),
-                Ok(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
-                Ok(ProtoDatumOther::Dummy) => self.push(Datum::Dummy),
-                Ok(ProtoDatumOther::NumericPosInf) => self.push(Datum::from(Numeric::infinity())),
-                Ok(ProtoDatumOther::NumericNegInf) => self.push(Datum::from(-Numeric::infinity())),
-                Ok(ProtoDatumOther::NumericNaN) => self.push(Datum::from(Numeric::nan())),
-                Err(id) => return Err(format!("unknown datum type: {}", id)),
+            Some(DatumType::Other(o)) => match ProtoDatumOther::from_i32(*o) {
+                Some(ProtoDatumOther::Unknown) => return Err("unknown datum type".into()),
+                Some(ProtoDatumOther::Null) => self.push(Datum::Null),
+                Some(ProtoDatumOther::False) => self.push(Datum::False),
+                Some(ProtoDatumOther::True) => self.push(Datum::True),
+                Some(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
+                Some(ProtoDatumOther::Dummy) => self.push(Datum::Dummy),
+                Some(ProtoDatumOther::NumericPosInf) => self.push(Datum::from(Numeric::infinity())),
+                Some(ProtoDatumOther::NumericNegInf) => {
+                    self.push(Datum::from(-Numeric::infinity()))
+                }
+                Some(ProtoDatumOther::NumericNaN) => self.push(Datum::from(Numeric::nan())),
+                None => return Err(format!("unknown datum type: {}", o)),
             },
-            Some(Datum_type::int16(x)) => {
+            Some(DatumType::Int16(x)) => {
                 let x = i16::try_from(*x)
                     .map_err(|_| format!("int16 field stored with out of range value: {}", *x))?;
                 self.push(Datum::Int16(x))
             }
-            Some(Datum_type::int32(x)) => self.push(Datum::Int32(*x)),
-            Some(Datum_type::int64(x)) => self.push(Datum::Int64(*x)),
-            Some(Datum_type::float32(x)) => self.push(Datum::Float32((*x).into())),
-            Some(Datum_type::float64(x)) => self.push(Datum::Float64((*x).into())),
-            Some(Datum_type::bytes(x)) => self.push(Datum::Bytes(x)),
-            Some(Datum_type::string(x)) => self.push(Datum::String(x)),
-            Some(Datum_type::uuid(x)) => {
+            Some(DatumType::Int32(x)) => self.push(Datum::Int32(*x)),
+            Some(DatumType::Int64(x)) => self.push(Datum::Int64(*x)),
+            Some(DatumType::Float32(x)) => self.push(Datum::Float32((*x).into())),
+            Some(DatumType::Float64(x)) => self.push(Datum::Float64((*x).into())),
+            Some(DatumType::Bytes(x)) => self.push(Datum::Bytes(x)),
+            Some(DatumType::String(x)) => self.push(Datum::String(x)),
+            Some(DatumType::Uuid(x)) => {
                 // Uuid internally has a [u8; 16] so we'll have to do at least
                 // one copy, but there's currently an additional one when the
                 // Vec is created. Perhaps the protobuf Bytes support will let
@@ -235,13 +208,13 @@ impl Row {
                 let u = Uuid::from_slice(&x).map_err(|err| err.to_string())?;
                 self.push(Datum::Uuid(u));
             }
-            Some(Datum_type::date(x)) => {
+            Some(DatumType::Date(x)) => {
                 self.push(Datum::Date(NaiveDate::from_yo(x.year, x.ordinal)))
             }
-            Some(Datum_type::time(x)) => self.push(Datum::Time(
+            Some(DatumType::Time(x)) => self.push(Datum::Time(
                 NaiveTime::from_num_seconds_from_midnight(x.secs, x.nanos),
             )),
-            Some(Datum_type::timestamp(x)) => {
+            Some(DatumType::Timestamp(x)) => {
                 let date = NaiveDate::from_yo(x.year, x.ordinal);
                 let time = NaiveTime::from_num_seconds_from_midnight(x.secs, x.nanos);
                 let datetime = date.and_time(time);
@@ -251,7 +224,7 @@ impl Row {
                     self.push(Datum::Timestamp(datetime));
                 }
             }
-            Some(Datum_type::interval(x)) => {
+            Some(DatumType::Interval(x)) => {
                 let mut duration = [0u8; 16];
                 duration[..8].copy_from_slice(&x.duration_lo.to_le_bytes());
                 duration[8..].copy_from_slice(&x.duration_hi.to_le_bytes());
@@ -261,13 +234,13 @@ impl Row {
                     duration,
                 }))
             }
-            Some(Datum_type::list(x)) => self.push_list_with(|row| -> Result<(), String> {
+            Some(DatumType::List(x)) => self.push_list_with(|row| -> Result<(), String> {
                 for d in x.datums.iter() {
                     row.try_push_proto(d)?;
                 }
                 Ok(())
             })?,
-            Some(Datum_type::array(x)) => {
+            Some(DatumType::Array(x)) => {
                 let dims = x
                     .dims
                     .iter()
@@ -287,7 +260,7 @@ impl Row {
                 }
                 .map_err(|err| err.to_string())?
             }
-            Some(Datum_type::dict(x)) => self.push_dict_with(|row| -> Result<(), String> {
+            Some(DatumType::Dict(x)) => self.push_dict_with(|row| -> Result<(), String> {
                 for e in x.elements.iter() {
                     row.push(Datum::from(e.key.as_str()));
                     let val = e
@@ -298,7 +271,7 @@ impl Row {
                 }
                 Ok(())
             })?,
-            Some(Datum_type::numeric(x)) => {
+            Some(DatumType::Numeric(x)) => {
                 // Reminder that special values like NaN, PosInf, and NegInf are
                 // represented as variants of ProtoDatumOther.
                 let n = Decimal::from_packed_bcd(&x.bcd, x.scale).map_err(|err| err.to_string())?;

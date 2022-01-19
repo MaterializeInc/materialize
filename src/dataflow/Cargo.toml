@@ -14,6 +14,7 @@ aws-sdk-s3 = { version = "0.4.0", default-features = false }
 aws-sdk-sqs = { version = "0.4.1", default-features = false }
 bincode = "1.3.3"
 byteorder = "1.4.3"
+bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.2"
@@ -43,7 +44,7 @@ persist-types = { path = "../persist-types" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
+prost = "0.9.0"
 pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false }
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }

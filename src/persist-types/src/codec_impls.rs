@@ -9,6 +9,8 @@
 
 //! Implementations of [Codec] for stdlib types.
 
+use bytes::BufMut;
+
 use crate::Codec;
 
 impl Codec for () {
@@ -16,7 +18,10 @@ impl Codec for () {
         "()".into()
     }
 
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, _buf: &mut E) {
+    fn encode<B>(&self, _buf: &mut B)
+    where
+        B: BufMut,
+    {
         // No-op.
     }
 
@@ -33,8 +38,11 @@ impl Codec for String {
         "String".into()
     }
 
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-        buf.extend(self.as_bytes())
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        buf.put(self.as_bytes())
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
@@ -47,8 +55,11 @@ impl Codec for Vec<u8> {
         "Vec<u8>".into()
     }
 
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-        buf.extend(self)
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        buf.put(self.as_slice())
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
@@ -63,14 +74,17 @@ impl<T: Codec, E: Codec> Codec for Result<T, E> {
         "Result".into()
     }
 
-    fn encode<B: for<'a> Extend<&'a u8>>(&self, buf: &mut B) {
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
         match self {
             Ok(r) => {
-                buf.extend(&[RESULT_OK]);
+                buf.put(&[RESULT_OK][..]);
                 r.encode(buf);
             }
             Err(err) => {
-                buf.extend(&[RESULT_ERR]);
+                buf.put(&[RESULT_ERR][..]);
                 err.encode(buf);
             }
         }

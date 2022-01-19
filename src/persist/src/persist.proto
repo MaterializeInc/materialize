@@ -11,7 +11,7 @@
 
 syntax = "proto3";
 
-package gen;
+package persist;
 
 message ProtoMeta {
     // For data written by some vX.Y.Z of Materialize, we'll support reading it
@@ -119,12 +119,12 @@ enum ProtoBatchFormat {
     // but we probably don't want to pay the cost of converting between the
     // in-mem `[(K, V, T, D)]` representation and anything else (to keep the hot
     // path clean). Unsealed batches are also likely to be our smallest. For
-    // this reason, they'll probably always stay as ParquetKVTD.
+    // this reason, they'll probably always stay as ParquetKvtd.
     //
     // For trace batches, we consolidate them before writing them out, so we're
     // guaranteed to get nothing from the V level of the trie. For duplicate
     // keys, we'll probably get a good amount of benefit from column specific
     // compression, and I'd like to exhaust that direction first before dealing
     // with a trie-like column structure.
-    ParquetKVTD = 2;
+    ParquetKvtd = 2;
 }
