@@ -33,19 +33,40 @@ topics.
 
 {{% create-source/syntax-details connector="kafka" formats="protobuf" envelopes="append-only upsert" keyConstraint=true %}}
 
+### Confluent Schema Registry details
+
+When using Confluent Schema Registry with Protobuf sources, the registered
+Protobuf schemas must contain exactly one `Message` definition. We expect to
+lift this restriction in the future {{% gh 9598 %}}.
+
 ## Examples
 
-### Receiving Protobuf messages
+### Receiving Protobuf messages using Confluent Schema Registry
+
+```sql
+CREATE SOURCE batches
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+FORMAT PROTOBUF USING SCHEMA REGISTRY 'http://localhost:8081';
+```
+
+This creates a source that...
+
+- Is append-only.
+- Decodes data received from the `billing` topic published by Kafka running on
+  `localhost:9092`.
+- Decodes data from the Protobuf message published to the `billing-value`
+  subject in the Confluent Schema Registry running on `localhost:8081`.
+
+### Receiving Protobuf messages using a schema file
 
 Assuming you've already generated a [`FileDescriptorSet`](#filedescriptorset)
-named `SCHEMA`:
+named `billing.pb` that contains a message named `billing.Batch`:
 
 ```sql
 CREATE SOURCE batches
 FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
 WITH (cache = true)
-FORMAT PROTOBUF MESSAGE '.billing.Batch'
-  USING SCHEMA FILE '[path to schema]';
+FORMAT PROTOBUF MESSAGE 'billing.Batch' USING SCHEMA FILE 'billing.pb';
 ```
 
 This creates a source that...
