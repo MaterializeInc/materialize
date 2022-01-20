@@ -1061,3 +1061,31 @@ SELECT 'table_with_id'::regclass
 # fully qualified names are not yet supported
 statement error object "test.table_with_id" does not exist
 SELECT 'test.table_with_id'::regclass
+
+
+# 🔬🔬 int2vector
+
+query T
+SELECT '1'::int2vector
+----
+1
+
+query T
+SELECT '1'::text::int2vector
+----
+1
+
+query T
+SELECT '1'::text::int2vector::text
+----
+1
+
+query T
+SELECT '1'::pg_catalog.int2vector
+----
+1
+
+query T
+SELECT '1 2 3'::int2vector
+----
+1 2 3
