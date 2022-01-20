@@ -1725,54 +1725,37 @@ impl SourceReaderPersistence {
         assert!(upper_bindings_seal_ts >= upper_data_seal_ts);
 
         let mut bindings: HashMap<_, isize> = HashMap::new();
+        let mut bindings_up_to_data_upper: HashMap<_, isize> = HashMap::new();
+
         let mut starting_offsets = HashMap::new();
 
         let snapshot = read.snapshot()?;
 
         let buf = snapshot.into_iter().collect::<Result<Vec<_>, _>>()?;
 
-        let mut lowest_bindings_ts = u64::MAX;
+        // First, we consolidate the bindings. We gather two versions: one that contains only
+        // bindings up the the data seal timestamp, and another one that has all bindings. We use
+        // the former to figure out what the starting offsets for the source should be but it's
+        // fine to use all bindings that we have for assigning timestamps, it just means we will
+        // emit source data with previously persisted bindings.
+        //
+        // NOTE: We "compact" all time resolution, by ignorning the timestamp. We don't need
+        // historical resolution and simply want the view as of the time at which the data was
+        // sealed. Thus, it represents the content of the timestamp histories at exactly that
+        // point.
         for ((source_timestamp, assigned_timestamp), ts, diff) in buf.into_iter() {
-            if ts < lowest_bindings_ts {
-                lowest_bindings_ts = ts;
-            }
-            // Only restore starting offsets that are not beyond the uppser_data_seal_ts. This is the
-            // timestamp up to which we have sealed the persistent collection storing the actual source
-            // data/updates.
             if ts < upper_data_seal_ts {
-                starting_offsets
-                    .entry(source_timestamp.partition.clone())
-                    .and_modify(|current_offset| {
-                        match current_offset {
-                            Some(current_offset) if source_timestamp.offset > *current_offset => {
-                                *current_offset = source_timestamp.offset;
-                            }
-                            _ => (), // ignore "older" starting offsets
-                        }
-                    })
-                    .or_insert_with(|| Some(source_timestamp.offset));
-            } else {
-                // If the binding is beyond the upper seal timestamp, we don't want to use its
-                // offset as a starting offset. We still want to record that we know about the
-                // partition so that we can add bindings to `timestamp_histories`. We do this,
-                // because we restore all bindings, ignoring whether they are before or after the
-                // seal timestamp.
-                starting_offsets
-                    .entry(source_timestamp.partition.clone())
-                    .or_insert_with(|| None);
+                *bindings_up_to_data_upper
+                    .entry((source_timestamp.clone(), assigned_timestamp))
+                    .or_default() += diff;
             }
 
-            // Collect all the bindings. The bindings are potentially beyond the starting offsets, but
-            // that is ok. This means we will emit source data with previously persisted bindings.
-            //
             // We consolidate all the diffs as we go. Below we collect all positive updates and
             // return them.
             *bindings
                 .entry((source_timestamp, assigned_timestamp))
                 .or_default() += diff;
         }
-
-        log::debug!("Lowest restored bindings ts: {}", lowest_bindings_ts);
 
         let bindings: Vec<_> = bindings
             .drain()
@@ -1787,6 +1770,49 @@ impl SourceReaderPersistence {
             })
             .map(|(binding, _diff)| binding)
             .collect();
+
+        let bindings_up_to_data_upper: Vec<_> = bindings_up_to_data_upper
+            .drain()
+            .filter(|(binding, diff)| {
+                if *diff < 0 || *diff > 1 {
+                    panic!(
+                        "Binding with invalid diff. Binding {:?}, diff: {}.",
+                        binding, diff
+                    );
+                }
+                *diff == 1
+            })
+            .map(|(binding, _diff)| binding)
+            .collect();
+
+        // Seed the starting offsets with all partitions we know about, but without a starting
+        // offset. We do this, because outside code will want to add the bindings to the timestamp
+        // histories, and that will fail if we didn't add the partition before.
+        //
+        // TODO: We could simply allow adding a binding without a partition present, and create the
+        // partition state when needed.
+        for (source_timestamp, _assigned_timestamp) in bindings.iter() {
+            starting_offsets
+                .entry(source_timestamp.partition.clone())
+                .or_insert_with(|| None);
+        }
+
+        for (source_timestamp, _assigned_timestamp) in bindings_up_to_data_upper.into_iter() {
+            starting_offsets
+                .entry(source_timestamp.partition.clone())
+                .and_modify(|current_offset| {
+                    match current_offset {
+                        Some(current_offset) if source_timestamp.offset > *current_offset => {
+                            *current_offset = source_timestamp.offset;
+                        }
+                        Some(_) => (), // our offset is not as far as the one we already got
+                        None => {
+                            // No offset recorded so far.
+                            *current_offset = Some(source_timestamp.offset);
+                        }
+                    }
+                });
+        }
 
         Ok((starting_offsets, bindings))
     }

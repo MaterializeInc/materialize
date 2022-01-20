@@ -9,3 +9,11 @@
 
 > SELECT COUNT(*) FROM failpoint;
 1000000
+
+# We expect to read at least some of the messages from Kafka after restarting
+> SELECT SUM(CAST(statistics->'topics'->'testdrive-failpoint-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) > 1 FROM mz_kafka_source_statistics;
+true
+
+# We also expect, though, that some messages we're successfully read before we activated the failpoint and restarted
+> SELECT SUM(CAST(statistics->'topics'->'testdrive-failpoint-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) < 1000000 FROM mz_kafka_source_statistics;
+true
