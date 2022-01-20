@@ -1002,12 +1002,7 @@ pub fn plan_create_source(
         column_names,
     };
 
-    if !with_options.is_empty() {
-        bail!(
-            "unexpected parameters for CREATE SOURCE: {}",
-            with_options.keys().join(",")
-        )
-    }
+    normalize::ensure_empty_options(&with_options, "CREATE SOURCE")?;
 
     Ok(Plan::CreateSource(CreateSourcePlan {
         name,
@@ -1900,12 +1895,7 @@ pub fn plan_create_sink(
         }
     };
 
-    if !with_options.is_empty() {
-        bail!(
-            "unexpected parameters for CREATE SINK: {}",
-            with_options.keys().join(",")
-        )
-    }
+    normalize::ensure_empty_options(&with_options, "CREATE SINK")?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
@@ -2180,12 +2170,7 @@ pub fn plan_create_type(
         ids.push(item_id);
     }
 
-    if !with_options.is_empty() {
-        bail!(
-            "unexpected parameters for CREATE TYPE: {}",
-            with_options.keys().join(",")
-        )
-    }
+    normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
 
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     if scx.catalog.item_exists(&name) {

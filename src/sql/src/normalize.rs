@@ -414,8 +414,8 @@ macro_rules! with_option_type {
 
 /// Ensures that the given set of options are empty, useful for validating that
 /// `WITH` options are all real, used options
-pub(crate) fn ensure_empty_options(
-    with_options: &BTreeMap<String, Value>,
+pub(crate) fn ensure_empty_options<V>(
+    with_options: &BTreeMap<String, V>,
     r#for: &str,
 ) -> Result<(), anyhow::Error> {
     if !with_options.is_empty() {
