@@ -277,11 +277,16 @@ class CargoBuild(CargoPreImage):
                 unicode=True,
                 cwd=self.rd.root,
             )
+            target_dir = str(self.rd.cargo_target_dir().absolute())
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
                     continue
                 message = json.loads(line)
                 if message["reason"] != "build-script-executed":
+                    continue
+                if not message["out_dir"].startswith(target_dir):
+                    # Some crates are built for both the host and the target.
+                    # Ignore the built-for-host out dir.
                     continue
                 package = message["package_id"].split()[0]
                 for src, dst in self.extract.get(package, {}).items():
@@ -318,12 +323,11 @@ class CargoTest(CargoPreImage):
             self.rd,
             self.path,
             {
-                "bin": "protoc",
+                "bin": "testdrive",
                 "strip": True,
                 "extract": {"protobuf-src": {"install": "protobuf-install"}},
             },
         ).build()
-        CargoBuild(self.rd, self.path, {"bin": "testdrive", "strip": True}).build()
         CargoBuild(self.rd, self.path, {"bin": "materialized", "strip": True}).build()
 
         # NOTE(benesch): The two invocations of `cargo test --no-run` here

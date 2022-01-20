@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::env;
 use std::iter;
-use std::path;
+use std::path::{self, PathBuf};
 
 use async_trait::async_trait;
-use protobuf::Message;
-use tokio::fs;
+use tokio::process::Command;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -50,19 +50,23 @@ impl Action for CompileDescriptorsAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let mut protoc = mz_protoc::Protoc::new();
-        protoc.include(&state.temp_path);
-        for input in &self.inputs {
-            protoc.input(state.temp_path.join(input));
-        }
-        let fds = protoc
-            .parse()
-            .map_err(|e| format!("compiling protobuf descriptors: {}", e))?
-            .write_to_bytes()
-            .map_err(|e| format!("compiling protobuf descriptors: {}", e))?;
-        fs::write(state.temp_path.join(&self.output), fds)
+        let protoc = match env::var_os("PROTOC") {
+            None => protobuf_src::protoc(),
+            Some(protoc) => PathBuf::from(protoc),
+        };
+        let status = Command::new(protoc)
+            .arg("--include_imports")
+            .arg("-I")
+            .arg(&state.temp_path)
+            .arg("--descriptor_set_out")
+            .arg(state.temp_path.join(&self.output))
+            .args(&self.inputs)
+            .status()
             .await
-            .map_err(|e| format!("writing protobuf descriptors: {}", e))?;
+            .map_err(|e| format!("invoking protoc failed: {}", e))?;
+        if !status.success() {
+            return Err(format!("protoc exited unsuccessfully"));
+        }
         Ok(())
     }
 }

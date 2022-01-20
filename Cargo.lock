@@ -5027,7 +5027,7 @@ dependencies = [
  "predicates",
  "prost",
  "prost-reflect",
- "protobuf",
+ "protobuf-src",
  "rand",
  "rdkafka",
  "regex",
