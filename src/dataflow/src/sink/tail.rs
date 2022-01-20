@@ -33,7 +33,6 @@ use expr::GlobalId;
 use repr::{Diff, Row, Timestamp};
 
 use crate::render::sinks::SinkRender;
-use crate::render::RenderState;
 
 use super::SinkBaseMetrics;
 
@@ -55,7 +54,8 @@ where
 
     fn render_continuous_sink(
         &self,
-        render_state: &mut RenderState,
+        render_state: &mut crate::render::ComputeState,
+        _storage_state: &mut crate::render::StorageState,
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,

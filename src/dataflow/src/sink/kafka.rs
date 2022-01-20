@@ -52,7 +52,6 @@ use tokio::task;
 
 use super::{KafkaBaseMetrics, SinkBaseMetrics};
 use crate::render::sinks::SinkRender;
-use crate::render::RenderState;
 use crate::source::timestamp::TimestampBindingRc;
 use prometheus::core::{AtomicI64, AtomicU64};
 
@@ -76,7 +75,8 @@ where
 
     fn render_continuous_sink(
         &self,
-        render_state: &mut RenderState,
+        _render_state: &mut crate::render::ComputeState,
+        storage_state: &mut crate::render::StorageState,
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
@@ -109,7 +109,7 @@ where
         let mut source_ts_histories = Vec::new();
 
         for id in &self.transitive_source_dependencies {
-            if let Some(history) = render_state.ts_histories.get(id) {
+            if let Some(history) = storage_state.ts_histories.get(id) {
                 // As soon as we have one sink that depends on a given source,
                 // that source needs to persist timestamp bindings.
                 history.enable_persistence();
@@ -131,7 +131,7 @@ where
         let active_write_worker = (usize::cast_from(sink_id.hashed()) % peers) == worker_index;
 
         // Only the active_write_worker will ever produce data so all other workers have
-        // an empty frontier.  It's necessary to insert all of these into `render_state.
+        // an empty frontier.  It's necessary to insert all of these into `storage_state.
         // sink_write_frontier` below so we properly clear out default frontiers of
         // non-active workers.
         let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
@@ -154,7 +154,7 @@ where
             &metrics.kafka,
         );
 
-        render_state
+        storage_state
             .sink_write_frontiers
             .insert(sink_id, shared_frontier);
 

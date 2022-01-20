@@ -24,7 +24,6 @@ use interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
 use repr::{Diff, RelationDesc, Row, Timestamp};
 
 use crate::render::sinks::SinkRender;
-use crate::render::RenderState;
 
 use super::SinkBaseMetrics;
 
@@ -46,7 +45,8 @@ where
 
     fn render_continuous_sink(
         &self,
-        _render_state: &mut RenderState,
+        _render_state: &mut crate::render::ComputeState,
+        _storage_state: &mut crate::render::StorageState,
         _sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,

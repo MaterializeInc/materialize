@@ -24,7 +24,7 @@ use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use repr::{Datum, Diff, Row, Timestamp};
 
 use crate::render::context::Context;
-use crate::render::{RelevantTokens, RenderState};
+use crate::render::RelevantTokens;
 use crate::sink::SinkBaseMetrics;
 
 impl<G> Context<G, Row, Timestamp>
@@ -34,7 +34,8 @@ where
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
         &mut self,
-        render_state: &mut RenderState,
+        render_state: &mut crate::render::ComputeState,
+        storage_state: &mut crate::render::StorageState,
         tokens: &mut RelevantTokens,
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
@@ -66,8 +67,14 @@ where
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
 
-        let sink_token =
-            sink_render.render_continuous_sink(render_state, sink, sink_id, collection, metrics);
+        let sink_token = sink_render.render_continuous_sink(
+            render_state,
+            storage_state,
+            sink,
+            sink_id,
+            collection,
+            metrics,
+        );
 
         if let Some(sink_token) = sink_token {
             needed_sink_tokens.push(sink_token);
@@ -207,7 +214,8 @@ where
 
     fn render_continuous_sink(
         &self,
-        render_state: &mut RenderState,
+        render_state: &mut crate::render::ComputeState,
+        storage_state: &mut crate::render::StorageState,
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,

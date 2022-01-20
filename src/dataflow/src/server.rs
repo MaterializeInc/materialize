@@ -51,7 +51,7 @@ use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::metrics::Metrics;
 use crate::operator::CollectionExt;
-use crate::render::{self, RenderState};
+use crate::render::{self, ComputeState, StorageState};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
@@ -133,16 +133,18 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
         let dataflow_sink_metrics = dataflow_sink_metrics.clone();
         Worker {
             timely_worker,
-            render_state: RenderState {
+            render_state: ComputeState {
                 traces: TraceManager::new(trace_metrics, worker_idx),
+                dataflow_tokens: HashMap::new(),
+                tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            },
+            storage_state: StorageState {
                 local_inputs: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 ts_histories: HashMap::default(),
-                dataflow_tokens: HashMap::new(),
                 sink_write_frontiers: HashMap::new(),
                 metrics,
                 persist: None,
-                tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             },
             materialized_logger: None,
             command_rx,
@@ -185,7 +187,9 @@ where
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The state associated with rendering dataflows.
-    render_state: RenderState,
+    render_state: ComputeState,
+    /// The state associated with collection ingress and egress.
+    storage_state: StorageState,
     /// The logger, from Timely's logging framework, if logs are enabled.
     materialized_logger: Option<logging::materialized::Logger>,
     /// The channel from which commands are drawn.
@@ -544,7 +548,7 @@ where
             }
         }
 
-        for (id, history) in self.render_state.ts_histories.iter() {
+        for (id, history) in self.storage_state.ts_histories.iter() {
             // Read the upper frontier and compare to what we've reported.
             history.read_upper(&mut new_frontier);
             let prev_frontier = self
@@ -561,7 +565,7 @@ where
             }
         }
 
-        for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
+        for (id, frontier) in self.storage_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             let prev_frontier = self
                 .reported_frontiers
@@ -598,7 +602,7 @@ where
         // Need to go through all sources that are generating timestamp bindings, and extract their upper frontiers.
         // If that frontier is different than the durability frontier we've previously reported then we also need to
         // get the new bindings we've produced and send them to the coordinator.
-        for (id, history) in self.render_state.ts_histories.iter() {
+        for (id, history) in self.storage_state.ts_histories.iter() {
             if !history.requires_persistence() {
                 continue;
             }
@@ -650,7 +654,7 @@ where
     /// Needs to be called periodically (ideally once per "timestamp_frequency" in order
     /// for real time sources to make progress.
     fn update_rt_timestamps(&self) {
-        for (_, history) in self.render_state.ts_histories.iter() {
+        for (_, history) in self.storage_state.ts_histories.iter() {
             history.update_timestamp();
         }
     }
@@ -681,6 +685,7 @@ where
                     render::build_dataflow(
                         self.timely_worker,
                         &mut self.render_state,
+                        &mut self.storage_state,
                         dataflow,
                         self.now.clone(),
                         &self.dataflow_source_metrics,
@@ -691,13 +696,13 @@ where
 
             Command::DropSources(names) => {
                 for name in names {
-                    self.render_state.local_inputs.remove(&name);
+                    self.storage_state.local_inputs.remove(&name);
                 }
             }
             Command::DropSinks(ids) => {
                 for id in ids {
                     self.reported_frontiers.remove(&id);
-                    self.render_state.sink_write_frontiers.remove(&id);
+                    self.storage_state.sink_write_frontiers.remove(&id);
                     self.render_state.dataflow_tokens.remove(&id);
                 }
             }
@@ -783,13 +788,13 @@ where
             }
 
             Command::AdvanceAllLocalInputs { advance_to } => {
-                for (_, local_input) in self.render_state.local_inputs.iter_mut() {
+                for (_, local_input) in self.storage_state.local_inputs.iter_mut() {
                     local_input.capability.downgrade(&advance_to);
                 }
             }
 
             Command::Insert { id, updates } => {
-                let input = match self.render_state.local_inputs.get_mut(&id) {
+                let input = match self.storage_state.local_inputs.get_mut(&id) {
                     Some(input) => input,
                     None => panic!(
                         "local input {} missing for insert at worker {}",
@@ -809,14 +814,14 @@ where
                     self.render_state
                         .traces
                         .allow_compaction(id, frontier.borrow());
-                    if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
+                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
                         ts_history.set_compaction_frontier(frontier.borrow());
                     }
                 }
             }
             Command::DurabilityFrontierUpdates(list) => {
                 for (id, frontier) in list {
-                    if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
+                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
                         ts_history.set_durability_frontier(frontier.borrow());
                     }
                 }
@@ -825,7 +830,7 @@ where
                 self.initialize_logging(&config);
             }
             Command::EnablePersistence(runtime) => {
-                self.render_state.persist = Some(runtime);
+                self.storage_state.persist = Some(runtime);
             }
             Command::AddSourceTimestamping {
                 id,
@@ -937,7 +942,7 @@ where
                         }
                     }
 
-                    let prev = self.render_state.ts_histories.insert(id, data);
+                    let prev = self.storage_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
                     self.reported_frontiers.insert(id, Antichain::from_elem(0));
                     self.reported_bindings_frontiers
@@ -947,7 +952,7 @@ where
                 }
             }
             Command::AdvanceSourceTimestamp { id, update } => {
-                if let Some(history) = self.render_state.ts_histories.get_mut(&id) {
+                if let Some(history) = self.storage_state.ts_histories.get_mut(&id) {
                     match update {
                         TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) => {
                             // TODO: change the interface between the dataflow server and the
@@ -969,7 +974,7 @@ where
                     };
 
                     let sources = self
-                        .render_state
+                        .storage_state
                         .ts_source_mapping
                         .entry(id)
                         .or_insert_with(Vec::new);
@@ -983,13 +988,13 @@ where
                 }
             }
             Command::DropSourceTimestamping { id } => {
-                let prev = self.render_state.ts_histories.remove(&id);
+                let prev = self.storage_state.ts_histories.remove(&id);
 
                 if prev.is_none() {
                     tracing::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
                 }
 
-                let prev = self.render_state.ts_source_mapping.remove(&id);
+                let prev = self.storage_state.ts_source_mapping.remove(&id);
                 if prev.is_none() {
                     tracing::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }

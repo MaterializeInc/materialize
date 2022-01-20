@@ -38,7 +38,6 @@ use crate::decode::rewrite_for_upsert;
 use crate::logging::materialized::Logger;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
-use crate::render::RenderState;
 use crate::server::LocalInput;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
@@ -63,73 +62,12 @@ impl<G> Context<G, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    /// Render a local source and return a handle to its input, and the data and
-    /// error collections.
-    fn render_local_source(
-        &mut self,
-        render_state: &mut RenderState,
-        scope: &mut G,
-        persisted_name: Option<String>,
-    ) -> (LocalInput, Collection<G, Row>, Collection<G, DataflowError>) {
-        let ((handle, capability), ok_stream, err_collection) = {
-            let ((handle, capability), ok_stream) = scope.new_unordered_input();
-            let err_collection = Collection::empty(scope);
-            ((handle, capability), ok_stream, err_collection)
-        };
-        let local_input = LocalInput { handle, capability };
-
-        // A local "source" is either fed by a local input handle, or by reading from a
-        // `persisted_source()`.
-        //
-        // For non-persisted sources, values that are to be inserted are sent from the
-        // coordinator and pushed into the handle.
-        //
-        // For persisted sources, the coordinator only writes new values to a persistent
-        // stream. These values will then "show up" here because we read from the same
-        // persistent stream.
-        let (ok_stream, error_collection) = match (&mut render_state.persist, persisted_name) {
-            (Some(persist), Some(stream_name)) => {
-                let (_write, read) = persist.create_or_load(&stream_name);
-                let (persist_ok_stream, persist_err_stream) = scope
-                    .persisted_source(read, &self.as_of_frontier)
-                    .ok_err(|x| match x {
-                        (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
-                        (Err(err), ts, diff) => Err((err, ts, diff)),
-                    });
-                let (persist_ok_stream, decode_err_stream) =
-                    persist_ok_stream.ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
-                let persist_err_collection = persist_err_stream
-                    .concat(&decode_err_stream)
-                    .map(move |(err, ts, diff)| {
-                        let err = SourceError::new(
-                            stream_name.clone(),
-                            SourceErrorDetails::Persistence(err),
-                        );
-                        (err.into(), ts, diff)
-                    })
-                    .as_collection();
-                (
-                    ok_stream.concat(&persist_ok_stream),
-                    err_collection.concat(&persist_err_collection),
-                )
-            }
-            _ => (ok_stream, err_collection),
-        };
-        let as_of_frontier = self.as_of_frontier.clone();
-        let ok_collection = ok_stream
-            .map_in_place(move |(_, mut time, _)| {
-                time.advance_by(as_of_frontier.borrow());
-            })
-            .as_collection();
-        (local_input, ok_collection, error_collection)
-    }
-
     /// Import the source described by `src` into the rendering context.
     ///
     /// Returns a "source token" and any "additional tokens" to be associated with `src_id`.
     pub(crate) fn import_source(
         &mut self,
-        render_state: &mut RenderState,
+        storage_state: &mut crate::render::StorageState,
         scope: &mut G,
         materialized_logging: Option<Logger>,
         src_id: GlobalId,
@@ -170,10 +108,60 @@ where
             // Create a new local input (exposed as TABLEs to users). Data is inserted
             // via Command::Insert commands.
             SourceConnector::Local { persisted_name, .. } => {
-                let (local_input, ok_collection, err_collection) =
-                    self.render_local_source(render_state, scope, persisted_name);
+                let ((handle, capability), ok_stream, err_collection) = {
+                    let ((handle, capability), ok_stream) = scope.new_unordered_input();
+                    let err_collection = Collection::empty(scope);
+                    ((handle, capability), ok_stream, err_collection)
+                };
 
-                render_state.local_inputs.insert(src_id, local_input);
+                // A local "source" is either fed by a local input handle, or by reading from a
+                // `persisted_source()`.
+                //
+                // For non-persisted sources, values that are to be inserted are sent from the
+                // coordinator and pushed into the handle.
+                //
+                // For persisted sources, the coordinator only writes new values to a persistent
+                // stream. These values will then "show up" here because we read from the same
+                // persistent stream.
+                let (ok_stream, err_collection) = match (&mut storage_state.persist, persisted_name)
+                {
+                    (Some(persist), Some(stream_name)) => {
+                        let (_write, read) = persist.create_or_load(&stream_name);
+                        let (persist_ok_stream, persist_err_stream) = scope
+                            .persisted_source(read, &self.as_of_frontier)
+                            .ok_err(|x| match x {
+                                (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
+                                (Err(err), ts, diff) => Err((err, ts, diff)),
+                            });
+                        let (persist_ok_stream, decode_err_stream) =
+                            persist_ok_stream.ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
+                        let persist_err_collection = persist_err_stream
+                            .concat(&decode_err_stream)
+                            .map(move |(err, ts, diff)| {
+                                let err = SourceError::new(
+                                    stream_name.clone(),
+                                    SourceErrorDetails::Persistence(err),
+                                );
+                                (err.into(), ts, diff)
+                            })
+                            .as_collection();
+                        (
+                            ok_stream.concat(&persist_ok_stream),
+                            err_collection.concat(&persist_err_collection),
+                        )
+                    }
+                    _ => (ok_stream, err_collection),
+                };
+
+                storage_state
+                    .local_inputs
+                    .insert(src_id, LocalInput { handle, capability });
+                let as_of_frontier = self.as_of_frontier.clone();
+                let ok_collection = ok_stream
+                    .map_in_place(move |(_, mut time, _)| {
+                        time.advance_by(as_of_frontier.borrow());
+                    })
+                    .as_collection();
                 self.insert_id(
                     Id::Global(src_id),
                     crate::render::CollectionBundle::from_collections(
@@ -207,7 +195,7 @@ where
                 // whose contents will be concatenated and inserted along the collection.
                 let mut error_collections = Vec::<Collection<_, _>>::new();
 
-                let source_persist_config = match (persist, render_state.persist.as_mut()) {
+                let source_persist_config = match (persist, storage_state.persist.as_mut()) {
                     (Some(persist_desc), Some(persist)) => {
                         Some(get_persist_config(&uid, persist_desc, persist))
                     }
@@ -238,7 +226,7 @@ where
                     )
                 };
 
-                let timestamp_histories = render_state
+                let timestamp_histories = storage_state
                     .ts_histories
                     .get(&orig_id)
                     .map(|history| history.clone());
@@ -402,7 +390,7 @@ where
                                     metadata_columns,
                                     &mut linear_operators,
                                     fast_forwarded,
-                                    render_state.metrics.clone(),
+                                    storage_state.metrics.clone(),
                                 ),
                                 SourceType::ByteStream(source) => render_decode(
                                     &source,
@@ -412,7 +400,7 @@ where
                                     metadata_columns,
                                     &mut linear_operators,
                                     fast_forwarded,
-                                    render_state.metrics.clone(),
+                                    storage_state.metrics.clone(),
                                 ),
                             };
                             if let Some(tok) = extra_token {
@@ -427,7 +415,7 @@ where
                                         DebeziumMode::Upsert => {
                                             let mut trackstate = (
                                                 HashMap::new(),
-                                                render_state.metrics.debezium_upsert_count_for(
+                                                storage_state.metrics.debezium_upsert_count_for(
                                                     src_id,
                                                     self.dataflow_id,
                                                 ),
@@ -650,7 +638,7 @@ where
 
                 // We also need to keep track of this mapping globally to activate sources
                 // on timestamp advancement queries
-                render_state
+                storage_state
                     .ts_source_mapping
                     .entry(orig_id)
                     .or_insert_with(Vec::new)

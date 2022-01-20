@@ -143,30 +143,37 @@ mod top_k;
 mod upsert;
 
 /// Worker-local state that is maintained across dataflows.
-pub struct RenderState {
+///
+/// This state is restricted to the COMPUTE state, the deterministic, idempotent work
+/// done between data ingress and egress.
+pub struct ComputeState {
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
+    /// Tokens that should be dropped when a dataflow is dropped to clean up
+    /// associated state.
+    pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
+    /// Shared buffer with TAIL operator instances by which they can respond.
+    ///
+    /// The entries are pairs of sink identifier (to identify the tail instance)
+    /// and the response itself.
+    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
+}
+
+/// Worker-local state related to the ingress or egress of collections of data.
+pub struct StorageState {
     /// Handles to local inputs, keyed by ID.
     pub local_inputs: HashMap<GlobalId, LocalInput>,
     /// Handles to external sources, keyed by ID.
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
-    /// Tokens that should be dropped when a dataflow is dropped to clean up
-    /// associated state.
-    pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
+    /// Metrics reported by all dataflows.
+    pub metrics: Metrics,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
-    /// Metrics reported by all dataflows.
-    pub metrics: Metrics,
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient>,
-    /// Shared buffer with TAIL operator instances by which they can respond.
-    ///
-    /// The entries are pairs of sink identifier (to identify the tail instance)
-    /// and the response itself.
-    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
 }
 
 /// A container for "tokens" that are relevant to an in-construction dataflow.
@@ -187,7 +194,8 @@ pub struct RelevantTokens {
 /// Build a dataflow from a description.
 pub fn build_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
-    render_state: &mut RenderState,
+    render_state: &mut ComputeState,
+    storage_state: &mut StorageState,
     dataflow: DataflowDescription<plan::Plan>,
     now: NowFn,
     source_metrics: &SourceBaseMetrics,
@@ -220,7 +228,7 @@ pub fn build_dataflow<A: Allocate>(
             // Import declared sources into the rendering context.
             for (src_id, (src, orig_id)) in &dataflow.source_imports {
                 let (source_token, additional_tokens) = context.import_source(
-                    render_state,
+                    storage_state,
                     region,
                     materialized_logging.clone(),
                     src_id.clone(),
@@ -279,6 +287,7 @@ pub fn build_dataflow<A: Allocate>(
             for (sink_id, imports, sink) in sinks {
                 context.export_sink(
                     render_state,
+                    storage_state,
                     &mut tokens,
                     imports,
                     sink_id,
@@ -296,7 +305,7 @@ where
 {
     fn import_index(
         &mut self,
-        render_state: &mut RenderState,
+        render_state: &mut ComputeState,
         tokens: &mut RelevantTokens,
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
@@ -354,7 +363,7 @@ where
 
     fn export_index(
         &mut self,
-        render_state: &mut RenderState,
+        render_state: &mut ComputeState,
         tokens: &mut RelevantTokens,
         import_ids: HashSet<GlobalId>,
         idx_id: GlobalId,
