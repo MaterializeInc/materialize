@@ -53,7 +53,7 @@ $ protobuf-compile-descriptors inputs=empty.proto,importee.proto,importer.proto 
 
 $ kafka-create-topic topic=import partitions=1
 
-$ kafka-ingest topic=import format=protobuf descriptor-file=import.pb message=.Importer
+$ kafka-ingest topic=import format=protobuf descriptor-file=import.pb message=Importer
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
 > CREATE MATERIALIZED SOURCE import FROM
@@ -96,7 +96,7 @@ $ schema-registry-publish subject=importee.proto schema-type=protobuf references
 $ schema-registry-publish subject=testdrive-import-csr-${testdrive.seed}-value schema-type=protobuf references=empty.proto,importee.proto
 \${importer-schema}
 
-$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true
+$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=Importer confluent-wire-format=true
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
 > CREATE MATERIALIZED SOURCE import_csr FROM
@@ -109,7 +109,7 @@ importee1  importee2            mz_offset
 (f)        "(\"(1234,5678)\")"  1
 
 # Test that non-zero message IDs in the Confluent wire format are rejected.
-$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=.Importer confluent-wire-format=true schema-message-id=123
+$ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=Importer confluent-wire-format=true schema-message-id=123
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
 ! SELECT importee1::text, importee2::text, mz_offset FROM import_csr

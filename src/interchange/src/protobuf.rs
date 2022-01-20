@@ -15,41 +15,22 @@ use prost_reflect::{
     Cardinality, DynamicMessage, FieldDescriptor, FileDescriptor, Kind, MessageDescriptor,
     ReflectMessage, Value,
 };
-use serde::{Deserialize, Serialize};
 
 use ore::str::StrExt;
 use repr::{ColumnName, ColumnType, Datum, Row, ScalarType};
-
-/// Wrapper type that ensures a protobuf message name is properly normalized.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct NormalizedProtobufMessageName(String);
-
-impl NormalizedProtobufMessageName {
-    /// Create a new normalized protobuf message name.  A leading dot will be
-    /// prepended to the provided message name if necessary.
-    pub fn new(mut message_name: String) -> Self {
-        if !message_name.starts_with('.') {
-            message_name = format!(".{}", message_name);
-        }
-        NormalizedProtobufMessageName(message_name)
-    }
-}
 
 /// A decoded description of the schema of a Protobuf message.
 #[derive(Debug, PartialEq)]
 pub struct DecodedDescriptors {
     message_descriptor: MessageDescriptor,
     columns: Vec<(ColumnName, ColumnType)>,
-    message_name: NormalizedProtobufMessageName,
+    message_name: String,
 }
 
 impl DecodedDescriptors {
     /// Builds a `DecodedDescriptors` from an encoded `FileDescriptorSet` and
     /// the fully qualified name of a message inside that file descriptor set.
-    pub fn from_bytes(
-        bytes: &[u8],
-        NormalizedProtobufMessageName(message_name): NormalizedProtobufMessageName,
-    ) -> Result<Self, anyhow::Error> {
+    pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self, anyhow::Error> {
         let fds = FileDescriptor::decode(bytes).context("decoding file descriptor set")?;
         let message_descriptor = fds.get_message_by_name(&message_name).ok_or_else(|| {
             anyhow!(
@@ -68,7 +49,7 @@ impl DecodedDescriptors {
         Ok(DecodedDescriptors {
             message_descriptor,
             columns,
-            message_name: NormalizedProtobufMessageName(message_name),
+            message_name,
         })
     }
 

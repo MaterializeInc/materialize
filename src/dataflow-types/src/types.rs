@@ -306,8 +306,7 @@ pub mod sources {
         use regex::Regex;
         use serde::{Deserialize, Serialize};
 
-        use interchange::avro::{self};
-        use interchange::protobuf::{self, NormalizedProtobufMessageName};
+        use interchange::{avro, protobuf};
         use repr::{ColumnType, RelationDesc, ScalarType};
 
         /// A description of how to interpret data from various sources
@@ -490,7 +489,7 @@ pub mod sources {
         #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
         pub struct ProtobufEncoding {
             pub descriptors: Vec<u8>,
-            pub message_name: NormalizedProtobufMessageName,
+            pub message_name: String,
             pub confluent_wire_format: bool,
         }
 

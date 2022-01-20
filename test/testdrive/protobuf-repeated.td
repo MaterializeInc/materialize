@@ -38,7 +38,7 @@ $ protobuf-compile-descriptors inputs=repeated.proto output=repeated.pb
 
 $ kafka-create-topic topic=repeated partitions=1
 
-$ kafka-ingest topic=repeated format=protobuf descriptor-file=repeated.pb message=.Repeated
+$ kafka-ingest topic=repeated format=protobuf descriptor-file=repeated.pb message=Repeated
 {"bool": [true, false], "int32": [2, 1], "int64": [2, 1], "float": [3.2, 1.0], "double": [3.2, 1.0], "bytes": ["YmJi", "YWFh"], "string": ["bbb", "aaa"], "enum": ["ENUM1", "ENUM0"], "message": [{"m1": 4, "m2": 2}, {"m1": 2, "m2": 4}]}
 {}
 
