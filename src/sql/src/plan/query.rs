@@ -3979,6 +3979,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, PlanError> {
             value_type: Box::new(scalar_type_from_pg(value_type)?),
             custom_oid: None,
         }),
+        pgrepr::Type::Int2Vector => Ok(ScalarType::Int2Vector),
     }
 }
 

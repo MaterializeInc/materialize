@@ -51,6 +51,7 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::Datum;
 
 macro_rules! bail {
     ($($arg:tt)*) => { return Err(format!($($arg)*)) };
@@ -791,6 +792,27 @@ where
             "malformed array literal; contains '{}' after terminal '}}'",
             c
         )
+    }
+
+    Ok(elems)
+}
+
+pub fn parse_int32a(s: &str) -> Result<Vec<Datum>, ParseError> {
+    parse_int32a_inner(s)
+        .map_err(|details| ParseError::invalid_input_syntax("int2vector", s).with_details(details))
+}
+
+// `parse_int32a_inner`'s separation from `parse_int32a` simplifies error handling
+// by allowing subprocedures to return `String` errors.
+fn parse_int32a_inner(s: &str) -> Result<Vec<Datum>, String> {
+    let mut elems = vec![];
+    let buf = &mut LexBuf::new(s);
+
+    // Consume elements.
+    loop {
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        elems.push(Datum::Int16(0));
+        break;
     }
 
     Ok(elems)

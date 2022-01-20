@@ -69,6 +69,8 @@ pub enum Type {
     RegType,
     /// A class name.
     RegClass,
+    /// A small int vector
+    Int2Vector,
 }
 
 lazy_static! {
@@ -121,6 +123,7 @@ impl Type {
             postgres_types::Type::REGCLASS => Some(Type::RegClass),
             postgres_types::Type::REGPROC => Some(Type::RegProc),
             postgres_types::Type::REGTYPE => Some(Type::RegType),
+            postgres_types::Type::INT2_VECTOR => Some(Type::Int2Vector),
             _ => None,
         }
     }
@@ -154,6 +157,7 @@ impl Type {
                 Type::RegClass => &postgres_types::Type::REGCLASS_ARRAY,
                 Type::RegProc => &postgres_types::Type::REGPROC_ARRAY,
                 Type::RegType => &postgres_types::Type::REGTYPE_ARRAY,
+                Type::Int2Vector => &postgres_types::Type::INT2_VECTOR_ARRAY,
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -180,6 +184,7 @@ impl Type {
             Type::RegClass => &postgres_types::Type::REGCLASS,
             Type::RegProc => &postgres_types::Type::REGPROC,
             Type::RegType => &postgres_types::Type::REGTYPE,
+            Type::Int2Vector => &postgres_types::Type::INT2_VECTOR,
         }
     }
 
@@ -219,6 +224,7 @@ impl Type {
             &postgres_types::Type::REGCLASS_ARRAY => "regclass[]",
             &postgres_types::Type::REGPROC_ARRAY => "regproc[]",
             &postgres_types::Type::REGTYPE_ARRAY => "regtype[]",
+            &postgres_types::Type::INT2_VECTOR => "int2vector",
             other => other.name(),
         }
     }
@@ -260,6 +266,7 @@ impl Type {
             Type::RegClass => 4,
             Type::RegProc => 4,
             Type::RegType => 4,
+            Type::Int2Vector => -1,
         }
     }
 
@@ -306,6 +313,7 @@ impl Type {
             Type::RegClass => ScalarType::RegClass,
             Type::RegProc => ScalarType::RegProc,
             Type::RegType => ScalarType::RegType,
+            Type::Int2Vector => ScalarType::Int2Vector,
         }
     }
 }
@@ -348,6 +356,7 @@ impl From<&ScalarType> for Type {
             ScalarType::RegClass => Type::RegClass,
             ScalarType::RegProc => Type::RegProc,
             ScalarType::RegType => Type::RegType,
+            ScalarType::Int2Vector => Type::Int2Vector,
         }
     }
 }

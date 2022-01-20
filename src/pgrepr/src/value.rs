@@ -484,6 +484,7 @@ impl Value {
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
             Type::Uuid => Value::Uuid(Uuid::parse_str(raw)?),
+            Type::Int2Vector => return Err("input of array types is not implemented".into()), //TODO
         })
     }
 
@@ -518,6 +519,7 @@ impl Value {
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
+            Type::Int2Vector => Err("binary decoding of int2vector is not implemented".into()), // TODO
         }
     }
 }
@@ -609,6 +611,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
         Type::RegClass => ScalarType::RegClass,
         Type::RegProc => ScalarType::RegProc,
         Type::RegType => ScalarType::RegType,
+        Type::Int2Vector => ScalarType::Int2Vector,
     };
     (Datum::Null, ty)
 }

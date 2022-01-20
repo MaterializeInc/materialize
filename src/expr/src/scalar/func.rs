@@ -3177,6 +3177,7 @@ pub enum UnaryFunc {
     CastStringToInt16(CastStringToInt16),
     CastStringToInt32(CastStringToInt32),
     CastStringToInt64(CastStringToInt64),
+    CastStringToInt2Vector(CastStringToInt2Vector),
     CastStringToFloat32(CastStringToFloat32),
     CastStringToFloat64(CastStringToFloat64),
     CastStringToDate(CastStringToDate),
@@ -3403,6 +3404,7 @@ derive_unary!(
     CastStringToInt16,
     CastStringToInt32,
     CastStringToInt64,
+    CastStringToInt2Vector,
     CastStringToFloat32,
     CastStringToFloat64,
     CastStringToNumeric,
@@ -3572,6 +3574,7 @@ impl UnaryFunc {
             | CastStringToInt16(_)
             | CastStringToInt32(_)
             | CastStringToInt64(_)
+            | CastStringToInt2Vector(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
             | CastStringToNumeric(_)
@@ -3773,6 +3776,7 @@ impl UnaryFunc {
             | CastStringToBytes(_)
             | CastStringToInt16(_)
             | CastStringToInt32(_)
+            | CastStringToInt2Vector(_)
             | CastStringToInt64(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
@@ -4009,6 +4013,7 @@ impl UnaryFunc {
             | CastStringToInt16(_)
             | CastStringToInt32(_)
             | CastStringToInt64(_)
+            | CastStringToInt2Vector(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
             | CastStringToNumeric(_)
@@ -4260,6 +4265,7 @@ impl UnaryFunc {
             | CastStringToInt16(_)
             | CastStringToInt32(_)
             | CastStringToInt64(_)
+            | CastStringToInt2Vector(_)
             | CastStringToFloat32(_)
             | CastStringToFloat64(_)
             | CastStringToNumeric(_)
@@ -4881,6 +4887,18 @@ where
                     buf.write_null()
                 } else {
                     stringify_datum(buf.nonnull_buffer(), d, elem_type)
+                }
+            },
+        ),
+        Int2Vector => strconv::format_array(
+            buf,
+            &d.unwrap_array().dims().into_iter().collect::<Vec<_>>(),
+            &d.unwrap_array().elements(),
+            |buf, d| {
+                if d.is_null() {
+                    buf.write_null()
+                } else {
+                    stringify_datum(buf.nonnull_buffer(), d, &Int32)
                 }
             },
         ),

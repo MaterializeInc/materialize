@@ -85,3 +85,6 @@ parquet-format-async-temp = { git = "https://github.com/MaterializeInc/parquet-f
 # Waiting on https://github.com/tokio-rs/prost/pull/576.
 prost = { git = "https://github.com/MaterializeInc/prost.git" }
 prost-types = { git = "https://github.com/MaterializeInc/prost.git" }
+
+[patch."https://github.com/MaterializeInc/rust-postgres"]
+postgres-types = { path = "/Users/martin/work/rust-postgres/postgres-types" }

@@ -110,6 +110,7 @@ impl TypeCategory {
             }
             ScalarType::Record { .. } => Self::Pseudo,
             ScalarType::Map { .. } => Self::Pseudo,
+            ScalarType::Int2Vector => Self::String,
         }
     }
 
@@ -906,7 +907,7 @@ impl From<ScalarBaseType> for ParamType {
             RegClass => ScalarType::RegClass,
             RegProc => ScalarType::RegProc,
             RegType => ScalarType::RegType,
-            Array | List | Record | Map => {
+            Array | List | Record | Map | Int2Vector => {
                 panic!("cannot convert ScalarBaseType::{:?} to ParamType", s)
             }
         })

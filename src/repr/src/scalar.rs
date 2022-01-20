@@ -941,6 +941,8 @@ pub enum ScalarType {
     RegType,
     /// A PostgreSQL class name.
     RegClass,
+    /// A small int array
+    Int2Vector,
 }
 
 /// Types that implement this trait can be stored in an SQL column with the specified ColumnType

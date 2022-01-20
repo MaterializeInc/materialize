@@ -1293,7 +1293,7 @@ dependencies = [
  "pdqselect",
  "persist",
  "persist-types",
- "postgres-protocol",
+ "postgres-protocol 0.6.1 (git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2)",
  "postgres-util",
  "prometheus",
  "prost",
@@ -2732,7 +2732,7 @@ dependencies = [
  "pid-file",
  "postgres",
  "postgres-openssl",
- "postgres-protocol",
+ "postgres-protocol 0.6.1 (git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2)",
  "postgres_array",
  "predicates",
  "prof",
@@ -3512,7 +3512,7 @@ dependencies = [
  "datadriven",
  "fallible-iterator",
  "ore",
- "postgres-protocol",
+ "postgres-protocol 0.6.1 (git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2)",
  "serde",
  "serde_json",
 ]
@@ -3690,6 +3690,22 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.1"
+dependencies = [
+ "base64",
+ "byteorder",
+ "bytes",
+ "fallible-iterator",
+ "hmac",
+ "md-5",
+ "memchr",
+ "rand",
+ "sha2",
+ "stringprep",
+]
+
+[[package]]
+name = "postgres-protocol"
+version = "0.6.1"
 source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#5ae9ff03d1b8085fe026c7d179226b1d169ef6c6"
 dependencies = [
  "base64",
@@ -3707,12 +3723,11 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#5ae9ff03d1b8085fe026c7d179226b1d169ef6c6"
 dependencies = [
  "bytes",
  "chrono",
  "fallible-iterator",
- "postgres-protocol",
+ "postgres-protocol 0.6.1",
  "serde",
  "serde_json",
  "uuid",
@@ -3738,7 +3753,7 @@ source = "git+https://github.com/MaterializeInc/rust-postgres-array?branch=mz-0.
 dependencies = [
  "bytes",
  "fallible-iterator",
- "postgres-protocol",
+ "postgres-protocol 0.6.1 (git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2)",
  "postgres-types",
 ]
 
@@ -4707,7 +4722,7 @@ dependencies = [
  "mz-protoc",
  "ore",
  "pgrepr",
- "postgres-protocol",
+ "postgres-protocol 0.6.1 (git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2)",
  "postgres-types",
  "postgres-util",
  "protobuf",
@@ -4762,7 +4777,7 @@ dependencies = [
  "md-5",
  "ore",
  "pgrepr",
- "postgres-protocol",
+ "postgres-protocol 0.6.1 (git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2)",
  "regex",
  "repr",
  "serde_json",
@@ -5258,7 +5273,7 @@ dependencies = [
  "percent-encoding",
  "phf",
  "pin-project-lite",
- "postgres-protocol",
+ "postgres-protocol 0.6.1 (git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2)",
  "postgres-types",
  "socket2",
  "tokio",

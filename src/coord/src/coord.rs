@@ -704,6 +704,7 @@ where
         let mut metric_scraper_stream = self.metric_scraper.tick_stream();
 
         loop {
+            // GUS INDICATION THAT THIS IS INTERESTING
             let msg = select! {
                 // Order matters here. We want to process internal commands
                 // before processing external commands.
