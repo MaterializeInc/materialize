@@ -233,6 +233,14 @@ struct Args {
     )]
     log_filter: String,
 
+    /// Prevent dumping of backtraces on SIGSEGV/SIGBUS
+    ///
+    /// In the case of OOMs and memory corruptions, it may be advantageous to NOT dump backtraces,
+    /// as the attempt to dump the backtraces will segfault on its own, corrupting the core file
+    /// further and obfuscating the original bug.
+    #[clap(long, hide = true, env = "MZ_NO_SIGBUS_SIGSEGV_BACKTRACES")]
+    no_sigbus_sigsegv_backtraces: bool,
+
     // == Connection options.
     /// The address on which to listen for connections.
     #[clap(
@@ -369,7 +377,11 @@ fn main() {
 
 fn run(args: Args) -> Result<(), anyhow::Error> {
     panic::set_hook(Box::new(handle_panic));
-    sys::enable_sigbus_sigsegv_backtraces()?;
+
+    if !args.no_sigbus_sigsegv_backtraces {
+        sys::enable_sigbus_sigsegv_backtraces()?;
+    }
+
     sys::enable_termination_signal_cleanup()?;
 
     // Initialize fail crate for failpoint support
