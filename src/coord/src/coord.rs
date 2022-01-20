@@ -108,6 +108,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use build_info::BuildInfo;
 use dataflow_types::client::TimestampBindingFeedback;
+use dataflow_types::client::{ComputeClient, StorageClient};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{sinks::SinkAsOf, sources::Timeline};
 use dataflow_types::{
@@ -403,7 +404,7 @@ macro_rules! guard_write_critical_section {
 
 impl<C> Coordinator<C>
 where
-    C: dataflow_types::client::Client + 'static,
+    C: ComputeClient + StorageClient + 'static,
 {
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
@@ -791,10 +792,9 @@ where
             });
         }
 
-        self.broadcast(dataflow_types::client::Command::Storage(
-            dataflow_types::client::StorageCommand::AdvanceAllLocalInputs { advance_to },
-        ))
-        .await;
+        self.dataflow_client
+            .advance_all_table_timestamps(advance_to)
+            .await;
     }
 
     async fn message_worker(&mut self, message: dataflow_types::client::Response) {
@@ -889,12 +889,9 @@ where
 
                 // Announce the new frontiers that have been durably persisted.
                 if !durability_updates.is_empty() {
-                    self.broadcast(dataflow_types::client::Command::Storage(
-                        dataflow_types::client::StorageCommand::DurabilityFrontierUpdates(
-                            durability_updates,
-                        ),
-                    ))
-                    .await;
+                    self.dataflow_client
+                        .update_durability_frontiers(durability_updates)
+                        .await;
                 }
             }
         }
@@ -1001,10 +998,9 @@ where
         &mut self,
         AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
     ) {
-        self.broadcast(dataflow_types::client::Command::Storage(
-            dataflow_types::client::StorageCommand::AdvanceSourceTimestamp { id, update },
-        ))
-        .await;
+        self.dataflow_client
+            .advance_source_timestamp(id, update)
+            .await;
     }
 
     async fn message_scrape_metrics(&mut self) {
@@ -1523,10 +1519,7 @@ where
 
         if !since_updates.is_empty() {
             self.persisted_table_allow_compaction(&since_updates);
-            self.broadcast(dataflow_types::client::Command::Compute(
-                dataflow_types::client::ComputeCommand::AllowCompaction(since_updates),
-            ))
-            .await;
+            self.dataflow_client.allow_compaction(since_updates).await;
         }
     }
 
@@ -1644,10 +1637,7 @@ where
             let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
             // Allow dataflow to cancel any pending peeks.
-            self.broadcast(dataflow_types::client::Command::Compute(
-                dataflow_types::client::ComputeCommand::CancelPeek { conn_id },
-            ))
-            .await;
+            self.dataflow_client.cancel_peek(conn_id).await;
         }
     }
 
@@ -2904,10 +2894,7 @@ where
                             );
                         } else {
                             for (id, updates) in volatile_updates {
-                                self.broadcast(dataflow_types::client::Command::Storage(
-                                    dataflow_types::client::StorageCommand::Insert { id, updates },
-                                ))
-                                .await;
+                                self.dataflow_client.table_insert(id, updates).await;
                             }
                         }
                     }
@@ -4003,19 +3990,13 @@ where
             for &id in &tables_to_drop {
                 self.sources.remove(&id);
             }
-            self.broadcast(dataflow_types::client::Command::Storage(
-                dataflow_types::client::StorageCommand::DropTables(tables_to_drop),
-            ))
-            .await;
+            self.dataflow_client.drop_tables(tables_to_drop).await;
         }
         if !sinks_to_drop.is_empty() {
             for id in sinks_to_drop.iter() {
                 self.sink_writes.remove(id);
             }
-            self.broadcast(dataflow_types::client::Command::Compute(
-                dataflow_types::client::ComputeCommand::DropSinks(sinks_to_drop),
-            ))
-            .await;
+            self.dataflow_client.drop_sinks(sinks_to_drop).await;
         }
         if !indexes_to_drop.is_empty() {
             self.drop_indexes(indexes_to_drop).await;
@@ -4086,10 +4067,7 @@ where
                 let write_fut = persist.write_handle.write(&updates);
                 let _ = tokio::spawn(write_fut);
             } else {
-                self.broadcast(dataflow_types::client::Command::Storage(
-                    dataflow_types::client::StorageCommand::Insert { id, updates },
-                ))
-                .await
+                self.dataflow_client.table_insert(id, updates).await
             }
         }
     }
@@ -4105,10 +4083,7 @@ where
 
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
-            self.broadcast(dataflow_types::client::Command::Compute(
-                dataflow_types::client::ComputeCommand::DropSinks(dataflow_names),
-            ))
-            .await;
+            self.dataflow_client.drop_sinks(dataflow_names).await;
         }
     }
 
@@ -4120,10 +4095,7 @@ where
             }
         }
         if !trace_keys.is_empty() {
-            self.broadcast(dataflow_types::client::Command::Compute(
-                dataflow_types::client::ComputeCommand::DropIndexes(trace_keys),
-            ))
-            .await
+            self.dataflow_client.drop_indexes(trace_keys).await
         }
     }
 
@@ -4237,10 +4209,7 @@ where
         for dataflow in dataflows.into_iter() {
             dataflow_plans.push(self.finalize_dataflow(dataflow)?);
         }
-        self.broadcast(dataflow_types::client::Command::Compute(
-            dataflow_types::client::ComputeCommand::CreateDataflows(dataflow_plans),
-        ))
-        .await;
+        self.dataflow_client.create_dataflows(dataflow_plans).await;
         Ok(())
     }
 
@@ -4329,10 +4298,6 @@ where
             .expect("Dataflow planning failed; unrecoverable error"))
     }
 
-    async fn broadcast(&mut self, cmd: dataflow_types::client::Command) {
-        self.dataflow_client.send(cmd).await;
-    }
-
     // Notify the timestamper thread that a source has been created or dropped.
     async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
         if create {
@@ -4346,24 +4311,18 @@ where
                         .send(TimestampMessage::Add(source_id, s.connector.clone()))
                         .expect("Failed to send CREATE Instance notice to timestamper");
                     let connector = s.connector.clone();
-                    self.broadcast(dataflow_types::client::Command::Storage(
-                        dataflow_types::client::StorageCommand::AddSourceTimestamping {
-                            id: source_id,
-                            connector,
-                            bindings,
-                        },
-                    ))
-                    .await;
+                    self.dataflow_client
+                        .add_source_timestamping(source_id, connector, bindings)
+                        .await;
                 }
             }
         } else {
             self.ts_tx
                 .send(TimestampMessage::Drop(source_id))
                 .expect("Failed to send DROP Instance notice to timestamper");
-            self.broadcast(dataflow_types::client::Command::Storage(
-                dataflow_types::client::StorageCommand::DropSourceTimestamping { id: source_id },
-            ))
-            .await;
+            self.dataflow_client
+                .drop_source_timestamping(source_id)
+                .await;
         }
     }
 
@@ -4497,7 +4456,7 @@ pub async fn serve<C>(
     }: Config<'_, C>,
 ) -> Result<(Handle, Client), CoordError>
 where
-    C: dataflow_types::client::Client + 'static,
+    C: dataflow_types::client::ComputeClient + dataflow_types::client::StorageClient + 'static,
 {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
@@ -4577,24 +4536,18 @@ where
             };
             if let Some(config) = &logging {
                 handle.block_on(
-                    coord.broadcast(dataflow_types::client::Command::Compute(
-                        dataflow_types::client::ComputeCommand::EnableLogging(
-                            DataflowLoggingConfig {
-                                granularity_ns: config.granularity.as_nanos(),
-                                active_logs: BUILTINS
-                                    .logs()
-                                    .map(|src| (src.variant.clone(), src.index_id))
-                                    .collect(),
-                                log_logging: config.log_logging,
-                            },
-                        ),
-                    )),
+                    coord.dataflow_client.enable_logging(DataflowLoggingConfig {
+                        granularity_ns: config.granularity.as_nanos(),
+                        active_logs: BUILTINS
+                            .logs()
+                            .map(|src| (src.variant.clone(), src.index_id))
+                            .collect(),
+                        log_logging: config.log_logging,
+                    }),
                 );
             }
             if let Some(persister) = persister {
-                handle.block_on(coord.broadcast(dataflow_types::client::Command::Storage(
-                    dataflow_types::client::StorageCommand::EnablePersistence(persister),
-                )));
+                handle.block_on(coord.dataflow_client.enable_persistence(persister));
             }
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
@@ -4806,6 +4759,8 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
+    use dataflow_types::client::{ComputeClient, StorageClient};
+
     use crate::CoordError;
     use expr::{EvalError, GlobalId, Id};
     use repr::{Diff, Row};
@@ -4893,7 +4848,7 @@ pub mod fast_path_peek {
 
     impl<C> crate::coord::Coordinator<C>
     where
-        C: dataflow_types::client::Client + 'static,
+        C: ComputeClient + StorageClient + 'static,
     {
         /// Implements a peek plan produced by `create_plan` above.
         pub async fn implement_fast_path_peek(
@@ -4949,24 +4904,19 @@ pub mod fast_path_peek {
             // If we must build the view, ship the dataflow.
             let (peek_command, drop_dataflow) = match fast_path {
                 Plan::PeekExisting(id, key, map_filter_project) => (
-                    dataflow_types::client::Command::Compute(
-                        dataflow_types::client::ComputeCommand::Peek {
-                            id,
-                            key,
-                            conn_id,
-                            timestamp,
-                            finishing: finishing.clone(),
-                            map_filter_project,
-                        },
+                    (
+                        id,
+                        key,
+                        conn_id,
+                        timestamp,
+                        finishing.clone(),
+                        map_filter_project,
                     ),
                     None,
                 ),
                 Plan::PeekDataflow(dataflow, index_id) => {
                     // Very important: actually create the dataflow (here, so we can destructure).
-                    self.broadcast(dataflow_types::client::Command::Compute(
-                        dataflow_types::client::ComputeCommand::CreateDataflows(vec![dataflow]),
-                    ))
-                    .await;
+                    self.dataflow_client.create_dataflows(vec![dataflow]).await;
 
                     // Create an identity MFP operator.
                     let map_filter_project = expr::MapFilterProject::new(source_arity)
@@ -4979,15 +4929,13 @@ pub mod fast_path_peek {
                             ))
                         })?;
                     (
-                        dataflow_types::client::Command::Compute(
-                            dataflow_types::client::ComputeCommand::Peek {
-                                id: index_id, // transient identifier produced by `dataflow_plan`.
-                                key: None,
-                                conn_id,
-                                timestamp,
-                                finishing: finishing.clone(),
-                                map_filter_project,
-                            },
+                        (
+                            index_id, // transient identifier produced by `dataflow_plan`.
+                            None,
+                            conn_id,
+                            timestamp,
+                            finishing.clone(),
+                            map_filter_project,
                         ),
                         Some(index_id),
                     )
@@ -5003,7 +4951,17 @@ pub mod fast_path_peek {
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.
             self.pending_peeks.insert(conn_id, rows_tx);
-            self.broadcast(peek_command).await;
+            let (id, key, conn_id, timestamp, _finishing, map_filter_project) = peek_command;
+            self.dataflow_client
+                .peek(
+                    id,
+                    key,
+                    conn_id,
+                    timestamp,
+                    finishing.clone(),
+                    map_filter_project,
+                )
+                .await;
 
             use dataflow_types::PeekResponse;
             use futures::FutureExt;

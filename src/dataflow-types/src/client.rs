@@ -289,6 +289,127 @@ impl Command {
     }
 }
 
+/// Methods that reflect actions that can be performed against a compute instance.
+#[async_trait::async_trait]
+pub trait ComputeClient: Client {
+    async fn create_dataflows(&mut self, dataflows: Vec<DataflowDescription<crate::plan::Plan>>) {
+        self.send(Command::Compute(ComputeCommand::CreateDataflows(dataflows)))
+            .await
+    }
+    async fn drop_sinks(&mut self, sink_identifiers: Vec<GlobalId>) {
+        self.send(Command::Compute(ComputeCommand::DropSinks(
+            sink_identifiers,
+        )))
+        .await
+    }
+    async fn drop_indexes(&mut self, index_identifiers: Vec<GlobalId>) {
+        self.send(Command::Compute(ComputeCommand::DropIndexes(
+            index_identifiers,
+        )))
+        .await
+    }
+    async fn peek(
+        &mut self,
+        id: GlobalId,
+        key: Option<Row>,
+        conn_id: u32,
+        timestamp: Timestamp,
+        finishing: RowSetFinishing,
+        map_filter_project: expr::SafeMfpPlan,
+    ) {
+        self.send(Command::Compute(ComputeCommand::Peek {
+            id,
+            key,
+            conn_id,
+            timestamp,
+            finishing,
+            map_filter_project,
+        }))
+        .await
+    }
+    async fn cancel_peek(&mut self, conn_id: u32) {
+        self.send(Command::Compute(ComputeCommand::CancelPeek { conn_id }))
+            .await
+    }
+    async fn allow_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<Timestamp>)>) {
+        self.send(Command::Compute(ComputeCommand::AllowCompaction(frontiers)))
+            .await
+    }
+    async fn enable_logging(&mut self, logging_config: LoggingConfig) {
+        self.send(Command::Compute(ComputeCommand::EnableLogging(
+            logging_config,
+        )))
+        .await
+    }
+}
+
+/// Methods that reflect actions that can be performed against the storage layer.
+#[async_trait::async_trait]
+pub trait StorageClient: Client {
+    async fn drop_tables(&mut self, table_identifiers: Vec<GlobalId>) {
+        self.send(Command::Storage(StorageCommand::DropTables(
+            table_identifiers,
+        )))
+        .await
+    }
+    async fn table_insert(&mut self, id: GlobalId, updates: Vec<Update>) {
+        self.send(Command::Storage(StorageCommand::Insert { id, updates }))
+            .await
+    }
+    async fn update_durability_frontiers(
+        &mut self,
+        updates: Vec<(GlobalId, Antichain<Timestamp>)>,
+    ) {
+        self.send(Command::Storage(StorageCommand::DurabilityFrontierUpdates(
+            updates,
+        )))
+        .await
+    }
+    async fn add_source_timestamping(
+        &mut self,
+        id: GlobalId,
+        connector: SourceConnector,
+        bindings: Vec<(PartitionId, Timestamp, crate::sources::MzOffset)>,
+    ) {
+        self.send(Command::Storage(StorageCommand::AddSourceTimestamping {
+            id,
+            connector,
+            bindings,
+        }))
+        .await
+    }
+    async fn advance_source_timestamp(
+        &mut self,
+        id: GlobalId,
+        update: crate::types::sources::persistence::TimestampSourceUpdate,
+    ) {
+        self.send(Command::Storage(StorageCommand::AdvanceSourceTimestamp {
+            id,
+            update,
+        }))
+        .await
+    }
+    async fn drop_source_timestamping(&mut self, id: GlobalId) {
+        self.send(Command::Storage(StorageCommand::DropSourceTimestamping {
+            id,
+        }))
+        .await
+    }
+    async fn advance_all_table_timestamps(&mut self, advance_to: Timestamp) {
+        self.send(Command::Storage(StorageCommand::AdvanceAllLocalInputs {
+            advance_to,
+        }))
+        .await
+    }
+    async fn enable_persistence(&mut self, runtime: RuntimeClient) {
+        self.send(Command::Storage(StorageCommand::EnablePersistence(runtime)))
+            .await
+    }
+}
+
+impl<C: Client> ComputeClient for C {}
+impl<C: Client> StorageClient for C {}
+
 /// Data about timestamp bindings that dataflow workers send to the coordinator
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampBindingFeedback {
