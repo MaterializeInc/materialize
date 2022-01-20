@@ -281,9 +281,7 @@ impl ScalarWindowExpr {
         _inner: &RelationType,
         _params: &BTreeMap<usize, ScalarType>,
     ) -> ColumnType {
-        match self.func {
-            ScalarWindowFunc::RowNumber => ScalarType::Int64.nullable(false),
-        }
+        self.func.output_type()
     }
 
     pub fn into_expr(self) -> expr::AggregateFunc {
@@ -299,6 +297,14 @@ impl ScalarWindowExpr {
 /// Scalar Window functions
 pub enum ScalarWindowFunc {
     RowNumber,
+}
+
+impl ScalarWindowFunc {
+    pub fn output_type(&self) -> ColumnType {
+        match self {
+            ScalarWindowFunc::RowNumber => ScalarType::Int64.nullable(false),
+        }
+    }
 }
 
 /// A `CoercibleScalarExpr` is a [`HirScalarExpr`] whose type is not fully
