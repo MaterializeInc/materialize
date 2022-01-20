@@ -14,7 +14,6 @@ use ore::collections::CollectionExt;
 use repr::adt::char;
 use repr::adt::jsonb::JsonbRef;
 use repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use repr::ScalarType::Int32;
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
 use serde_json::{json, Map};
 
@@ -193,27 +192,7 @@ impl<'a> ToJson for TypedDatum<'_> {
                         .collect();
                     serde_json::value::Value::Array(values)
                 }
-                ScalarType::Int2Vector => {
-                    let list = match typ.scalar_type {
-                        ScalarType::Array(_) => datum.unwrap_array().elements(),
-                        ScalarType::List { .. } => datum.unwrap_list(),
-                        _ => unreachable!(),
-                    };
-                    let values = list
-                        .into_iter()
-                        .map(|datum| {
-                            let datum = TypedDatum::new(
-                                datum,
-                                ColumnType {
-                                    nullable: true,
-                                    scalar_type: Int32,
-                                },
-                            );
-                            datum.json(namer)
-                        })
-                        .collect();
-                    serde_json::value::Value::Array(values)
-                }
+                ScalarType::Int2Vector => json!(datum.unwrap_str()),
                 ScalarType::Record {
                     fields,
                     custom_name,
@@ -322,18 +301,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
             })
         }
         ScalarType::Int2Vector => {
-            let inner = build_row_schema_field(
-                namer,
-                names_seen,
-                &ColumnType {
-                    nullable: true,
-                    scalar_type: Int32,
-                },
-            );
-            json!({
-                "type": "array",
-                "items": inner
-            })
+            json!("string")
         }
         ScalarType::Map { value_type, .. } => {
             let inner = build_row_schema_field(

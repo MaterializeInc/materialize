@@ -24,3 +24,7 @@ pub struct RegProc(pub i32);
 /// A rust type representing a PostgreSQL type of object
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct RegType(pub i32);
+
+/// A rust type representing a PostgreSQL vector of smallint
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct Int2Vector(pub String);

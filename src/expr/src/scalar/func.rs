@@ -4860,7 +4860,7 @@ where
         TimestampTz => strconv::format_timestamptz(buf, d.unwrap_timestamptz()),
         Interval => strconv::format_interval(buf, d.unwrap_interval()),
         Bytes => strconv::format_bytes(buf, d.unwrap_bytes()),
-        String | VarChar { .. } => strconv::format_string(buf, d.unwrap_str()),
+        String | VarChar { .. } | Int2Vector => strconv::format_string(buf, d.unwrap_str()),
         Char { length } => strconv::format_string(
             buf,
             &repr::adt::char::format_str_pad(d.unwrap_str(), *length),
@@ -4887,18 +4887,6 @@ where
                     buf.write_null()
                 } else {
                     stringify_datum(buf.nonnull_buffer(), d, elem_type)
-                }
-            },
-        ),
-        Int2Vector => strconv::format_array(
-            buf,
-            &d.unwrap_array().dims().into_iter().collect::<Vec<_>>(),
-            &d.unwrap_array().elements(),
-            |buf, d| {
-                if d.is_null() {
-                    buf.write_null()
-                } else {
-                    stringify_datum(buf.nonnull_buffer(), d, &Int32)
                 }
             },
         ),

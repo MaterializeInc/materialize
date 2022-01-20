@@ -15,6 +15,7 @@ mod datum;
 mod float32;
 mod float64;
 mod int16;
+mod int2vector;
 mod int32;
 mod int64;
 mod interval;

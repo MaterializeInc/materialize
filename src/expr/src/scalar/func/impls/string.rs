@@ -19,6 +19,7 @@ use ore::result::ResultExt;
 use repr::adt::char::{format_str_trim, Char};
 use repr::adt::interval::Interval;
 use repr::adt::numeric::{self, Numeric};
+use repr::adt::system::Int2Vector;
 use repr::adt::varchar::VarChar;
 use repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
 
@@ -72,6 +73,14 @@ sqlfunc!(
     #[sqlname = "strtof64"]
     fn cast_string_to_float64<'a>(a: &'a str) -> Result<f64, EvalError> {
         strconv::parse_float64(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "strtoint2ector"]
+    #[preserves_uniqueness = true]
+    fn cast_string_to_int2_vector<'a>(a: &'a str) -> Result<Int2Vector, EvalError> {
+        Ok(Int2Vector(String::from(a)))
     }
 );
 
@@ -150,9 +159,15 @@ sqlfunc!(
 #[derive(
     Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
 )]
-pub struct CastStringToInt2Vector {}
+pub struct CastStringToArray {
+    // Target array's type.
+    pub return_ty: ScalarType,
+    // The expression to cast the discovered array elements to the array's
+    // element type.
+    pub cast_expr: Box<MirScalarExpr>,
+}
 
-impl LazyUnaryFunc for CastStringToInt2Vector {
+impl LazyUnaryFunc for CastStringToArray {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -163,13 +178,24 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
         if a.is_null() {
             return Ok(Datum::Null);
         }
-        let datums = strconv::parse_int32a(a.unwrap_str())?;
+        let datums = strconv::parse_array(
+            a.unwrap_str(),
+            || Datum::Null,
+            |elem_text| {
+                let elem_text = match elem_text {
+                    Cow::Owned(s) => temp_storage.push_string(s),
+                    Cow::Borrowed(s) => s,
+                };
+                self.cast_expr
+                    .eval(&[Datum::String(elem_text)], temp_storage)
+            },
+        )?;
         array_create_scalar(&datums, temp_storage)
     }
 
     /// The output ColumnType of this function
     fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::Array(Box::from(ScalarType::Int16)).nullable(input_type.nullable)
+        self.return_ty.clone().nullable(input_type.nullable)
     }
 
     /// Whether this function will produce NULL on NULL input
@@ -188,9 +214,9 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
     }
 }
 
-impl fmt::Display for CastStringToInt2Vector {
+impl fmt::Display for CastStringToArray {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("strtoint2vector")
+        f.write_str("strtoarray")
     }
 }
 
@@ -337,70 +363,6 @@ impl LazyUnaryFunc for CastStringToMap {
 impl fmt::Display for CastStringToMap {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("strtomap")
-    }
-}
-
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect,
-)]
-pub struct CastStringToArray {
-    // Target array's type.
-    pub return_ty: ScalarType,
-    // The expression to cast the discovered array elements to the array's
-    // element type.
-    pub cast_expr: Box<MirScalarExpr>,
-}
-
-impl LazyUnaryFunc for CastStringToArray {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let datums = strconv::parse_array(
-            a.unwrap_str(),
-            || Datum::Null,
-            |elem_text| {
-                let elem_text = match elem_text {
-                    Cow::Owned(s) => temp_storage.push_string(s),
-                    Cow::Borrowed(s) => s,
-                };
-                self.cast_expr
-                    .eval(&[Datum::String(elem_text)], temp_storage)
-            },
-        )?;
-        array_create_scalar(&datums, temp_storage)
-    }
-
-    /// The output ColumnType of this function
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        self.return_ty.clone().nullable(input_type.nullable)
-    }
-
-    /// Whether this function will produce NULL on NULL input
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    /// Whether this function will produce NULL on non-NULL input
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    /// Whether this function preserves uniqueness
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastStringToArray {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("strtoarray")
     }
 }
 

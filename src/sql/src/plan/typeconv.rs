@@ -356,9 +356,7 @@ lazy_static! {
                     cast_expr: Box::new(cast_expr),
                 })))
             }),
-            (String, Int2Vector) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, _to_type| {
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToInt2Vector(func::CastStringToInt2Vector {})))
-            }),
+            (String, Int2Vector) => Explicit: CastStringToInt2Vector(func::CastStringToInt2Vector),
             (String, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))

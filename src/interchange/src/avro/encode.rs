@@ -23,7 +23,6 @@ use crate::encode::{column_names_and_types, Encode, TypedDatum};
 use crate::json::build_row_schema_json;
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
-use repr::ScalarType::Int16;
 
 lazy_static! {
     // TODO(rkhaitan): this schema intentionally omits the data_collections field
@@ -354,6 +353,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     let s = repr::adt::char::format_str_pad(datum.unwrap_str(), *length);
                     Value::String(s)
                 }
+                ScalarType::Int2Vector => Value::String(datum.unwrap_str().to_owned()),
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
                 ScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
                 ScalarType::Array(element_type) | ScalarType::List { element_type, .. } => {
@@ -409,28 +409,6 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         })
                         .collect();
                     Value::Record(fields)
-                }
-                ScalarType::Int2Vector => {
-                    let list = match typ.scalar_type {
-                        ScalarType::Array(_) => datum.unwrap_array().elements(),
-                        ScalarType::List { .. } => datum.unwrap_list(),
-                        _ => unreachable!(),
-                    };
-
-                    let values = list
-                        .into_iter()
-                        .map(|datum| {
-                            let datum = TypedDatum::new(
-                                datum,
-                                ColumnType {
-                                    nullable: true,
-                                    scalar_type: Int16,
-                                },
-                            );
-                            datum.avro()
-                        })
-                        .collect();
-                    Value::Array(values)
                 }
             };
             if typ.nullable {

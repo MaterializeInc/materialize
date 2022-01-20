@@ -25,7 +25,7 @@ use crate::adt::array::Array;
 use crate::adt::char::Char;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
-use crate::adt::system::{Oid, RegClass, RegProc, RegType};
+use crate::adt::system::{Int2Vector, Oid, RegClass, RegProc, RegType};
 use crate::adt::varchar::VarChar;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
@@ -1289,6 +1289,29 @@ impl<'a, E> DatumType<'a, E> for RegType {
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Int32(self.0))
+    }
+}
+
+impl AsColumnType for Int2Vector {
+    fn as_column_type() -> ColumnType {
+        ScalarType::String.nullable(true)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for Int2Vector {
+    fn nullable() -> bool {
+        true
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::String(a)) => Ok(Int2Vector(String::from(a))),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(temp_storage.push_string(self.0)))
     }
 }
 

@@ -128,6 +128,7 @@ impl Value {
                 inner: s.to_owned(),
                 length: *length,
             }),
+            (Datum::String(s), ScalarType::Int2Vector) => Some(Value::Text(s.to_owned())),
             (_, ScalarType::Jsonb) => {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
             }
