@@ -1294,7 +1294,7 @@ impl<'a, E> DatumType<'a, E> for RegType {
 
 impl AsColumnType for Int2Vector {
     fn as_column_type() -> ColumnType {
-        ScalarType::String.nullable(true)
+        ScalarType::Int2Vector.nullable(true)
     }
 }
 
