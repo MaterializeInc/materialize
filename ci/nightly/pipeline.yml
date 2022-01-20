@@ -31,8 +31,8 @@
   label: ":panda_face: :racing_car: testdrive"
   plugins:
     - ./ci/plugins/mzcompose:
-        composition: redpanda
-        run: redpanda-testdrive
+        composition: testdrive
+        run: testdrive-redpanda-ci
 
 - id: redpanda-testdrive-aarch64
   label: ":panda_face: :racing_car: testdrive aarch64"
@@ -40,8 +40,8 @@
     queue: aarch64
   plugins:
     - ./ci/plugins/mzcompose:
-        composition: redpanda
-        run: redpanda-testdrive
+        composition: testdrive
+        run: testdrive-redpanda-ci
 
 - id: upgrade
   label: "Upgrade testing"
@@ -81,7 +81,8 @@
     - ./ci/plugins/scratch-aws-access: ~
     - ./ci/plugins/mzcompose:
         composition: testdrive
-        run: testdrive-ci-workers-1
+        run: testdrive
+        args: [--aws-region=us-east-2, --workers=1]
 
 - id: testdrive_workers_32
   label: ":racing_car: testdrive with --workers 32"
@@ -90,7 +91,8 @@
     - ./ci/plugins/scratch-aws-access: ~
     - ./ci/plugins/mzcompose:
         composition: testdrive
-        run: testdrive-ci-workers-32
+        run: testdrive
+        args: [--aws-region=us-east-2, --workers=32]
 
 - id: persistence_testdrive
   label: ":racing_car: testdrive with --persistent-user-tables"
@@ -99,7 +101,8 @@
     - ./ci/plugins/scratch-aws-access: ~
     - ./ci/plugins/mzcompose:
         composition: testdrive
-        run: persistence-testdrive
+        run: testdrive
+        args: [--aws-region=us-east-2, --persistent-user-tables]
 
 - id: feature-benchmark
   label: "Feature benchmark against latest release"

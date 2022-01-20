@@ -71,12 +71,16 @@ def workflow_s3_resumption(c: Composition) -> None:
                 f"--seed={toxiproxy_bytes_allowed}",
                 "--aws-endpoint=http://toxiproxy:4566",
                 "configure-toxiproxy.td",
-                "s3-create.td s3-insert-long.td s3-insert-long-gzip.td",
+                "s3-create.td",
+                "s3-insert-long.td",
+                "s3-insert-long-gzip.td",
                 #
                 # Confirm that short network interruptions are tolerated
                 #
                 *toxiproxy_setup,
-                "short-sleep.td toxiproxy-restore-connection.td materialize-verify-success.td",
+                "short-sleep.td",
+                "toxiproxy-restore-connection.td",
+                "materialize-verify-success.td",
                 #
                 # Confirm that long network interruptions cause source error
                 # Disabled due to https://github.com/MaterializeInc/materialize/issues/7009
@@ -84,5 +88,6 @@ def workflow_s3_resumption(c: Composition) -> None:
                 #
                 # Cleanup
                 #
-                "materialize-drop-source.td toxiproxy-remove.td",
+                "materialize-drop-source.td",
+                "toxiproxy-remove.td",
             )

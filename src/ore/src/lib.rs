@@ -52,6 +52,7 @@ pub mod netio;
 pub mod now;
 pub mod option;
 pub mod panic;
+pub mod path;
 pub mod result;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
 #[cfg(feature = "network")]

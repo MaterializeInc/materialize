@@ -13,6 +13,7 @@
 
 use std::fs::File;
 use std::io::{self, Read};
+use std::path::Path;
 
 use self::error::InputError;
 use self::parser::LineReader;
@@ -27,11 +28,11 @@ pub use self::action::Config;
 pub use self::error::{Error, ResultExt};
 
 /// Runs a testdrive script stored in a file.
-pub async fn run_file(config: &Config, filename: &str) -> Result<(), Error> {
-    let mut file = File::open(&filename).err_ctx(format!("opening {}", filename))?;
+pub async fn run_file(config: &Config, filename: &Path) -> Result<(), Error> {
+    let mut file = File::open(filename).err_ctx(format!("opening {}", filename.display()))?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)
-        .err_ctx(format!("reading {}", filename))?;
+        .err_ctx(format!("reading {}", filename.display()))?;
     run_string(config, filename, &contents).await
 }
 
@@ -41,7 +42,7 @@ pub async fn run_stdin(config: &Config) -> Result<(), Error> {
     io::stdin()
         .read_to_string(&mut contents)
         .err_ctx("reading <stdin>")?;
-    run_string(config, "<stdin>", &contents).await
+    run_string(config, Path::new("<stdin>"), &contents).await
 }
 
 /// Runs a testdrive script stored in a string.
@@ -49,8 +50,8 @@ pub async fn run_stdin(config: &Config) -> Result<(), Error> {
 /// The script in `contents` is used verbatim. The provided `filename` is used
 /// only as output in error messages and such. No attempt is made to read
 /// `filename`.
-pub async fn run_string(config: &Config, filename: &str, contents: &str) -> Result<(), Error> {
-    println!("--- {}", filename);
+pub async fn run_string(config: &Config, filename: &Path, contents: &str) -> Result<(), Error> {
+    println!("--- {}", filename.display());
 
     let mut line_reader = LineReader::new(contents);
     run_line_reader(config, &mut line_reader)

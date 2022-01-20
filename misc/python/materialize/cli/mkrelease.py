@@ -503,7 +503,6 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
             commit_range,
             "--",
         ],
-        unicode=True,
     )
 
     pattern = re.compile(r"^\s*\(refs/pullreqs/(\d+)|\(#(\d+)")

@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from pathlib import Path
+
+from materialize import spawn
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Coordd,
@@ -38,7 +41,6 @@ SERVICES = [
         options="--workers 4 dataflowd_1:6876 dataflowd_2:6876",
     ),
     Testdrive(
-        shell_eval=True,
         volumes=[
             "mzdata:/share/mzdata",
             "tmp:/share/tmp",
@@ -50,19 +52,21 @@ SERVICES = [
 
 
 def workflow_cluster_smoke(c: Composition) -> None:
-    test_cluster(c, "ls", "-1", "smoke/*.td")
+    test_cluster(c, "smoke/*.td")
 
 
 def workflow_cluster_testdrive(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
-    # Skip tests that use features that are not supported yet
-    test_cluster(
-        c,
-        "grep",
-        "-LE",
-        "mz_catalog|mz_kafka_|mz_records_|mz_metrics",
-        "testdrive/*.td",
-    )
+    # Skip tests that use features that are not supported yet.
+    files = spawn.capture(
+        [
+            "sh",
+            "-c",
+            "grep -rLE 'mz_catalog|mz_kafka_|mz_records_|mz_metrics' testdrive/*.td",
+        ],
+        cwd=Path(__file__).parent.parent,
+    ).split()
+    test_cluster(c, *files)
 
 
 def test_cluster(c: Composition, *glob: str) -> None:

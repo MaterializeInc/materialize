@@ -5010,6 +5010,7 @@ dependencies = [
  "coord",
  "flate2",
  "futures",
+ "globset",
  "http",
  "interchange",
  "itertools",
@@ -5047,6 +5048,7 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]

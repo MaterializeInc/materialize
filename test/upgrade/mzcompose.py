@@ -92,7 +92,7 @@ def test_upgrade_from_version(
 ) -> None:
     print(f"===>>> Testing upgrade from Materialize {from_version} to current_source.")
 
-    version_glob = "|".join(["any_version", *priors, from_version])
+    version_glob = "{" + ",".join(["any_version", *priors, from_version]) + "}"
     print(">>> Version glob pattern: " + version_glob)
 
     if from_version != "current_source":
@@ -118,7 +118,7 @@ def test_upgrade_from_version(
             "--seed=1",
             "--no-reset",
             temp_dir,
-            f"create-in-@({version_glob})-{filter}.td",
+            f"create-in-{version_glob}-{filter}.td",
         )
 
     c.kill("materialized")
@@ -133,7 +133,8 @@ def test_upgrade_from_version(
             "--seed=1",
             "--no-reset",
             temp_dir,
-            f"--validate-catalog=/share/mzdata/catalog check-from-@({version_glob})-{filter}.td",
+            "--validate-catalog=/share/mzdata/catalog",
+            f"check-from-{version_glob}-{filter}.td",
         )
 
     c.kill("materialized")

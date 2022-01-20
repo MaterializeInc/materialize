@@ -494,7 +494,7 @@ class Testdrive(Service):
         consistent_seed: bool = False,
         validate_catalog: bool = True,
         entrypoint: Optional[List[str]] = None,
-        shell_eval: Optional[bool] = False,
+        entrypoint_extra: List[str] = [],
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
         volumes_extra: Optional[List[str]] = None,
@@ -503,7 +503,6 @@ class Testdrive(Service):
     ) -> None:
         if environment is None:
             environment = [
-                "TD_TEST",
                 "TMPDIR=/share/tmp",
                 "MZ_LOG_FILTER",
                 "AWS_ACCESS_KEY_ID",
@@ -534,34 +533,22 @@ class Testdrive(Service):
         if no_reset:
             entrypoint.append("--no-reset")
 
-        entrypoint.append(f"--default-timeout {default_timeout}")
+        entrypoint.append(f"--default-timeout={default_timeout}")
 
         if seed and consistent_seed:
             raise RuntimeError("Can't pass `seed` and `consistent_seed` at same time")
         elif consistent_seed:
-            entrypoint.append(f"--seed {random.getrandbits(32)}")
+            entrypoint.append(f"--seed={random.getrandbits(32)}")
         elif seed:
-            entrypoint.append(f"--seed {seed}")
+            entrypoint.append(f"--seed={seed}")
 
-        if shell_eval:
-            # Evaluate the arguments as a shell command
-            # This allows bashisms to be used to prepare the list of tests to run
-            entrypoint.append("${TD_TEST:-`$*`}")
-        else:
-            entrypoint.append("${TD_TEST:-$*}")
+        entrypoint.extend(entrypoint_extra)
 
         super().__init__(
             name=name,
             config={
                 "mzbuild": mzbuild,
-                "entrypoint": [
-                    "bash",
-                    "-O",
-                    "extglob",
-                    "-c",
-                    " ".join(entrypoint),
-                    "bash",
-                ],
+                "entrypoint": entrypoint,
                 "environment": environment,
                 "volumes": volumes,
                 "propagate_uid_gid": propagate_uid_gid,

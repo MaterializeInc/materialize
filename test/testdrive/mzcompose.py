@@ -7,70 +7,105 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
+from pathlib import Path
 
-from materialize.mzcompose import Composition
+from materialize import spawn, ui
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,
     Localstack,
     Materialized,
+    Redpanda,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
 )
-
-mz_default = Materialized(name="mz_default", hostname="materialized")
-mz_workers_1 = Materialized(name="mz_workers_1", hostname="materialized", workers=1)
-mz_workers_32 = Materialized(name="mz_workers_32", hostname="materialized", workers=32)
-mz_persistence = Materialized(
-    name="mz_persistence", hostname="materialized", options="--persistent-user-tables"
-)
+from materialize.xcompile import Arch
 
 SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Redpanda(),
     Localstack(),
-    mz_default,
-    mz_workers_1,
-    mz_workers_32,
-    mz_persistence,
+    Materialized(),
     Testdrive(),
 ]
 
-tests = os.getenv("TD_TEST", "*.td esoteric/*.td")
-tests_ci = tests + " esoteric/pubnub/pubnub.td"
-aws_localstack = "--aws-endpoint=http://localstack:4566"
-aws_amazon = "--aws-region=us-east-2"
 
-
-def workflow_testdrive(c: Composition) -> None:
-    """Run non-esoteric tests with localstack"""
-    c.start_and_wait_for_tcp(services=["localstack"])
-    test_testdrive(c, mz_default, aws_localstack, tests)
-
-
-def workflow_testdrive_ci(c: Composition) -> None:
-    """Run all tests with actual AWS credentials"""
-    test_testdrive(c, mz_default, aws_amazon, tests_ci)
-
-
-def workflow_testdrive_ci_workers_1(c: Composition) -> None:
-    test_testdrive(c, mz_workers_1, aws_amazon, tests_ci)
-
-
-def workflow_testdrive_ci_workers_32(c: Composition) -> None:
-    test_testdrive(c, mz_workers_32, aws_amazon, tests_ci)
-
-
-def workflow_persistence_testdrive(c: Composition) -> None:
-    test_testdrive(c, mz_persistence, aws_amazon, tests_ci)
-
-
-def test_testdrive(c: Composition, mz: Materialized, aws: str, tests: str) -> None:
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", mz.name]
+def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Run testdrive."""
+    parser.add_argument(
+        "--redpanda",
+        action="store_true",
+        help="run against Redpanda instead of the Confluent Platform",
     )
-    c.wait_for_materialized(mz.name)
-    c.run("testdrive-svc", aws, tests)
-    c.kill(mz.name)
+    parser.add_argument(
+        "--aws-region",
+        help="run against the specified AWS region instead of localstack",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        metavar="N",
+        help="set the number of materialized dataflow workers",
+    )
+    parser.add_argument(
+        "--persistent-user-tables",
+        action="store_true",
+        help="enable the --persistent-user-tables materialized option",
+    )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default=["*.td", "esoteric/*.td"],
+        help="run against the specified files",
+    )
+    args = parser.parse_args()
+
+    if not args.redpanda and Arch.host() == Arch.AARCH64:
+        ui.warn(
+            "Running the Confluent Platform in Docker on ARM-based machines is "
+            "nearly unusably slow. Consider using Redpanda instead (--redpanda) "
+            "or running tests without mzcompose."
+        )
+
+    dependencies = ["materialized"]
+    if args.redpanda:
+        dependencies += ["redpanda"]
+    else:
+        dependencies += ["zookeeper", "kafka", "schema-registry"]
+
+    materialized = Materialized(
+        workers=args.workers,
+        options=["--persistent-user-tables"] if args.persistent_user_tables else [],
+    )
+
+    testdrive = Testdrive(
+        entrypoint_extra=[f"--aws-region={args.aws_region}"]
+        if args.aws_region
+        else ["--aws-endpoint=http://localstack:4566"]
+    )
+
+    with c.override(materialized, testdrive):
+        c.start_and_wait_for_tcp(services=dependencies)
+        c.wait_for_materialized("materialized")
+        c.run("testdrive-svc", *args.files)
+        c.kill("materialized")
+
+
+def workflow_testdrive_redpanda_ci(c: Composition) -> None:
+    """Run testdrive against files known to be supported by Redpanda."""
+
+    # https://github.com/vectorizedio/redpanda/issues/2397
+    KNOWN_FAILURES = {"./kafka-time-offset.td"}
+
+    files = set(
+        # NOTE(benesch): invoking the shell like this to filter testdrive files is
+        # pretty gross. Let's not get into the habit of using this construction.
+        spawn.capture(
+            ["sh", "-c", "grep -lr '\$.*kafka-ingest' *.td"], cwd=Path(__file__).parent
+        ).split()
+    )
+    files -= KNOWN_FAILURES
+    c.workflow("testdrive", "--redpanda", *files)

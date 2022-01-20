@@ -14,9 +14,10 @@ import csv
 import datetime
 import os
 import shlex
+import subprocess
 import sys
 from subprocess import CalledProcessError
-from typing import IO, Dict, List, NamedTuple, Optional, Union, cast
+from typing import Dict, List, NamedTuple, Optional, cast
 
 import boto3
 from mypy_boto3_ec2.literals import InstanceTypeType
@@ -318,7 +319,7 @@ def launch_cluster(
         (f"{i.private_ip_address}\t{d.name}\n" for (i, d) in zip(instances, descs))
     )
     for i in instances:
-        mssh(i, "sudo tee -a /etc/hosts", stdin=hosts_str.encode())
+        mssh(i, "sudo tee -a /etc/hosts", input=hosts_str.encode())
 
     env = " ".join(f"{k}={shlex.quote(v)}" for k, v in extra_env.items())
     for (i, d) in zip(instances, descs):
@@ -367,13 +368,10 @@ def mssh(
     instance: Instance,
     command: str,
     *,
-    stdin: Union[None, int, IO[bytes], bytes] = None,
+    input: Optional[bytes] = None,
 ) -> None:
     """Runs a command over SSH via EC2 Instance Connect."""
     host = instance_host(instance)
-    # The actual invocation of SSH that `spawn.runv` wants to print is
-    # unreadable quoted garbage, so we do our own printing here before the shell
-    # quoting.
     if command:
         print(f"{host}$ {command}", file=sys.stderr)
         # Quote to work around:
@@ -381,30 +379,20 @@ def mssh(
         command = shlex.quote(command)
     else:
         print(f"$ mssh {host}")
-    spawn.runv(
+    subprocess.run(
         [
             *SSH_COMMAND,
-            f"{host}",
+            host,
             command,
         ],
-        stdin=stdin,
-        print_to=open(os.devnull, "w"),
+        check=True,
+        input=input,
     )
 
 
 def msftp(
     instance: Instance,
-    *,
-    stdin: Union[None, int, IO[bytes], bytes] = None,
 ) -> None:
     """Connects over SFTP via EC2 Instance Connect."""
     host = instance_host(instance)
-    print(f"$ msftp {host}")
-    spawn.runv(
-        [
-            *SFTP_COMMAND,
-            f"{host}",
-        ],
-        stdin=stdin,
-        print_to=open(os.devnull, "w"),
-    )
+    spawn.runv([*SFTP_COMMAND, host])
