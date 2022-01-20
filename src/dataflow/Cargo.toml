@@ -63,4 +63,4 @@ url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [build-dependencies]
-mz-protoc = { path = "../protoc" }
+prost-build = "0.9.1"

@@ -28,4 +28,4 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [build-dependencies]
-mz-protoc = { path = "../../src/protoc" }
+prost-build = "0.9.1"

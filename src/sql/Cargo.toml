@@ -30,7 +30,7 @@ postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", b
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 postgres-util = { path = "../postgres-util" }
 protobuf-native = "0.2.1"
-mz-protoc = { path = "../../src/protoc" }
+prost-build = "0.9.1"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
 kafka-util = { path = "../kafka-util" }
 regex = "1.5.4"

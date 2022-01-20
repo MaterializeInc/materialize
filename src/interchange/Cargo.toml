@@ -46,4 +46,4 @@ uuid = { version = "0.8.2", features = ["serde"] }
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 
 [build-dependencies]
-mz-protoc = { path = "../protoc" }
+prost-build = "0.9.1"

@@ -9,4 +9,4 @@
 
 //! Module for all generated protobuf code.
 
-include!(concat!(env!("OUT_DIR"), "/protobuf/mod.rs"));
+include!(concat!(env!("OUT_DIR"), "/mod.rs"));
