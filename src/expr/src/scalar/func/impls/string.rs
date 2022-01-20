@@ -77,7 +77,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "strtoint2ector"]
+    #[sqlname = "strtoint2vector"]
     #[preserves_uniqueness = true]
     fn cast_string_to_int2_vector<'a>(a: &'a str) -> Result<Int2Vector, EvalError> {
         Ok(Int2Vector(String::from(a)))

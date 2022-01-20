@@ -3126,6 +3126,7 @@ pub enum UnaryFunc {
     CastInt16ToInt64(CastInt16ToInt64),
     CastInt16ToOid(CastInt16ToOid),
     CastInt16ToString(CastInt16ToString),
+    CastInt2VectorToArray(CastInt2VectorToArray),
     CastInt32ToBool(CastInt32ToBool),
     CastInt32ToFloat32(CastInt32ToFloat32),
     CastInt32ToFloat64(CastInt32ToFloat64),
@@ -3522,6 +3523,7 @@ impl UnaryFunc {
             | CastInt16ToInt64(_)
             | CastInt16ToOid(_)
             | CastInt16ToString(_)
+            | CastInt2VectorToArray(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
             | CastInt32ToFloat64(_)
@@ -3725,6 +3727,7 @@ impl UnaryFunc {
             | CastInt16ToInt64(_)
             | CastInt16ToOid(_)
             | CastInt16ToString(_)
+            | CastInt2VectorToArray(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
             | CastInt32ToFloat64(_)
@@ -3961,6 +3964,7 @@ impl UnaryFunc {
             | CastInt16ToInt64(_)
             | CastInt16ToOid(_)
             | CastInt16ToString(_)
+            | CastInt2VectorToArray(_)
             | CastInt32ToBool(_)
             | CastInt32ToFloat32(_)
             | CastInt32ToFloat64(_)
@@ -4211,6 +4215,7 @@ impl UnaryFunc {
             | CastInt16ToFloat64(_)
             | CastInt16ToInt32(_)
             | CastInt16ToInt64(_)
+            | CastInt2VectorToArray(_)
             | CastInt16ToOid(_)
             | CastInt16ToString(_)
             | CastInt32ToBool(_)

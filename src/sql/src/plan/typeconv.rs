@@ -366,6 +366,11 @@ lazy_static! {
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
             }),
 
+            // INT2VECTOR
+            (Int2Vector, Array) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, _to_type| {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastInt2VectorToArray(func::CastInt2VectorToArray {})))
+            }),
+
             // CHAR
             (Char, String) => Implicit: CastCharToString(func::CastCharToString),
             (Char, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {

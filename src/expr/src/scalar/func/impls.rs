@@ -37,6 +37,7 @@ pub use datum::*;
 pub use float32::*;
 pub use float64::*;
 pub use int16::*;
+pub use int2vector::*;
 pub use int32::*;
 pub use int64::*;
 pub use interval::*;

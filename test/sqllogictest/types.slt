@@ -1089,3 +1089,11 @@ query T
 SELECT '1 2 3'::int2vector
 ----
 1 2 3
+
+query T
+SELECT '1 2 3'::int2vector::int2[]
+----
+{1,2,3}
+
+query error foo
+select '{1,2,3}'::int2[]::int2vector
