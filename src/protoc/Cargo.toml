@@ -13,8 +13,5 @@ path = "bin/protoc.rs"
 anyhow = "1.0.52"
 clap = { version = "3.0.10", features = ["derive"] }
 ore = { path = "../ore" }
-protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
-protobuf-codegen = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
-protobuf-parse = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
 prost-build = { git = "https://github.com/MaterializeInc/prost.git" }
 tempfile = "3.2.0"

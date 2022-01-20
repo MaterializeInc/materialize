@@ -35,8 +35,6 @@ use std::process;
 
 use anyhow::{bail, Context};
 
-use protobuf::descriptor::FileDescriptorSet;
-
 /// A builder for a protobuf compilation.
 #[derive(Default, Debug)]
 pub struct Protoc {
@@ -66,30 +64,6 @@ impl Protoc {
     {
         self.inputs.push(input.into());
         self
-    }
-
-    /// Parses the inputs into a file descriptor set.
-    ///
-    /// A [`FileDescriptorSet`] is protobuf's internal representation of a
-    /// collection .proto file. It is similar in spirit to an AST, and is useful
-    /// for callers who will analyze the protobuf messages to provide bespoke
-    /// deserialization and serialization behavior, rather than relying on the
-    /// stock code generation.
-    ///
-    /// Most users will want to call [`Protoc::compile_into`] or
-    /// [`Protoc::build_script_exec`] instead.
-    // TODO(benesch): switch this to protobuf_native to avoid the dependency
-    // on rust-protobuf.
-    pub fn parse(&self) -> Result<FileDescriptorSet, anyhow::Error> {
-        for input in &self.inputs {
-            if !input.exists() {
-                bail!("input protobuf file does not exist: {}", input.display());
-            }
-        }
-        let parsed = protobuf_parse::pure::parse_and_typecheck(&self.includes, &self.inputs)?;
-        let mut fds = FileDescriptorSet::new();
-        fds.file = parsed.file_descriptors.into_iter().collect();
-        Ok(fds)
     }
 
     /// Executes the compilation.

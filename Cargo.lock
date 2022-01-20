@@ -952,14 +952,13 @@ dependencies = [
  "log",
  "mz-avro",
  "mz-aws-util",
- "mz-protoc",
  "ore",
  "persist",
  "pgrepr",
  "postgres-types",
  "postgres-util",
  "prometheus",
- "protobuf",
+ "protobuf-native",
  "rand",
  "rdkafka",
  "regex",
@@ -1200,9 +1199,9 @@ dependencies = [
 
 [[package]]
 name = "cxx"
-version = "1.0.62"
+version = "1.0.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5beeee74e023d146e6fb933296b3b5e07de146ff3c9498c5af6e53cabc986d51"
+checksum = "c949f4e2576a655698463c56dbc5c5ea4c00964becc9adb0458baa943e862a5b"
 dependencies = [
  "cc",
  "cxxbridge-flags",
@@ -1212,13 +1211,13 @@ dependencies = [
 
 [[package]]
 name = "cxx-build"
-version = "1.0.62"
+version = "1.0.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b49af8e551e84f85d6def97c42b8d93bc5bb0817cce96b56a472b1b19b5bfc2"
+checksum = "618f85c8f132bd8912aab124e15a38adc762bb7e3cef84524adde1692ef3e8bc"
 dependencies = [
  "cc",
  "codespan-reporting",
- "lazy_static",
+ "once_cell",
  "proc-macro2",
  "quote",
  "scratch",
@@ -1227,15 +1226,15 @@ dependencies = [
 
 [[package]]
 name = "cxxbridge-flags"
-version = "1.0.62"
+version = "1.0.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d2033701dc9a0cd15c14bb24d4423b6ba57f6eba079b65b7049b95288dad6b3"
+checksum = "1b44dad556b0c83d86676135d6c684bdc2b1b9a1188052dd1cb5998246163536"
 
 [[package]]
 name = "cxxbridge-macro"
-version = "1.0.62"
+version = "1.0.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94d7ddcc58b10f23413d3fef111d1bd64b2bfb76af53f31611e02e9d0b6537be"
+checksum = "2acc9305a8b69bc2308c2e17dbb98debeac984cdc89ac550c01507cc129433c3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2500,15 +2499,12 @@ dependencies = [
  "ore",
  "prost",
  "prost-reflect",
- "protobuf",
- "protobuf-native",
  "regex",
  "repr",
  "serde",
  "serde_json",
  "sha2",
  "smallvec",
- "sql-parser",
  "tempfile",
  "timely",
  "tokio",
@@ -3038,9 +3034,6 @@ dependencies = [
  "clap",
  "ore",
  "prost-build",
- "protobuf",
- "protobuf-codegen",
- "protobuf-parse",
  "tempfile",
 ]
 
@@ -3254,9 +3247,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.8.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "692fcb63b64b1758029e0a96ee63e049ce8c5948587f2f7208df04625e5f6b56"
+checksum = "da32515d9f6e6e489d7bc9d84c71b060db7247dc035bbe44eac88cf87486d8d5"
 
 [[package]]
 name = "oorandom"
@@ -4047,24 +4040,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "protobuf"
-version = "3.0.0-alpha.2"
-source = "git+https://github.com/MaterializeInc/rust-protobuf.git#063964a8ab6fee98a9622a0c0a72a9765411025a"
-
-[[package]]
-name = "protobuf-codegen"
-version = "3.0.0-alpha.2"
-source = "git+https://github.com/MaterializeInc/rust-protobuf.git#063964a8ab6fee98a9622a0c0a72a9765411025a"
-dependencies = [
- "anyhow",
- "protobuf",
- "protobuf-parse",
- "protoc",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
 name = "protobuf-native"
 version = "0.2.1+3.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4079,35 +4054,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "protobuf-parse"
-version = "3.0.0-alpha.2"
-source = "git+https://github.com/MaterializeInc/rust-protobuf.git#063964a8ab6fee98a9622a0c0a72a9765411025a"
-dependencies = [
- "anyhow",
- "protobuf",
- "protoc",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
 name = "protobuf-src"
 version = "1.0.4+3.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "152161ab96ab8f66c4faeda5179798cc03a6c55c653d314d0e6d2f3ae7a46f1f"
 dependencies = [
  "autotools",
-]
-
-[[package]]
-name = "protoc"
-version = "3.0.0-alpha.2"
-source = "git+https://github.com/MaterializeInc/rust-protobuf.git#063964a8ab6fee98a9622a0c0a72a9765411025a"
-dependencies = [
- "anyhow",
- "log",
- "thiserror",
- "which",
 ]
 
 [[package]]
@@ -4794,7 +4746,7 @@ dependencies = [
  "postgres-protocol",
  "postgres-types",
  "postgres-util",
- "protobuf",
+ "protobuf-native",
  "rdkafka",
  "regex",
  "repr",
