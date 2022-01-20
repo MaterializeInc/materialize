@@ -1453,7 +1453,7 @@ pub mod sinks {
         /// dependencies' compaction frontiers as it completes writes.
         ///
         /// Sinks that do need to hold back compaction need to insert an
-        /// [`Antichain`] into `RenderState.sink_write_frontiers` that they update
+        /// [`Antichain`] into `StorageState::sink_write_frontiers` that they update
         /// in order to advance the frontier that holds back upstream compaction
         /// of timestamp bindings.
         ///
