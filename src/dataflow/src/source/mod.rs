@@ -1313,19 +1313,25 @@ where
     // errors. The errors here would likely be considered transitive or indefinite errors.
     let mut construction_errs = Vec::new();
 
-    let (source_persist, restored_bindings) = match persist_config {
-        Some(persist_config) => {
-            let source_persist = SourceReaderPersistence::new(name.clone(), persist_config);
+    // If we have persisted data, we initialize the starting timestamp to the latest upper seal
+    // timestamp, such that we can start emitting data right at the time where it will become
+    // sealed when we next downgrade the capability. We do this to ensure that necessary
+    // retractions are considered valid on a future restore attempt.
+    let (source_persist, restored_bindings, mut ts_bindings_retractions, starting_ts) =
+        match persist_config {
+            Some(persist_config) => {
+                let source_persist =
+                    SourceReaderPersistence::new(name.clone(), persist_config.clone());
 
-            let timestamp_histories = timestamp_histories.as_mut().ok_or_else(|| {
-                SourceError::new(
-                    sql_name.clone(),
-                    SourceErrorDetails::Persistence("missing timestamp histories".to_owned()),
-                )
-            });
+                let timestamp_histories = timestamp_histories.as_mut().ok_or_else(|| {
+                    SourceError::new(
+                        sql_name.clone(),
+                        SourceErrorDetails::Persistence("missing timestamp histories".to_owned()),
+                    )
+                });
 
-            let result = timestamp_histories.and_then(|timestamp_histories| {
-                let (offsets, mut bindings) = source_persist.restore().map_err(|e| {
+                let result = timestamp_histories.and_then(|timestamp_histories| {
+                let (mut valid_bindings, retractions) = source_persist.restore().map_err(|e| {
                     SourceError::new(
                         sql_name.clone(),
                         SourceErrorDetails::Persistence(format!(
@@ -1335,15 +1341,32 @@ where
                     )
                 })?;
 
-                for (pid, offset) in offsets {
-                    timestamp_histories.add_partition(pid, offset);
+                let starting_offsets = source_persist.get_starting_offsets(valid_bindings.iter());
+
+                tracing::debug!(
+                    "In {}, initial (restored) source offsets: {:?}. upper_bindings_seal_ts = {}, upper_data_seal_ts = {}",
+                    name,
+                    starting_offsets,
+                    source_persist.config.upper_bindings_seal_ts,
+                    source_persist.config.upper_data_seal_ts,
+                );
+
+                tracing::debug!(
+                    "In {}, initial (restored) timestamp bindings: valid_bindings: {:?}, retractions: {:?}",
+                    name,
+                    valid_bindings, retractions
+                );
+
+                for (pid, offset) in starting_offsets {
+                    timestamp_histories.add_partition(pid, Some(offset));
                 }
 
                 // We need to sort by offset and then timestamp because `add_binding()` will not allow
                 // adding bindings that go "backwards".
-                bindings.sort_by(|a, b| (a.0.offset.offset, a.1).cmp(&(b.0.offset.offset, b.1)));
+                valid_bindings.sort_by(|a, b| (a.0.offset.offset, a.1).cmp(&(b.0.offset.offset, b.1)));
 
-                for (source_ts, assigned_ts) in bindings.iter() {
+                for (source_ts, assigned_ts) in valid_bindings.iter() {
+
                     // The timestamp bindings are potentially pre-seeded by bindings that we
                     // restored from the coordinator, if/when coordinator based timestamp
                     // persistence is active.
@@ -1376,23 +1399,23 @@ where
                     }
                 }
 
-                Ok((Some(source_persist), Some(bindings)))
+                Ok((Some(source_persist), Some(valid_bindings), Some(retractions), persist_config.upper_bindings_seal_ts))
             });
 
-            match result {
-                Ok(result) => result,
-                Err(e) => {
-                    construction_errs.push(e);
-                    (None, None)
+                match result {
+                    Ok(result) => result,
+                    Err(e) => {
+                        construction_errs.push(e);
+                        (None, None, None, 0)
+                    }
                 }
             }
-        }
-        None => (None, None),
-    };
+            None => (None, None, None, 0),
+        };
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
 
-    let emit_timestamp_bindings = source_persist.is_some();
+    let should_emit_timestamp_bindings = source_persist.is_some();
 
     let (stream, ts_bindings_stream, capability) = source(scope, name.clone(), move |info| {
         // Create activator for source
@@ -1443,7 +1466,7 @@ where
         // Stash messages we cannot yet timestamp here.
         let mut buffer = None;
 
-        let mut timestamp_bindings_updater = if emit_timestamp_bindings {
+        let mut timestamp_bindings_updater = if should_emit_timestamp_bindings {
             let restored_bindings = restored_bindings.expect("missing restored bindings");
             Some(TimestampBindingUpdater::new(restored_bindings))
         } else {
@@ -1467,6 +1490,30 @@ where
                     return SourceStatus::Done;
                 }
             };
+
+            // NOTE: It's **very** important that we get out any necessary
+            // retractions/additions to the timestamp bindings before we downgrade beyond the
+            // previous upper seal frontier. Otherwise, it can happen that a needed retraction
+            // is not considered valid on a future restart attempt, and we will get an
+            // inconsistency between the persisted timestamp bindings and persisted data.
+            if let Some(ts_bindings_retractions) = ts_bindings_retractions.take() {
+                assert_eq!(
+                    *bindings_cap.time(),
+                    0,
+                    "did not emit retractions at the earliest possible time: source capability is already at {}", bindings_cap.time()
+                );
+
+                bindings_cap.downgrade(&starting_ts);
+
+                let mut session = bindings_output.session(&bindings_cap);
+
+                let retraction_ts = starting_ts;
+                let ts_bindings_retractions = ts_bindings_retractions
+                    .into_iter()
+                    .map(|(binding, diff)| (binding, retraction_ts, diff));
+
+                session.give_iterator(ts_bindings_retractions);
+            }
 
             // Refresh any consistency info from the worker that we need to
             consistency_info.refresh(source_reader, &mut timestamp_histories);
@@ -1652,111 +1699,54 @@ impl SourceReaderPersistence {
         }
     }
 
-    /// Restores the known source partitions (along with their latest read offset, if the binding
-    /// is not beyond the `upper_data_seal_ts`) and the known timestamp bindings.
+    /// Restores timestamp bindings from the given `StreamReadHandle` by reading the differential
+    /// timestamp updates and materializing/consolidating them into a `Vec`. This basically sums up
+    /// the `diff` of the bindings and collects those bindings whose `diff` is `1`.
+    ///
+    /// This returns two `Vec`s. The first contains the valid bindings, the second one contains
+    /// retractions  for the bindings that are beyond the `upper_seal_ts` which must be
+    /// applied/emitted before emitting any new bindings updates.
+    ///
+    /// NOTE: Consolidated bindings with a `diff` other than `0` or `1` indicate a bug, and this
+    /// method panics if that case happens.
     fn restore(
         &self,
     ) -> Result<
         (
-            HashMap<PartitionId, Option<MzOffset>>,
             Vec<(SourceTimestamp, AssignedTimestamp)>,
+            Vec<((SourceTimestamp, AssignedTimestamp), Diff)>,
         ),
         persist::error::Error,
     > {
-        let (offsets, bindings) = self.internal_restore(
-            self.config.read_handle.clone(),
-            self.config.upper_bindings_seal_ts,
-            self.config.upper_data_seal_ts,
-        )?;
+        assert!(self.config.upper_bindings_seal_ts >= self.config.upper_data_seal_ts);
 
-        tracing::trace!(
-            "In {}, initial (restored) source offsets: {:?}. upper_bindings_seal_ts = {}, upper_data_seal_ts = {}",
-            self.source_name,
-            offsets,
-            self.config.upper_bindings_seal_ts,
-            self.config.upper_data_seal_ts,
-        );
+        // Materialized version of bindings updates that are not beyond the common seal timestamp.
+        let mut valid_bindings: HashMap<_, isize> = HashMap::new();
 
-        tracing::trace!(
-            "In {}, initial (restored) timestamp bindings: {:?}",
-            self.source_name,
-            bindings,
-        );
+        let mut retractions: HashMap<_, isize> = HashMap::new();
 
-        Ok((offsets, bindings))
-    }
-
-    /// Restores the latest partition offsets and timestamp bindings from the given `StreamReadHandle`.
-    ///
-    /// This restores partition offsets that are not beyond the given `upper_data_seal_ts`, to ensure
-    /// that the updates we emit from the source are consistent with the state that we have in the
-    /// persistent data collection. We do restore bindings up to `upper_bindings_seal_ts`, which is
-    /// potentially beyond `upper_data_seal_ts` because we seal the latter before sealing the former.
-    /// This means we will emit source data with previously persisted bindings, which is a valid thing
-    /// to do.
-    ///
-    /// When `write` is `Some(StreamWriteHandle)`, this will also emit retractions for updates that are
-    /// beyond the `upper_bindings_seal_ts`. This should be used when restoring to clean up unsealed
-    /// updates from previous attempts.
-    fn internal_restore(
-        &self,
-        read: StreamReadHandle<SourceTimestamp, AssignedTimestamp>,
-        upper_bindings_seal_ts: u64,
-        upper_data_seal_ts: u64,
-    ) -> Result<
-        (
-            HashMap<PartitionId, Option<MzOffset>>,
-            Vec<(SourceTimestamp, AssignedTimestamp)>,
-        ),
-        persist::error::Error,
-    > {
-        assert!(upper_bindings_seal_ts >= upper_data_seal_ts);
-
-        let mut bindings: HashMap<_, isize> = HashMap::new();
-        let mut starting_offsets = HashMap::new();
-
-        let snapshot = read.snapshot()?;
-
+        let snapshot = self.config.read_handle.snapshot()?;
         let buf = snapshot.into_iter().collect::<Result<Vec<_>, _>>()?;
 
+        // NOTE: We "compact" all time resolution, by ignorning the timestamp. We don't need
+        // historical resolution and simply want the view as of the time at which the data was
+        // sealed. Thus, it represents the content of the timestamp histories at exactly that
+        // point.
         for ((source_timestamp, assigned_timestamp), ts, diff) in buf.into_iter() {
-            // Only restore starting offsets that are not beyond the uppser_data_seal_ts. This is the
-            // timestamp up to which we have sealed the persistent collection storing the actual source
-            // data/updates.
-            if ts < upper_data_seal_ts {
-                starting_offsets
-                    .entry(source_timestamp.partition.clone())
-                    .and_modify(|current_offset| {
-                        match current_offset {
-                            Some(current_offset) if source_timestamp.offset > *current_offset => {
-                                *current_offset = source_timestamp.offset;
-                            }
-                            _ => (), // ignore "older" starting offsets
-                        }
-                    })
-                    .or_insert_with(|| Some(source_timestamp.offset));
+            if ts < self.config.upper_data_seal_ts {
+                *valid_bindings
+                    .entry((source_timestamp.clone(), assigned_timestamp))
+                    .or_default() += diff;
             } else {
-                // If the binding is beyond the upper seal timestamp, we don't want to use its
-                // offset as a starting offset. We still want to record that we know about the
-                // partition so that we can add bindings to `timestamp_histories`. We do this,
-                // because we restore all bindings, ignoring whether they are before or after the
-                // seal timestamp.
-                starting_offsets
-                    .entry(source_timestamp.partition.clone())
-                    .or_insert_with(|| None);
+                *retractions
+                    .entry((source_timestamp.clone(), assigned_timestamp))
+                    .or_default() += diff;
             }
-
-            // Collect all the bindings. The bindings are potentially beyond the starting offsets, but
-            // that is ok. This means we will emit source data with previously persisted bindings.
-            //
-            // We consolidate all the diffs as we go. Below we collect all positive updates and
-            // return them.
-            *bindings
-                .entry((source_timestamp, assigned_timestamp))
-                .or_default() += diff;
         }
 
-        let bindings: Vec<_> = bindings
+        // We only want bindings that "exist". And panic on bindings that have a diff other than 0
+        // or 1.
+        let valid_bindings = valid_bindings
             .drain()
             .filter(|(binding, diff)| {
                 if *diff < 0 || *diff > 1 {
@@ -1768,9 +1758,44 @@ impl SourceReaderPersistence {
                 *diff == 1
             })
             .map(|(binding, _diff)| binding)
-            .collect();
+            .collect::<Vec<_>>();
 
-        Ok((starting_offsets, bindings))
+        // For retractions, we just need the "consolidated" diff value for each binding/timestamp.
+        let retractions = retractions
+            .drain()
+            .filter(|(binding, diff)| {
+                if diff.abs() > 1 {
+                    panic!(
+                        "Binding with invalid diff. Binding {:?}, diff: {}.",
+                        binding, diff
+                    );
+                }
+                diff.abs() == 1
+            })
+            // retraction!
+            .map(|(binding, diff)| (binding, -diff))
+            .collect::<Vec<_>>();
+
+        Ok((valid_bindings, retractions))
+    }
+
+    fn get_starting_offsets<'a>(
+        &self,
+        bindings: impl Iterator<Item = &'a (SourceTimestamp, AssignedTimestamp)>,
+    ) -> HashMap<PartitionId, MzOffset> {
+        let mut starting_offsets = HashMap::new();
+        for (source_timestamp, _assigned_timestamp) in bindings {
+            starting_offsets
+                .entry(source_timestamp.partition.clone())
+                .and_modify(|current_offset| {
+                    if source_timestamp.offset > *current_offset {
+                        *current_offset = source_timestamp.offset;
+                    }
+                })
+                .or_insert_with(|| source_timestamp.offset);
+        }
+
+        starting_offsets
     }
 
     /// Renders operators that persist the given `ts_bindings_stream` to the configured persistent
