@@ -519,7 +519,12 @@ pub fn generate_ccsr_client_config(
 
     let mut ccsr_options = extract(
         ccsr_options,
-        &[Config::string("username"), Config::string("password")],
+        &[
+            Config::string("username"),
+            Config::string("password"),
+            // An old migration added this field in some avro cases, so we remove it here
+            Config::new("confluent_wire_format", ValType::Boolean),
+        ],
     )?;
     if let Some(username) = ccsr_options.remove("username") {
         client_config = client_config.auth(username, ccsr_options.remove("password"));
