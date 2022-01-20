@@ -34,7 +34,7 @@ where
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
         &mut self,
-        render_state: &mut crate::render::ComputeState,
+        compute_state: &mut crate::render::ComputeState,
         storage_state: &mut crate::render::StorageState,
         tokens: &mut RelevantTokens,
         import_ids: HashSet<GlobalId>,
@@ -68,7 +68,7 @@ where
         // if we figure out a protocol for that.
 
         let sink_token = sink_render.render_continuous_sink(
-            render_state,
+            compute_state,
             storage_state,
             sink,
             sink_id,
@@ -85,7 +85,7 @@ where
             needed_source_tokens,
             needed_additional_tokens,
         ));
-        render_state
+        compute_state
             .dataflow_tokens
             .insert(sink_id, Box::new(tokens));
     }
@@ -214,7 +214,7 @@ where
 
     fn render_continuous_sink(
         &self,
-        render_state: &mut crate::render::ComputeState,
+        compute_state: &mut crate::render::ComputeState,
         storage_state: &mut crate::render::StorageState,
         sink: &SinkDesc,
         sink_id: GlobalId,

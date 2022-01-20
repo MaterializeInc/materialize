@@ -54,7 +54,7 @@ where
 
     fn render_continuous_sink(
         &self,
-        render_state: &mut crate::render::ComputeState,
+        compute_state: &mut crate::render::ComputeState,
         _storage_state: &mut crate::render::StorageState,
         sink: &SinkDesc,
         sink_id: GlobalId,
@@ -75,7 +75,7 @@ where
         let tail_protocol_handle = Rc::new(RefCell::new(if active_worker {
             Some(TailProtocol {
                 sink_id,
-                tail_response_buffer: Some(render_state.tail_response_buffer.clone()),
+                tail_response_buffer: Some(compute_state.tail_response_buffer.clone()),
             })
         } else {
             None

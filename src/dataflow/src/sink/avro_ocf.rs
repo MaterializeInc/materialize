@@ -45,7 +45,7 @@ where
 
     fn render_continuous_sink(
         &self,
-        _render_state: &mut crate::render::ComputeState,
+        _compute_state: &mut crate::render::ComputeState,
         _storage_state: &mut crate::render::StorageState,
         _sink: &SinkDesc,
         sink_id: GlobalId,

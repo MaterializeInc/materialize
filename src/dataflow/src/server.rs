@@ -133,7 +133,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalClient), anyhow::Error> {
         let dataflow_sink_metrics = dataflow_sink_metrics.clone();
         Worker {
             timely_worker,
-            render_state: ComputeState {
+            compute_state: ComputeState {
                 traces: TraceManager::new(trace_metrics, worker_idx),
                 dataflow_tokens: HashMap::new(),
                 tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
@@ -187,7 +187,7 @@ where
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The state associated with rendering dataflows.
-    render_state: ComputeState,
+    compute_state: ComputeState,
     /// The state associated with collection ingress and egress.
     storage_state: StorageState,
     /// The logger, from Timely's logging framework, if logs are enabled.
@@ -408,7 +408,7 @@ where
         // Install traces as maintained indexes
         for (log, (trace, permutation)) in t_traces {
             let id = logging.active_logs[&log];
-            self.render_state
+            self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
@@ -416,7 +416,7 @@ where
         }
         for (log, (trace, permutation)) in r_traces {
             let id = logging.active_logs[&log];
-            self.render_state
+            self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
@@ -424,7 +424,7 @@ where
         }
         for (log, (trace, permutation)) in d_traces {
             let id = logging.active_logs[&log];
-            self.render_state
+            self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
@@ -432,7 +432,7 @@ where
         }
         for (log, (trace, permutation)) in m_traces {
             let id = logging.active_logs[&log];
-            self.render_state
+            self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone(), permutation));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
@@ -462,7 +462,7 @@ where
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
-            self.render_state.traces.maintenance();
+            self.compute_state.traces.maintenance();
 
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
@@ -499,7 +499,7 @@ where
             self.process_peeks();
             self.process_tails();
         }
-        self.render_state.traces.del_all_traces();
+        self.compute_state.traces.del_all_traces();
         self.shutdown_logging();
     }
 
@@ -526,7 +526,7 @@ where
 
         let mut new_frontier = Antichain::new();
         let mut progress = Vec::new();
-        for (id, traces) in self.render_state.traces.traces.iter_mut() {
+        for (id, traces) in self.compute_state.traces.traces.iter_mut() {
             // Read the upper frontier and compare to what we've reported.
             traces.oks_mut().read_upper(&mut new_frontier);
             let prev_frontier = self
@@ -684,7 +684,7 @@ where
 
                     render::build_dataflow(
                         self.timely_worker,
-                        &mut self.render_state,
+                        &mut self.compute_state,
                         &mut self.storage_state,
                         dataflow,
                         self.now.clone(),
@@ -703,12 +703,12 @@ where
                 for id in ids {
                     self.reported_frontiers.remove(&id);
                     self.storage_state.sink_write_frontiers.remove(&id);
-                    self.render_state.dataflow_tokens.remove(&id);
+                    self.compute_state.dataflow_tokens.remove(&id);
                 }
             }
             Command::DropIndexes(ids) => {
                 for id in ids {
-                    self.render_state.traces.del_trace(&id);
+                    self.compute_state.traces.del_trace(&id);
                     let frontier = self
                         .reported_frontiers
                         .remove(&id)
@@ -731,7 +731,7 @@ where
                 mut map_filter_project,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace_bundle = self.render_state.traces.get(&id).unwrap().clone();
+                let mut trace_bundle = self.compute_state.traces.get(&id).unwrap().clone();
                 trace_bundle
                     .permutation()
                     .permute_safe_mfp_plan(&mut map_filter_project);
@@ -811,7 +811,7 @@ where
 
             Command::AllowCompaction(list) => {
                 for (id, frontier) in list {
-                    self.render_state
+                    self.compute_state
                         .traces
                         .allow_compaction(id, frontier.borrow());
                     if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
@@ -1038,7 +1038,7 @@ where
 
     /// Scan the shared tail response buffer, and forward results along.
     fn process_tails(&mut self) {
-        let mut tail_responses = self.render_state.tail_response_buffer.borrow_mut();
+        let mut tail_responses = self.compute_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
             self.send_response(Response::TailResponse(sink_id, response));
         }

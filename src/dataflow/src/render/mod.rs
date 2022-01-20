@@ -194,7 +194,7 @@ pub struct RelevantTokens {
 /// Build a dataflow from a description.
 pub fn build_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
-    render_state: &mut ComputeState,
+    compute_state: &mut ComputeState,
     storage_state: &mut StorageState,
     dataflow: DataflowDescription<plan::Plan>,
     now: NowFn,
@@ -250,7 +250,7 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared indexes into the rendering context.
             for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(render_state, &mut tokens, scope, region, *idx_id, &idx.0);
+                context.import_index(compute_state, &mut tokens, scope, region, *idx_id, &idx.0);
             }
 
             // We first determine indexes and sinks to export, then build the declared object, and
@@ -280,13 +280,13 @@ pub fn build_dataflow<A: Allocate>(
 
             // Export declared indexes.
             for (idx_id, imports, idx) in indexes {
-                context.export_index(render_state, &mut tokens, imports, idx_id, &idx);
+                context.export_index(compute_state, &mut tokens, imports, idx_id, &idx);
             }
 
             // Export declared sinks.
             for (sink_id, imports, sink) in sinks {
                 context.export_sink(
-                    render_state,
+                    compute_state,
                     storage_state,
                     &mut tokens,
                     imports,
@@ -305,14 +305,14 @@ where
 {
     fn import_index(
         &mut self,
-        render_state: &mut ComputeState,
+        compute_state: &mut ComputeState,
         tokens: &mut RelevantTokens,
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
-        if let Some(traces) = render_state.traces.get_mut(&idx_id) {
+        if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
             let token = traces.to_drop().clone();
             let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                 scope,
@@ -363,7 +363,7 @@ where
 
     fn export_index(
         &mut self,
-        render_state: &mut ComputeState,
+        compute_state: &mut ComputeState,
         tokens: &mut RelevantTokens,
         import_ids: HashSet<GlobalId>,
         idx_id: GlobalId,
@@ -389,7 +389,7 @@ where
         });
         match bundle.arrangement(&idx.keys) {
             Some(ArrangementFlavor::Local(oks, errs, permutation)) => {
-                render_state.traces.set(
+                compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace, permutation).with_drop(tokens),
                 );
@@ -397,8 +397,8 @@ where
             Some(ArrangementFlavor::Trace(gid, _, _, _)) => {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
-                let trace = render_state.traces.get(&gid).unwrap().clone();
-                render_state.traces.set(idx_id, trace);
+                let trace = compute_state.traces.get(&gid).unwrap().clone();
+                compute_state.traces.set(idx_id, trace);
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
