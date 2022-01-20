@@ -168,6 +168,10 @@ boundary don't silently merge their release notes into the wrong place.
 
 {{% version-header v0.17.0 %}}
 
+- **Breaking change.** `CONFLUENT SCHEMA REGISTRY` sections
+  of `CREATE SOURCE` and `CREATE SINK` now reject unknown parameters.
+  (Example: [Confluent Schema Registry options](/sql/create-source/avro-kafka#confluent-schema-registry-options)).
+
 - **Breaking change.** Improve consistency with PostgreSQL's column name
   inference rules:
 
