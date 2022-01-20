@@ -57,6 +57,75 @@ enum SourceType<Delimited, ByteStream> {
     ByteStream(ByteStream),
 }
 
+/// Imports a table (non-durable, local source of input).
+pub(crate) fn import_table<G>(
+    as_of_frontier: &timely::progress::Antichain<repr::Timestamp>,
+    storage_state: &mut crate::render::StorageState,
+    scope: &mut G,
+    persisted_name: Option<String>,
+) -> (
+    LocalInput,
+    crate::render::CollectionBundle<G, Row, Timestamp>,
+)
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let ((handle, capability), ok_stream, err_collection) = {
+        let ((handle, capability), ok_stream) = scope.new_unordered_input();
+        let err_collection = Collection::empty(scope);
+        ((handle, capability), ok_stream, err_collection)
+    };
+
+    // A local "source" is either fed by a local input handle, or by reading from a
+    // `persisted_source()`.
+    //
+    // For non-persisted sources, values that are to be inserted are sent from the
+    // coordinator and pushed into the handle.
+    //
+    // For persisted sources, the coordinator only writes new values to a persistent
+    // stream. These values will then "show up" here because we read from the same
+    // persistent stream.
+    let (ok_stream, err_collection) = match (&mut storage_state.persist, persisted_name) {
+        (Some(persist), Some(stream_name)) => {
+            let (_write, read) = persist.create_or_load(&stream_name);
+            let (persist_ok_stream, persist_err_stream) = scope
+                .persisted_source(read, &as_of_frontier)
+                .ok_err(|x| match x {
+                    (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
+                    (Err(err), ts, diff) => Err((err, ts, diff)),
+                });
+            let (persist_ok_stream, decode_err_stream) =
+                persist_ok_stream.ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
+            let persist_err_collection = persist_err_stream
+                .concat(&decode_err_stream)
+                .map(move |(err, ts, diff)| {
+                    let err =
+                        SourceError::new(stream_name.clone(), SourceErrorDetails::Persistence(err));
+                    (err.into(), ts, diff)
+                })
+                .as_collection();
+            (
+                ok_stream.concat(&persist_ok_stream),
+                err_collection.concat(&persist_err_collection),
+            )
+        }
+        _ => (ok_stream, err_collection),
+    };
+
+    let local_input = LocalInput { handle, capability };
+    let as_of_frontier = as_of_frontier.clone();
+    let ok_collection = ok_stream
+        .map_in_place(move |(_, mut time, _)| {
+            time.advance_by(as_of_frontier.borrow());
+        })
+        .as_collection();
+
+    let collection_bundle =
+        crate::render::CollectionBundle::from_collections(ok_collection, err_collection);
+
+    (local_input, collection_bundle)
+}
+
 /// Constructs a `CollectionBundle` and tokens from source arguments.
 ///
 /// The first return value is the collection bundle, and the second a pair of source and additional
@@ -112,62 +181,9 @@ where
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands.
         SourceConnector::Local { persisted_name, .. } => {
-            let ((handle, capability), ok_stream, err_collection) = {
-                let ((handle, capability), ok_stream) = scope.new_unordered_input();
-                let err_collection = Collection::empty(scope);
-                ((handle, capability), ok_stream, err_collection)
-            };
-
-            // A local "source" is either fed by a local input handle, or by reading from a
-            // `persisted_source()`.
-            //
-            // For non-persisted sources, values that are to be inserted are sent from the
-            // coordinator and pushed into the handle.
-            //
-            // For persisted sources, the coordinator only writes new values to a persistent
-            // stream. These values will then "show up" here because we read from the same
-            // persistent stream.
-            let (ok_stream, err_collection) = match (&mut storage_state.persist, persisted_name) {
-                (Some(persist), Some(stream_name)) => {
-                    let (_write, read) = persist.create_or_load(&stream_name);
-                    let (persist_ok_stream, persist_err_stream) = scope
-                        .persisted_source(read, &as_of_frontier)
-                        .ok_err(|x| match x {
-                            (Ok(kv), ts, diff) => Ok((kv, ts, diff)),
-                            (Err(err), ts, diff) => Err((err, ts, diff)),
-                        });
-                    let (persist_ok_stream, decode_err_stream) =
-                        persist_ok_stream.ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
-                    let persist_err_collection = persist_err_stream
-                        .concat(&decode_err_stream)
-                        .map(move |(err, ts, diff)| {
-                            let err = SourceError::new(
-                                stream_name.clone(),
-                                SourceErrorDetails::Persistence(err),
-                            );
-                            (err.into(), ts, diff)
-                        })
-                        .as_collection();
-                    (
-                        ok_stream.concat(&persist_ok_stream),
-                        err_collection.concat(&persist_err_collection),
-                    )
-                }
-                _ => (ok_stream, err_collection),
-            };
-
-            storage_state
-                .local_inputs
-                .insert(src_id, LocalInput { handle, capability });
-            let as_of_frontier = as_of_frontier.clone();
-            let ok_collection = ok_stream
-                .map_in_place(move |(_, mut time, _)| {
-                    time.advance_by(as_of_frontier.borrow());
-                })
-                .as_collection();
-
-            let collection_bundle =
-                crate::render::CollectionBundle::from_collections(ok_collection, err_collection);
+            let (local_input, collection_bundle) =
+                import_table(as_of_frontier, storage_state, scope, persisted_name);
+            storage_state.local_inputs.insert(src_id, local_input);
 
             // TODO(mcsherry): Local tables are a special non-source we should relocate.
             (collection_bundle, (Rc::new(None), Vec::new()))
