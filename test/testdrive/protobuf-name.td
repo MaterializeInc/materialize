@@ -47,8 +47,8 @@ i   mz_offset
 ! CREATE MATERIALIZED SOURCE absolute_path FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-name-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE 'Name' USING SCHEMA FILE '${testdrive.temp-dir}/name.pb'
-protobuf message "Name" not found in file descriptor set
+contains:protobuf message "Name" not found in file descriptor set
 ! CREATE MATERIALIZED SOURCE absolute_path FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-name-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Name' USING SCHEMA FILE '${testdrive.temp-dir}/name.pb'
-protobuf message ".Name" not found in file descriptor set
+contains:protobuf message ".Name" not found in file descriptor set

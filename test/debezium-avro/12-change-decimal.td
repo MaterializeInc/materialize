@@ -35,4 +35,4 @@ INSERT INTO alter_change_decimal VALUES (23.456);
 UPDATE alter_change_decimal SET f1 = 34.567 WHERE f1 = 0;
 
 ! SELECT * FROM alter_change_decimal;
-Decimal types must match in precision, scale, and fixed size
+contains:Decimal types must match in precision, scale, and fixed size

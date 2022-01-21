@@ -13,7 +13,7 @@
 
 # If this begins to succeeed, this means additional tests need to be added
 ! CREATE ROLE nosuperuser_login NOSUPERUSER LOGIN;
-non-superusers not yet supported
+contains:non-superusers not yet supported
 
 ! CREATE ROLE superuser_nologin SUPERUSER NOLOGIN;
-non-login users not yet supported
+contains:non-login users not yet supported

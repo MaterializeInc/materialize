@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use md5::{Digest, Md5};
 use ore::result::ResultExt;
 use postgres_array::Array;
+use regex::Regex;
 use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
 use tokio_postgres::types::{FromSql, Type};
@@ -312,9 +313,25 @@ impl SqlAction {
 }
 
 pub struct FailSqlAction {
-    cmd: FailSqlCommand,
+    query: String,
+    expected_error: ErrorMatcher,
     stmt: Option<Statement<Raw>>,
     context: Context,
+}
+
+enum ErrorMatcher {
+    Contains(String),
+    Exact(String),
+    Regex(Regex),
+}
+
+impl ErrorMatcher {
+    fn as_str(&self) -> &str {
+        match self {
+            ErrorMatcher::Contains(s) | ErrorMatcher::Exact(s) => s.as_str(),
+            ErrorMatcher::Regex(r) => r.as_str(),
+        }
+    }
 }
 
 pub fn build_fail_sql(cmd: FailSqlCommand, context: Context) -> Result<FailSqlAction, String> {
@@ -333,7 +350,20 @@ pub fn build_fail_sql(cmd: FailSqlCommand, context: Context) -> Result<FailSqlAc
         Err(_) => None,
     };
 
-    Ok(FailSqlAction { cmd, stmt, context })
+    let expected_error = match cmd.error_match_type {
+        crate::parser::SqlErrorMatchType::Contains => ErrorMatcher::Contains(cmd.expected_error),
+        crate::parser::SqlErrorMatchType::Exact => ErrorMatcher::Exact(cmd.expected_error),
+        crate::parser::SqlErrorMatchType::Regex => {
+            ErrorMatcher::Regex(Regex::new(&cmd.expected_error).map_err(|e| e.to_string())?)
+        }
+    };
+
+    Ok(FailSqlAction {
+        query: cmd.query,
+        expected_error,
+        stmt,
+        context,
+    })
 }
 
 #[async_trait]
@@ -345,7 +375,7 @@ impl Action for FailSqlAction {
     async fn redo(&self, state: &mut State) -> Result<(), String> {
         use Statement::{Commit, Rollback};
 
-        let query = &self.cmd.query;
+        let query = &self.query;
         print_query(&query);
 
         let should_retry = match &self.stmt {
@@ -397,7 +427,7 @@ impl FailSqlAction {
         match pgclient.query(query, &[]).await {
             Ok(_) => Err(format!(
                 "query succeeded, but expected error '{}'",
-                self.cmd.expected_error
+                self.expected_error.as_str()
             )),
             Err(err) => {
                 let mut err_string = err.to_string();
@@ -411,14 +441,35 @@ impl FailSqlAction {
                                 .to_string();
                         }
 
-                        if err_string.contains(&self.cmd.expected_error) {
-                            Ok(())
-                        } else {
-                            Err(format!(
-                                "expected error containing '{}', but got '{}'",
-                                self.cmd.expected_error, err_string
-                            ))
+                        match &self.expected_error {
+                            ErrorMatcher::Contains(s) => {
+                                if !err_string.contains(s) {
+                                    return Err(format!(
+                                        "expected error containing '{}', but got '{}'",
+                                        s, err_string
+                                    ));
+                                }
+                            }
+                            ErrorMatcher::Exact(s) => {
+                                if &err_string != s {
+                                    return Err(format!(
+                                        "expected exact error '{}', but got '{}'",
+                                        s, err_string
+                                    ));
+                                }
+                            }
+                            ErrorMatcher::Regex(r) => {
+                                if !r.is_match(&err_string) {
+                                    return Err(format!(
+                                        "expected error matching regex '{}', but got '{}'",
+                                        r.as_str(),
+                                        err_string
+                                    ));
+                                }
+                            }
                         }
+
+                        Ok(())
                     }
                     None => Err(err_string),
                 }

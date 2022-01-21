@@ -202,7 +202,7 @@ garbage
   FORMAT AVRO USING SCHEMA '${reader-schema}'
 
 ! SELECT f2 FROM avro_corrupted_values
-Decode error: Text: avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 1
+contains:Decode error: Text: avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 1
 
 # Test decoding of corrupted messages without magic byte
 $ kafka-create-topic topic=avro-corrupted-values2
@@ -215,4 +215,4 @@ garbage
   FORMAT AVRO USING SCHEMA '${reader-schema}' WITH (confluent_wire_format = false)
 
 ! SELECT f2 FROM avro_corrupted_values2
-Decode error: Text: avro deserialization error: Decode error: Decoding error: Expected non-negative integer, got -49
+contains:Decode error: Text: avro deserialization error: Decode error: Decoding error: Expected non-negative integer, got -49

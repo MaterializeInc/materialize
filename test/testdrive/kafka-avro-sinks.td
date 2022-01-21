@@ -128,28 +128,28 @@ $ kafka-verify format=avro sink=materialize.public.namespace_key_value_sink sort
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a, a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Repeated column name in sink key: a
+contains:Repeated column name in sink key: a
 
 ! CREATE SINK bad_sink FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink'
   WITH (avro_value_fullname = 'some.neat.class.foo', avro_key_fullname = 'some.neat.class.bar')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Cannot specify avro_key_fullname without a corresponding KEY field
+contains:Cannot specify avro_key_fullname without a corresponding KEY field
 
 ! CREATE SINK bad_sink FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink'
   WITH (avro_key_fullname = 'some.neat.class.bar')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Cannot specify avro_key_fullname without a corresponding KEY field
+contains:Cannot specify avro_key_fullname without a corresponding KEY field
 
 ! CREATE SINK bad_sink FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
   WITH (avro_key_fullname = 'some.neat.class.bar')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Must specify both avro_key_fullname and avro_value_fullname when specifying generated schema names
+contains:Must specify both avro_key_fullname and avro_value_fullname when specifying generated schema names
 
 ! CREATE SINK bad_sink FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
   WITH (avro_value_fullname = 'some.neat.class.bar')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Must specify both avro_key_fullname and avro_value_fullname when specifying generated schema names
+contains:Must specify both avro_key_fullname and avro_value_fullname when specifying generated schema names

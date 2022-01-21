@@ -13,10 +13,10 @@
 true
 
 ! SELECT * FROM persistent_user_table_negative_diff;
-Invalid data in source, saw retractions (1) for row that does not exist: [Null]
+contains:Invalid data in source, saw retractions (1) for row that does not exist: [Null]
 
 ! SELECT * FROM persistent_user_table_large_negative_diff;
-Invalid data in source, saw retractions (8589934592) for row that does not exist: [Null]
+contains:Invalid data in source, saw retractions (8589934592) for row that does not exist: [Null]
 
 > SELECT COUNT(*) = 0 FROM persistent_user_table_cancelling_diffs;
 true

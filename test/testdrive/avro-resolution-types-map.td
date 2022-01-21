@@ -28,4 +28,4 @@ $ kafka-ingest format=avro topic=resolution-maps schema=${map-double} publish=tr
 {"f1": { "key1": 234.345 } }
 
 ! SELECT f1 -> 'key1' FROM resolution_maps
-Schemas don't match: Double, Int
+contains:Schemas don't match: Double, Int

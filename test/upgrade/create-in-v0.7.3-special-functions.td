@@ -21,7 +21,7 @@
 # if they ever are allowed, add an upgrade test for them
 
 ! CREATE MATERIALIZED VIEW foo AS SELECT NOW();
-cannot be used in static queries
+contains:cannot be used in static queries
 
 ! CREATE MATERIALIZED VIEW bar AS SELECT CURRENT_TIMESTAMP();
-cannot be used in static queries
+contains:cannot be used in static queries

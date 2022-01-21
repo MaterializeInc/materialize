@@ -78,4 +78,4 @@ a
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
-sslv3 alert certificate unknown
+contains:sslv3 alert certificate unknown

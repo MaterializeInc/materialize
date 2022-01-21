@@ -76,7 +76,7 @@ $ kafka-verify format=json sink=materialize.public.record_sink key=false
 
 # Duplicate column names
 ! CREATE VIEW duplicate_cols AS SELECT 'a1' AS a, 'a1' AS a;
-column "a" specified more than once
+contains:column "a" specified more than once
 
 # Complex types
 

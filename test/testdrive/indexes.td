@@ -226,7 +226,7 @@ foo  foo_expr_idx      1  <null>  "a + b"         true  true
 #   SHOW INDEXES FROM v LIKE '%v'
 
 ! SHOW INDEX FROM nonexistent
-unknown catalog item 'nonexistent'
+contains:unknown catalog item 'nonexistent'
 
 ! SHOW INDEX FROM foo_primary_idx
-cannot show indexes on materialize.public.foo_primary_idx because it is a index
+contains:cannot show indexes on materialize.public.foo_primary_idx because it is a index

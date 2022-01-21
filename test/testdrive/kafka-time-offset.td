@@ -20,25 +20,25 @@ $ kafka-create-topic topic=t0
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'missing_topic'
   WITH (kafka_time_offset=1)
   FORMAT TEXT
-topic missing_topic does not exist
+contains:topic missing_topic does not exist
 
 ! CREATE MATERIALIZED SOURCE pick_one
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
   WITH (kafka_time_offset=1, start_offset=1)
   FORMAT TEXT
-`start_offset` and `kafka_time_offset` cannot be set at the same time.
+contains:`start_offset` and `kafka_time_offset` cannot be set at the same time.
 
 ! CREATE MATERIALIZED SOURCE byo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
   WITH (kafka_time_offset=1, consistency_topic="t0")
   FORMAT TEXT
-`start_offset` is not yet implemented for non-realtime consistency sources.
+contains:`start_offset` is not yet implemented for non-realtime consistency sources.
 
 ! CREATE MATERIALIZED SOURCE not_a_number
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
   WITH (kafka_time_offset="not_a_number")
   FORMAT TEXT
-`kafka_time_offset` must be a number
+contains:`kafka_time_offset` must be a number
 
 #
 # Append-Only
