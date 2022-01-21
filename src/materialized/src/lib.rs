@@ -258,7 +258,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Listen on the third-party metrics port if we are configured for it.
     if let Some(third_party_addr) = config.third_party_metrics_listen_addr {
-        task::spawn("metrics_server", {
+        task::spawn(|| "metrics_server", {
             let server = http::ThirdPartyServer::new(metrics_registry.clone());
             async move {
                 server.serve(third_party_addr).await;
@@ -274,7 +274,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // should be rejected. Once all existing user connections have gracefully
     // terminated, this task exits.
     let (drain_trigger, drain_tripwire) = oneshot::channel();
-    task::spawn("pgwire_server", {
+    task::spawn(|| "pgwire_server", {
         let pgwire_server = pgwire::Server::new(pgwire::Config {
             tls: pgwire_tls,
             coord_client: coord_client.clone(),
@@ -308,7 +308,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             workers,
             coord_client,
         };
-        task::spawn("telemetry_loop", async move {
+        task::spawn(|| "telemetry_loop", async move {
             telemetry::report_loop(config).await
         });
     }

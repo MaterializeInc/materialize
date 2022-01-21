@@ -825,7 +825,7 @@ impl SourceReader for S3SourceReader {
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
 
             task::spawn(
-                &format!("s3_download:{}", source_id),
+                || format!("s3_download:{}", source_id),
                 download_objects_task(
                     source_id.to_string(),
                     keys_rx,
@@ -846,8 +846,10 @@ impl SourceReader for S3SourceReader {
                             bucket,
                             worker_id
                         );
+                        // TODO(guswynn): see if we can avoid this formatting
+                        let task_name = format!("s3_scan:{}:{}", source_id, bucket);
                         task::spawn(
-                            &format!("s3_scan:{}:{}", source_id, bucket),
+                            || task_name,
                             scan_bucket_task(
                                 bucket,
                                 source_id.to_string(),
@@ -866,7 +868,7 @@ impl SourceReader for S3SourceReader {
                             worker_id
                         );
                         task::spawn(
-                            &format!("s3_read_sqs:{}", source_id),
+                            || format!("s3_read_sqs:{}", source_id),
                             read_sqs_task(
                                 source_id.to_string(),
                                 glob.clone(),

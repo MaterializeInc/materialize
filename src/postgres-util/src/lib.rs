@@ -212,7 +212,7 @@ pub async fn publication_info(
     let tls = make_tls(&config)?;
     let (client, connection) = config.connect(tls).await?;
     task::spawn(
-        &format!("publication_info:postgres_connection{conn}"),
+        || format!("publication_info:postgres_connection{conn}"),
         connection,
     );
 
@@ -348,7 +348,7 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
     let tls = make_tls(&config)?;
     let (client, connection) = tokio_postgres::connect(&conn, tls).await?;
     task::spawn(
-        &format!("drop_replication_slots:postgres_connection{conn}"),
+        || format!("drop_replication_slots:postgres_connection{conn}"),
         connection,
     );
 
@@ -391,7 +391,7 @@ pub async fn connect_replication(conn: &str) -> Result<Client, anyhow::Error> {
         .connect(tls)
         .await?;
     task::spawn(
-        &format!("connect_replication:postgres_connection:{conn}"),
+        || format!("connect_replication:postgres_connection:{conn}"),
         connection,
     );
     Ok(client)

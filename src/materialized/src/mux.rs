@@ -72,7 +72,7 @@ impl Mux {
             //
             // [0]: https://news.ycombinator.com/item?id=10608356
             conn.set_nodelay(true).expect("set_nodelay failed");
-            task::spawn("mux_serve", handle_connection(Arc::clone(&handlers), conn));
+            task::spawn(|| "mux_serve", handle_connection(Arc::clone(&handlers), conn));
         }
     }
 }

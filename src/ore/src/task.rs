@@ -23,8 +23,10 @@ use tokio::task::{self, JoinHandle};
 /// more details.
 #[cfg(not(all(tokio_unstable, feature = "task")))]
 #[track_caller]
-pub fn spawn<Fut>(_name: &str, future: Fut) -> JoinHandle<Fut::Output>
+pub fn spawn<Fut, Name, NameClosure>(_nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
 where
+    Name: AsRef<str>,
+    NameClosure: FnOnce() -> Name,
     Fut: Future + Send + 'static,
     Fut::Output: Send + 'static,
 {
@@ -37,12 +39,14 @@ where
 /// more details.
 #[cfg(all(tokio_unstable, feature = "task"))]
 #[track_caller]
-pub fn spawn<Fut>(name: &str, future: Fut) -> JoinHandle<Fut::Output>
+pub fn spawn<Fut, Name, NameClosure>(nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
 where
+    Name: AsRef<str>,
+    NameClosure: FnOnce() -> Name,
     Fut: Future + Send + 'static,
     Fut::Output: Send + 'static,
 {
-    task::Builder::new().name(name).spawn(future)
+    task::Builder::new().name(nc().as_ref()).spawn(future)
 }
 
 /// Spawns blocking code on the blocking threadpool.
@@ -51,8 +55,13 @@ where
 /// for more details.
 #[cfg(not(all(tokio_unstable, feature = "task")))]
 #[track_caller]
-pub fn spawn_blocking<Function, Output>(_name: &str, function: Function) -> JoinHandle<Output>
+pub fn spawn_blocking<Function, Output, Name, NameClosure>(
+    _nc: NameClosure,
+    function: Function,
+) -> JoinHandle<Output>
 where
+    Name: AsRef<str>,
+    NameClosure: FnOnce() -> Name,
     Function: FnOnce() -> Output + Send + 'static,
     Output: Send + 'static,
 {
@@ -65,10 +74,17 @@ where
 /// for more details.
 #[cfg(all(tokio_unstable, feature = "task"))]
 #[track_caller]
-pub fn spawn_blocking<Function, Output>(name: &str, function: Function) -> JoinHandle<Output>
+pub fn spawn_blocking<Function, Output, Name, NameClosure>(
+    nc: NameClosure,
+    function: Function,
+) -> JoinHandle<Output>
 where
+    Name: AsRef<str>,
+    NameClosure: FnOnce() -> Name,
     Function: FnOnce() -> Output + Send + 'static,
     Output: Send + 'static,
 {
-    task::Builder::new().name(name).spawn_blocking(function)
+    task::Builder::new()
+        .name(nc().as_ref())
+        .spawn_blocking(function)
 }

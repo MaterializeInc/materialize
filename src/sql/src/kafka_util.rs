@@ -278,7 +278,9 @@ pub async fn create_consumer(
             // e.g. the hostname was mistyped. librdkafka doesn't expose a
             // better API for asking whether a connection succeeded or failed,
             // unfortunately.
-            task::spawn_blocking(&format!("kafka_set_metadata:{broker}:{topic}"), {
+            // TODO(guswynn): see if we can avoid this formatting
+            let task_name = format!("kafka_set_metadata:{broker}:{topic}");
+            task::spawn_blocking(|| task_name, {
                 let consumer = Arc::clone(&consumer);
                 move || {
                     let _ = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
@@ -363,7 +365,9 @@ pub async fn lookup_start_offsets(
     };
 
     // Lookup offsets
-    task::spawn_blocking(&format!("kafka_lookup_start_offets:{topic}"), {
+    // TODO(guswynn): see if we can avoid this formatting
+    let task_name = format!("kafka_lookup_start_offets:{topic}");
+    task::spawn_blocking(|| task_name, {
         let topic = topic.to_string();
         move || {
             // There cannot be more than i32 partitions

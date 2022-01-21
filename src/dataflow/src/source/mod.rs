@@ -1179,7 +1179,7 @@ where
     let (tx, mut rx) = mpsc::channel(64);
 
     if active {
-        task::spawn(&format!("create_source_simple:{}", name), async move {
+        task::spawn(|| format!("create_source_simple:{}", name), async move {
             let timestamper = Timestamper::new(tx, timestamp_frequency, now);
             let source = connector.start(&timestamper);
             tokio::pin!(source);

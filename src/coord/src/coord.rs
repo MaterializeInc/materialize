@@ -721,7 +721,7 @@ where
             // close on a regular interval. This roughly tracks the behaivor of realtime
             // sources that close off timestamps on an interval.
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn("coordinator_serve", async move {
+            task::spawn(|| "coordinator_serve", async move {
                 let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
                 loop {
                     interval.tick().await;
@@ -806,7 +806,7 @@ where
             let seal_fut = persist_multi
                 .write_handle
                 .seal(&persist_multi.all_table_ids, advance_to);
-            let _ = task::spawn("advance_local_inputs", async move {
+            let _ = task::spawn(|| "advance_local_inputs", async move {
                 if let Err(err) = seal_fut.await {
                     // TODO: Linearizability relies on this, bubble up the
                     // error instead.
@@ -1243,7 +1243,7 @@ where
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
                         let catalog = self.catalog.for_session(&session);
                         let purify_fut = sql::pure::purify(&catalog, stmt);
-                        task::spawn("purify", async move {
+                        task::spawn(|| "purify", async move {
                             let result = purify_fut.await.map_err(|e| e.into());
                             internal_cmd_tx
                                 .send(Message::StatementReady(StatementReady {
@@ -1549,7 +1549,7 @@ where
                 .write_handle
                 .allow_compaction(&table_since_updates);
             let _ = task::spawn(
-                "compaction <insert some details about what we are compacting here>",
+                || "compaction <insert some details about what we are compacting here>",
                 async move {
                     if let Err(err) = compaction_fut.await {
                         // TODO: Do something smarter here
@@ -2018,7 +2018,9 @@ where
                 match self.sequence_execute(&mut session, plan) {
                     Ok(portal_name) => {
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
-                        task::spawn(&format!("execute:{portal_name}"), async move {
+                        // TODO(guswynn): see if we can avoid this formatting
+                        let task_name = format!("execute:{portal_name}");
+                        task::spawn(|| task_name, async move {
                             internal_cmd_tx
                                 .send(Message::Command(Command::Execute {
                                     portal_name,
@@ -2477,7 +2479,7 @@ where
         // main coordinator thread when the future completes.
         let connector_builder = sink.connector_builder;
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        task::spawn("sink_connector_ready", async move {
+        task::spawn(|| "sink_connector_ready", async move {
             internal_cmd_tx
                 .send(Message::SinkConnectorReady(SinkConnectorReady {
                     session,
@@ -2850,7 +2852,7 @@ where
 
         // We can now wait for responses or errors and do any session/transaction
         // finalization in a separate task.
-        task::spawn("sequence_end_transaction", async move {
+        task::spawn(|| "sequence_end_transaction", async move {
             let result = match rx {
                 // If we have more work to do, do it
                 Ok(fut) => fut.await,
@@ -3863,7 +3865,7 @@ where
         };
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        task::spawn("sequence_copy_rows", async move {
+        task::spawn(|| "sequence_copy_rows", async move {
             let arena = RowArena::new();
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows(batch) => match batch.await {
@@ -4089,7 +4091,7 @@ where
         // did (and how the code previously worked), mz has already dropped it from our
         // catalog, and so we wouldn't be able to retry anyway.
         if !replication_slots_to_drop.is_empty() {
-            task::spawn("drop_replication_slots", async move {
+            task::spawn(|| "drop_replication_slots", async move {
                 for (conn, slot_names) in replication_slots_to_drop {
                     // Try to drop the replication slots, but give up after a while.
                     let _ = Retry::default()
@@ -4146,7 +4148,7 @@ where
                 // but only if we synchronously wait for the (fast) registration
                 // of that work to return.
                 let write_fut = persist.write_handle.write(&updates);
-                let _ = task::spawn("write_fut", write_fut);
+                let _ = task::spawn(|| "write_fut", write_fut);
             } else {
                 self.dataflow_client.table_insert(id, updates).await
             }
@@ -4505,7 +4507,7 @@ where
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let write_lock = Arc::clone(&self.write_lock);
-        task::spawn("defer_write", async move {
+        task::spawn(|| "defer_write", async move {
             let guard = write_lock.lock_owned().await;
             internal_cmd_tx
                 .send(Message::WriteLockGrant(guard))

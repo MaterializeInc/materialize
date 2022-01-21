@@ -106,7 +106,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let listener = TcpListener::bind(&args.listen_addr).await?;
 
-    task::spawn("pgwire_server", {
+    task::spawn(|| "pgwire_server", {
         let pgwire_server = pgwire::Server::new(pgwire::Config {
             tls: None,
             coord_client: coord_client.clone(),
