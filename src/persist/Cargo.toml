@@ -39,7 +39,7 @@ tracing = "0.1.29"
 md-5 = "0.10.0"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 ore = { path = "../ore", default-features = false, features = ["metrics"] }
-parquet2 = { version = "0.8.1", default-features = false }
+parquet2 = { version = "0.9.0", default-features = false }
 persist-types = { path = "../persist-types" }
 prost = "0.9.0"
 semver = { version = "1.0.4" }
