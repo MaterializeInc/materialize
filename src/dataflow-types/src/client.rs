@@ -13,6 +13,8 @@
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
+use enum_iterator::IntoEnumIterator;
+use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
@@ -36,7 +38,12 @@ pub enum Command {
 }
 
 /// Commands related to the computation and maintenance of views.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
+#[enum_kind(
+    ComputeCommandKind,
+    derive(IntoEnumIterator),
+    doc = "The kind of compute command that was received"
+)]
 pub enum ComputeCommand {
     /// Create a sequence of dataflows.
     ///
@@ -96,8 +103,30 @@ pub enum ComputeCommand {
     EnableLogging(LoggingConfig),
 }
 
+impl ComputeCommandKind {
+    /// Returns the name of this kind of command.
+    ///
+    /// Must remain unique over all variants of `Command`.
+    pub fn metric_name(&self) -> &'static str {
+        match self {
+            ComputeCommandKind::AllowCompaction => "allow_compaction",
+            ComputeCommandKind::CancelPeek => "cancel_peek",
+            ComputeCommandKind::CreateDataflows => "create_dataflows",
+            ComputeCommandKind::DropIndexes => "drop_indexes",
+            ComputeCommandKind::DropSinks => "drop_sinks",
+            ComputeCommandKind::EnableLogging => "enable_logging",
+            ComputeCommandKind::Peek => "peek",
+        }
+    }
+}
+
 /// Commands related to the ingress and egress of collections.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
+#[enum_kind(
+    StorageCommandKind,
+    derive(IntoEnumIterator),
+    doc = "the kind of storage command that was received"
+)]
 pub enum StorageCommand {
     /// Drop the tables bound to these names.
     DropTables(Vec<GlobalId>),
@@ -147,6 +176,24 @@ pub enum StorageCommand {
     // client.
     #[serde(skip)]
     EnablePersistence(RuntimeClient),
+}
+
+impl StorageCommandKind {
+    /// Returns the same of this kind of command.
+    ///
+    /// Must remain unique over all variants of `Command`.
+    pub fn metric_name(&self) -> &'static str {
+        match self {
+            StorageCommandKind::AddSourceTimestamping => "add_source_timestamping",
+            StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
+            StorageCommandKind::AdvanceSourceTimestamp => "advance_source_timestamp",
+            StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
+            StorageCommandKind::DropTables => "drop_tables",
+            StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
+            StorageCommandKind::EnablePersistence => "enable_persistence",
+            StorageCommandKind::Insert => "insert",
+        }
+    }
 }
 
 impl Command {
@@ -256,35 +303,13 @@ impl Command {
             }
         }
     }
-
-    /// A string used by metrics to track occurrences of commands. Must be unique.
+    /// Returns the same of this kind of command.
+    ///
+    /// Must remain unique over all variants of `Command`.
     pub fn metric_name(&self) -> &'static str {
         match self {
-            Command::Compute(ComputeCommand::AllowCompaction(..)) => "allow_compaction",
-            Command::Compute(ComputeCommand::CancelPeek { .. }) => "cancel_peek",
-            Command::Compute(ComputeCommand::CreateDataflows(..)) => "create_dataflows",
-            Command::Compute(ComputeCommand::DropIndexes(..)) => "drop_indexes",
-            Command::Compute(ComputeCommand::DropSinks(..)) => "drop_sinks",
-            Command::Compute(ComputeCommand::EnableLogging(..)) => "enable_logging",
-            Command::Compute(ComputeCommand::Peek { .. }) => "peek",
-            Command::Storage(StorageCommand::AddSourceTimestamping { .. }) => {
-                "add_source_timestamping"
-            }
-            Command::Storage(StorageCommand::AdvanceAllLocalInputs { .. }) => {
-                "advance_all_local_inputs"
-            }
-            Command::Storage(StorageCommand::AdvanceSourceTimestamp { .. }) => {
-                "advance_source_timestamp"
-            }
-            Command::Storage(StorageCommand::DropSourceTimestamping { .. }) => {
-                "drop_source_timestamping"
-            }
-            Command::Storage(StorageCommand::DropTables(..)) => "drop_tables",
-            Command::Storage(StorageCommand::DurabilityFrontierUpdates(..)) => {
-                "durability_frontier_updates"
-            }
-            Command::Storage(StorageCommand::EnablePersistence(..)) => "enable_persistence",
-            Command::Storage(StorageCommand::Insert { .. }) => "insert",
+            Command::Compute(command) => ComputeCommandKind::from(command).metric_name(),
+            Command::Storage(command) => StorageCommandKind::from(command).metric_name(),
         }
     }
 }

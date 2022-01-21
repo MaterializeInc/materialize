@@ -19,7 +19,8 @@ use ore::{
 };
 
 use super::PendingPeek;
-use dataflow_types::client::Command;
+use dataflow_types::client::{Command, ComputeCommandKind, StorageCommandKind};
+use enum_iterator::IntoEnumIterator;
 use prometheus::core::AtomicI64;
 
 #[derive(Clone)]
@@ -105,19 +106,26 @@ impl WorkerMetrics {
 /// Count of how many metrics we have processed for a given command type
 #[derive(Debug)]
 struct CommandsProcessedMetrics {
-    worker: String,
-    commands_processed_metric: IntCounterVec,
     cache: HashMap<&'static str, i64>,
     counters: HashMap<&'static str, DeleteOnDropCounter<'static, AtomicI64, Vec<String>>>,
 }
 
 impl CommandsProcessedMetrics {
     fn new(worker: &str, commands_processed_metric: &IntCounterVec) -> CommandsProcessedMetrics {
+        let compute_names = ComputeCommandKind::into_enum_iter().map(|kind| kind.metric_name());
+        let storage_names = StorageCommandKind::into_enum_iter().map(|kind| kind.metric_name());
+        let names = compute_names.chain(storage_names);
         CommandsProcessedMetrics {
-            worker: worker.to_string(),
-            commands_processed_metric: commands_processed_metric.clone(),
-            cache: HashMap::new(),
-            counters: HashMap::new(),
+            cache: names.clone().map(|name| (name, 0)).collect(),
+            counters: names
+                .map(|name| {
+                    (
+                        name,
+                        commands_processed_metric
+                            .get_delete_on_drop_counter(vec![worker.to_string(), name.to_string()]),
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -128,13 +136,7 @@ impl CommandsProcessedMetrics {
 
     fn finish(&mut self) {
         for (key, count) in self.cache.drain() {
-            self.counters
-                .entry(key)
-                .or_insert_with(|| {
-                    self.commands_processed_metric
-                        .get_delete_on_drop_counter(vec![self.worker.clone(), key.to_string()])
-                })
-                .inc_by(count);
+            self.counters[key].inc_by(count);
         }
     }
 }
