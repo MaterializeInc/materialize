@@ -87,8 +87,8 @@ lazy_static! {
 ///   * Union schemas are only used to represent nullability. The first
 ///     variant is always the null variant, and the second and last variant
 ///     is the non-null variant.
-fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
-    let row_schema = build_row_schema_json(&columns, "envelope");
+fn build_schema(columns: &[(ColumnName, ColumnType)], class_name: Option<&str>) -> Schema {
+    let row_schema = build_row_schema_json(&columns, class_name.unwrap_or("envelope"));
     Schema::parse(&row_schema).expect("valid schema constructed")
 }
 
@@ -130,6 +130,8 @@ pub struct AvroSchemaGenerator {
 
 impl AvroSchemaGenerator {
     pub fn new(
+        key_fullname: Option<&str>,
+        value_fullname: Option<&str>,
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
         include_transaction: bool,
@@ -159,10 +161,10 @@ impl AvroSchemaGenerator {
                 },
             ));
         }
-        let writer_schema = build_schema(&value_columns);
+        let writer_schema = build_schema(&value_columns, value_fullname);
         let key_info = key_desc.map(|key_desc| {
             let columns = column_names_and_types(key_desc);
-            let row_schema = build_row_schema_json(&columns, "row");
+            let row_schema = build_row_schema_json(&columns, key_fullname.unwrap_or("row"));
             KeyInfo {
                 schema: Schema::parse(&row_schema).expect("valid schema constructed"),
                 columns,
