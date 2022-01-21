@@ -75,7 +75,7 @@ class Docker(Executor):
                 "testdrive-svc",
                 "--no-reset",
                 f"--seed={self._seed}",
-                "--initial-backoff=0ms",
+                "--initial-backoff=10ms",
                 "--backoff-factor=0",
                 f"tmp/{basename}",
                 capture=True,
