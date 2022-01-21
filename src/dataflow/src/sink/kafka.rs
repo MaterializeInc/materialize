@@ -910,7 +910,10 @@ where
                 ($expr:expr) => {
                     match $expr {
                         Ok(val) => val,
-                        Err(_) => return true,
+                        Err(_) => {
+                            s.activator.activate();
+                            return true;
+                        }
                     }
                 };
             }
