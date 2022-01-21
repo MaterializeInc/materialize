@@ -3978,7 +3978,7 @@ dependencies = [
 [[package]]
 name = "prost"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/prost.git#6dd498282d0c7ade8f82f2a0163587dae259ae38"
+source = "git+https://github.com/MaterializeInc/prost.git#60a377c72d8025bd185f49842d1ff3dec1d4c466"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -3987,7 +3987,7 @@ dependencies = [
 [[package]]
 name = "prost-build"
 version = "0.9.1"
-source = "git+https://github.com/MaterializeInc/prost.git#6dd498282d0c7ade8f82f2a0163587dae259ae38"
+source = "git+https://github.com/MaterializeInc/prost.git#60a377c72d8025bd185f49842d1ff3dec1d4c466"
 dependencies = [
  "bytes",
  "heck",
@@ -4007,7 +4007,7 @@ dependencies = [
 [[package]]
 name = "prost-derive"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/prost.git#6dd498282d0c7ade8f82f2a0163587dae259ae38"
+source = "git+https://github.com/MaterializeInc/prost.git#60a377c72d8025bd185f49842d1ff3dec1d4c466"
 dependencies = [
  "anyhow",
  "itertools",
@@ -4033,7 +4033,7 @@ dependencies = [
 [[package]]
 name = "prost-types"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/prost.git#6dd498282d0c7ade8f82f2a0163587dae259ae38"
+source = "git+https://github.com/MaterializeInc/prost.git#60a377c72d8025bd185f49842d1ff3dec1d4c466"
 dependencies = [
  "bytes",
  "prost",
