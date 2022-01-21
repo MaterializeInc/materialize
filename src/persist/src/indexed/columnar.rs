@@ -13,7 +13,7 @@
 use std::iter::FromIterator;
 use std::{cmp, fmt};
 
-use arrow2::buffer::{Buffer, MutableBuffer};
+use arrow2::buffer::Buffer;
 use arrow2::types::Index;
 use ore::cast::CastFrom;
 
@@ -341,12 +341,12 @@ impl<'a> ExactSizeIterator for ColumnarRecordsIter<'a> {}
 /// in a columnar representation, and eventually get back a [ColumnarRecords].
 pub struct ColumnarRecordsBuilder {
     len: usize,
-    key_data: MutableBuffer<u8>,
-    key_offsets: MutableBuffer<i32>,
-    val_data: MutableBuffer<u8>,
-    val_offsets: MutableBuffer<i32>,
-    timestamps: MutableBuffer<u64>,
-    diffs: MutableBuffer<i64>,
+    key_data: Vec<u8>,
+    key_offsets: Vec<i32>,
+    val_data: Vec<u8>,
+    val_offsets: Vec<i32>,
+    timestamps: Vec<u64>,
+    diffs: Vec<i64>,
 }
 
 impl fmt::Debug for ColumnarRecordsBuilder {
@@ -359,12 +359,12 @@ impl Default for ColumnarRecordsBuilder {
     fn default() -> Self {
         let mut ret = ColumnarRecordsBuilder {
             len: 0,
-            key_data: MutableBuffer::new(),
-            key_offsets: MutableBuffer::new(),
-            val_data: MutableBuffer::new(),
-            val_offsets: MutableBuffer::new(),
-            timestamps: MutableBuffer::new(),
-            diffs: MutableBuffer::new(),
+            key_data: Vec::new(),
+            key_offsets: Vec::new(),
+            val_data: Vec::new(),
+            val_offsets: Vec::new(),
+            timestamps: Vec::new(),
+            diffs: Vec::new(),
         };
         // Push initial 0 offsets to maintain our invariants, even as we build.
         ret.key_offsets.push(0);

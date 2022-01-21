@@ -168,13 +168,12 @@ fn encode_parquet_kvtd<W: Write>(
 fn decode_parquet_file_kvtd<R: Read + Seek>(r: &mut R) -> Result<Vec<ColumnarRecords>, Error> {
     let reader = RecordReader::try_new(r, None, None, None, None)?;
 
-    let file_schema = reader.schema().fields().as_slice();
+    let file_schema = reader.schema().fields.as_slice();
     // We're not trying to accept any sort of user created data, so be strict.
-    if file_schema != SCHEMA_ARROW_KVTD.fields() {
+    if file_schema != SCHEMA_ARROW_KVTD.fields {
         return Err(format!(
             "expected arrow schema {:?} got: {:?}",
-            SCHEMA_ARROW_KVTD.fields(),
-            file_schema
+            SCHEMA_ARROW_KVTD.fields, file_schema
         )
         .into());
     }
