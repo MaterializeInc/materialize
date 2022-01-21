@@ -35,7 +35,6 @@ members = [
     "src/pid-file",
     "src/postgres-util",
     "src/prof",
-    "src/protoc",
     "src/repr-test-util",
     "src/repr",
     "src/s3-datagen",

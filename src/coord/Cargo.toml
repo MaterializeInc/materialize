@@ -29,14 +29,13 @@ log = "0.4.13"
 tracing = "0.1.29"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util" }
-mz-protoc = { path = "../protoc" }
 ore = { path = "../ore" }
 persist = { path = "../persist" }
 pgrepr = { path = "../pgrepr" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
+protobuf-native = "0.2.1"
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"

@@ -36,7 +36,7 @@ Decode error: Text: protobuf deserialization error: failed to decode Protobuf me
 
 $ kafka-create-topic topic=wrong-message
 
-$ kafka-ingest topic=wrong-message format=protobuf descriptor-file=simple.pb message=.OneInt
+$ kafka-ingest topic=wrong-message format=protobuf descriptor-file=simple.pb message=OneInt
 {"f": 1}
 
 > CREATE MATERIALIZED SOURCE wrong_message FROM

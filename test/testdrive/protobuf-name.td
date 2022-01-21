@@ -22,7 +22,7 @@ $ protobuf-compile-descriptors inputs=name.proto output=name.pb
 
 $ kafka-create-topic topic=name partitions=1
 
-$ kafka-ingest topic=name format=protobuf descriptor-file=name.pb message=.some.where.Name
+$ kafka-ingest topic=name format=protobuf descriptor-file=name.pb message=some.where.Name
 {"i": 42}
 
 # Ingesting with the fully-qualified absolute path should work.
@@ -47,7 +47,7 @@ i   mz_offset
 ! CREATE MATERIALIZED SOURCE absolute_path FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-name-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE 'Name' USING SCHEMA FILE '${testdrive.temp-dir}/name.pb'
-protobuf message ".Name" not found in file descriptor set
+protobuf message "Name" not found in file descriptor set
 ! CREATE MATERIALIZED SOURCE absolute_path FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-name-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Name' USING SCHEMA FILE '${testdrive.temp-dir}/name.pb'

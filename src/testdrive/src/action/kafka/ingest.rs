@@ -180,14 +180,12 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         },
         "protobuf" => {
             let descriptor_file = cmd.args.string("descriptor-file")?;
-            // This was introduced after the avro format's confluent-wire-format, so it defaults to
-            // false
             let message = cmd.args.string("message")?;
-            validate_protobuf_message_name(&message)?;
-
             Format::Protobuf {
                 descriptor_file,
                 message,
+                // This was introduced after the avro format's confluent-wire-format, so it defaults to
+                // false
                 confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
                 schema_id_subject: cmd.args.opt_string("schema-id-subject"),
                 schema_message_id: cmd.args.opt_parse::<u8>("schema-message-id")?.unwrap_or(0),
@@ -204,7 +202,6 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         Some("protobuf") => {
             let descriptor_file = cmd.args.string("key-descriptor-file")?;
             let message = cmd.args.string("key-message")?;
-            validate_protobuf_message_name(&message)?;
             Some(Format::Protobuf {
                 descriptor_file,
                 message,
@@ -247,16 +244,6 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         start_iteration,
         repeat,
     })
-}
-
-fn validate_protobuf_message_name(message: &str) -> Result<(), String> {
-    if !message.starts_with('.') {
-        return Err(format!(
-            "protobuf message name must start with a dot: {}",
-            message
-        ));
-    }
-    Ok(())
 }
 
 #[async_trait]

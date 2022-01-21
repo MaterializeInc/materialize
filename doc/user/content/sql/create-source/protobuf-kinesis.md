@@ -44,7 +44,7 @@ FROM KINESIS ARN ... WITH (
     access_key_id = ...,
     secret_access_key = ...
 )
-FORMAT PROTOBUF MESSAGE '.billing.Batch'
+FORMAT PROTOBUF MESSAGE 'billing.Batch'
   USING SCHEMA FILE '[path to schema]';
 ```
 

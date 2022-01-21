@@ -44,7 +44,7 @@ $ protobuf-compile-descriptors inputs=basic.proto output=basic.pb
 
 $ kafka-create-topic topic=basic partitions=1
 
-$ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=.Basic
+$ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=Basic
 {"bool": true, "int32": 1, "int64": 2, "float": 1.2, "double": 3.2, "bytes": "YWFh", "string": "bbb", "enum": "ENUM1", "message": {"bool": true, "int32": 1, "int64": 2, "float": 1.2, "double": 3.2, "bytes": "YWFh", "string": "bbb", "enum": "ENUM1"}}
 {}
 # Test the case where the nested message is explicitly set to all default

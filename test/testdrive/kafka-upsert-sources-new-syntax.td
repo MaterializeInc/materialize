@@ -191,7 +191,7 @@ $ kafka-create-topic topic=textproto
   ENVELOPE UPSERT
 
 $ kafka-ingest topic=textproto
-  format=protobuf descriptor-file=test.pb message=.Test
+  format=protobuf descriptor-file=test.pb message=Test
   key-format=bytes key-terminator=:
 fish:{"f": "one"}
 bìrd1:{"f": "two"}
@@ -208,7 +208,7 @@ bìrd1     two  2
 birdmore  ""   3
 
 $ kafka-ingest topic=textproto
-  format=protobuf descriptor-file=test.pb message=.Test
+  format=protobuf descriptor-file=test.pb message=Test
   key-format=bytes key-terminator=:
 mammal1: {"f": "three"}
 bìrd1:

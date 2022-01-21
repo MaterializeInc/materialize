@@ -8,8 +8,7 @@
 // by the Apache License, Version 2.0.
 
 fn main() {
-    mz_protoc::Protoc::new()
-        .include("testdata")
-        .input("testdata/benchmark.proto")
-        .build_script_exec();
+    prost_build::Config::new()
+        .compile_protos(&["benchmark.proto"], &["testdata"])
+        .unwrap();
 }

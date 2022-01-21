@@ -20,7 +20,7 @@ $ protobuf-compile-descriptors inputs=required.proto output=required.pb
 
 $ kafka-create-topic topic=required partitions=1
 
-$ kafka-ingest topic=required format=protobuf descriptor-file=required.pb message=.Required
+$ kafka-ingest topic=required format=protobuf descriptor-file=required.pb message=Required
 {"f": 42}
 
 > CREATE MATERIALIZED SOURCE required FROM
@@ -32,7 +32,7 @@ f   mz_offset
 -------------
 42  1
 
-$ kafka-ingest topic=required format=protobuf descriptor-file=required.pb message=.Required
+$ kafka-ingest topic=required format=protobuf descriptor-file=required.pb message=Required
 {}
 
 ! SELECT * FROM required

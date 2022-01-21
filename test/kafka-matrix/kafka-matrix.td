@@ -42,7 +42,7 @@ $ kafka-create-topic topic=input_proto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_proto-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Input' USING SCHEMA FILE '${testdrive.temp-dir}/input.pb'
 
-$ kafka-ingest format=protobuf topic=input_proto message=.Input descriptor-file=input.pb timestamp=1
+$ kafka-ingest format=protobuf topic=input_proto message=Input descriptor-file=input.pb timestamp=1
 {"field": "a"}
 {"field": "b"}
 

@@ -32,7 +32,7 @@ $ protobuf-compile-descriptors inputs=defaults.proto output=defaults.pb
 
 $ kafka-create-topic topic=defaults partitions=1
 
-$ kafka-ingest topic=defaults format=protobuf descriptor-file=defaults.pb message=.Defaults
+$ kafka-ingest topic=defaults format=protobuf descriptor-file=defaults.pb message=Defaults
 {}
 
 > CREATE MATERIALIZED SOURCE defaults FROM
