@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use futures::StreamExt;
+use futures::{StreamExt, TryFutureExt};
 use interchange::json::JsonEncoder;
 use itertools::Itertools;
 use ore::collections::CollectionExt;
@@ -265,42 +265,37 @@ struct KafkaTxProducer {
 }
 
 impl KafkaTxProducer {
-    async fn init_transactions(&self) -> KafkaResult<()> {
+    fn init_transactions(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
         task::spawn_blocking(move || self_producer.init_transactions(self_timeout))
-            .await
-            .unwrap_or(Err(KafkaError::Canceled))
+            .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
-    async fn begin_transaction(&self) -> KafkaResult<()> {
+    fn begin_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         task::spawn_blocking(move || self_producer.begin_transaction())
-            .await
-            .unwrap_or(Err(KafkaError::Canceled))
+            .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
-    async fn commit_transaction(&self) -> KafkaResult<()> {
+    fn commit_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
         task::spawn_blocking(move || self_producer.commit_transaction(self_timeout))
-            .await
-            .unwrap_or(Err(KafkaError::Canceled))
+            .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
-    async fn abort_transaction(&self) -> KafkaResult<()> {
+    fn abort_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
         task::spawn_blocking(move || self_producer.abort_transaction(self_timeout))
-            .await
-            .unwrap_or(Err(KafkaError::Canceled))
+            .unwrap_or_else(|_| Err(KafkaError::Canceled))
     }
 
-    async fn flush(&self) -> KafkaResult<()> {
+    fn flush(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
         task::spawn_blocking(move || self_producer.flush(self_timeout))
-            .await
             .map_err(|_| KafkaError::Canceled)
     }
 
@@ -910,14 +905,12 @@ where
                 s.ready_rows.push_back((ts, rows));
             });
 
-            // Can't use `?` when the return type is a `bool` so wrap up all the tx error handling
-            macro_rules! retry_txn_with_error {
-                (|$s:ident, $producer:ident| $body:block) => {
-                    if let Err(_error) = $s
-                        .retry_on_txn_error(|$producer| async move { $body })
-                        .await
-                    {
-                        return true;
+            // Can't use `?` when the return type is a `bool` so use a custom try operator
+            macro_rules! bail_err {
+                ($expr:expr) => {
+                    match $expr {
+                        Ok(val) => val,
+                        Err(_) => return true,
                     }
                 };
             }
@@ -933,7 +926,7 @@ where
                 && s.ready_rows.front().is_some()
             {
                 if s.transactional {
-                    retry_txn_with_error!(|s, producer| { producer.init_transactions().await });
+                    bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
                 }
                 s.send_state = SendState::Running;
             }
@@ -942,15 +935,13 @@ where
                 assert!(is_active_worker);
 
                 if s.transactional {
-                    retry_txn_with_error!(|s, producer| { producer.begin_transaction().await });
+                    bail_err!(s.retry_on_txn_error(|p| p.begin_transaction()).await);
                 }
                 if s.consistency.is_some() {
-                    if let Err(_) = s
-                        .send_consistency_record(&ts.to_string(), "BEGIN", None)
-                        .await
-                    {
-                        return true;
-                    }
+                    bail_err!(
+                        s.send_consistency_record(&ts.to_string(), "BEGIN", None)
+                            .await
+                    );
                 }
 
                 let mut repeat_counter = 0;
@@ -969,9 +960,7 @@ where
                     };
 
                     // Only fatal errors are returned from send
-                    if let Err(_) = s.send(record).await {
-                        return true;
-                    }
+                    bail_err!(s.send(record).await);
 
                     // advance to the next repetition of this row, or the next row if all
                     // reptitions are exhausted
@@ -984,18 +973,16 @@ where
                 }
 
                 if s.consistency.is_some() {
-                    if let Err(_) = s
-                        .send_consistency_record(&ts.to_string(), "END", Some(total_sent))
-                        .await
-                    {
-                        return true;
-                    }
+                    bail_err!(
+                        s.send_consistency_record(&ts.to_string(), "END", Some(total_sent))
+                            .await
+                    );
                 }
                 if s.transactional {
-                    retry_txn_with_error!(|s, producer| { producer.commit_transaction().await });
+                    bail_err!(s.retry_on_txn_error(|p| p.commit_transaction()).await);
                 };
 
-                retry_txn_with_error!(|s, producer| { producer.flush().await });
+                bail_err!(s.retry_on_txn_error(|p| p.flush()).await);
 
                 // sanity check for the continuous updating
                 // of the write frontier below
