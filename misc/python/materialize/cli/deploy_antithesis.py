@@ -25,8 +25,9 @@ REGISTRY = "us-central1-docker.pkg.dev/molten-verve-216720/materialize-repositor
 def main() -> None:
     root = Path(os.environ["MZ_ROOT"])
     repo = mzbuild.Repository(root)
-    deps = repo.resolve_dependencies([repo.images[name] for name in IMAGES])
-    deps.acquire()
+    deps = repo.resolve_dependencies(
+        [repo.images[name] for name in IMAGES], acquire=True
+    )
     for mzimage in IMAGES:
         spawn.runv(["docker", "tag", deps[mzimage].spec(), f"{REGISTRY}/{mzimage}"])
         spawn.runv(["docker", "push", f"{REGISTRY}/{mzimage}"])

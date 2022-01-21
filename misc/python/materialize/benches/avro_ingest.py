@@ -96,8 +96,9 @@ def main() -> None:
     wait_for_confluent(args.confluent_host)
 
     images = ["kgen", "materialized"]
-    deps = repo.resolve_dependencies([repo.images[name] for name in images])
-    deps.acquire()
+    deps = repo.resolve_dependencies(
+        [repo.images[name] for name in images], acquire=True
+    )
 
     docker_client = docker.from_env()
 

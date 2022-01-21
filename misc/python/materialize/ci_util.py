@@ -20,8 +20,7 @@ def acquire_materialized(repo: mzbuild.Repository, out: Path) -> None:
     This avoids an expensive rebuild if a Docker image is available from Docker
     Hub.
     """
-    deps = repo.resolve_dependencies([repo.images["materialized"]])
-    deps.acquire()
+    deps = repo.resolve_dependencies([repo.images["materialized"]], acquire=True)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "wb") as f:
         spawn.runv(

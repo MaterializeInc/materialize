@@ -805,13 +805,17 @@ class Repository:
         """The path to the root directory for the repository."""
         return self.rd.root
 
-    def resolve_dependencies(self, targets: Iterable[Image]) -> DependencySet:
+    def resolve_dependencies(
+        self, targets: Iterable[Image], acquire: bool = False
+    ) -> DependencySet:
         """Compute the dependency set necessary to build target images.
 
         The dependencies of `targets` will be crawled recursively until the
         complete set of transitive dependencies is determined or a circular
         dependency is discovered. The returned dependency set will be sorted
         in topological order.
+
+        The dependencies will also be acquired if `acquire` is set.
 
         Raises:
            ValueError: A circular dependency was discovered in the images
@@ -835,7 +839,11 @@ class Repository:
         for target in sorted(targets, key=lambda image: image.name):
             visit(target)
 
-        return DependencySet(resolved.values())
+        deps = DependencySet(resolved.values())
+        if acquire:
+            deps.acquire()
+
+        return deps
 
     def __iter__(self) -> Iterator[Image]:
         return iter(self.images.values())

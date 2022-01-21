@@ -342,8 +342,9 @@ class SqlCommand(Command):
         # if the service isn't running or isn't exposing a port.
         composition.default_port(args.service)
 
-        deps = composition.repo.resolve_dependencies([composition.repo.images["psql"]])
-        deps.acquire()
+        deps = composition.repo.resolve_dependencies(
+            [composition.repo.images["psql"]], acquire=True
+        )
         deps["psql"].run(
             [
                 "-h",

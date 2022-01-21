@@ -240,7 +240,9 @@ class Composition:
         os.set_inheritable(self.file.fileno(), True)
         self._write_compose()
 
-    def _munge_services(self, services: List[Tuple[str, dict]]) -> List[mzbuild.Image]:
+    def _munge_services(
+        self, services: List[Tuple[str, dict]], acquire: bool = False
+    ) -> List[mzbuild.Image]:
         images = []
 
         for name, config in services:
@@ -280,7 +282,7 @@ class Composition:
                 config.setdefault("volumes", []).append("./coverage:/coverage")
 
         # Determine mzbuild specs and inject them into services accordingly.
-        deps = self.repo.resolve_dependencies(images)
+        deps = self.repo.resolve_dependencies(images, acquire)
         for _name, config in services:
             if "mzbuild" in config:
                 config["image"] = deps[config["mzbuild"]].spec()
@@ -413,8 +415,11 @@ class Composition:
         # Remember the old composition.
         old_compose = copy.deepcopy(self.compose)
 
-        # Update the composition with the new service definitions.
-        self._munge_services([(s.name, cast(dict, s.config)) for s in services])
+        # Update the composition with the new service definitions and
+        # acquire (pull or build) the new images if needed
+        self._munge_services(
+            [(s.name, cast(dict, s.config)) for s in services], acquire=True
+        )
         for service in services:
             if service.name not in self.compose["services"]:
                 raise RuntimeError(
