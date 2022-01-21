@@ -101,7 +101,8 @@ i  mz_offset
 # Expect that ingesting an incompatible message will brick the topic. We have to
 # explicitly disable the schema registry's protection against this.
 
-$ http-request method=PUT url=${testdrive.schema-registry-url}config/testdrive-evolution-${testdrive.seed}-value
+$ http-request method=PUT content-type=application/json
+  url=${testdrive.schema-registry-url}config/testdrive-evolution-${testdrive.seed}-value
 {"compatibility": "NONE"}
 
 $ set schema
