@@ -173,7 +173,6 @@ pub struct SinkMetrics {
     message_send_errors_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
     message_delivery_errors_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
     rows_queued: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    messages_in_flight: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SinkMetrics {
@@ -198,8 +197,7 @@ impl SinkMetrics {
             message_delivery_errors_counter: base
                 .message_delivery_errors_counter
                 .get_delete_on_drop_counter(labels.clone()),
-            rows_queued: base.rows_queued.get_delete_on_drop_gauge(labels.clone()),
-            messages_in_flight: base.messages_in_flight.get_delete_on_drop_gauge(labels),
+            rows_queued: base.rows_queued.get_delete_on_drop_gauge(labels),
         }
     }
 }
@@ -297,11 +295,6 @@ impl KafkaTxProducer {
         let self_timeout = self.timeout;
         task::spawn_blocking(move || self_producer.flush(self_timeout))
             .unwrap_or_else(|_| Err(KafkaError::Canceled))
-    }
-
-    fn in_flight_count(&self) -> i32 {
-        // non-blocking call
-        self.inner.in_flight_count()
     }
 
     fn send<'a, K, P>(
@@ -1021,24 +1014,15 @@ where
                 }
             }
 
+            // Make sure that everything is flushed (e.g. from `maybe_emit_progress`) before returning
+            bail_err!(s.retry_on_txn_error(|p| p.flush()).await);
+            debug_assert_eq!(s.producer.inner.in_flight_count(), 0);
+
             if !s.pending_rows.is_empty() {
                 // We have some more rows that we need to wait for frontiers to advance before we
                 // can write them out. Let's make sure to reschedule with a small delay to give the
                 // system time to advance.
                 s.activator.activate_after(Duration::from_millis(100));
-                return true;
-            }
-
-            // N.B. Given the `flush` call above, I don't think we should ever end up in this
-            // situation but let's keep the metrics / logging here so we can verify this in real
-            // world use cases.
-            let in_flight = s.producer.in_flight_count();
-            s.metrics.messages_in_flight.set(in_flight as u64);
-            if in_flight > 0 {
-                // We still have messages that need to be flushed out to Kafka
-                // Let's make sure to keep the sink operator around until
-                // we flush them out
-                s.activator.activate_after(Duration::from_secs(5));
                 return true;
             }
 
