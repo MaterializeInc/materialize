@@ -30,7 +30,7 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 {{</ linkbox >}}
 {{< linkbox icon="doc" title="Guides" >}}
 - [Materialize &amp; Postgres CDC](/guides/cdc-postgres/)
-- [Exactly-Once Sinks](/guides/reuse-topic-for-kafka-sink)
+- [dbt &amp; Materialize](/guides/dbt/)
 - [Materialize &amp; Node.js](/guides/node-js/)
 - [Time-windowed computation](/guides/temporal-filters/)
 {{</ linkbox >}}

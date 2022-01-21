@@ -62,8 +62,8 @@ Field                | Value type | Description
 ---------------------|------------|------------
 `partition_count`    | `int`      | Set the sink Kafka topic's partition count. This defaults to -1 (use the broker default).
 `replication_factor` | `int`      | Set the sink Kafka topic's replication factor. This defaults to -1 (use the broker default).
-`reuse_topic`        | `bool`     | Use the existing Kafka topic after Materialize restarts, instead of creating a new one. The default is false. See [Enabling topic reuse after restart](/sql/create-sink/#enabling-topic-reuse-after-restart-exactly-once-sinks) for details.
-`consistency_topic`  | `text`     | This option is only available to support backwards-compatibility. Please use the new [`CONSISTENCY` syntax](https://materialize.com/docs/sql/create-sink/#sink_kafka_connector) to define a consistency topic for the sink.
+`reuse_topic`        | `bool`     | Use the existing Kafka topic after Materialize restarts, instead of creating a new one. The default is false. See [Enabling topic reuse after restart](/sql/create-sink/#exactly-once-sinks-with-topic-reuse-after-restart) for details.
+`consistency_topic`  | `text`     | This option is only available to support backwards-compatibility. Please use the new [`CONSISTENCY` syntax](/sql/create-sink/#sink_kafka_connector) to define a consistency topic for the sink.
 `security_protocol`  | `text`     | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberos-with-options), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
 `retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default.
@@ -126,7 +126,7 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
     - Avro-formatted sinks that write to either a topic or an Avro object container file.
     - JSON-formatted sinks that write to a topic.
 - For most sinks, Materialize creates new, distinct topics and files for each sink on restart.
-- A beta feature enables the use of the same topic after restart. For details, see [Enabling topic reuse after restart](#enabling-topic-reuse-after-restart-exactly-once-sinks).
+- A beta feature enables the use of the same topic after restart. For details, see [Enabling topic reuse after restart](#exactly-once-sinks-with-topic-reuse-after-restart).
 - Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
 - For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink.
 - Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction id information inline with the data, and adds a separate transaction metadata topic.
