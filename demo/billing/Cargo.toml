@@ -21,7 +21,7 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 prost = "0.9.0"
 prost-types = "0.9.0"
 rand = "0.8.4"
-rand_distr = "0.4.2"
+rand_distr = "0.4.3"
 test-util = { path = "../../test/test-util" }
 tokio = "1.15.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
