@@ -232,7 +232,8 @@ class Composition:
             }
         )
 
-        self.images = self._munge_services(compose["services"].items())
+        # The CLI driver will handle acquiring these dependencies.
+        self.dependencies = self._munge_services(compose["services"].items())
 
         # Emit the munged configuration to a temporary file so that we can later
         # pass it to Docker Compose.
@@ -240,7 +241,9 @@ class Composition:
         os.set_inheritable(self.file.fileno(), True)
         self._write_compose()
 
-    def _munge_services(self, services: List[Tuple[str, dict]]) -> List[mzbuild.Image]:
+    def _munge_services(
+        self, services: List[Tuple[str, dict]]
+    ) -> mzbuild.DependencySet:
         images = []
 
         for name, config in services:
@@ -286,7 +289,7 @@ class Composition:
                 config["image"] = deps[config["mzbuild"]].spec()
                 del config["mzbuild"]
 
-        return images
+        return deps
 
     def _write_compose(self) -> None:
         self.file.seek(0)
@@ -414,7 +417,7 @@ class Composition:
         old_compose = copy.deepcopy(self.compose)
 
         # Update the composition with the new service definitions.
-        self._munge_services([(s.name, cast(dict, s.config)) for s in services])
+        deps = self._munge_services([(s.name, cast(dict, s.config)) for s in services])
         for service in services:
             if service.name not in self.compose["services"]:
                 raise RuntimeError(
@@ -422,6 +425,11 @@ class Composition:
                     f"{service.name!r} does not exist"
                 )
             self.compose["services"][service.name] = service.config
+
+        # Re-acquire dependencies, as the override may have swapped an `image`
+        # config for an `mzbuild` config.
+        deps.acquire()
+
         self._write_compose()
 
         try:
