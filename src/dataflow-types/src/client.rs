@@ -15,7 +15,6 @@
 
 use enum_iterator::IntoEnumIterator;
 use enum_kinds::EnumKind;
-use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
@@ -30,15 +29,22 @@ use persist::client::RuntimeClient;
 use repr::{Row, Timestamp};
 
 /// Explicit instructions for timely dataflow workers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Command {
+    /// A compute command.
+    Compute(ComputeCommand),
+    /// A storage command.
+    Storage(StorageCommand),
+}
+
+/// Commands related to the computation and maintenance of views.
 #[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
 #[enum_kind(
-    CommandKind,
-    derive(Serialize, IntoPrimitive, IntoEnumIterator),
-    repr(usize),
-    serde(rename_all = "snake_case"),
-    doc = "The kind of command that was received"
+    ComputeCommandKind,
+    derive(IntoEnumIterator),
+    doc = "The kind of compute command that was received"
 )]
-pub enum Command {
+pub enum ComputeCommand {
     /// Create a sequence of dataflows.
     ///
     /// Each of the dataflows must contain `as_of` members that are valid
@@ -48,12 +54,11 @@ pub enum Command {
     /// the dataflow runners are responsible for ensuring that they can
     /// correctly maintain the dataflows.
     CreateDataflows(Vec<DataflowDescription<crate::plan::Plan>>),
-    /// Drop the sources bound to these names.
-    DropSources(Vec<GlobalId>),
     /// Drop the sinks bound to these names.
     DropSinks(Vec<GlobalId>),
     /// Drop the indexes bound to these namees.
     DropIndexes(Vec<GlobalId>),
+
     /// Peek at an arrangement.
     ///
     /// This request elicits data from the worker, by naming an
@@ -87,6 +92,45 @@ pub enum Command {
         /// The identifier of the peek request to cancel.
         conn_id: u32,
     },
+    /// Enable compaction in views.
+    ///
+    /// Each entry in the vector names a view and provides a frontier after which
+    /// accumulations must be correct. The workers gain the liberty of compacting
+    /// the corresponding maintained traces up through that frontier.
+    AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    /// Request that the logging sources in the contained configuration are
+    /// installed.
+    EnableLogging(LoggingConfig),
+}
+
+impl ComputeCommandKind {
+    /// Returns the name of this kind of command.
+    ///
+    /// Must remain unique over all variants of `Command`.
+    pub fn metric_name(&self) -> &'static str {
+        match self {
+            ComputeCommandKind::AllowCompaction => "allow_compaction",
+            ComputeCommandKind::CancelPeek => "cancel_peek",
+            ComputeCommandKind::CreateDataflows => "create_dataflows",
+            ComputeCommandKind::DropIndexes => "drop_indexes",
+            ComputeCommandKind::DropSinks => "drop_sinks",
+            ComputeCommandKind::EnableLogging => "enable_logging",
+            ComputeCommandKind::Peek => "peek",
+        }
+    }
+}
+
+/// Commands related to the ingress and egress of collections.
+#[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
+#[enum_kind(
+    StorageCommandKind,
+    derive(IntoEnumIterator),
+    doc = "the kind of storage command that was received"
+)]
+pub enum StorageCommand {
+    /// Drop the tables bound to these names.
+    DropTables(Vec<GlobalId>),
+
     /// Insert `updates` into the local input named `id`.
     Insert {
         /// Identifier of the local input.
@@ -94,12 +138,6 @@ pub enum Command {
         /// A list of updates to be introduced to the input.
         updates: Vec<Update>,
     },
-    /// Enable compaction in views.
-    ///
-    /// Each entry in the vector names a view and provides a frontier after which
-    /// accumulations must be correct. The workers gain the liberty of compacting
-    /// the corresponding maintained traces up through that frontier.
-    AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
     /// Update durability information for sources.
     ///
     /// Each entry names a source and provides a frontier before which the source can
@@ -132,15 +170,30 @@ pub enum Command {
         /// The timestamp to advance to.
         advance_to: Timestamp,
     },
-    /// Request that the logging sources in the contained configuration are
-    /// installed.
-    EnableLogging(LoggingConfig),
     /// Enable persistence.
     // TODO: to enable persistence in clustered mode, we'll need to figure out
     // an alternative design that doesn't require serializing a persistence
     // client.
     #[serde(skip)]
     EnablePersistence(RuntimeClient),
+}
+
+impl StorageCommandKind {
+    /// Returns the same of this kind of command.
+    ///
+    /// Must remain unique over all variants of `Command`.
+    pub fn metric_name(&self) -> &'static str {
+        match self {
+            StorageCommandKind::AddSourceTimestamping => "add_source_timestamping",
+            StorageCommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
+            StorageCommandKind::AdvanceSourceTimestamp => "advance_source_timestamp",
+            StorageCommandKind::DropSourceTimestamping => "drop_source_timestamping",
+            StorageCommandKind::DropTables => "drop_tables",
+            StorageCommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
+            StorageCommandKind::EnablePersistence => "enable_persistence",
+            StorageCommandKind::Insert => "insert",
+        }
+    }
 }
 
 impl Command {
@@ -156,7 +209,7 @@ impl Command {
             vec![self]
         } else {
             match self {
-                Command::CreateDataflows(dataflows) => {
+                Command::Compute(ComputeCommand::CreateDataflows(dataflows)) => {
                     let mut dataflows_parts = vec![Vec::new(); parts];
 
                     for dataflow in dataflows {
@@ -192,17 +245,17 @@ impl Command {
                     }
                     dataflows_parts
                         .into_iter()
-                        .map(Command::CreateDataflows)
+                        .map(|x| Command::Compute(ComputeCommand::CreateDataflows(x)))
                         .collect()
                 }
-                Command::Insert { id, updates } => {
+                Command::Storage(StorageCommand::Insert { id, updates }) => {
                     let mut updates_parts = vec![Vec::new(); parts];
                     for (index, update) in updates.into_iter().enumerate() {
                         updates_parts[index % parts].push(update);
                     }
                     updates_parts
                         .into_iter()
-                        .map(|updates| Command::Insert { id, updates })
+                        .map(|updates| Command::Storage(StorageCommand::Insert { id, updates }))
                         .collect()
                 }
                 command => vec![command; parts],
@@ -216,7 +269,7 @@ impl Command {
     /// added to `cease` will uninstall frontier tracking.
     pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
         match self {
-            Command::CreateDataflows(dataflows) => {
+            Command::Compute(ComputeCommand::CreateDataflows(dataflows)) => {
                 for dataflow in dataflows.iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
                         start.push(*sink_id)
@@ -226,23 +279,23 @@ impl Command {
                     }
                 }
             }
-            Command::DropIndexes(index_ids) => {
+            Command::Compute(ComputeCommand::DropIndexes(index_ids)) => {
                 for id in index_ids.iter() {
                     cease.push(*id);
                 }
             }
-            Command::DropSinks(sink_ids) => {
+            Command::Compute(ComputeCommand::DropSinks(sink_ids)) => {
                 for id in sink_ids.iter() {
                     cease.push(*id);
                 }
             }
-            Command::AddSourceTimestamping { id, .. } => {
+            Command::Storage(StorageCommand::AddSourceTimestamping { id, .. }) => {
                 start.push(*id);
             }
-            Command::DropSourceTimestamping { id } => {
+            Command::Storage(StorageCommand::DropSourceTimestamping { id }) => {
                 cease.push(*id);
             }
-            Command::EnableLogging(logging_config) => {
+            Command::Compute(ComputeCommand::EnableLogging(logging_config)) => {
                 start.extend(logging_config.log_identifiers());
             }
             _ => {
@@ -250,30 +303,137 @@ impl Command {
             }
         }
     }
-}
-
-impl CommandKind {
-    /// Returns the name of the command kind.
-    pub fn name(self) -> &'static str {
+    /// Returns the same of this kind of command.
+    ///
+    /// Must remain unique over all variants of `Command`.
+    pub fn metric_name(&self) -> &'static str {
         match self {
-            CommandKind::AddSourceTimestamping => "add_source_timestamping",
-            CommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
-            CommandKind::AdvanceSourceTimestamp => "advance_source_timestamp",
-            CommandKind::AllowCompaction => "allow_compaction",
-            CommandKind::CancelPeek => "cancel_peek",
-            CommandKind::CreateDataflows => "create_dataflows",
-            CommandKind::DropIndexes => "drop_indexes",
-            CommandKind::DropSinks => "drop_sinks",
-            CommandKind::DropSourceTimestamping => "drop_source_timestamping",
-            CommandKind::DropSources => "drop_sources",
-            CommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
-            CommandKind::EnableLogging => "enable_logging",
-            CommandKind::EnablePersistence => "enable_persistence",
-            CommandKind::Insert => "insert",
-            CommandKind::Peek => "peek",
+            Command::Compute(command) => ComputeCommandKind::from(command).metric_name(),
+            Command::Storage(command) => StorageCommandKind::from(command).metric_name(),
         }
     }
 }
+
+/// Methods that reflect actions that can be performed against a compute instance.
+#[async_trait::async_trait]
+pub trait ComputeClient: Client {
+    async fn create_dataflows(&mut self, dataflows: Vec<DataflowDescription<crate::plan::Plan>>) {
+        self.send(Command::Compute(ComputeCommand::CreateDataflows(dataflows)))
+            .await
+    }
+    async fn drop_sinks(&mut self, sink_identifiers: Vec<GlobalId>) {
+        self.send(Command::Compute(ComputeCommand::DropSinks(
+            sink_identifiers,
+        )))
+        .await
+    }
+    async fn drop_indexes(&mut self, index_identifiers: Vec<GlobalId>) {
+        self.send(Command::Compute(ComputeCommand::DropIndexes(
+            index_identifiers,
+        )))
+        .await
+    }
+    async fn peek(
+        &mut self,
+        id: GlobalId,
+        key: Option<Row>,
+        conn_id: u32,
+        timestamp: Timestamp,
+        finishing: RowSetFinishing,
+        map_filter_project: expr::SafeMfpPlan,
+    ) {
+        self.send(Command::Compute(ComputeCommand::Peek {
+            id,
+            key,
+            conn_id,
+            timestamp,
+            finishing,
+            map_filter_project,
+        }))
+        .await
+    }
+    async fn cancel_peek(&mut self, conn_id: u32) {
+        self.send(Command::Compute(ComputeCommand::CancelPeek { conn_id }))
+            .await
+    }
+    async fn allow_compaction(&mut self, frontiers: Vec<(GlobalId, Antichain<Timestamp>)>) {
+        self.send(Command::Compute(ComputeCommand::AllowCompaction(frontiers)))
+            .await
+    }
+    async fn enable_logging(&mut self, logging_config: LoggingConfig) {
+        self.send(Command::Compute(ComputeCommand::EnableLogging(
+            logging_config,
+        )))
+        .await
+    }
+}
+
+/// Methods that reflect actions that can be performed against the storage layer.
+#[async_trait::async_trait]
+pub trait StorageClient: Client {
+    async fn drop_tables(&mut self, table_identifiers: Vec<GlobalId>) {
+        self.send(Command::Storage(StorageCommand::DropTables(
+            table_identifiers,
+        )))
+        .await
+    }
+    async fn table_insert(&mut self, id: GlobalId, updates: Vec<Update>) {
+        self.send(Command::Storage(StorageCommand::Insert { id, updates }))
+            .await
+    }
+    async fn update_durability_frontiers(
+        &mut self,
+        updates: Vec<(GlobalId, Antichain<Timestamp>)>,
+    ) {
+        self.send(Command::Storage(StorageCommand::DurabilityFrontierUpdates(
+            updates,
+        )))
+        .await
+    }
+    async fn add_source_timestamping(
+        &mut self,
+        id: GlobalId,
+        connector: SourceConnector,
+        bindings: Vec<(PartitionId, Timestamp, crate::sources::MzOffset)>,
+    ) {
+        self.send(Command::Storage(StorageCommand::AddSourceTimestamping {
+            id,
+            connector,
+            bindings,
+        }))
+        .await
+    }
+    async fn advance_source_timestamp(
+        &mut self,
+        id: GlobalId,
+        update: crate::types::sources::persistence::TimestampSourceUpdate,
+    ) {
+        self.send(Command::Storage(StorageCommand::AdvanceSourceTimestamp {
+            id,
+            update,
+        }))
+        .await
+    }
+    async fn drop_source_timestamping(&mut self, id: GlobalId) {
+        self.send(Command::Storage(StorageCommand::DropSourceTimestamping {
+            id,
+        }))
+        .await
+    }
+    async fn advance_all_table_timestamps(&mut self, advance_to: Timestamp) {
+        self.send(Command::Storage(StorageCommand::AdvanceAllLocalInputs {
+            advance_to,
+        }))
+        .await
+    }
+    async fn enable_persistence(&mut self, runtime: RuntimeClient) {
+        self.send(Command::Storage(StorageCommand::EnablePersistence(runtime)))
+            .await
+    }
+}
+
+impl<C: Client> ComputeClient for C {}
+impl<C: Client> StorageClient for C {}
 
 /// Data about timestamp bindings that dataflow workers send to the coordinator
 #[derive(Clone, Debug, Serialize, Deserialize)]

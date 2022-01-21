@@ -31,7 +31,9 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use dataflow_types::client::{Command, LocalClient, Response, TimestampBindingFeedback};
+use dataflow_types::client::{
+    Command, ComputeCommand, LocalClient, Response, StorageCommand, TimestampBindingFeedback,
+};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     sources::{
@@ -661,7 +663,14 @@ where
 
     fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            Command::CreateDataflows(dataflows) => {
+            Command::Compute(cmd) => self.handle_compute_command(cmd),
+            Command::Storage(cmd) => self.handle_storage_command(cmd),
+        }
+    }
+
+    fn handle_compute_command(&mut self, cmd: ComputeCommand) {
+        match cmd {
+            ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
                         self.reported_frontiers
@@ -694,19 +703,14 @@ where
                 }
             }
 
-            Command::DropSources(names) => {
-                for name in names {
-                    self.storage_state.local_inputs.remove(&name);
-                }
-            }
-            Command::DropSinks(ids) => {
+            ComputeCommand::DropSinks(ids) => {
                 for id in ids {
                     self.reported_frontiers.remove(&id);
                     self.storage_state.sink_write_frontiers.remove(&id);
                     self.compute_state.dataflow_tokens.remove(&id);
                 }
             }
-            Command::DropIndexes(ids) => {
+            ComputeCommand::DropIndexes(ids) => {
                 for id in ids {
                     self.compute_state.traces.del_trace(&id);
                     let frontier = self
@@ -722,7 +726,7 @@ where
                 }
             }
 
-            Command::Peek {
+            ComputeCommand::Peek {
                 id,
                 key,
                 timestamp,
@@ -772,7 +776,7 @@ where
                 self.metrics.observe_pending_peeks(&self.pending_peeks);
             }
 
-            Command::CancelPeek { conn_id } => {
+            ComputeCommand::CancelPeek { conn_id } => {
                 let pending_peeks_len = self.pending_peeks.len();
                 let mut pending_peeks = std::mem::replace(
                     &mut self.pending_peeks,
@@ -786,14 +790,37 @@ where
                     }
                 }
             }
+            ComputeCommand::AllowCompaction(list) => {
+                for (id, frontier) in list {
+                    self.compute_state
+                        .traces
+                        .allow_compaction(id, frontier.borrow());
+                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
+                        ts_history.set_compaction_frontier(frontier.borrow());
+                    }
+                }
+            }
+            ComputeCommand::EnableLogging(config) => {
+                self.initialize_logging(&config);
+            }
+        }
+    }
 
-            Command::AdvanceAllLocalInputs { advance_to } => {
+    fn handle_storage_command(&mut self, cmd: StorageCommand) {
+        match cmd {
+            StorageCommand::DropTables(names) => {
+                for name in names {
+                    self.storage_state.local_inputs.remove(&name);
+                }
+            }
+
+            StorageCommand::AdvanceAllLocalInputs { advance_to } => {
                 for (_, local_input) in self.storage_state.local_inputs.iter_mut() {
                     local_input.capability.downgrade(&advance_to);
                 }
             }
 
-            Command::Insert { id, updates } => {
+            StorageCommand::Insert { id, updates } => {
                 let input = match self.storage_state.local_inputs.get_mut(&id) {
                     Some(input) => input,
                     None => panic!(
@@ -809,30 +836,18 @@ where
                 }
             }
 
-            Command::AllowCompaction(list) => {
-                for (id, frontier) in list {
-                    self.compute_state
-                        .traces
-                        .allow_compaction(id, frontier.borrow());
-                    if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
-                        ts_history.set_compaction_frontier(frontier.borrow());
-                    }
-                }
-            }
-            Command::DurabilityFrontierUpdates(list) => {
+            StorageCommand::DurabilityFrontierUpdates(list) => {
                 for (id, frontier) in list {
                     if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
                         ts_history.set_durability_frontier(frontier.borrow());
                     }
                 }
             }
-            Command::EnableLogging(config) => {
-                self.initialize_logging(&config);
-            }
-            Command::EnablePersistence(runtime) => {
+
+            StorageCommand::EnablePersistence(runtime) => {
                 self.storage_state.persist = Some(runtime);
             }
-            Command::AddSourceTimestamping {
+            StorageCommand::AddSourceTimestamping {
                 id,
                 connector,
                 bindings,
@@ -951,7 +966,7 @@ where
                     assert!(bindings.is_empty());
                 }
             }
-            Command::AdvanceSourceTimestamp { id, update } => {
+            StorageCommand::AdvanceSourceTimestamp { id, update } => {
                 if let Some(history) = self.storage_state.ts_histories.get_mut(&id) {
                     match update {
                         TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) => {
@@ -987,7 +1002,7 @@ where
                     }
                 }
             }
-            Command::DropSourceTimestamping { id } => {
+            StorageCommand::DropSourceTimestamping { id } => {
                 let prev = self.storage_state.ts_histories.remove(&id);
 
                 if prev.is_none() {
