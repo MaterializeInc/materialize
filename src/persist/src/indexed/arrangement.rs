@@ -898,7 +898,7 @@ impl Iterator for ArrangementSnapshotIter {
 #[cfg(test)]
 mod tests {
     use differential_dataflow::trace::Description;
-    use tokio::runtime::Runtime;
+    use tokio::runtime::Runtime as AsyncRuntime;
 
     use crate::gen::persist::ProtoBatchFormat;
     use crate::indexed::encoding::Id;
@@ -1004,6 +1004,7 @@ mod tests {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("append_trace_ts_upper_invariant"),
         );
         let mut f = Arrangement::new(ArrangementMeta {
@@ -1043,10 +1044,11 @@ mod tests {
     /// This test checks whether we correctly determine the min/max times stored
     /// in a unsealed batch consisting of unsorted updates.
     #[test]
-    fn append_detect_min_max_times() {
+    fn append_detect_min_max_times() -> Result<(), Error> {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("append_ts_lower_invariant"),
         );
         let mut f = Arrangement::new(ArrangementMeta {
@@ -1070,6 +1072,8 @@ mod tests {
         let meta = &f.unsealed_batches[0];
         assert_eq!(meta.ts_lower, 2);
         assert_eq!(meta.ts_upper, 3);
+
+        Ok(())
     }
 
     #[test]
@@ -1077,6 +1081,7 @@ mod tests {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_evict"),
         );
         let mut f = Arrangement::new(ArrangementMeta {
@@ -1151,6 +1156,7 @@ mod tests {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_snapshot"),
         );
         let mut f = Arrangement::new(ArrangementMeta {
@@ -1204,6 +1210,7 @@ mod tests {
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            Arc::new(AsyncRuntime::new()?),
             MemBlob::new_no_reentrance("unsealed_batch_trim"),
         );
         let mut f = Arrangement::new(ArrangementMeta {
@@ -1321,12 +1328,14 @@ mod tests {
 
     #[test]
     fn trace_compact() -> Result<(), Error> {
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            async_runtime.clone(),
             MemRegistry::new().blob_no_reentrance()?,
         );
-        let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        let maintainer = Maintainer::new(blob.clone(), async_runtime);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
         t.update_seal(10);
 
@@ -1473,12 +1482,14 @@ mod tests {
 
     #[test]
     fn compaction_beyond_upper() -> Result<(), Error> {
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
         let mut blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
+            async_runtime.clone(),
             MemRegistry::new().blob_no_reentrance()?,
         );
-        let maintainer = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        let maintainer = Maintainer::new(blob.clone(), async_runtime);
         let mut t = Arrangement::new(ArrangementMeta::new(Id(0)));
 
         t.update_seal(10);

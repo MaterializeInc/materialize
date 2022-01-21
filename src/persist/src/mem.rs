@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
-use tokio::runtime::Runtime;
+use tokio::runtime::Runtime as AsyncRuntime;
 
 use crate::client::RuntimeClient;
 use crate::error::Error;
@@ -434,12 +434,14 @@ impl MemRegistry {
     pub fn indexed_no_reentrance(&mut self) -> Result<Indexed<MemLog, MemBlob>, Error> {
         let log = self.log_no_reentrance()?;
         let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
         let blob = BlobCache::new(
             build_info::DUMMY_BUILD_INFO,
             metrics.clone(),
+            async_runtime.clone(),
             self.blob_no_reentrance()?,
         );
-        let compacter = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        let compacter = Maintainer::new(blob.clone(), async_runtime);
         Indexed::new(log, blob, compacter, metrics)
     }
 
@@ -452,10 +454,16 @@ impl MemRegistry {
         let log = self.log_no_reentrance()?;
         let log = UnreliableLog::from_handle(log, unreliable.clone());
         let metrics = Arc::new(Metrics::register_with(&MetricsRegistry::new()));
+        let async_runtime = Arc::new(AsyncRuntime::new()?);
         let blob = self.blob_no_reentrance()?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
-        let blob = BlobCache::new(build_info::DUMMY_BUILD_INFO, metrics.clone(), blob);
-        let compacter = Maintainer::new(blob.clone(), Arc::new(Runtime::new()?));
+        let blob = BlobCache::new(
+            build_info::DUMMY_BUILD_INFO,
+            metrics.clone(),
+            async_runtime.clone(),
+            blob,
+        );
+        let compacter = Maintainer::new(blob.clone(), async_runtime);
         Indexed::new(log, blob, compacter, metrics)
     }
 
