@@ -19,13 +19,12 @@ use crate::util;
 
 /// Constructs a new AWS Kinesis client that respects the
 /// [system proxy configuration](mz_http_proxy#system-proxy-configuration).
-pub fn client(config: &AwsConfig) -> Result<Client, anyhow::Error> {
+pub fn client(config: &AwsConfig) -> Client {
     let mut builder = aws_sdk_kinesis::config::Builder::from(config.inner());
     if let Some(endpoint) = config.endpoint() {
         builder = builder.endpoint_resolver(endpoint.clone());
     }
-    let conn = util::connector()?;
-    Ok(Client::from_conf_conn(builder.build(), conn))
+    Client::from_conf_conn(builder.build(), util::connector())
 }
 
 /// Wrapper around AWS Kinesis ListShards API.

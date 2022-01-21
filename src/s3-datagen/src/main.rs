@@ -99,7 +99,7 @@ async fn run() -> anyhow::Result<()> {
         .collect::<String>();
 
     let config = AwsConfig::load_from_env().await;
-    let client = mz_aws_util::s3::client(&config)?;
+    let client = mz_aws_util::s3::client(&config);
 
     let first_object_key = format!("{}{:>05}", args.key_prefix, 0);
 

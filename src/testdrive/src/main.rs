@@ -138,7 +138,7 @@ async fn main() {
             let loader = aws_config::from_env().region(Region::new(region));
             let config = AwsConfig::from_loader(loader).await;
             let account = async {
-                let sts_client = mz_aws_util::sts::client(&config)?;
+                let sts_client = mz_aws_util::sts::client(&config);
                 Ok::<_, Box<dyn Error>>(
                     sts_client
                         .get_caller_identity()

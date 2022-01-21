@@ -827,8 +827,8 @@ async fn compile_proto(
 /// Makes an always-valid AWS API call to perform a basic sanity check of
 /// whether the specified AWS configuration is valid.
 async fn validate_aws_credentials(config: &AwsConfig) -> Result<(), anyhow::Error> {
-    let config = config.load().await?;
-    let sts_client = mz_aws_util::sts::client(&config)?;
+    let config = config.load().await;
+    let sts_client = mz_aws_util::sts::client(&config);
     let _ = sts_client.get_caller_identity().send().await?;
     Ok(())
 }
