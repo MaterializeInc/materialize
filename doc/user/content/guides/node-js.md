@@ -36,6 +36,7 @@ Download your instance's certificate files from the Materialize Cloud [Connect](
 ```js
 const { Client } = require('pg');
 const fs = require('fs');
+
 const client = new Client({
     connectionString: "postgresql://materialize@MY_INSTANCE_ID.materialize.cloud:6875/materialize",
     ssl: {
