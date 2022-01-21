@@ -736,10 +736,9 @@ pub async fn create_state(
         )
     };
 
-    let kinesis_client =
-        mz_aws_util::kinesis::client(&config.aws_config).err_ctx("creating Kinesis client")?;
-    let s3_client = mz_aws_util::s3::client(&config.aws_config).err_ctx("creating S3 client")?;
-    let sqs_client = mz_aws_util::sqs::client(&config.aws_config).err_ctx("creating SQS client")?;
+    let kinesis_client = mz_aws_util::kinesis::client(&config.aws_config);
+    let s3_client = mz_aws_util::s3::client(&config.aws_config);
+    let sqs_client = mz_aws_util::sqs::client(&config.aws_config);
 
     let state = State {
         seed,

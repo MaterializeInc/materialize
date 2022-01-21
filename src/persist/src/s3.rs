@@ -57,8 +57,7 @@ impl S3BlobConfig {
             loader = loader.credentials_provider(role_provider.build(default_provider));
         }
         let config = AwsConfig::from_loader(loader).await;
-        let client = mz_aws_util::s3::client(&config)
-            .map_err(|err| format!("connecting client: {}", err))?;
+        let client = mz_aws_util::s3::client(&config);
         Ok(S3BlobConfig {
             client,
             bucket,

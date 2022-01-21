@@ -133,7 +133,7 @@ async fn download_objects_task(
     let client = match aws_config
         .load()
         .await
-        .and_then(|config| mz_aws_util::s3::client(&config))
+        .map(|config| mz_aws_util::s3::client(&config))
     {
         Ok(client) => client,
         Err(e) => {
@@ -261,7 +261,7 @@ async fn scan_bucket_task(
     let client = match aws_config
         .load()
         .await
-        .and_then(|config| mz_aws_util::s3::client(&config))
+        .map(|config| mz_aws_util::s3::client(&config))
     {
         Ok(client) => client,
         Err(e) => {
@@ -397,7 +397,7 @@ async fn read_sqs_task(
     let client = match aws_config
         .load()
         .await
-        .and_then(|config| mz_aws_util::sqs::client(&config))
+        .map(|config| mz_aws_util::sqs::client(&config))
     {
         Ok(client) => client,
         Err(e) => {
