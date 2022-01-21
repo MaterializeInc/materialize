@@ -82,6 +82,16 @@ impl Hash for Matcher {
 
 /// Builds a Matcher that matches a SQL LIKE pattern.
 pub fn compile(pattern: &str, case_insensitive: bool, escape: char) -> Result<Matcher, EvalError> {
+    // We would like to have a consistent, documented limit to the size of
+    // supported LIKE patterns. The real limiting factor is the number of states
+    // that can be handled by the Regex library. In testing, I was able to
+    // create an adversarial pattern "%a%b%c%d%e..." that started failing around
+    // 9 KiB, so we chose 8 KiB as the limit. This is consistent with limits
+    // set by other databases, like SQL Server.
+    // On the other hand, PostgreSQL does not have a documented limit.
+    if pattern.len() > 8 << 10 {
+        return Err(EvalError::LikePatternTooLong);
+    }
     let mut matcher = Matcher {
         pattern: String::from(pattern),
         case_insensitive,
