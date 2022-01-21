@@ -1179,27 +1179,30 @@ where
     let (tx, mut rx) = mpsc::channel(64);
 
     if active {
-        task::spawn(|| format!("create_source_simple:{}", name), async move {
-            let timestamper = Timestamper::new(tx, timestamp_frequency, now);
-            let source = connector.start(&timestamper);
-            tokio::pin!(source);
+        task::spawn(
+            || format!("source_simple_timestamper:{}", id.source_id),
+            async move {
+                let timestamper = Timestamper::new(tx, timestamp_frequency, now);
+                let source = connector.start(&timestamper);
+                tokio::pin!(source);
 
-            loop {
-                tokio::select! {
-                    res = timestamper.tick() => {
-                        if res.is_err() {
+                loop {
+                    tokio::select! {
+                        res = timestamper.tick() => {
+                            if res.is_err() {
+                                break;
+                            }
+                        }
+                        res = &mut source => {
+                            if let Err(err) = res {
+                                let _ = timestamper.error(err).await;
+                            }
                             break;
                         }
                     }
-                    res = &mut source => {
-                        if let Err(err) = res {
-                            let _ = timestamper.error(err).await;
-                        }
-                        break;
-                    }
                 }
-            }
-        });
+            },
+        );
     }
 
     let (stream, _secondary_stream, capability) = source(scope, name.clone(), move |info| {

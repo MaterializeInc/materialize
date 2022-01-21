@@ -366,6 +366,7 @@ pub async fn lookup_start_offsets(
 
     // Lookup offsets
     // TODO(guswynn): see if we can avoid this formatting
+    // TODO(guswynn): see if we can add broker to this name
     let task_name = format!("kafka_lookup_start_offets:{topic}");
     task::spawn_blocking(|| task_name, {
         let topic = topic.to_string();

@@ -806,21 +806,24 @@ where
             let seal_fut = persist_multi
                 .write_handle
                 .seal(&persist_multi.all_table_ids, advance_to);
-            let _ = task::spawn(|| "advance_local_inputs", async move {
-                if let Err(err) = seal_fut.await {
-                    // TODO: Linearizability relies on this, bubble up the
-                    // error instead.
-                    //
-                    // EDIT: On further consideration, I think it doesn't
-                    // affect correctness if this fails, just availability
-                    // of the table.
-                    tracing::error!(
-                        "failed to seal persisted stream to ts {}: {}",
-                        advance_to,
-                        err
-                    );
-                }
-            });
+            let _ = task::spawn(
+                || format!("advance_local_inputs:{advance_to}"),
+                async move {
+                    if let Err(err) = seal_fut.await {
+                        // TODO: Linearizability relies on this, bubble up the
+                        // error instead.
+                        //
+                        // EDIT: On further consideration, I think it doesn't
+                        // affect correctness if this fails, just availability
+                        // of the table.
+                        tracing::error!(
+                            "failed to seal persisted stream to ts {}: {}",
+                            advance_to,
+                            err
+                        );
+                    }
+                },
+            );
         }
 
         self.dataflow_client
@@ -1243,7 +1246,8 @@ where
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
                         let catalog = self.catalog.for_session(&session);
                         let purify_fut = sql::pure::purify(&catalog, stmt);
-                        task::spawn(|| "purify", async move {
+                        let conn_id = session.conn_id();
+                        task::spawn(|| format!("purify:{conn_id}"), async move {
                             let result = purify_fut.await.map_err(|e| e.into());
                             internal_cmd_tx
                                 .send(Message::StatementReady(StatementReady {
@@ -2015,11 +2019,12 @@ where
                 }
             }
             Plan::Execute(plan) => {
+                let plan_name = plan.name.clone();
                 match self.sequence_execute(&mut session, plan) {
                     Ok(portal_name) => {
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
                         // TODO(guswynn): see if we can avoid this formatting
-                        let task_name = format!("execute:{portal_name}");
+                        let task_name = format!("execute:{plan_name}");
                         task::spawn(|| task_name, async move {
                             internal_cmd_tx
                                 .send(Message::Command(Command::Execute {
@@ -2479,17 +2484,20 @@ where
         // main coordinator thread when the future completes.
         let connector_builder = sink.connector_builder;
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        task::spawn(|| "sink_connector_ready", async move {
-            internal_cmd_tx
-                .send(Message::SinkConnectorReady(SinkConnectorReady {
-                    session,
-                    tx,
-                    id,
-                    oid,
-                    result: sink_connector::build(connector_builder, id).await,
-                }))
-                .expect("sending to internal_cmd_tx cannot fail");
-        });
+        task::spawn(
+            || format!("sink_connector_ready:{}", sink.from),
+            async move {
+                internal_cmd_tx
+                    .send(Message::SinkConnectorReady(SinkConnectorReady {
+                        session,
+                        tx,
+                        id,
+                        oid,
+                        result: sink_connector::build(connector_builder, id).await,
+                    }))
+                    .expect("sending to internal_cmd_tx cannot fail");
+            },
+        );
     }
 
     fn generate_view_ops(
@@ -2852,23 +2860,27 @@ where
 
         // We can now wait for responses or errors and do any session/transaction
         // finalization in a separate task.
-        task::spawn(|| "sequence_end_transaction", async move {
-            let result = match rx {
-                // If we have more work to do, do it
-                Ok(fut) => fut.await,
-                Err(e) => Err(e),
-            };
+        let conn_id = session.conn_id();
+        task::spawn(
+            || format!("sequence_end_transaction:{conn_id}"),
+            async move {
+                let result = match rx {
+                    // If we have more work to do, do it
+                    Ok(fut) => fut.await,
+                    Err(e) => Err(e),
+                };
 
-            if result.is_err() {
-                action = EndTransactionAction::Rollback;
-            }
-            session.vars_mut().end_transaction(action);
+                if result.is_err() {
+                    action = EndTransactionAction::Rollback;
+                }
+                session.vars_mut().end_transaction(action);
 
-            match result {
-                Ok(()) => tx.send(Ok(response), session),
-                Err(err) => tx.send(Err(err), session),
-            }
-        });
+                match result {
+                    Ok(()) => tx.send(Ok(response), session),
+                    Err(err) => tx.send(Err(err), session),
+                }
+            },
+        );
     }
 
     async fn sequence_end_transaction_inner(
@@ -3865,7 +3877,7 @@ where
         };
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        task::spawn(|| "sequence_copy_rows", async move {
+        task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let arena = RowArena::new();
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows(batch) => match batch.await {
@@ -4091,6 +4103,7 @@ where
         // did (and how the code previously worked), mz has already dropped it from our
         // catalog, and so we wouldn't be able to retry anyway.
         if !replication_slots_to_drop.is_empty() {
+            // TODO(guswynn): see if there is more relevant info to add to this name
             task::spawn(|| "drop_replication_slots", async move {
                 for (conn, slot_names) in replication_slots_to_drop {
                     // Try to drop the replication slots, but give up after a while.
@@ -4148,7 +4161,7 @@ where
                 // but only if we synchronously wait for the (fast) registration
                 // of that work to return.
                 let write_fut = persist.write_handle.write(&updates);
-                let _ = task::spawn(|| "write_fut", write_fut);
+                let _ = task::spawn(|| "builtin_table_updates_write_fut:{id}", write_fut);
             } else {
                 self.dataflow_client.table_insert(id, updates).await
             }
@@ -4502,12 +4515,14 @@ where
         session: Session,
         plan: Plan,
     ) {
+        let conn_id = session.conn_id();
         let plan = DeferredPlan { tx, session, plan };
         self.write_lock_wait_group.push_back(plan);
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let write_lock = Arc::clone(&self.write_lock);
-        task::spawn(|| "defer_write", async move {
+        // TODO(guswynn): see if there is more relevant info to add to this name
+        task::spawn(|| format!("defer_write:{conn_id}"), async move {
             let guard = write_lock.lock_owned().await;
             internal_cmd_tx
                 .send(Message::WriteLockGrant(guard))
