@@ -948,15 +948,13 @@ where
                 let mut total_sent = 0;
                 for encoded_row in rows {
                     let record = BaseRecord::to(&s.topic);
-                    let record = if encoded_row.value.is_some() {
-                        record.payload(encoded_row.value.as_ref().unwrap())
-                    } else {
-                        record
+                    let record = match encoded_row.value.as_ref() {
+                        Some(r) => record.payload(r),
+                        None => record,
                     };
-                    let record = if encoded_row.key.is_some() {
-                        record.key(encoded_row.key.as_ref().unwrap())
-                    } else {
-                        record
+                    let record = match encoded_row.key.as_ref() {
+                        Some(r) => record.key(r),
+                        None => record,
                     };
 
                     // Only fatal errors are returned from send
