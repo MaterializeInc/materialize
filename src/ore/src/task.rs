@@ -92,6 +92,7 @@ where
 }
 
 pub trait RuntimeExt {
+    #[track_caller]
     fn spawn_blocking<Function, Output, Name, NameClosure>(
         &self,
         nc: NameClosure,
@@ -103,6 +104,7 @@ pub trait RuntimeExt {
         Function: FnOnce() -> Output + Send + 'static,
         Output: Send + 'static;
 
+    #[track_caller]
     fn spawn<Fut, Name, NameClosure>(
         &self,
         _nc: NameClosure,
