@@ -127,6 +127,24 @@ changes that have not yet been documented.
 
   - Support `SHOW TIME ZONE` as an alias for `SHOW TIMEZONE` {{% gh 9908 %}}.
 
+- **Breaking change.** Further improve consistency with PostgreSQL's column name
+  inference rules:
+
+    * When inferring a column name for a nested cast expression, prefer the
+      name of the outermost cast rather than the innermost cast {{% gh 10167 %}}.
+
+      Consider the following query:
+
+      ```sql
+      SELECT 'a'::int::text;
+      ```
+
+      This version of Materialize will infer the column name `text`, while
+      previous versions of Materialize would incorrectly infer the name `int4`.
+
+    * Infer the name `case` for `CASE` expressions unless column name inference
+      on the `ELSE` expression produces a preferred name.
+
 {{< comment >}}
 Only add new release notes above this line.
 
