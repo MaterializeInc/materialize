@@ -101,7 +101,7 @@ DELETE FROM numbers WHERE number = 2;
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostssl sslmode=disable dbname=postgres'
   PUBLICATION 'mz_source';
-db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostssl", database "postgres", SSL off
+contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostssl", database "postgres", SSL off
 
 # server: hostssl, client: prefer => OK
 > CREATE MATERIALIZED SOURCE "mz_source"
@@ -141,7 +141,7 @@ DELETE FROM numbers WHERE number = 2;
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostssl dbname=postgres sslmode=verify-ca'
   PUBLICATION 'mz_source';
-self signed certificate in certificate chain
+contains:self signed certificate in certificate chain
 
 # server: hostssl, client: verify-ca => OK
 > CREATE MATERIALIZED SOURCE "mz_source"
@@ -164,7 +164,7 @@ DELETE FROM numbers WHERE number = 2;
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostssl dbname=postgres sslmode=verify-full'
   PUBLICATION 'mz_source';
-self signed certificate in certificate chain
+contains:self signed certificate in certificate chain
 
 # server: hostssl, client: verify-full => OK
 > CREATE MATERIALIZED SOURCE "mz_source"
@@ -205,25 +205,25 @@ DELETE FROM numbers WHERE number = 2;
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostnossl sslmode=prefer dbname=postgres'
   PUBLICATION 'mz_source';
-db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnossl", database "postgres", SSL on
+contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnossl", database "postgres", SSL on
 
 # server: hostnossl, client: require => ERROR
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostnossl sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
-db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnossl", database "postgres", SSL on
+contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnossl", database "postgres", SSL on
 
 # server: hostnossl, client: verify-ca => ERROR
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostnossl sslmode=verify-ca dbname=postgres'
   PUBLICATION 'mz_source';
-self signed certificate in certificate chain
+contains:self signed certificate in certificate chain
 
 # server: hostnossl, client: verify-full => ERROR
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=hostnossl sslmode=verify-full dbname=postgres'
   PUBLICATION 'mz_source';
-self signed certificate in certificate chain
+contains:self signed certificate in certificate chain
 
 # server: certuser, client: require => OK
 > CREATE MATERIALIZED SOURCE "mz_source"
@@ -246,13 +246,13 @@ DELETE FROM numbers WHERE number = 2;
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=certuser dbname=postgres sslmode=verify-ca sslrootcert=/share/secrets/ca.crt'
   PUBLICATION 'mz_source'
-db error: FATAL: connection requires a valid client certificate
+contains:db error: FATAL: connection requires a valid client certificate
 
 # server: certuser, client: verify-ca (wrong cert) => ERROR
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=certuser dbname=postgres sslmode=verify-ca sslcert=/share/secrets/postgres.crt sslkey=/share/secrets/postgres.key sslrootcert=/share/secrets/ca.crt'
   PUBLICATION 'mz_source'
-db error: FATAL: certificate authentication failed for user "certuser"
+contains:db error: FATAL: certificate authentication failed for user "certuser"
 
 # server: certuser, client: verify-ca => OK
 > CREATE MATERIALIZED SOURCE "mz_source"
@@ -292,27 +292,27 @@ DELETE FROM numbers WHERE number = 2;
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=certuser sslmode=verify-ca sslcert=/share/secrets/missing sslkey=/share/secrets/certuser.key sslrootcert=/share/secrets/ca.crt dbname=postgres'
   PUBLICATION 'mz_source'
-invalid connection string: invalid value for option `sslcert`
+contains:invalid connection string: invalid value for option `sslcert`
 
 # missing sslkey
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=certuser sslmode=verify-ca sslcert=/share/secrets/certuser.crt sslkey=/share/secrets/missing sslrootcert=/share/secrets/ca.crt dbname=postgres'
   PUBLICATION 'mz_source'
-invalid connection string: invalid value for option `sslkey`
+contains:invalid connection string: invalid value for option `sslkey`
 
 # missing sslrootcert
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=certuser sslmode=verify-ca sslcert=/share/secrets/certuser.crt sslkey=/share/secrets/certuser.key sslrootcert=/share/secrets/missing dbname=postgres'
   PUBLICATION 'mz_source'
-invalid connection string: invalid value for option `sslrootcert`
+contains:invalid connection string: invalid value for option `sslrootcert`
 
 # require both sslcert and sslkey
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=certuser sslmode=verify-ca sslcert=/share/secrets/certuser.crt dbname=postgres'
   PUBLICATION 'mz_source'
-must provide both sslcert and sslkey, but only provided sslcert
+contains:must provide both sslcert and sslkey, but only provided sslcert
 
 ! CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=certuser sslmode=verify-ca sslkey=/share/secrets/certuser.key dbname=postgres'
   PUBLICATION 'mz_source'
-must provide both sslcert and sslkey, but only provided sslkey
+contains:must provide both sslcert and sslkey, but only provided sslkey

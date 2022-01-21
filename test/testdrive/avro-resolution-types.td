@@ -29,4 +29,4 @@ $ kafka-ingest format=avro topic=resolution-int2double schema=${double-col} publ
 {"f1": 234.456}
 
 ! SELECT * FROM resolution_int2double
-Schema resolution error: Schemas don't match: Double, Int
+contains:Schema resolution error: Schemas don't match: Double, Int

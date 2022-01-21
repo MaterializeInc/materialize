@@ -34,7 +34,7 @@ $ s3-add-notifications bucket=${buk} queue=${buk} sqs-validation-timeout=5m
 
 ! CREATE MATERIALIZED VIEW s3_double_mat_error AS
   SELECT * FROM s3_double_mat
-Cannot re-materialize source s3_double_mat
+contains:Cannot re-materialize source s3_double_mat
 
 # check that going through multiple unmaterialized views doesn't allow hiding from the error
 > CREATE VIEW s3_double_mat_unmaterialized AS
@@ -45,7 +45,7 @@ Cannot re-materialize source s3_double_mat
 
 ! CREATE MATERIALIZED VIEW s3_double_mat_unmaterialized_final AS
   SELECT * FROM s3_double_mat_unmaterialized_extra
-Cannot re-materialize source s3_double_mat
+contains:Cannot re-materialize source s3_double_mat
 
 # check that dropping and recreating a view succeeds
 
@@ -73,7 +73,7 @@ Cannot re-materialize source s3_double_mat
 
 ! CREATE MATERIALIZED VIEW s3_double_mat_error AS
   SELECT * FROM s3_double_mat
-Cannot re-materialize source s3_double_mat
+contains:Cannot re-materialize source s3_double_mat
 
 > CREATE VIEW s3_double_mat_unmaterialized_3 AS
   SELECT * FROM s3_double_mat
@@ -83,16 +83,16 @@ Cannot re-materialize source s3_double_mat
 
 ! CREATE MATERIALIZED VIEW s3_double_mat_error_3 AS
   SELECT * FROM s3_double_mat_unmaterialized_extra_3
-Cannot re-materialize source s3_double_mat
+contains:Cannot re-materialize source s3_double_mat
 
 ! CREATE INDEX s3_double_mat_custom_idx ON s3_double_mat (text)
-Cannot re-materialize source s3_double_mat
+contains:Cannot re-materialize source s3_double_mat
 
 ! CREATE DEFAULT INDEX ON s3_double_mat
-Cannot re-materialize source s3_double_mat
+contains:Cannot re-materialize source s3_double_mat
 
 ! CREATE SINK invalid_double_mat_sink FROM s3_double_mat
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Cannot re-materialize source s3_double_mat
+contains:Cannot re-materialize source s3_double_mat

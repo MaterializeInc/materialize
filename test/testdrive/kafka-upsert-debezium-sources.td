@@ -62,13 +62,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
   ENVELOPE DEBEZIUM
 
 ! SELECT * FROM start_offset_misconfigured
-Updates and deletes are not allowed for this source! This probably means it was started with `start_offset` and without `UPSERT` semantics.
+contains:Updates and deletes are not allowed for this source! This probably means it was started with `start_offset` and without `UPSERT` semantics.
 
 ! CREATE MATERIALIZED SOURCE doin_upsert
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM UPSERT
-ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
+contains:ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
 
 > CREATE MATERIALIZED SOURCE doin_upsert
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
@@ -122,7 +122,7 @@ moros
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   INCLUDE OFFSET
   ENVELOPE DEBEZIUM
-INCLUDE OFFSET with Debezium requires UPSERT semantics
+contains:INCLUDE OFFSET with Debezium requires UPSERT semantics
 
 > CREATE MATERIALIZED SOURCE doin_upsert_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
@@ -185,7 +185,7 @@ id creature
   WITH (deduplication = 'full')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT
-Debezium deduplication does not make sense with upsert sources
+contains:Debezium deduplication does not make sense with upsert sources
 
 
 # test include metadata

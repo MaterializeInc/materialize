@@ -29,4 +29,4 @@ $ kafka-ingest format=avro topic=resolution-records-int2double schema=${double-c
 {"f1": { "f1": 123.234 }}
 
 ! SELECT * FROM resolution_records_int2double
-Schemas don't match: Double, Int
+contains:Schemas don't match: Double, Int

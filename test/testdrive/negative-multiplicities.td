@@ -49,7 +49,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 -1
 
 ! SELECT * FROM data
-Invalid data in source, saw retractions (1) for row that does not exist: [Int64(1)]
+contains:Invalid data in source, saw retractions (1) for row that does not exist: [Int64(1)]
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": {"row": {"a": 1}}, "after": null}
@@ -58,4 +58,4 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 -2
 
 ! SELECT * FROM data
-Invalid data in source, saw retractions (2) for row that does not exist: [Int64(1)]
+contains:Invalid data in source, saw retractions (2) for row that does not exist: [Int64(1)]

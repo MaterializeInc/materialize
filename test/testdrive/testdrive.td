@@ -58,7 +58,7 @@ $ set-regex match=u\d+ replacement=UID
 | | implementation = Differential %1 %0.()
 
 ! SELECT * FROM u1234;
-unknown catalog item 'UID'
+contains:unknown catalog item 'UID'
 
 # Exclude FETCH from the retry logic
 

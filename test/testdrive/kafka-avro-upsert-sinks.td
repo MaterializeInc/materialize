@@ -275,13 +275,13 @@ $ kafka-create-topic topic=non-keyed-input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
   WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
-Invalid upsert key: (a), there are no valid keys
+contains:Invalid upsert key: (a), there are no valid keys
 
 ! CREATE SINK another_invalid_key FROM input_keyed
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b)
   WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
-Invalid upsert key: (b), valid keys are: (a)
+contains:Invalid upsert key: (b), valid keys are: (a)
 
 > CREATE VIEW input_keyed_ab AS SELECT a, b FROM input GROUP BY a, b
 
@@ -289,22 +289,22 @@ Invalid upsert key: (b), valid keys are: (a)
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
   WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
-Invalid upsert key: (a), valid keys are: (a, b)
+contains:Invalid upsert key: (a), valid keys are: (a, b)
 
 ! CREATE SINK another_invalid_sub_key FROM input_keyed_ab
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b)
   WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
-Invalid upsert key: (b), valid keys are: (a, b)
+contains:Invalid upsert key: (b), valid keys are: (a, b)
 
 ! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
   KEY (key1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
-Invalid upsert key: (key1), valid keys are: (key1, key2)
+contains:Invalid upsert key: (key1), valid keys are: (key1, key2)
 
 ! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
   KEY (key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
-Invalid upsert key: (key2), valid keys are: (key1, key2)
+contains:Invalid upsert key: (key2), valid keys are: (key1, key2)

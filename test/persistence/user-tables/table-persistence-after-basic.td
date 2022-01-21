@@ -31,7 +31,7 @@
 #
 
 ! SELECT * FROM to_be_dropped;
-unknown catalog item 'to_be_dropped'
+contains:unknown catalog item 'to_be_dropped'
 
 #
 # Confirm that same-named tables in different schemas still has different contents

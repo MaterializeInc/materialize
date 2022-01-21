@@ -39,7 +39,7 @@ $ kafka-ingest format=avro topic=avro-types-null2int schema=${null} timestamp=1
   ENVELOPE NONE
 
 ! SELECT * FROM avro_types_null2int
-avro deserialization error: IO error: UnexpectedEof
+contains:avro deserialization error: IO error: UnexpectedEof
 
 #
 # boolean -> int
@@ -93,7 +93,7 @@ $ kafka-ingest format=avro topic=avro-types-int2float schema=${int} timestamp=1
   ENVELOPE NONE
 
 ! SELECT * FROM avro_types_int2float
-avro deserialization error: IO error: UnexpectedEof
+contains:avro deserialization error: IO error: UnexpectedEof
 
 #
 # long -> float
@@ -110,7 +110,7 @@ $ kafka-ingest format=avro topic=avro-types-long2float schema=${long} timestamp=
   ENVELOPE NONE
 
 ! SELECT * FROM avro_types_long2float
-Unexpected bytes remaining
+contains:Unexpected bytes remaining
 
 #
 # long -> int
@@ -127,7 +127,7 @@ $ kafka-ingest format=avro topic=avro-types-long2int schema=${long} timestamp=1
   ENVELOPE NONE
 
 ! SELECT * FROM avro_types_long2int
-avro deserialization error: Decode error: Decoding error: Expected i32, got: 992147483647
+contains:avro deserialization error: Decode error: Decoding error: Expected i32, got: 992147483647
 
 #
 # float -> double
@@ -144,7 +144,7 @@ $ kafka-ingest format=avro topic=avro-types-float2double schema=${float} timesta
   ENVELOPE NONE
 
 ! SELECT * FROM avro_types_float2double
-avro deserialization error: IO error: UnexpectedEof
+contains:avro deserialization error: IO error: UnexpectedEof
 
 #
 # avro-typestion string -> bytes

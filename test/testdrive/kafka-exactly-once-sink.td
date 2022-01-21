@@ -108,7 +108,7 @@ New York,NY,10004
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output3-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-reuse_topic requires that sink input dependencies are sources, materialize.public.input_table is not
+contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_table is not
 
 > CREATE SINK output4 FROM input_kafka_byo_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output4-view-${testdrive.seed}'
@@ -134,19 +134,19 @@ reuse_topic requires that sink input dependencies are sources, materialize.publi
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output6-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-reuse_topic requires that sink input dependencies are sources, materialize.public.input_table is not
+contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_table is not
 
 ! CREATE SINK output7 FROM input_values_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output7-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_view is not
+contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_view is not
 
 ! CREATE SINK output8 FROM input_values_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output8-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_mview is not
+contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_mview is not
 
 > CREATE SINK output12 FROM input_kafka_no_byo_derived_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output12-view-${testdrive.seed}'
@@ -237,7 +237,7 @@ $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_s
   CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (consistency_topic='willfail')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Expected TOPIC, found FORMAT
+contains:Expected TOPIC, found FORMAT
 
 # Can't provide CONSISTENCY FORMAT and consistency_topic WITH option
 ! CREATE SINK double_avro FROM simple_view
@@ -245,14 +245,14 @@ Expected TOPIC, found FORMAT
     CONSISTENCY TOPIC 'topicname'
     WITH (consistency_topic='willfail')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Cannot specify consistency_topic and CONSISTENCY options simultaneously
+contains:Cannot specify consistency_topic and CONSISTENCY options simultaneously
 
 # Can't create sinks with JSON-encoded consistency topics
 ! CREATE SINK double_avro FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
     CONSISTENCY TOPIC 'consistency-double-avro' CONSISTENCY FORMAT JSON
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-CONSISTENCY FORMAT JSON not yet supported
+contains:CONSISTENCY FORMAT JSON not yet supported
 
 # Providing CONSISTENCY TOPIC without CONSISTENCY FORMAT will default to the sink's FORMAT
 # of the sink, if valid
@@ -266,7 +266,7 @@ CONSISTENCY FORMAT JSON not yet supported
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'default-avro'
     CONSISTENCY TOPIC 'consistency-default-avro'
   FORMAT JSON
-CONSISTENCY FORMAT JSON not yet supported
+contains:CONSISTENCY FORMAT JSON not yet supported
 
 > CREATE SINK double_avro FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
@@ -304,7 +304,7 @@ $ kafka-verify format=json sink=materialize.public.json_avro_2 sort-messages=tru
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic'
     WITH (reuse_topic=true)
   FORMAT JSON
-For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY TOPIC consistency_topic CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url'. The default of using a JSON consistency topic is not supported.
+contains:For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY TOPIC consistency_topic CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url'. The default of using a JSON consistency topic is not supported.
 
 # This should succeed, but will incorrectly create a nonced topic.
 # See https://github.com/MaterializeInc/materialize/issues/8231.

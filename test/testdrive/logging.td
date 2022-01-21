@@ -51,10 +51,10 @@
 1
 
 ! DROP SCHEMA mz_catalog
-cannot drop schema mz_catalog because it is required by the database system
+contains:cannot drop schema mz_catalog because it is required by the database system
 
 ! DROP VIEW mz_peek_durations
-cannot drop item mz_catalog.mz_peek_durations because it is required by the database system
+contains:cannot drop item mz_catalog.mz_peek_durations because it is required by the database system
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)

@@ -87,7 +87,7 @@ Infinity
 
 # Side note that you cannot rescale Infinity
 ! SELECT sum_a::numeric(39,1)::text from numeric_values_sum;
-numeric field overflow
+contains:numeric field overflow
 
 # Retracting/subtracting values lets you return to a valid state
 > INSERT INTO numeric_insertions VALUES ('-9e38');
@@ -235,7 +235,7 @@ sum_a
 # only in aggregation contexts as a means of preserving commutativity and
 # associativity.
 ! SELECT sum_a::text AS sum_a FROM numeric_scaled_values_sum;
-Evaluation error: numeric field overflow
+contains:Evaluation error: numeric field overflow
 
 # Errored state is invertible by reducing aggregated value so it's expressable
 # with the provided scale.
@@ -276,7 +276,7 @@ sum_a
 # Note that this error actually occurs in numeric_scaled_inputs, so is an
 # evaluation error, rather than the aggregation returning infinity.
 ! SELECT sum_a::text AS sum_a FROM numeric_scaled_inputs_sum;
-Evaluation error: numeric field overflow
+contains:Evaluation error: numeric field overflow
 
 # However, retracting this values returns us to a good state.
 > INSERT INTO numeric_scaled_input_deletions VALUES ('1e38');

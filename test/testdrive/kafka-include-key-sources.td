@@ -32,26 +32,26 @@ $ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflict
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
-INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
+contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
 ! CREATE SOURCE missing_key_format
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS key_col
-INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
+contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
 
 ! CREATE SOURCE not_supported
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE TOPIC
-INCLUDE TOPIC not yet supported
+contains:INCLUDE TOPIC not yet supported
 
 ! CREATE SOURCE not_supported
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE TIMESTAMP as myts, TOPIC
-INCLUDE TOPIC not yet supported
+contains:INCLUDE TOPIC not yet supported
 
 > CREATE MATERIALIZED SOURCE avro_data_conflict
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
@@ -60,7 +60,7 @@ INCLUDE TOPIC not yet supported
   INCLUDE KEY
 
 ! SELECT id, b FROM avro_data_conflict
-column reference "id" is ambiguous
+contains:column reference "id" is ambiguous
 
 > SELECT * FROM avro_data_conflict
 id id b
@@ -170,7 +170,7 @@ named_id named_geo a
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE debezium
-Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.
+contains:Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.
 
 # formats: TEXT and REGEX
 $ kafka-create-topic topic=textsrc

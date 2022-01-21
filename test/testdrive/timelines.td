@@ -157,7 +157,7 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema} timestamp=1
     WITH (epoch_ms_timeline=false)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
-unsupported epoch_ms_timeline value
+contains:unsupported epoch_ms_timeline value
 
 # Can't specify epoch_ms_timeline and timeline.
 ! CREATE MATERIALIZED SOURCE source_cdcv2_system
@@ -165,7 +165,7 @@ unsupported epoch_ms_timeline value
     WITH (epoch_ms_timeline=false, timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
-unexpected parameters for CREATE SOURCE: epoch_ms_timeline
+contains:unexpected parameters for CREATE SOURCE: epoch_ms_timeline
 
 > CREATE MATERIALIZED SOURCE source_cdcv2_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
@@ -186,28 +186,28 @@ unexpected parameters for CREATE SOURCE: epoch_ms_timeline
 > CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
 
 ! CREATE VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo, source_system;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_byo;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_byo;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_cdcv2;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo, source_cdcv2;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT (SELECT a FROM source_system LIMIT 1) FROM source_byo;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 
 # Verify that user timelines don't allow things to be joinable with their non-user versions.
 ! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_system_user;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 ! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo, source_byo_user;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 
 # Can join static view with anything.
 > CREATE VIEW values_table_view AS SELECT * FROM input_values_view, input_table;
@@ -224,27 +224,27 @@ multiple timelines within one dataflow are not supported
 
 # System things should be joinable only with system sources.
 ! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_byo;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 ! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_cdcv2;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 > CREATE VIEW various_system_no_byo (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_system;
 > CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k, l, m, n) AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, input_table;
 
 # EXPLAIN should complain too.
 ! EXPLAIN SELECT * FROM source_system, source_byo;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 
 # Can join user-specified timelines.
 > CREATE MATERIALIZED VIEW source_system_byo_user (a, b, c, d, e, f) AS SELECT * FROM source_system_user, source_byo_user, source_cdcv2_user;
 
 # Unless they are from different user timelines.
 ! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_byo_user, source_byo_user2;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 
 # CDCv2 can only be joined with system time stuff if specified
 > CREATE MATERIALIZED VIEW source_cdcv2_table_system AS SELECT * FROM source_cdcv2_system, input_table;
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_cdcv2, input_table;
-multiple timelines within one dataflow are not supported
+contains:multiple timelines within one dataflow are not supported
 
 # Verify that timedomains don't cross timelines. In the case that
 # source_byo is grouped in the same timedomain as epoch ms sources,
@@ -253,7 +253,7 @@ multiple timelines within one dataflow are not supported
 # complains about.
 > BEGIN;
 ! SELECT * FROM source_byo;
-At least one input has no complete timestamps yet
+contains:At least one input has no complete timestamps yet
 > ROLLBACK;
 
 # Verify that if the transaction starts on some timeline (epoch ms here),
@@ -261,5 +261,5 @@ At least one input has no complete timestamps yet
 > BEGIN;
 > SELECT * FROM input_table;
 ! SELECT * FROM source_byo;
-Transactions can only reference objects in the same timedomain
+contains:Transactions can only reference objects in the same timedomain
 > ROLLBACK;

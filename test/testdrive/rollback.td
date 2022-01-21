@@ -24,4 +24,4 @@
 <null>
 
 ! SELECT * FROM t1 AS OF NOW() - INTERVAL '1 second';
-is not valid for all inputs
+contains:is not valid for all inputs
