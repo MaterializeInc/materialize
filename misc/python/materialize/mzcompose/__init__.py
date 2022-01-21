@@ -311,12 +311,18 @@ class Composition:
             _lint_composition(path, composition, errs)
         return errs
 
-    def invoke(self, *args: str, capture: bool = False) -> subprocess.CompletedProcess:
+    def invoke(
+        self,
+        *args: str,
+        capture: bool = False,
+        env: Optional[Dict[str, str]] = None,
+    ) -> subprocess.CompletedProcess:
         """Invoke `docker-compose` on the rendered composition.
 
         Args:
             args: The arguments to pass to `docker-compose`.
             capture: Whether to capture the child's stdout stream.
+            env: Environment variables container runs with. See `run` for details.
         """
         print(f"$ docker-compose {' '.join(args)}", file=sys.stderr)
 
@@ -339,6 +345,7 @@ class Composition:
                 check=True,
                 stdout=stdout,
                 text=True,
+                env=env,
             )
         except subprocess.CalledProcessError as e:
             if e.stdout:
@@ -459,8 +466,8 @@ class Composition:
         *args: str,
         detach: bool = False,
         rm: bool = False,
-        env: Dict[str, str] = {},
         capture: bool = False,
+        env: Optional[Dict[str, str]] = None,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
@@ -473,7 +480,14 @@ class Composition:
             service: The name of a service in the composition.
             args: Arguments to pass to the service's entrypoint.
             detach: Run the container in the background.
-            env: Additional environment variables to set in the container.
+            env: Explicit set of environment variables that the Docker
+                subprocess will have access to. By default docker-compose and
+                Docker containers have access to all env vars that that
+                mzcompose itself can access.
+
+                Note that for services to gain access to additional env vars
+                passed in this way their ServiceConfig must list them in
+                `environment` or `environment_extra`.
             rm: Remove container after run.
             capture: Capture the stdout of the `docker-compose` invocation.
         """
@@ -483,15 +497,20 @@ class Composition:
         self.invoke("up", "--detach", "--scale", f"{service}=0", service)
         return self.invoke(
             "run",
-            *(f"-e{k}={v}" for k, v in env.items()),
             *(["--detach"] if detach else []),
             *(["--rm"] if rm else []),
             service,
             *args,
             capture=capture,
+            env=env,
         )
 
-    def up(self, *services: str, detach: bool = True) -> None:
+    def up(
+        self,
+        *services: str,
+        detach: bool = True,
+        env: Optional[Dict[str, str]] = None,
+    ) -> None:
         """Build, (re)create, and start the named services.
 
         Delegates to `docker-compose up`. See that command's help for details.
@@ -499,8 +518,9 @@ class Composition:
         Args:
             services: The names of services in the composition.
             detach: Run containers in the background.
+            env: Environment variables container runs with. See `run` for details.
         """
-        self.invoke("up", *(["--detach"] if detach else []), *services)
+        self.invoke("up", *(["--detach"] if detach else []), *services, env=env)
 
     def kill(self, *services: str, signal: str = "SIGKILL") -> None:
         """Force stop service containers.

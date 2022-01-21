@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 from typing import Dict
 
 from materialize.mzcompose import Composition
@@ -32,6 +33,12 @@ SERVICES = [
             "mzbuild": "dbt-materialize",
             "depends_on": ["test-certs"],
             "volumes": ["secrets:/secrets"],
+            "environment": [
+                "DBT_HOST",
+                "DBT_SSLCERT",
+                "DBT_SSLKEY",
+                "DBT_SSLROOTCERT",
+            ],
         },
     ),
 ]
@@ -62,9 +69,11 @@ def workflow_tls(c: Composition) -> None:
     )
 
 
-def run_test(c: Composition, materialized: str, env: Dict[str, str]) -> None:
+def run_test(c: Composition, materialized: str, extra_env: Dict[str, str]) -> None:
     c.up(materialized)
     c.wait_for_tcp(host=materialized, port=6875)
+    env = os.environ.copy()
+    env.update(extra_env)
     c.run(
         "dbt-test",
         "pytest",
