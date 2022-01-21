@@ -260,7 +260,7 @@ async fn create_state(
     ),
     anyhow::Error,
 > {
-    let config = c.aws.load().await?;
+    let config = c.aws.load().await;
     let kinesis_client = kinesis::client(&config);
 
     let shard_set = kinesis::get_shard_ids(&kinesis_client, &c.stream_name).await?;
